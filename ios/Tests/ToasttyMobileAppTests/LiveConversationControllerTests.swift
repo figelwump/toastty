@@ -1,6 +1,7 @@
 import Foundation
 import RemoteProtocol
 import XCTest
+import SwiftUI
 @testable import ToasttyMobileApp
 @testable import ToasttyMobileDomain
 
@@ -715,6 +716,50 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(terminations, 2)
     }
 
+    // Failure modes: foreground verification consumes the only visibility
+    // callback, or finishing the probe needs navigation to acknowledge a
+    // transcript whose content and status did not change.
+    func testVisibleTranscriptAcknowledgesAfterForegroundVerificationWithoutReopening() async throws {
+        let acknowledged = expectation(description: "Visible transcript acknowledged after verification")
+        let recorder = ReadAcknowledgementRecorder(results: [
+            .success(RemoteConversationReadAcknowledgementResponse(result: .acknowledged)),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            acknowledgeRead: { request in
+                let response = try await recorder.acknowledge(request)
+                acknowledged.fulfill()
+                return response
+            }
+        )
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.consumeConnectionPhase(.checkingConnection)
+        let originalRows = subject.transcriptPresentation.rows
+        let host = UIHostingController(rootView: ReadAcknowledgementTranscriptHarness(controller: subject)
+            .environment(\.scenePhase, .active))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            subject.stop()
+        }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        let before = await recorder.requests()
+        XCTAssertTrue(before.isEmpty, "Verification must not spend the visible read attempt")
+
+        subject.consumeConnectionPhase(.live)
+        await fulfillment(of: [acknowledged], timeout: 5)
+        XCTAssertEqual(subject.transcriptPresentation.rows, originalRows)
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.map(\.observedThroughSequence), [1])
+        XCTAssertEqual(requests.first?.conversationID, conversationID)
+    }
+
     func testVisibleReadAcknowledgementAcceptsEmptyAndRearmsForPresentationChange() async {
         let recorder = ReadAcknowledgementRecorder(results: [
             .success(RemoteConversationReadAcknowledgementResponse(result: .acknowledged)),
@@ -724,6 +769,7 @@ final class LiveConversationControllerTests: XCTestCase {
             runtime: ConversationRuntime(conversationID: conversationID),
             acknowledgeRead: { try await recorder.acknowledge($0) }
         )
+        subject.consumeConnectionPhase(.live)
 
         subject.acknowledgeVisibleTranscript(presentationStatus: .working)
         subject.consume(state(runID: runID(1), events: [], phase: .live))
@@ -759,6 +805,7 @@ final class LiveConversationControllerTests: XCTestCase {
             acknowledgeRead: { try await recorder.acknowledge($0) }
         )
         subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.consumeConnectionPhase(.live)
 
         subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
         await recorder.waitForRequestCount(2)
@@ -769,6 +816,42 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
     }
 
+    func testForegroundVerificationRetiresPendingReadWithoutClearingItsReplacement() async {
+        let recorder = LifecycleReadAcknowledgementRecorder()
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            acknowledgeRead: { await recorder.acknowledge($0) }
+        )
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.consumeConnectionPhase(.live)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(1)
+
+        subject.consumeConnectionPhase(.checkingConnection)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        subject.consumeConnectionPhase(.live)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(2)
+
+        // The old request ignores cancellation until its delayed response.
+        // It must not clear the replacement's identical pending boundary.
+        await recorder.finish(attempt: 1)
+        try? await Task.sleep(for: .milliseconds(20))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        try? await Task.sleep(for: .milliseconds(20))
+        let pending = await recorder.requests()
+        XCTAssertEqual(pending.count, 2)
+
+        await recorder.finish(attempt: 2)
+        try? await Task.sleep(for: .milliseconds(20))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        try? await Task.sleep(for: .milliseconds(20))
+        let finished = await recorder.requests()
+        XCTAssertEqual(finished.count, 2)
+        subject.stop()
+    }
+
     func testNewerVisibleBoundaryCancelsOlderAcknowledgement() async {
         let recorder = SupersedingReadAcknowledgementRecorder()
         let subject = LiveConversationController(
@@ -777,6 +860,7 @@ final class LiveConversationControllerTests: XCTestCase {
             acknowledgeRead: { try await recorder.acknowledge($0) }
         )
         subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.consumeConnectionPhase(.live)
         subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
         await recorder.waitForRequestCount(1)
 
@@ -1366,4 +1450,45 @@ private actor DraftReleaseRecorder {
     }
 
     func requests() -> [RemoteConversationLocalDraftReleaseRequest] { recorded }
+}
+
+private struct ReadAcknowledgementTranscriptHarness: View {
+    let controller: LiveConversationController
+    @State private var jumpToLiveEdgeRequest: UInt64 = 0
+
+    var body: some View {
+        ToasttyTranscriptView(
+            state: controller.transcriptPresentation,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
+            canAcknowledgeRead: controller.canAcknowledgeRead,
+            onVisibleLiveEdge: {
+                controller.acknowledgeVisibleTranscript(presentationStatus: .ready)
+            }
+        )
+    }
+}
+
+private actor LifecycleReadAcknowledgementRecorder {
+    private var values: [RemoteConversationReadAcknowledgementRequest] = []
+    private var completions: [Int: CheckedContinuation<RemoteConversationReadAcknowledgementResponse?, Never>] = [:]
+
+    func acknowledge(_ request: RemoteConversationReadAcknowledgementRequest) async -> RemoteConversationReadAcknowledgementResponse? {
+        values.append(request)
+        let attempt = values.count
+        return await withCheckedContinuation { completions[attempt] = $0 }
+    }
+
+    func waitForRequestCount(_ count: Int) async {
+        while values.count < count { await Task.yield() }
+    }
+
+    func finish(attempt: Int) {
+        completions.removeValue(forKey: attempt)?.resume(
+            returning: RemoteConversationReadAcknowledgementResponse(result: .acknowledged)
+        )
+    }
+
+    func requests() -> [RemoteConversationReadAcknowledgementRequest] { values }
 }

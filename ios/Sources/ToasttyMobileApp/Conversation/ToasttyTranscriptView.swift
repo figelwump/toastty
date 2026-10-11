@@ -17,6 +17,7 @@ struct ToasttyTranscriptView: View {
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let readAcknowledgementEpoch: MobileSessionStatus?
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: () -> Void
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
@@ -51,6 +52,7 @@ struct ToasttyTranscriptView: View {
         readAcknowledgementEpoch: MobileSessionStatus? = nil,
         workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
+        canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
         self.state = state
@@ -63,6 +65,7 @@ struct ToasttyTranscriptView: View {
         self.submitInteractionAnswer = submitInteractionAnswer
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
         self.workingIndicator = workingIndicator
+        self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
         _followsLiveEdge = State(initialValue: readAcknowledgementEpoch?.bucket != .ready)
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
@@ -790,7 +793,8 @@ struct ToasttyTranscriptView: View {
             hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
             measuredBoundaryID: measuredBoundaryID,
             latestBoundaryID: state.rows.last?.id,
-            readAcknowledgementEpoch: readAcknowledgementEpoch
+            readAcknowledgementEpoch: readAcknowledgementEpoch,
+            canAcknowledgeRead: canAcknowledgeRead
         )
     }
 
@@ -1301,9 +1305,11 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
     let measuredBoundaryID: ToasttyTranscriptRowID?
     let latestBoundaryID: ToasttyTranscriptRowID?
     let readAcknowledgementEpoch: MobileSessionStatus?
+    let canAcknowledgeRead: Bool
 
     var isEligible: Bool {
-        phase == .live
+        canAcknowledgeRead
+            && phase == .live
             && scenePhase == .active
             && isVisible
             && isAtLiveEdge

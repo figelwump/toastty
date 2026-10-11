@@ -43,6 +43,7 @@ struct ToasttyConversationScreen: View {
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
+    let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
 
     init(
@@ -75,6 +76,7 @@ struct ToasttyConversationScreen: View {
             ToasttyInteractionAnswerEdit
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
+        canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
@@ -103,6 +105,7 @@ struct ToasttyConversationScreen: View {
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
+        self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
     }
 
@@ -126,6 +129,7 @@ struct ToasttyConversationScreen: View {
                     readAcknowledgementEpoch: conversation.state,
                     workingIndicator: transcriptWorkingIndicator(conversation),
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
+                    canAcknowledgeRead: canAcknowledgeRead,
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
                     }
