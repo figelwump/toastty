@@ -605,16 +605,10 @@ struct ToasttyMobileRootView: View {
         for conversationID: UUID
     ) -> ToasttyComposerPresentation? {
         guard let conversation = sessionController.homeController.conversation(id: conversationID),
-              let controller = sessionController.liveController?.activeConversationController,
-              controller.conversationID == conversationID else {
+              let presentation = sessionController.liveController?.composerPresentation(for: conversation) else {
             return fixtureComposer(for: conversationID)
         }
-        return ToasttyComposerPresentation.make(
-            agentDisplayName: conversation.agent.displayName.capitalized,
-            authority: controller.presentedComposerAuthority,
-            releasableLocalDraftEpoch: controller.releasableLocalDraftEpoch,
-            localDraftReleaseRefusal: controller.localDraftReleaseRefusal
-        )
+        return presentation
     }
 
     private func conversationDraftChange(for conversationID: UUID, generation: UUID) -> (String, UInt64) -> Void {

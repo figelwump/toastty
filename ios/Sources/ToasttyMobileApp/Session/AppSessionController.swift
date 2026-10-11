@@ -21,6 +21,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     var activeConversationCursor: UInt64? { get }
     var activeConversationController: LiveConversationController? { get }
     var supportsPushNotifications: Bool { get }
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation?
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
     func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
@@ -42,6 +43,7 @@ extension AppLiveSessionsControlling {
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {}
     var activeConversationController: LiveConversationController? { nil }
     var supportsPushNotifications: Bool { false }
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? { nil }
 }
 
 typealias AppLiveSessionsFactory = @MainActor (

@@ -414,6 +414,18 @@ final class LiveSessionsController {
         await runtime.connectIfNeeded()
     }
 
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? {
+        guard let controller = activeConversationController,
+              controller.conversationID == conversation.id else { return nil }
+        return ToasttyComposerPresentation.make(
+            agentDisplayName: conversation.agent.displayName.capitalized,
+            authority: controller.presentedComposerAuthority,
+            suppressesConnectionNotice: suppressesConnectionDowngrade,
+            releasableLocalDraftEpoch: controller.releasableLocalDraftEpoch,
+            localDraftReleaseRefusal: controller.localDraftReleaseRefusal
+        )
+    }
+
     /// A short return probes the retained stream; a disconnected or expired
     /// stream takes the coordinator's normal fresh-snapshot path.
     func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant? = nil) async {
@@ -636,7 +648,11 @@ final class LiveSessionsController {
 
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
-        finishConnectionPresentationGraceIfNeeded(for: state.phase)
+        if state.latestTransportFailure != nil {
+            endConnectionPresentationGracePeriod()
+        } else {
+            finishConnectionPresentationGraceIfNeeded(for: state.phase)
+        }
         activeConversationController?.consumeConnectionState(state)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
@@ -716,9 +732,12 @@ final class LiveSessionsController {
     private func finishConnectionPresentationGraceIfNeeded(for phase: ConnectionCoordinatorPhase) {
         guard suppressesConnectionDowngrade else { return }
         switch phase {
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection:
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live:
+            // Connection and conversation observers can deliver separately.
+            // Keep the bounded grace through success so a restored connection
+            // cannot expose the previous composer gate before it catches up.
             break
-        case .live, .reconnecting, .suspended, .requiresAuthentication,
+        case .reconnecting, .suspended, .requiresAuthentication,
              .authorizationDenied, .incompatibleProtocol, .failed:
             endConnectionPresentationGracePeriod()
         }

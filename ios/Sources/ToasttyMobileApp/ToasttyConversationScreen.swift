@@ -417,7 +417,7 @@ struct ToasttyConversationScreen: View {
 
             if presentation.canReleaseLocalDraft {
                 localDraftReleaseStatus(presentation)
-            } else if case .disabled(let reason) = presentation.gate {
+            } else if case .disabled(let reason) = presentation.gate, !presentation.suppressesConnectionNotice {
                 composerDisabledStatus(reason)
                     .font(.caption.monospaced())
                     .foregroundStyle(composerStatusColor(reason))
@@ -789,6 +789,7 @@ struct ToasttyConversationScreen: View {
     private func disabledAccessibilityHint(
         _ presentation: ToasttyComposerPresentation
     ) -> String {
+        if presentation.suppressesConnectionNotice { return "Checking connection. Composer locked." }
         guard case .disabled(let reason) = presentation.gate else { return "" }
         return reason.message
     }
