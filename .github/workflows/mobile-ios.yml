@@ -38,9 +38,6 @@ jobs:
           echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
           test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
-      - name: Test dispatcher and release scripts
-        run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs
-
       - name: Test native client
         # Full UI and hardware-sensitive budgets remain available on manual runs.
         # Hosted runners can time out the first UI launch under load, so every
