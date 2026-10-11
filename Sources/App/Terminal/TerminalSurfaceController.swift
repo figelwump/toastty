@@ -236,9 +236,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return }
             self.delegate?.handleLocalInterruptKey(for: self.panelID, kind: kind)
         }
-        terminalHostView.handleLocalInput = { [weak self] in
+        terminalHostView.handleLocalInput = { [weak self] kind in
             guard let self else { return }
-            self.delegate?.handleLocalInput(for: self.panelID)
+            self.delegate?.handleLocalInput(for: self.panelID, kind: kind)
         }
         #else
         hostedView = fallbackView

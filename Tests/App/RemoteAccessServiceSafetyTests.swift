@@ -1796,7 +1796,7 @@ struct RemoteAccessServiceSafetyTests {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }
 
-        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
         #expect(fixture.confirmCurrentLaunchBinding())
 
         #expect(fixture.summary.inputAvailability ==
@@ -1846,12 +1846,15 @@ struct RemoteAccessServiceSafetyTests {
     /// phone. Clients learn each newer draft epoch, a release naming an older
     /// one is refused, and the released prompt accepts one send.
     @MainActor
-    @Test func releasedMacDraftReopensTheBootstrappedPromptForASend() async throws {
-        let fixture = try RemoteBootstrapFixture(localDraftEpochBroadcastInterval: .milliseconds(20))
+    @Test(arguments: [AgentKind.claude, .codex], [false, true])
+    func releasedMacDraftReopensTheBootstrappedPromptForASend(
+        agent: AgentKind, exerciseLaterKeys: Bool
+    ) async throws {
+        let fixture = try RemoteBootstrapFixture(agent: agent, localDraftEpochBroadcastInterval: .milliseconds(20))
         defer { fixture.removeRuntimeFiles() }
         #expect(fixture.confirmCurrentLaunchBinding())
         guard case .openPrompt(let prompt) = fixture.summary.inputAvailability else {
-            Issue.record("Expected confirmed Codex prompt")
+            Issue.record("Expected confirmed agent prompt")
             return
         }
         var delivered: [String] = []
@@ -1868,7 +1871,7 @@ struct RemoteAccessServiceSafetyTests {
             )
         }
 
-        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
         guard case .localDraft(let seen) = fixture.summary.inputAvailability else {
             Issue.record("Expected a Mac draft")
             return
@@ -1877,7 +1880,7 @@ struct RemoteAccessServiceSafetyTests {
 
         // A second keystroke clears the draft; clients get its epoch shortly.
         let broadcastsBefore = fixture.server.sessionListSnapshots.count
-        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
         guard case .localDraft(let current) = fixture.summary.inputAvailability, current != seen else {
             Issue.record("Expected the keystroke to advance the draft epoch")
             return
@@ -1894,6 +1897,71 @@ struct RemoteAccessServiceSafetyTests {
         #expect(release(current) == .released)
         #expect(fixture.summary.inputAvailability == .openPrompt(epoch: prompt))
         #expect(release(current) == .rejected(reason: .noLocalDraft))
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let host = TerminalHostView()
+        host.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in }, setOcclusion: { _, _ in }, refresh: { _ in },
+            keyTranslationMods: { _, mods in mods }, sendKey: { _, _ in true },
+            keyIsBinding: { _, _ in false }, setPreedit: { _, _, _ in }
+        )
+        host.setGhosttySurface(try #require(UnsafeMutableRawPointer(bitPattern: 0x1251)))
+        host.handleLocalInput = { kind in
+            fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: kind)
+        }
+        host.handleLocalInterruptKey = { kind in
+            fixture.terminalRuntimeRegistry.handleLocalInterruptKey(for: fixture.panelID, kind: kind)
+        }
+        func pressC(_ modifiers: NSEvent.ModifierFlags) throws {
+            host.keyDown(with: try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: 0, context: nil, characters: "c", charactersIgnoringModifiers: "c",
+                isARepeat: false, keyCode: 8
+            )))
+        }
+        // Clearing an already empty composer must not recreate a released lock.
+        try pressC(.control)
+        try await Task.sleep(for: .milliseconds(200))
+        if agent != .claude {
+            // Other CLIs can exit on the first Ctrl+C. Keep their prior behavior.
+            guard case .localDraft(let otherProviderDraft) = fixture.summary.inputAvailability else {
+                Issue.record("Only Claude has the first Ctrl+C exception")
+                return
+            }
+            #expect(release(otherProviderDraft) == .released)
+        }
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: prompt))
+
+        if exerciseLaterKeys {
+            // A second press can exit the agent. Release cannot reset that history.
+            for _ in 0..<2 {
+                try pressC(.control)
+                guard case .localDraft(let exitDraft) = fixture.summary.inputAvailability else {
+                    Issue.record("A possible agent exit must close remote input")
+                    return
+                }
+                #expect(release(exitDraft) == .released)
+            }
+
+            // Other modifier combinations remain conservative. Ctrl+C also must
+            // not release an existing draft, since a dialog can consume the key.
+            for modifiers: NSEvent.ModifierFlags in [[], [.control, .shift], [.control, .option]] {
+                try pressC(modifiers)
+                guard case .localDraft(let beforeInterrupt) = fixture.summary.inputAvailability else {
+                    Issue.record("Expected local input to protect the composer")
+                    return
+                }
+                try pressC(.control)
+                guard case .localDraft(let afterInterrupt) = fixture.summary.inputAvailability else {
+                    Issue.record("Ctrl+C must not infer that a draft was cleared")
+                    return
+                }
+                #expect(afterInterrupt != beforeInterrupt)
+                #expect(release(beforeInterrupt) == .rejected(reason: .draftChanged))
+                #expect(release(afterInterrupt) == .released)
+            }
+        }
+        #endif
 
         let send = RemoteMessageSendRequest(
             conversationID: fixture.conversationID,
@@ -3260,8 +3328,10 @@ extension RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test(arguments: [AgentKind.codex, .claude])
-    func queuedSendWaitsForTheNextPromptAndSteerTypesIntoTheRunningTurn(agent: AgentKind) async throws {
+    @Test(arguments: [AgentKind.codex, .claude], [TerminalLocalInputKind.key, .controlC])
+    func queuedSendWaitsForTheNextPromptAndSteerTypesIntoTheRunningTurn(
+        agent: AgentKind, localInput: TerminalLocalInputKind
+    ) async throws {
         let fixture = try RemoteBootstrapFixture(agent: agent, pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }
         #expect(fixture.confirmCurrentLaunchBinding())
@@ -3403,8 +3473,9 @@ extension RemoteAccessServiceSafetyTests {
         wrongTurn.expectedInputEpoch = turnEpoch.next()
         #expect(fixture.service.performRemoteSend(wrongTurn, device: device) == .rejected(reason: .turnMismatch))
 
-        // Local typing on the Mac closes steer for this turn but not stop.
-        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        // A key during a running turn, including Ctrl+C, must keep draft
+        // protection because it does not prove that the composer is empty.
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: localInput)
         let touched = try await Self.waitForSummary(fixture) { $0.inputControl?.canSteer == false }
         #expect(touched.inputControl?.canSteer == false)
         #expect(touched.inputControl?.canInterrupt == true)

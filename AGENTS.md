@@ -65,6 +65,8 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - For worktree, Xcode, dev, or smoke runs, resolve `instance.json` and read its `logFilePath`; do not default to production logs.
 - If the target is ambiguous, default to the current worktree's runtime-isolated instance before inspecting broad process lists.
 - For agent-specific terminal input bugs, validate the managed launch environment as well as AppKit/Ghostty routing. A fixture that enables terminal protocols itself can hide launch overrides that disable them in the real agent.
+- For remote Claude login failures over SSH, check authentication in the macOS GUI login session before concluding that Claude is logged out. The SSH security session can lack access to an existing subscription login; run the live CLI check in the GUI session when this occurs.
+- Before retrying remote GUI input or investigating `cgWindowNotFound`, check whether the remote desktop is locked. A running GUI session and a valid provider login do not prove that its windows are available to Computer Use.
 
 ## Specialized References
 

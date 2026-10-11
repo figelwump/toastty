@@ -148,7 +148,7 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
         _ = kind
     }
 
-    func handleLocalInput(for panelID: UUID) {}
+    func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind) {}
 
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
         _ = panelID

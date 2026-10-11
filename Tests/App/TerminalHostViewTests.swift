@@ -270,7 +270,7 @@ final class TerminalHostViewGhosttyBridgeTests: TerminalHostViewTestCase {
         // including auto-repeat, reporting local input.
         let host = TerminalHostView()
         var localInputs = 0
-        host.handleLocalInput = { localInputs += 1 }
+        host.handleLocalInput = { _ in localInputs += 1 }
         for isARepeat in [false, true, true] {
             host.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
@@ -279,6 +279,55 @@ final class TerminalHostViewGhosttyBridgeTests: TerminalHostViewTestCase {
             )))
         }
         XCTAssertEqual(localInputs, 3)
+    }
+
+    func testControlCRecordsInputBeforeInterruptCanChangeSessionStatus() throws {
+        let host = TerminalHostView()
+        host.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in }, setOcclusion: { _, _ in }, refresh: { _ in },
+            keyTranslationMods: { _, mods in mods }, sendKey: { _, _ in true },
+            keyIsBinding: { _, _ in false }, setPreedit: { _, _, _ in }
+        )
+        host.setGhosttySurface(fakeSurfaceHandle(0x1249))
+        var callbacks: [String] = []
+        host.handleLocalInput = { kind in callbacks.append(kind.rawValue) }
+        host.handleLocalInterruptKey = { _ in callbacks.append("interrupt") }
+        host.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{03}", charactersIgnoringModifiers: "c",
+            isARepeat: false, keyCode: 8
+        )))
+        XCTAssertEqual(callbacks, ["controlC", "interrupt"])
+
+        callbacks.removeAll()
+        host.setMarkedText("draft", selectedRange: NSRange(location: 5, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        host.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{03}", charactersIgnoringModifiers: "c",
+            isARepeat: false, keyCode: 8
+        )))
+        XCTAssertEqual(callbacks, ["key"], "Composition must retain draft protection")
+    }
+
+    func testControlCBindingKeepsDraftProtectionAndStillReachesGhostty() throws {
+        let host = TerminalHostView()
+        let recorder = GhosttyKeyEventRecorder()
+        host.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in }, setOcclusion: { _, _ in }, refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, event in recorder.record(event); return true },
+            keyIsBinding: { _, _ in true }
+        )
+        host.setGhosttySurface(fakeSurfaceHandle(0x1250))
+        var kinds: [TerminalLocalInputKind] = []
+        host.handleLocalInput = { kinds.append($0) }
+        host.keyDown(with: try makeKeyEvent(
+            type: .keyDown, keyCode: 8, modifierFlags: [.control, .capsLock],
+            characters: "\u{03}", charactersIgnoringModifiers: "C"
+        ))
+        XCTAssertEqual(kinds, [.key])
+        XCTAssertEqual(recorder.events.count, 1)
     }
 
     func testLocalInterruptKeyRecognizesEscape() {

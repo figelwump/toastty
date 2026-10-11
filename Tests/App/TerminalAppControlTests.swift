@@ -271,9 +271,11 @@ final class TerminalAppControlTests: XCTestCase {
         let fixture = try TerminalAppControlFixture()
         var callOrder: [String] = []
         let panelID = fixture.panelID
-        fixture.terminalRuntimeRegistry.localInputObserver = { observedPanelID in
+        fixture.terminalRuntimeRegistry.localInputObserver = { observedPanelID, kind in
             XCTAssertEqual(observedPanelID, panelID)
             callOrder.append("local-input")
+            XCTAssertEqual(kind, .programmatic)
+            return true
         }
         fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
             callOrder.append("delivery")
@@ -292,7 +294,7 @@ final class TerminalAppControlTests: XCTestCase {
     func testRemoteSendBypassesLocalInputObserver() throws {
         let fixture = try TerminalAppControlFixture()
         var localInputCount = 0
-        fixture.terminalRuntimeRegistry.localInputObserver = { _ in localInputCount += 1 }
+        fixture.terminalRuntimeRegistry.localInputObserver = { _, _ in localInputCount += 1; return true }
         fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
 
         XCTAssertEqual(
