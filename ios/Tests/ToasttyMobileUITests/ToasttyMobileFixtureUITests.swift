@@ -1010,7 +1010,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     func testReadyResponseOpensWithItsCollapsedWorkCardAboveIt() {
         for historyCount in [0, 200] {
             let app = launchFixtureApp(environment: [
-                "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
                 "TOASTTY_MOBILE_FIXTURE_READY_WORK": "1",
                 "TOASTTY_MOBILE_FIXTURE_READY_HISTORY": historyCount > 0 ? "1" : "0",
             ])
@@ -1033,7 +1032,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                     && message.frame.minY >= work.frame.maxY - 8
                     && message.frame.minY <= top + 100
             }
-            print("ENTRY_TRACE \(app.descendants(matching: .any)["toastty-mobile-transcript-scroll-trace"].value ?? "missing")")
             print("ENTRY_WORK_FRAMES work=\(work.frame) response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
             attachScreenshot(named: "fixture-ready-response-with-work-card", of: app)
             XCTAssertTrue(showsWorkContext, "The unread response should open below its visible work card")
@@ -1052,7 +1050,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     }
 
     func testReadyResponseInLongHistoryShowsPrecedingContext() {
-        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_HISTORY": "1", "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1"])
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_HISTORY": "1"])
         let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
         XCTAssertTrue(scrollHomeTo(row, in: app))
         row.tap()
@@ -2660,7 +2658,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             // inset. Require visible context, not an exact inset measurement.
             return message.frame.minY >= top + 12 && message.frame.minY <= top + 44
         }
-        print("ENTRY_TRACE \(app.descendants(matching: .any)["toastty-mobile-transcript-scroll-trace"].value ?? "missing")")
         print("ENTRY_RESPONSE_FRAMES response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
         attachScreenshot(named: "fixture-ready-response-context-\(sequence)", of: app)
         XCTAssertTrue(showsResponseContext, "The ready session should show some context above its latest response", file: #filePath, line: #line)
