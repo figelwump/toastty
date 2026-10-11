@@ -334,8 +334,10 @@ original spawning session; a workspace that had none records the caller. The
 sidebar offers the same detach through "Move to top level" on a task space row.
 
 `workspace.snapshot` reports `parentWorkspaceID`, `spawningSessionID`, and
-`subspaceWorkspaceIDs`; related workspaces outside the caller's scope are
-omitted (`null` or left out of the array).
+`subspaceWorkspaceIDs`. The parent ID is returned even when the parent is
+outside the caller's scope; `null` means the workspace has no parent. Knowing
+the parent ID does not grant automation access to that workspace.
+`subspaceWorkspaceIDs` omits workspaces outside the caller's scope.
 
 `workspace.set-done` marks a task space's task done, and `workspace.clear-done`
 clears the mark. With no `workspaceID` or `windowID`, a managed agent's call

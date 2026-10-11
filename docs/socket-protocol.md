@@ -532,10 +532,11 @@ unavailable profile fails the query. Wrapper profiles resolve their wrapper
 executable, not the provider inside it.
 
 `workspace.snapshot` includes nullable `parentWorkspaceID` and
-`spawningSessionID`, plus `subspaceWorkspaceIDs`. Related workspaces outside
-the caller's scope are omitted, either as null fields or absent array entries.
-For a scoped caller, a null `parentWorkspaceID` does not prove the workspace
-is top level.
+`spawningSessionID`, plus `subspaceWorkspaceIDs`. The parent ID is returned
+even when the parent is outside the caller's scope. A null `parentWorkspaceID`
+means the workspace is top level. This metadata does not grant automation
+access to the parent. `subspaceWorkspaceIDs` omits workspaces outside the
+caller's scope.
 Its `annotations` entries include `primary`, which identifies the annotation
 chosen for the task space row.
 
