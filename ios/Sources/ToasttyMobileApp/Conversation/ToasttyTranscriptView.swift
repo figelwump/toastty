@@ -298,6 +298,9 @@ struct ToasttyTranscriptView: View {
                             #if DEBUG
                             fixtureScrollTrace.entryEvent("settled checks=\(completedSettleChecks) quiet=\(isQuiet) candidate=\(settled)")
                             #endif
+                            if let target = scrollTaskKey.materializationTarget {
+                                fixtureScrollTrace.entryEvent("materialize \(target)")
+                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                 // The first move can stop at the lazy stack's
                                 // estimated bottom without realizing this target.
                                 // Retry as that pending layout grows, using the
@@ -330,8 +333,8 @@ struct ToasttyTranscriptView: View {
                                     case .wait:
                                         continue
                                     case .retry:
-                                        fixtureScrollTrace.entryEvent("materialize \(target)")
-                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                        fixtureScrollTrace.entryEvent("retry materialize \(target)")
+                                        scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                     case .expire:
                                         scrollCoordinator.abandonHistoryMove(command)
                                         return
@@ -1975,5 +1978,3 @@ struct TranscriptEntryMaterializationRetry {
         return .retry
     }
 }
-
-
