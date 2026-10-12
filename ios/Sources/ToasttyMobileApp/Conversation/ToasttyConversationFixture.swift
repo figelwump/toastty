@@ -1,8 +1,73 @@
 #if DEBUG
 import Foundation
 import RemoteProtocol
+import ToasttyMobileDomain
 
 enum ToasttyConversationFixture {
+    enum EntryLoad: String, Equatable, Sendable {
+        case catchUp = "catch-up"
+        case phaseOnly = "phase-only"
+        case rebuilt
+        case reconnect
+    }
+
+    static func entryLoadHome(isRead: Bool = false) -> MobileHomeSnapshot {
+        let workspaceID = ToasttyMobileFixture.previewWorkspaceID
+        let conversations = [1, 7].map { number in
+            MobileConversation(
+                id: UUID(uuidString: String(format: "B1000000-0000-0000-0000-%012d", number))!,
+                workspaceID: workspaceID, workspaceTitle: "toastty", cwd: nil, agent: .codex,
+                title: number == 1 ? "Mobile gateway design" : "Changelog + tag",
+                state: number == 1 ? MobileSessionStatus.needsApproval : (isRead ? .idle : .ready),
+                inputAvailability: .unavailable(reason: "fixture"), age: "now", lastActivity: "Entry loading fixture"
+            )
+        }
+        return MobileHomeSnapshot(hostName: "Fixture Mac", workspaces: [
+            MobileWorkspace(id: workspaceID, title: "toastty", conversations: conversations),
+        ])
+    }
+
+    static func entryLoadPresentation(
+        for conversationID: UUID, mode: EntryLoad, step: Int
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let longText = (1...28).map {
+            "Paragraph \($0). This response has enough text to keep its start and end in different viewports. The reader can scroll through it."
+        }.joined(separator: "\n\n")
+        var rows = [
+            row(conversationID, 1, timestamp, .userMessage(text: "Previous request", origin: .local)),
+            row(conversationID, 2, timestamp, .assistantMessage(text: "## PREVIOUS RESPONSE\n\n" + longText, phase: .final)),
+        ]
+        if step > 0 || mode == .phaseOnly {
+            rows += [
+                row(conversationID, 3, timestamp, .userMessage(text: "Latest request", origin: .local)),
+                row(conversationID, 4, timestamp, .assistantMessage(text: "## LATEST RESPONSE\n\n" + longText, phase: .final)),
+            ]
+        }
+        if mode == .rebuilt, step == 2 {
+            rows = rows.map { row in
+                ToasttyTranscriptRow(
+                    id: ToasttyTranscriptRowID(
+                        projectionRunID: row.id.projectionRunID, projectionGeneration: 2,
+                        conversationID: conversationID, sequence: row.id.sequence
+                    ),
+                    timestamp: row.timestamp, provider: row.provider, content: row.content
+                )
+            }
+        }
+        let revision: ToasttyTranscriptRevision = switch (mode, step) {
+        case (.phaseOnly, _), (_, 0): .initial
+        case (.rebuilt, 2): .rebuilt
+        case (_, 1): .appended
+        default: .metadataOnly
+        }
+        return ToasttyConversationPresentationState(
+            rows: rows,
+            phase: step == 2 ? .live : (mode == .reconnect ? .stale : .resyncing),
+            revision: revision, historyTruncated: false
+        )
+    }
+
     enum SendEventOrder: String {
         case statusFirst = "status-first"
         case echoFirst = "echo-first"

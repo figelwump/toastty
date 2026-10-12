@@ -19,9 +19,9 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         ])
         XCTAssertGreaterThan(state.blocks.filter { $0.id.rowID == latestResponseID }.count, 1)
 
-        var position = TranscriptEntryScrollPosition()
+        var position = TranscriptEntryScrollPosition(status: .ready)
         XCTAssertEqual(
-            position.target(for: state, status: .ready, isSubmitting: false),
+            position.target(for: state, isSubmitting: false),
             .responseStart(ToasttyTranscriptBlockID(rowID: latestResponseID))
         )
     }
@@ -84,31 +84,127 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertNil(context.markerHostID)
     }
 
-    func testEntryWaitsForContentAndDoesNotMoveAgainAfterStatusOrTranscriptUpdates() {
-        var position = TranscriptEntryScrollPosition()
-        XCTAssertNil(position.target(for: .loading, status: .ready, isSubmitting: false))
+    func testEntryWaitsForContentAndDoesNotMoveAgainForALaterTurn() {
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertNil(position.target(for: .loading, isSubmitting: false))
 
         let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
         XCTAssertEqual(
-            position.target(for: state, status: .ready, isSubmitting: false),
+            position.target(for: state, isSubmitting: false),
             .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 1)))
         )
-        for status in [MobileSessionStatus.idle, .working, .ready] {
-            XCTAssertNil(position.target(for: state, status: status, isSubmitting: false))
+        XCTAssertNil(position.target(for: state, isSubmitting: false))
+        XCTAssertNil(position.target(for: entryState([
+            .assistantMessage(text: "Latest response", phase: .final),
+            .userMessage(text: "A later request", origin: .local),
+            .assistantMessage(text: "A later response", phase: .final),
+        ]), isSubmitting: false))
+    }
+
+    func testReadyEntryWaitsForCatchUpEvenWhenOlderContentIsAlreadyVisible() {
+        for phase in [ToasttyConversationPresentationPhase.loading, .resyncing] {
+            var position = TranscriptEntryScrollPosition(status: .ready)
+            let partial = entryState([
+                .userMessage(text: "Previous request", origin: .local),
+                .assistantMessage(text: "Previous response", phase: .final),
+            ], phase: phase)
+            XCTAssertNil(position.target(for: partial, isSubmitting: false))
+
+            let complete = entryState(partial.rows.map(\.content) + [
+                .userMessage(text: "Latest request", origin: .local),
+                .assistantMessage(text: "Latest response", phase: .final),
+            ])
+            XCTAssertEqual(
+                position.target(for: complete, isSubmitting: false),
+                .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 4)))
+            )
         }
+    }
+
+    func testCatchUpCompletionCanResolveEntryWithoutChangingRows() {
+        let rows: [ToasttyTranscriptRow.Content] = [
+            .userMessage(text: "Latest request", origin: .local),
+            .assistantMessage(text: "Latest response", phase: .final),
+        ]
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertNil(position.target(
+            for: entryState(rows, phase: .resyncing), isSubmitting: false
+        ))
+        XCTAssertEqual(
+            position.target(for: entryState(rows), isSubmitting: false),
+            .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 2)))
+        )
+    }
+
+    func testOfflineEntryUsesAvailableContentUntilOpeningCatchUpCompletes() {
+        for phase in [ToasttyConversationPresentationPhase.stale, .failure(message: "Offline")] {
+            var position = TranscriptEntryScrollPosition(status: .ready)
+            let retained: [ToasttyTranscriptRow.Content] = [
+                .userMessage(text: "Previous request", origin: .local),
+                .assistantMessage(text: "Previous response", phase: .final),
+            ]
+            XCTAssertEqual(
+                position.target(for: entryState(retained, phase: phase), isSubmitting: false),
+                .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 2)))
+            )
+            XCTAssertTrue(position.isPending)
+            let target = position.target(
+                for: entryState(retained + [
+                    .userMessage(text: "Latest request", origin: .local),
+                    .assistantMessage(text: "Latest response", phase: .final),
+                ]),
+                isSubmitting: false
+            )
+            XCTAssertEqual(target, .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 4))))
+            XCTAssertFalse(position.isPending)
+        }
+    }
+
+    func testReaderInteractionCancelsDeferredEntryThroughEmptyAndOfflineUpdates() {
+        for phase in [ToasttyConversationPresentationPhase.loading, .resyncing, .stale,
+                      .failure(message: "Offline")] {
+            var position = TranscriptEntryScrollPosition(status: .ready)
+            let rows: [ToasttyTranscriptRow.Content] = [.assistantMessage(text: "Retained response", phase: .final)]
+            _ = position.target(for: entryState(rows, phase: phase), isSubmitting: false)
+            position.cancelForInteraction()
+            XCTAssertNil(position.target(for: .loading, isSubmitting: false))
+            XCTAssertNil(position.target(for: entryState(rows, phase: .resyncing), isSubmitting: false))
+            XCTAssertTrue(position.isPending, "Completion must still consume the first live revision")
+            XCTAssertNil(position.target(for: entryState(rows + [
+                .userMessage(text: "Latest request", origin: .local),
+                .assistantMessage(text: "Latest response", phase: .final),
+            ]), isSubmitting: false))
+            XCTAssertFalse(position.isPending)
+        }
+    }
+
+    func testEmptyLiveEntryResolvesToFollowingInsteadOfWaitingForAFutureReply() {
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertEqual(position.target(for: entryState([]), isSubmitting: false), .liveEdge)
+        XCTAssertFalse(position.isPending)
+        XCTAssertNil(position.target(for: entryState([
+            .assistantMessage(text: "Future response", phase: .final),
+        ]), isSubmitting: false))
+    }
+
+    func testSubmissionDuringCatchUpResolvesToLiveEdgeAndDoesNotReopenEntry() {
+        let rows: [ToasttyTranscriptRow.Content] = [.assistantMessage(text: "Previous response", phase: .final)]
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertNil(position.target(for: entryState(rows, phase: .resyncing), isSubmitting: false))
+        XCTAssertEqual(position.target(for: entryState(rows, phase: .resyncing), isSubmitting: true), .liveEdge)
+        XCTAssertNil(position.target(for: entryState(rows), isSubmitting: false))
     }
 
     func testNonReadyEntriesAndReadyEntriesWithoutAResponseUseLiveEdge() {
         let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
         for status in [MobileSessionStatus.working, .needsApproval, .idle, .error] {
-            var position = TranscriptEntryScrollPosition()
-            XCTAssertEqual(position.target(for: state, status: status, isSubmitting: false), .liveEdge)
+            var position = TranscriptEntryScrollPosition(status: status)
+            XCTAssertEqual(position.target(for: state, isSubmitting: false), .liveEdge)
         }
-        var position = TranscriptEntryScrollPosition()
+        var position = TranscriptEntryScrollPosition(status: .ready)
         XCTAssertEqual(
             position.target(
                 for: entryState([.assistantMessage(text: "Work note", phase: .commentary)]),
-                status: .ready,
                 isSubmitting: false
             ),
             .liveEdge
@@ -116,11 +212,10 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
     }
 
     func testSubmissionAtReadyEntryKeepsTheLiveEdge() {
-        var position = TranscriptEntryScrollPosition()
+        var position = TranscriptEntryScrollPosition(status: .ready)
         XCTAssertEqual(
             position.target(
                 for: entryState([.assistantMessage(text: "Previous response", phase: .final)]),
-                status: .ready,
                 isSubmitting: true
             ),
             .liveEdge
@@ -128,7 +223,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
     }
 
     func testReadyEntryWithoutAResponseToTheLatestRequestDoesNotOpenAnOlderAnswer() {
-        var position = TranscriptEntryScrollPosition()
+        var position = TranscriptEntryScrollPosition(status: .ready)
         XCTAssertEqual(
             position.target(
                 for: entryState([
@@ -137,7 +232,6 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
                     .assistantMessage(text: "Work note", phase: .commentary),
                     .toolStarted(callID: "new-work", name: "Read", detail: nil),
                 ]),
-                status: .ready,
                 isSubmitting: false
             ),
             .liveEdge
@@ -156,8 +250,8 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
             revision: .initial,
             historyTruncated: false
         )
-        var position = TranscriptEntryScrollPosition()
-        XCTAssertEqual(position.target(for: state, status: .ready, isSubmitting: false), .liveEdge)
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertEqual(position.target(for: state, isSubmitting: false), .liveEdge)
     }
 
     func testScrollGeometryExcludesComposerAndKeyboardInsetsFromVisibleBottom() {
@@ -774,7 +868,10 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
-    private func entryState(_ contents: [ToasttyTranscriptRow.Content]) -> ToasttyConversationPresentationState {
+    private func entryState(
+        _ contents: [ToasttyTranscriptRow.Content],
+        phase: ToasttyConversationPresentationPhase = .live
+    ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationState(
             rows: contents.enumerated().map { index, content in
                 ToasttyTranscriptRow(
@@ -784,7 +881,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
                     content: content
                 )
             },
-            phase: .live,
+            phase: phase,
             revision: .appended,
             historyTruncated: false
         )

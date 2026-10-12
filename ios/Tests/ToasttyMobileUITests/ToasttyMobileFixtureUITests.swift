@@ -1007,6 +1007,88 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
+    func testNextWaitsForCatchUpThenOpensTheLatestResponseStart() {
+        let app = openEntryLoadingConversation(mode: "catch-up")
+        let latest = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
+        XCTAssertFalse(latest.exists)
+        app.buttons["toastty-mobile-fixture-entry-load-0"].tap()
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-resyncing"].exists)
+        app.buttons["toastty-mobile-fixture-entry-load-1"].tap()
+        assertReadyMessageStartsWithContext(in: app, sequence: 4)
+        attachScreenshot(named: "entry-catch-up-latest-response", of: app)
+    }
+
+    func testNextResolvesPhaseOnlyRebuildAndOfflineEntryCompletion() {
+        for mode in ["phase-only", "rebuilt", "reconnect"] {
+            let app = openEntryLoadingConversation(mode: mode)
+            app.buttons["toastty-mobile-fixture-entry-load-0"].tap()
+            assertReadyMessageStartsWithContext(in: app, sequence: 4)
+            attachScreenshot(named: "entry-\(mode)-latest-response", of: app)
+            app.terminate()
+        }
+    }
+
+    func testReaderScrollDuringNextCatchUpKeepsTheChosenPosition() {
+        let app = openEntryLoadingConversation(mode: "catch-up")
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        let previous = app.descendants(matching: .any)["toastty-mobile-transcript-row-2"]
+        transcript.swipeDown()
+        transcript.swipeDown()
+        XCTAssertTrue(previous.isHittable)
+        let previousFrame = previous.frame
+        let previousViewport = transcript.frame
+        let previousTop = max(previousViewport.minY, app.navigationBars.firstMatch.frame.maxY)
+        attachScreenshot(named: "entry-reader-before-completion", of: app)
+        app.buttons["toastty-mobile-fixture-entry-load-0"].tap()
+        app.buttons["toastty-mobile-fixture-entry-load-1"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-fixture-entry-load-1"].waitForNonExistence(timeout: 5))
+        let latest = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            previous.isHittable && latest.frame.minY > transcript.frame.maxY
+        })
+        // The scroll view extends under navigation once the banner disappears.
+        // Compare against the visible top in both states, as entry tests do.
+        let currentTop = max(transcript.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+        XCTAssertEqual(previous.frame.minY - currentTop, previousFrame.minY - previousTop, accuracy: 12)
+        attachScreenshot(named: "entry-reader-position-preserved", of: app)
+    }
+
+    func testJumpToLatestDuringNextCatchUpKeepsTheExplicitDestination() {
+        let app = openEntryLoadingConversation(mode: "catch-up")
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 5))
+        jump.tap()
+        XCTAssertTrue(jump.waitForNonExistence(timeout: 5))
+        app.buttons["toastty-mobile-fixture-entry-load-0"].tap()
+        app.buttons["toastty-mobile-fixture-entry-load-1"].tap()
+        let latestChunks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "toastty-mobile-transcript-row-4")
+        )
+        XCTAssertTrue(waitUntil(timeout: 5) { latestChunks.allElementsBoundByIndex.last?.isHittable == true })
+        XCTAssertFalse(jump.exists)
+        attachScreenshot(named: "entry-explicit-jump-preserved", of: app)
+    }
+
+    private func openEntryLoadingConversation(mode: String) -> XCUIApplication {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_ENTRY_LOAD": mode])
+        let row = app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+        let next = app.buttons["toastty-conversation-next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        // The fixture has exactly one other unread session, so this exercises
+        // the primary Next tap, including the conversation identity change.
+        next.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["toastty-mobile-conversation-title"], "Changelog + tag"))
+        XCTAssertTrue(app.buttons["toastty-mobile-fixture-entry-load-0"].waitForExistence(timeout: 5))
+        return app
+    }
+
     func testReadyResponseOpensWithItsCollapsedWorkCardAboveIt() {
         for historyCount in [0, 200] {
             let app = launchFixtureApp(environment: [
