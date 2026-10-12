@@ -99,7 +99,9 @@ A remote Debug run on 2026-09-05 recorded 1.9807 seconds for those 200 updates i
 
 Opening a ready session from the home list, a workspace, or Next session shows the start of its latest assistant response to the current request. Long responses start at their first block, with the adjacent collapsed work or tool card above it. If no card is directly above the response, or tool details are expanded, entry shows about 32 points of preceding content when available. A response at the start of loaded history uses its own start.
 
-Commentary and later session activity do not change the selected response. If the current request has no response yet, the session opens at the bottom. Other session states and pending sends also open at the bottom. A short response that fits on screen keeps following the bottom. The entry position is selected once after content arrives and resets when the conversation changes. Read acknowledgements still require the bottom of the transcript to be visible.
+Commentary and later session activity do not change the selected response. If the current request has no response yet, the session opens at the bottom. Other session states and pending sends also open at the bottom. A short response that fits on screen keeps following the bottom.
+
+Entry captures the session's ready status when the conversation opens. It waits for the opening catch-up to become live before selecting a response, so an incomplete page or retained tail cannot select the previous answer. A status change while loading does not change that opening intent. Offline content can supply a provisional position until the first live snapshot. A reader scroll, Jump to latest, send, or Load earlier cancels the pending entry move. Later turns do not restart entry. This state resets when the conversation changes. Read acknowledgements still require the bottom of the transcript to be visible.
 
 For a lazy transcript, entry first brings the response into layout, then waits for both the response and its context target to have measured geometry before the final scroll. While a measurement is pending, entry reissues the same move whenever the pending layout changes. Pending history moves observe content and viewport height changes through the same settling coordinator. This avoids scrolling against a short content-height estimate on iOS 26.5.
 
@@ -110,5 +112,7 @@ Submitting acquires the transcript’s bottom immediately without animation, inc
 The opt-in Debug fixture environment value `TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE=1` exposes coherent scroll geometry samples to UI tests. Send regression tests inspect every recorded geometry change after reaching the bottom, rather than comparing accessibility frames captured at different points during a keyboard animation. This is simulator layout evidence; it does not measure physical-device frame timing.
 
 The Debug home fixture accepts `TOASTTY_MOBILE_FIXTURE_READY_WORK=1` to put a tool card before the latest response, and `TOASTTY_MOBILE_FIXTURE_READY_HISTORY=1` to add 200 older rows and exercise lazy entry positioning.
+
+`TOASTTY_MOBILE_FIXTURE_ENTRY_LOAD` selects a two-session Debug fixture for primary Next navigation. Values `catch-up`, `phase-only`, `rebuilt`, and `reconnect` control transcript arrival. Its on-screen controls publish the latest response and finish loading. They also clear the unread status while entry is pending. The UI tests check response-start alignment and preserve manual scrolling and Jump to latest through completion.
 
 The Debug `gated-send` fixture accepts `TOASTTY_MOBILE_FIXTURE_SHORT_READY_RESPONSE=1` to make its latest reply short. The keyboard regression uses this variant to check bottom following after ready-session entry.

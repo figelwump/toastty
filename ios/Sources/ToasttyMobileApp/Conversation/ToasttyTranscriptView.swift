@@ -31,7 +31,7 @@ struct ToasttyTranscriptView: View {
     @State private var isVisible = false
     @State private var followsLiveEdge = true
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
-    @State private var entryScrollPosition = TranscriptEntryScrollPosition()
+    @State private var entryScrollPosition: TranscriptEntryScrollPosition
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
     @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
     #if DEBUG
@@ -68,7 +68,10 @@ struct ToasttyTranscriptView: View {
         self.workingIndicator = workingIndicator
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
-        _followsLiveEdge = State(initialValue: readAcknowledgementEpoch?.bucket != .ready)
+        _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
+        _followsLiveEdge = State(initialValue:
+            readAcknowledgementEpoch?.bucket != .ready || state.phase == .loading || state.phase == .resyncing
+        )
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
     }
 
@@ -208,6 +211,7 @@ struct ToasttyTranscriptView: View {
                         // after finger lift.
                         jumpToLiveEdgeRequest = 0
                         followsLiveEdge = false
+                        entryScrollPosition.cancelForInteraction()
                         scrollCoordinator.cancelForInteraction()
                         #if DEBUG
                         fixtureScrollTrace.stop()
@@ -242,6 +246,7 @@ struct ToasttyTranscriptView: View {
                         Button {
                             // The affordance stays visible until the live edge
                             // is actually reached; each tap (re)starts a jump.
+                            entryScrollPosition.cancelForInteraction()
                             scrollCoordinator.requestJump()
                         } label: {
                             Label("Jump to latest", systemImage: "arrow.down")
@@ -257,14 +262,16 @@ struct ToasttyTranscriptView: View {
                     }
                 }
                 .onChange(of: jumpToLiveEdgeRequest) { _, request in
-                    guard request > 0, lastScrollTarget != nil else { return }
+                    guard request > 0 else { return }
+                    entryScrollPosition.cancelForInteraction()
+                    guard lastScrollTarget != nil else { return }
                     #if DEBUG
                     fixtureScrollTrace.begin()
                     #endif
                     scrollCoordinator.requestSend(request)
                 }
-                .onChange(of: scrollChangeKey, initial: true) { _, _ in
-                    reconcileScrollChange()
+                .onChange(of: scrollChangeKey, initial: true) { old, new in
+                    reconcileScrollChange(contentChanged: old.content != new.content)
                 }
                 .task(id: scrollTaskKey) {
                     guard let command = scrollTaskKey.command else { return }
@@ -684,7 +691,10 @@ struct ToasttyTranscriptView: View {
             .transcriptBannerStyle(color: ToasttyDesignTokens.secondaryText)
             .accessibilityIdentifier("toastty-mobile-transcript-loading-older")
         } else if state.hasOlder {
-            Button(action: loadOlder) {
+            Button {
+                entryScrollPosition.cancelForInteraction()
+                loadOlder()
+            } label: {
                 Label("Load earlier activity", systemImage: "arrow.up")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(ToasttyDesignTokens.amberText)
@@ -739,11 +749,15 @@ struct ToasttyTranscriptView: View {
 
     private var scrollChangeKey: ScrollChangeKey {
         ScrollChangeKey(
-            revision: state.revision,
-            blockCount: state.blocks.count,
-            sendItems: state.sendItems.map(ToasttySendScrollItem.init),
-            firstID: state.blocks.first?.id,
-            lastTarget: lastScrollTarget
+            content: ScrollContentKey(
+                revision: state.revision,
+                blockCount: state.blocks.count,
+                sendItems: state.sendItems.map(ToasttySendScrollItem.init),
+                firstID: state.blocks.first?.id,
+                lastTarget: lastScrollTarget
+            ),
+            phase: state.phase,
+            isSubmitting: isSubmitting
         )
     }
 
@@ -756,10 +770,10 @@ struct ToasttyTranscriptView: View {
         )
     }
 
-    private func reconcileScrollChange() {
+    private func reconcileScrollChange(contentChanged: Bool) {
+        let wasPendingEntry = entryScrollPosition.isPending
         if let target = entryScrollPosition.target(
             for: state,
-            status: readAcknowledgementEpoch,
             isSubmitting: isSubmitting
         ) {
             switch target {
@@ -779,6 +793,19 @@ struct ToasttyTranscriptView: View {
             }
             return
         }
+
+        // Catch-up pages and their completion belong to entry positioning,
+        // even when a reader cancelled it. A rebuild on that same update
+        // must not replace the chosen response or override the reader.
+        if wasPendingEntry {
+            if lastScrollTarget != nil, followsLiveEdge || scrollCoordinator.ownsLiveEdge {
+                scrollCoordinator.reinforceLiveEdge()
+            }
+            return
+        }
+        // Phase-only updates can resolve entry, but must not replay a stale
+        // prepend or rebuild revision after entry has finished.
+        guard contentChanged else { return }
 
         switch state.revision {
         case .initial:
@@ -885,24 +912,57 @@ struct ToasttyTranscriptView: View {
     }
 }
 
-/// Choose an entry position once, after transcript content becomes available.
-/// Later status updates must not move a reader through the same response.
+/// Choose from the completed opening catch-up, not its first nonempty page.
+/// Offline content can supply a provisional position until that first live
+/// snapshot. Reader actions cancel entry, and later turns never reopen it.
 struct TranscriptEntryScrollPosition {
+    private let opensLatestResponse: Bool
+    private var isCancelled = false
+    private(set) var isPending = true
     private(set) var selectedTarget: TranscriptScrollCoordinator.Target?
+
+    init(status: MobileSessionStatus?) {
+        opensLatestResponse = status?.bucket == .ready
+    }
+
+    mutating func cancelForInteraction() {
+        isCancelled = true
+    }
 
     mutating func target(
         for state: ToasttyConversationPresentationState,
-        status: MobileSessionStatus?,
         isSubmitting: Bool
     ) -> TranscriptScrollCoordinator.Target? {
-        guard selectedTarget == nil,
-              state.blocks.isEmpty == false || state.sendItems.isEmpty == false
-        else { return nil }
-        selectedTarget = .liveEdge
+        guard isPending else { return nil }
+        if isSubmitting || !state.sendItems.isEmpty {
+            isPending = false
+            guard !isCancelled else { return nil }
+            selectedTarget = .liveEdge
+            return .liveEdge
+        }
 
-        guard status?.bucket == .ready,
-              isSubmitting == false,
-              state.sendItems.isEmpty,
+        switch state.phase {
+        case .loading, .resyncing:
+            return nil
+        case .stale, .failure:
+            // Keep cached history usable while disconnected, but allow one
+            // correction when the opening catch-up completes.
+            guard !isCancelled, selectedTarget == nil, !state.blocks.isEmpty else { return nil }
+        case .live:
+            isPending = false
+            guard !isCancelled else { return nil }
+        }
+
+        let target = preferredTarget(for: state)
+        guard target != selectedTarget else { return nil }
+        selectedTarget = target
+        return target
+    }
+
+    private func preferredTarget(
+        for state: ToasttyConversationPresentationState
+    ) -> TranscriptScrollCoordinator.Target {
+        guard opensLatestResponse,
               let response = state.rows.reversed().prefix(while: { row in
                   if case .userMessage = row.content { return false }
                   return true
@@ -913,11 +973,9 @@ struct TranscriptEntryScrollPosition {
               })
         else { return .liveEdge }
 
-        let target = TranscriptScrollCoordinator.Target.responseStart(
+        return .responseStart(
             ToasttyTranscriptBlockID(rowID: response.id)
         )
-        selectedTarget = target
-        return target
     }
 }
 
@@ -1520,6 +1578,12 @@ private struct TurnFoldKey: Equatable {
 }
 
 private struct ScrollChangeKey: Equatable {
+    let content: ScrollContentKey
+    let phase: ToasttyConversationPresentationPhase
+    let isSubmitting: Bool
+}
+
+private struct ScrollContentKey: Equatable {
     let revision: ToasttyTranscriptRevision
     let blockCount: Int
     let sendItems: [ToasttySendScrollItem]

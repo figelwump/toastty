@@ -114,6 +114,73 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(subject.projectionRunID, runID(2))
     }
 
+    func testReadyEntryResolvesAfterTheLastCatchUpPageAndPhaseOnlyCompletion() async {
+        let runtime = ConversationRuntime(conversationID: conversationID)
+        let subject = LiveConversationController(conversationID: conversationID.rawValue, runtime: runtime)
+        let events = [userEvent(1, clientRequestID: "previous"), event(2),
+                      userEvent(3, clientRequestID: "latest"), event(4)]
+        func page(_ events: [CompatibleConversationEvent]) -> CompatibleConversationEventPage {
+            CompatibleConversationEventPage(
+                conversationID: conversationID, projectionRunID: runID(1), projectionGeneration: 7,
+                events: events, latestSequence: 4, firstAvailableSequence: 1, historyTruncated: false
+            )
+        }
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        _ = await runtime.beginCatchUp(connectionGeneration: 1)
+        let firstPage = await runtime.applyREST(page(Array(events.prefix(2))), connectionGeneration: 1)
+        guard case .fetchREST = firstPage else { return XCTFail("The newest turn needs a second page") }
+        subject.consume(await runtime.currentState())
+        XCTAssertEqual(subject.transcriptPresentation.phase, .resyncing)
+        XCTAssertNil(position.target(for: subject.transcriptPresentation, isSubmitting: false))
+
+        _ = await runtime.applyREST(page(Array(events.suffix(2))), connectionGeneration: 1)
+        subject.consume(await runtime.currentState())
+        XCTAssertEqual(subject.transcriptPresentation.revision, .appended)
+        XCTAssertNil(position.target(for: subject.transcriptPresentation, isSubmitting: false))
+
+        let finished = await runtime.finishCatchUp(connectionGeneration: 1)
+        XCTAssertTrue(finished)
+        subject.consume(await runtime.currentState())
+        XCTAssertEqual(subject.transcriptPresentation.phase, .live)
+        XCTAssertEqual(subject.transcriptPresentation.revision, .metadataOnly)
+        XCTAssertEqual(position.target(for: subject.transcriptPresentation, isSubmitting: false),
+                       .responseStart(ToasttyTranscriptBlockID(rowID: subject.transcriptPresentation.rows[3].id)))
+    }
+
+    func testReopenedRetainedRuntimeDoesNotChooseItsOldResponseDuringCatchUp() async {
+        let runtime = ConversationRuntime(conversationID: conversationID)
+        func page(_ events: [CompatibleConversationEvent]) -> CompatibleConversationEventPage {
+            CompatibleConversationEventPage(
+                conversationID: conversationID, projectionRunID: runID(1), projectionGeneration: 7,
+                events: events, latestSequence: events.last?.sequence ?? 0,
+                firstAvailableSequence: 1, historyTruncated: false
+            )
+        }
+        _ = await runtime.beginCatchUp(connectionGeneration: 1)
+        _ = await runtime.applyRESTTail(page([userEvent(1, clientRequestID: "previous"), event(2)]),
+                                        connectionGeneration: 1)
+        _ = await runtime.finishCatchUp(connectionGeneration: 1)
+        _ = await runtime.suspend(connectionGeneration: 1)
+
+        let subject = LiveConversationController(conversationID: conversationID.rawValue, runtime: runtime)
+        subject.consume(await runtime.currentState())
+        var position = TranscriptEntryScrollPosition(status: .ready)
+        XCTAssertEqual(subject.transcriptPresentation.phase, .stale)
+        XCTAssertEqual(position.target(for: subject.transcriptPresentation, isSubmitting: false),
+                       .responseStart(ToasttyTranscriptBlockID(rowID: subject.transcriptPresentation.rows[1].id)))
+        XCTAssertTrue(position.isPending, "An offline retained response is provisional")
+
+        _ = await runtime.beginCatchUp(connectionGeneration: 1)
+        subject.consume(await runtime.currentState())
+        XCTAssertNil(position.target(for: subject.transcriptPresentation, isSubmitting: false))
+        _ = await runtime.applyREST(page([userEvent(3, clientRequestID: "latest"), event(4)]),
+                                    connectionGeneration: 1)
+        _ = await runtime.finishCatchUp(connectionGeneration: 1)
+        subject.consume(await runtime.currentState())
+        XCTAssertEqual(position.target(for: subject.transcriptPresentation, isSubmitting: false),
+                       .responseStart(ToasttyTranscriptBlockID(rowID: subject.transcriptPresentation.rows[3].id)))
+    }
+
     func testMetadataUpdatesReusePreparedTranscriptAndContentAppendRebuildsIt() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,

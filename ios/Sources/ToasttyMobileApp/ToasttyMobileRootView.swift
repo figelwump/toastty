@@ -20,6 +20,7 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureTurnStopped = false
     @State private var fixtureLocalDraftReleaseAttempts = 0
 #if DEBUG
+    @State private var fixtureEntryLoadStep = 0
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
     @State private var fixtureSendUpdateCount = 0
@@ -31,6 +32,7 @@ struct ToasttyMobileRootView: View {
     private let forcesPairingPrivacyShield: Bool
     private let fixtureScenario: ToasttyMobileFixtureScenario?
 #if DEBUG
+    private let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
     private let controlsFixtureSubmission: Bool
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
 #endif
@@ -80,6 +82,7 @@ struct ToasttyMobileRootView: View {
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
 #if DEBUG
+        entryLoadFixture = configuration.entryLoadFixture
         controlsFixtureSubmission = configuration.fixtureScenario == .gatedSend
             && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT"] == "1"
         fixtureSendEventOrder = configuration.fixtureScenario == .gatedSend
@@ -417,6 +420,25 @@ struct ToasttyMobileRootView: View {
         .id(conversationID)
 #if DEBUG
         .overlay(alignment: .topTrailing) {
+            if let entryLoadFixture, conversationID == Self.fixtureOpenPromptConversationID,
+               fixtureEntryLoadStep < 2 {
+                Button(fixtureEntryLoadStep == 0 && entryLoadFixture == .catchUp
+                       ? "Load latest response" : "Finish catch-up") {
+                    fixtureEntryLoadStep = entryLoadFixture == .catchUp ? fixtureEntryLoadStep + 1 : 2
+                    // The unread status can clear on another client while this
+                    // phone is loading. Entry keeps the original ready intent.
+                    sessionController.homeController.update(
+                        snapshot: ToasttyConversationFixture.entryLoadHome(isRead: true),
+                        connectionState: .live,
+                        freshness: .live
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("toastty-mobile-fixture-entry-load-\(fixtureEntryLoadStep)")
+                .padding(.top, 80)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
             if controlsFixtureSubmission,
                conversationID == Self.fixtureOpenPromptConversationID,
                let pending = controlledFixtureSubmission {
@@ -501,6 +523,11 @@ struct ToasttyMobileRootView: View {
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState? {
 #if DEBUG
+        if let entryLoadFixture, conversationID == Self.fixtureOpenPromptConversationID {
+            return ToasttyConversationFixture.entryLoadPresentation(
+                for: conversationID, mode: entryLoadFixture, step: fixtureEntryLoadStep
+            )
+        }
         switch fixtureScenario {
         case .home, .reconnecting:
             let hasWork = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_WORK"] == "1"
