@@ -296,6 +296,10 @@ struct RemotePendingSendCorrelator: Sendable {
         pendingSendsByConversationID[request.conversationID] = pendingSends
     }
 
+    func contains(clientRequestID: String, for conversationID: RemoteConversationID) -> Bool {
+        pendingSendsByConversationID[conversationID]?.contains { $0.clientRequestID == clientRequestID } == true
+    }
+
     mutating func discard(for conversationID: RemoteConversationID) {
         pendingSendsByConversationID.removeValue(forKey: conversationID)
     }
@@ -482,6 +486,11 @@ final class RemoteAccessService: ObservableObject {
     private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
+    /// Codex writes `task_started` before the user message, and pre-turn work
+    /// such as automatic context compaction can separate them by more than a
+    /// minute. While a Codex turn that started after the send is running, a
+    /// send stays pending up to this long after acceptance.
+    private let codexTurnConfirmationTimeout: Duration
     private let localDraftEpochBroadcastInterval: Duration
 
     private struct RemotePresentationDiagnosticState: Equatable {
@@ -511,6 +520,12 @@ final class RemoteAccessService: ObservableObject {
     private struct PendingSendConfirmationWork {
         var acceptedAt: Date
         var task: Task<Void, Never>
+        /// A Codex turn that started after this send was accepted and has not
+        /// ended yet. The inner value is the provider turn ID, when known.
+        var runningCodexTurnID: String??
+        /// The normal deadline passed while `runningCodexTurnID` was set, so
+        /// the end of that turn decides the outcome.
+        var isWaitingForCodexTurn = false
     }
     private var pendingSendConfirmationWork: [
         PendingSendConfirmationKey: PendingSendConfirmationWork
@@ -572,6 +587,7 @@ final class RemoteAccessService: ObservableObject {
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pushConfiguration: RemotePushConfiguration? = .configured(),
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
@@ -597,6 +613,7 @@ final class RemoteAccessService: ObservableObject {
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
+        self.codexTurnConfirmationTimeout = codexTurnConfirmationTimeout
         self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
         self.pushConfiguration = pushConfiguration
         self.pushRelay = pushRelay
@@ -2548,7 +2565,7 @@ final class RemoteAccessService: ObservableObject {
             && previousObservationIndex == nil
         var changed = false
         if let previousIdentity, previousIdentity != identity || feedWasRewritten {
-            pendingSendCorrelator.discard(for: candidate.conversationID)
+            discardPendingSendCorrelation(for: candidate.conversationID)
             projectionStore.forceResnapshot(
                 for: candidate.conversationID,
                 bindingID: UUID(),
@@ -2629,7 +2646,7 @@ final class RemoteAccessService: ObservableObject {
         }
         // A hook feed normally has no file. Only losing an actual file
         // binding invalidates pending sends; a routine feed sync does not.
-        pendingSendCorrelator.discard(for: conversationID)
+        discardPendingSendCorrelation(for: conversationID)
         if runtimeBound {
             let emitted = projectionStore.noteBinding(
                 for: conversationID,
@@ -2650,7 +2667,7 @@ final class RemoteAccessService: ObservableObject {
         // Every fresh tailer replays from byte zero. Discard correlation before
         // constructing it so historical same-text input cannot confirm a send
         // accepted against the previous file/tailer lifetime.
-        pendingSendCorrelator.discard(for: conversationID)
+        discardPendingSendCorrelation(for: conversationID)
         let generation = conversationTrackingGeneration
         let tailer = RemoteTranscriptTailer(
             conversationID: conversationID,
@@ -2706,7 +2723,7 @@ final class RemoteAccessService: ObservableObject {
             // space and re-read the file from the start under a fresh
             // generation. Discard delivery correlation before any early exit;
             // `startTailer` defensively repeats this for every replay path.
-            pendingSendCorrelator.discard(for: conversationID)
+            discardPendingSendCorrelation(for: conversationID)
             guard let tailer = tailersByConversationID[conversationID] else { return }
             let path = tailer.fileURL.path
             let provider = tailer.provider
@@ -3507,39 +3524,129 @@ final class RemoteAccessService: ObservableObject {
         pendingSendConfirmationWork.removeValue(forKey: key)?.task.cancel()
         let acceptedAt = Date()
         let task = Task { @MainActor [weak self] in
-            guard let self else { return }
             do {
                 try await Task.sleep(for: confirmationTimeout)
+                guard Task.isCancelled == false else { return }
+                if let extraWait = self?.codexTurnConfirmationExtension(for: key) {
+                    try await Task.sleep(for: extraWait)
+                    guard Task.isCancelled == false else { return }
+                }
             } catch {
                 return
             }
-            guard Task.isCancelled == false,
-                  self.isEnabled,
-                  let work = self.pendingSendConfirmationWork.removeValue(forKey: key) else {
-                return
-            }
-            self.pendingSendCorrelator.discard(clientRequestID: clientRequestID, for: conversationID)
-            let emitted = self.projectionStore.noteSendDeliveryUnconfirmed(
-                for: conversationID,
-                clientRequestID: clientRequestID,
-                at: Date()
-            )
-            guard emitted.isEmpty == false else { return }
-            let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
-            ToasttyLog.warning(
-                "Remote send was not confirmed by the provider transcript",
-                category: .automation,
-                metadata: [
-                    "conversation_id": conversationID.rawValue.uuidString,
-                    "latency_ms": String(latencyMs),
-                ]
-            )
-            self.broadcastEvents(emitted, for: conversationID)
+            self?.expireUnconfirmedSend(key)
         }
         pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
             acceptedAt: acceptedAt,
             task: task
         )
+    }
+
+    /// Returns how much longer to wait when the normal deadline passes while
+    /// a Codex turn that started after the send is still running and the
+    /// send can still match its user message.
+    private func codexTurnConfirmationExtension(for key: PendingSendConfirmationKey) -> Duration? {
+        guard isEnabled,
+              var work = pendingSendConfirmationWork[key],
+              let turnID = work.runningCodexTurnID,
+              pendingSendCorrelator.contains(clientRequestID: key.clientRequestID, for: key.conversationID) else {
+            return nil
+        }
+        let remaining = codexTurnConfirmationTimeout - .seconds(Date().timeIntervalSince(work.acceptedAt))
+        guard remaining > .zero else { return nil }
+        work.isWaitingForCodexTurn = true
+        pendingSendConfirmationWork[key] = work
+        ToasttyLog.info(
+            "Remote send confirmation is waiting for the started Codex turn",
+            category: .automation,
+            metadata: [
+                "conversation_id": key.conversationID.rawValue.uuidString,
+                "turn_id": turnID ?? "unknown",
+            ]
+        )
+        return remaining
+    }
+
+    private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey) {
+        guard isEnabled,
+              let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
+            return
+        }
+        work.task.cancel()
+        let conversationID = key.conversationID
+        pendingSendCorrelator.discard(clientRequestID: key.clientRequestID, for: conversationID)
+        let emitted = projectionStore.noteSendDeliveryUnconfirmed(
+            for: conversationID,
+            clientRequestID: key.clientRequestID,
+            at: Date()
+        )
+        guard emitted.isEmpty == false else { return }
+        let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+        ToasttyLog.warning(
+            "Remote send was not confirmed by the provider transcript",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "latency_ms": String(latencyMs),
+                "waited_for_codex_turn": String(work.isWaitingForCodexTurn),
+            ]
+        )
+        broadcastEvents(emitted, for: conversationID)
+    }
+
+    /// Codex starts a turn before it records the turn's user message. Track a
+    /// turn that starts after a pending send so the send's deadline can wait
+    /// for it, and settle a send that was waiting once that turn ends without
+    /// its message. Other providers report the turn start with or after the
+    /// user message, so a missing message there is already a mismatch.
+    private func trackCodexTurn(
+        _ observation: ProviderTranscriptObservation,
+        for conversationID: RemoteConversationID
+    ) {
+        guard observation.mayAuthorizeCurrentRuntime else { return }
+        switch observation.payload {
+        case .turnStarted(let turnID):
+            // A start recorded before the send was delivered belongs to an
+            // earlier turn. The margin covers the transcript's millisecond
+            // timestamps and the delivery call itself.
+            for (key, work) in pendingSendConfirmationWork
+            where key.conversationID == conversationID
+                && observation.timestamp >= work.acceptedAt.addingTimeInterval(-1) {
+                pendingSendConfirmationWork[key]?.runningCodexTurnID = .some(turnID)
+            }
+        case .turnEnded(let endedTurnID, _):
+            for (key, work) in pendingSendConfirmationWork where key.conversationID == conversationID {
+                guard let runningTurnID = work.runningCodexTurnID else { continue }
+                if let runningTurnID, let endedTurnID, runningTurnID != endedTurnID {
+                    continue
+                }
+                if work.isWaitingForCodexTurn {
+                    expireUnconfirmedSend(key)
+                } else {
+                    pendingSendConfirmationWork[key]?.runningCodexTurnID = nil
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    /// A send waiting for a Codex turn can confirm only through its
+    /// correlation entry. Once a different user message consumed it, or the
+    /// transcript binding discarded it, settle the send now instead of at the
+    /// turn's end or the time limit.
+    private func expireCodexTurnWaitsWithoutCorrelation(for conversationID: RemoteConversationID) {
+        for (key, work) in pendingSendConfirmationWork
+        where key.conversationID == conversationID
+            && work.isWaitingForCodexTurn
+            && pendingSendCorrelator.contains(clientRequestID: key.clientRequestID, for: conversationID) == false {
+            expireUnconfirmedSend(key)
+        }
+    }
+
+    private func discardPendingSendCorrelation(for conversationID: RemoteConversationID) {
+        pendingSendCorrelator.discard(for: conversationID)
+        expireCodexTurnWaitsWithoutCorrelation(for: conversationID)
     }
 
     /// Stamps origin=.remote and the clientRequestID onto the confirming user
@@ -3554,22 +3661,35 @@ final class RemoteAccessService: ObservableObject {
            let panelID = panelIDByConversationID[conversationID] {
             sessionRuntimeStore.reconcileClaudeQuestionTranscript(observations, sessionID: sessionID, panelID: panelID)
         }
-        let stamped = pendingSendCorrelator.stamp(observations, for: conversationID)
-        for observation in stamped {
-            guard case .transcript(.userMessage(let payload)) = observation.payload else { continue }
-            if payload.clientRequestID == nil, observation.mayAuthorizeCurrentRuntime {
-                // The Mac user submitted what they typed: the running turn no
-                // longer holds a local draft that a steer or the next prompt
-                // must avoid.
-                coordinator.noteLocalDraftSubmitted(for: conversationID)
+        let tracksCodexTurns = projectionStore.projectorState(for: conversationID)?.provider == .codex
+        var stamped: [ProviderTranscriptObservation] = []
+        stamped.reserveCapacity(observations.count)
+        // One observation at a time, in transcript order: a Codex turn that
+        // ends without the send must settle it before a later user message in
+        // the same batch can match it.
+        for observation in observations {
+            let observation = pendingSendCorrelator.stamp([observation], for: conversationID)[0]
+            stamped.append(observation)
+            if case .transcript(.userMessage(let payload)) = observation.payload {
+                if payload.clientRequestID == nil, observation.mayAuthorizeCurrentRuntime {
+                    // The Mac user submitted what they typed: the running turn no
+                    // longer holds a local draft that a steer or the next prompt
+                    // must avoid.
+                    coordinator.noteLocalDraftSubmitted(for: conversationID)
+                }
+                if let clientRequestID = payload.clientRequestID {
+                    confirmPendingSend(
+                        conversationID: conversationID,
+                        clientRequestID: clientRequestID
+                    )
+                }
             }
-            guard let clientRequestID = payload.clientRequestID else {
-                continue
+            if tracksCodexTurns {
+                trackCodexTurn(observation, for: conversationID)
             }
-            confirmPendingSend(
-                conversationID: conversationID,
-                clientRequestID: clientRequestID
-            )
+        }
+        if tracksCodexTurns {
+            expireCodexTurnWaitsWithoutCorrelation(for: conversationID)
         }
         return stamped
     }

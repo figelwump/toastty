@@ -2376,6 +2376,149 @@ struct RemoteAccessServiceSafetyTests {
         try await Self.waitForReceipt(next.clientRequestID, mode: nil, in: fixture)
     }
 
+    enum CodexStartedTurnOutcome: CaseIterable, Sendable {
+        case recordsMessage
+        case endsThenNextTurnRepeatsText
+        case neverEnds
+        case startedBeforeSend
+    }
+
+    /// Codex starts a turn when it accepts input but records the user message
+    /// only after pre-turn work such as automatic context compaction, which
+    /// can take more than a minute. Real Codex 0.162.1 order: task_started,
+    /// ContextCompaction item, UserMessage item, all with the same turn ID.
+    @MainActor
+    @Test(arguments: CodexStartedTurnOutcome.allCases)
+    func codexSendWaitsForATurnThatStartsBeforeRecordingIt(_ outcome: CodexStartedTurnOutcome) async throws {
+        let fixture = try RemoteBootstrapFixture(
+            sendConfirmationTimeout: .seconds(2),
+            codexTurnConfirmationTimeout: outcome == .neverEnds ? .seconds(5) : .seconds(60)
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        let panelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
+            _, _, deliveredPanelID, _ in deliveredPanelID == panelID
+        }
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "compacting-turn-send",
+            expectedInputEpoch: epoch, text: "Ok yeah do that"
+        )
+        let sentAt = ContinuousClock.now
+        #expect(fixture.service.performRemoteSend(request, device: .init(
+            name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt
+        )).isAccepted)
+
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        let startedAt = outcome == .startedBeforeSend ? Date().addingTimeInterval(-60) : Date()
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"compacting-turn"}"#, at: Self.codexTimestamp(startedAt)
+        ))
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 1_500_000_000) {
+            Self.projectedWorkingStatus(in: fixture)
+        }
+        guard Self.projectedWorkingStatus(in: fixture) else {
+            Issue.record("The turn start was not ingested before the normal deadline")
+            return
+        }
+        try await Task.sleep(until: sentAt.advanced(by: .seconds(3)), clock: .continuous)
+        // Past the normal deadline, only a turn that started after the send
+        // keeps it pending.
+        #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture) == (outcome == .startedBeforeSend))
+
+        switch outcome {
+        case .recordsMessage:
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"item_completed","turn_id":"compacting-turn","item":{"type":"ContextCompaction","id":"compaction-1"}}"#,
+                at: Self.codexTimestamp(Date())
+            ))
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"item_completed","turn_id":"compacting-turn","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Ok yeah do that"}]}}"#,
+                at: Self.codexTimestamp(Date())
+            ))
+            try await Self.waitForReceipt(request.clientRequestID, mode: nil, in: fixture)
+        case .endsThenNextTurnRepeatsText:
+            // One write, so the end and the next turn's identical text can
+            // arrive in one batch. The end settles the send first, well
+            // before the 60-second limit, and the later text cannot claim it.
+            let now = Self.codexTimestamp(Date())
+            var lines = Self.codexLine(#"{"type":"task_complete","turn_id":"compacting-turn"}"#, at: now)
+            lines.append(Self.codexLine(#"{"type":"task_started","turn_id":"next-turn"}"#, at: now))
+            lines.append(Self.codexLine(
+                #"{"type":"item_completed","turn_id":"next-turn","item":{"type":"UserMessage","id":"user-2","content":[{"type":"text","text":"Ok yeah do that"}]}}"#,
+                at: now
+            ))
+            try transcript.write(contentsOf: lines)
+            await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 5_000_000_000) {
+                Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+            }
+            #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+            await SessionRuntimeStoreTestSupport.waitUntil {
+                Self.userMessageTexts(in: fixture).contains("Ok yeah do that")
+            }
+            guard case .page(let page) = fixture.service.facadeConversationEvents(
+                for: fixture.conversationID, after: nil, limit: 100
+            ) else {
+                Issue.record("Expected conversation event page")
+                return
+            }
+            #expect(!page.events.contains { event in
+                guard case .userMessage(let payload) = event.payload else { return false }
+                return payload.clientRequestID == request.clientRequestID
+            })
+        case .neverEnds:
+            await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 5_000_000_000) {
+                Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+            }
+            #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+        case .startedBeforeSend:
+            break
+        }
+    }
+
+    private static func codexTimestamp(_ date: Date) -> String {
+        date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+    }
+
+    @MainActor
+    private static func projectedWorkingStatus(in fixture: RemoteBootstrapFixture) -> Bool {
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID, after: nil, limit: 100
+        ) else { return false }
+        return page.events.contains { event in
+            guard case .statusChanged(let payload) = event.payload else { return false }
+            return payload.state == .working
+        }
+    }
+
+    @MainActor
+    private static func userMessageTexts(in fixture: RemoteBootstrapFixture) -> [String] {
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID, after: nil, limit: 100
+        ) else { return [] }
+        return page.events.compactMap { event in
+            guard case .userMessage(let payload) = event.payload else { return nil }
+            return payload.text
+        }
+    }
+
+    @MainActor
+    private static func hasUnconfirmedReceipt(_ clientRequestID: String, in fixture: RemoteBootstrapFixture) -> Bool {
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID, after: nil, limit: 100
+        ) else { return false }
+        return page.events.contains { event in
+            guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return false }
+            return payload.clientRequestID == clientRequestID
+        }
+    }
+
     @MainActor
     @Test func activationMintsIdentityBeforeListeningAndDisableRemovesLiveTracking() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
@@ -2588,6 +2731,7 @@ private final class RemoteBootstrapFixture {
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pairNativeDevice: Bool = false,
         pushConfiguration: RemotePushConfiguration? = nil,
@@ -2662,6 +2806,7 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            codexTurnConfirmationTimeout: codexTurnConfirmationTimeout,
             localDraftEpochBroadcastInterval: localDraftEpochBroadcastInterval,
             pushConfiguration: pushConfiguration,
             pushRelay: pushRelay,
