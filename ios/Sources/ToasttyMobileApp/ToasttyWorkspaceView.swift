@@ -340,7 +340,7 @@ private struct ToasttyWorkspacePanelRow: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let age = panel.updatedAt.map { ToasttyWorkspacePanels.age($0, now: context.date) }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: Self.symbol(for: panel.kind))
+                Image(systemName: ToasttyWorkspacePanels.symbol(for: panel.kind))
                     .font(.subheadline)
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     .frame(width: 20)
@@ -385,14 +385,6 @@ private struct ToasttyWorkspacePanelRow: View {
             parts.append(age == "now" ? "updated just now" : "updated \(age) ago")
         }
         return parts.joined(separator: ", ")
-    }
-
-    private static func symbol(for kind: String) -> String {
-        switch kind {
-        case "scratchpad": "square.on.square"
-        case "browser": "globe"
-        default: "doc.text"
-        }
     }
 
     private static func kindName(for kind: String) -> String {

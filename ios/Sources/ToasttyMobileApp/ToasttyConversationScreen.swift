@@ -167,10 +167,10 @@ struct ToasttyConversationScreen: View {
                     navigationBarHeader(conversation)
                 }
             }
-            // Next sits rightmost, with Scratchpad just inside it. Each shows
+            // Next sits rightmost, with Panels just inside it. Each shows
             // only when it has somewhere to go.
             ToolbarItemGroup(placement: .topBarTrailing) {
-                scratchpadButton
+                panelsButton
                 nextSessionButton
             }
         }
@@ -184,23 +184,41 @@ struct ToasttyConversationScreen: View {
         return .loading
     }
 
+    /// Lists the workspace's panels as its workspace page does, plus any
+    /// Scratchpad of this session that lives in another workspace. A lone
+    /// panel opens on tap.
     @ViewBuilder
-    private var scratchpadButton: some View {
-        let panels = ToasttySessionScratchpads.panels(in: controller.snapshot, for: conversationID)
+    private var panelsButton: some View {
+        let sections = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
+        let panels = sections.flatMap(\.panels)
         if panels.count == 1, let panel = panels.first {
-            Button { openScratchpad(panel) } label: {
-                Label("Scratchpad", systemImage: "square.on.square")
+            Button { openPanel(panel) } label: {
+                Label("Panels", systemImage: "square.on.square")
             }
-            .accessibilityIdentifier("toastty-conversation-scratchpad")
+            .accessibilityHint("Opens \(panel.panel.title)")
+            .accessibilityIdentifier("toastty-conversation-panels")
         } else if panels.count > 1 {
             Menu {
-                ForEach(panels) { panel in
-                    Button(panel.menuTitle) { openScratchpad(panel) }
+                ForEach(sections) { section in
+                    Section {
+                        ForEach(section.panels) { panel in
+                            Button { openPanel(panel) } label: {
+                                Label(panel.panel.title,
+                                      systemImage: ToasttyWorkspacePanels.symbol(for: panel.panel.kind))
+                                if let folderHint = panel.folderHint {
+                                    Text(folderHint)
+                                }
+                            }
+                        }
+                    } header: {
+                        // Only a menu that spans workspaces names them.
+                        if sections.count > 1 { Text(section.workspaceTitle) }
+                    }
                 }
             } label: {
-                Label("Scratchpads", systemImage: "square.on.square")
+                Label("Panels", systemImage: "square.on.square")
             }
-            .accessibilityIdentifier("toastty-conversation-scratchpad")
+            .accessibilityIdentifier("toastty-conversation-panels")
         }
     }
 
@@ -262,9 +280,12 @@ struct ToasttyConversationScreen: View {
         controller.open(conversation)
     }
 
-    private func openScratchpad(_ panel: ToasttySessionScratchpad) {
+    private func openPanel(_ panel: ToasttyConversationPanel) {
+        // Resolve again at tap time so a panel that closed or moved since the
+        // menu rendered does not open.
         guard selectedPreview == nil,
-              let current = ToasttySessionScratchpads.panels(in: controller.snapshot, for: conversationID)
+              let current = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
+                .lazy.flatMap(\.panels)
                 .first(where: { $0.workspaceID == panel.workspaceID && $0.id == panel.id }) else { return }
         isComposerFocused = false
         selectedPreview = current.selection
@@ -286,7 +307,7 @@ struct ToasttyConversationScreen: View {
                 .truncationMode(.middle)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("toastty-mobile-conversation-title")
-            // The trailing Scratchpad and Next buttons narrow the title area;
+            // The trailing Panels and Next buttons narrow the title area;
             // the agent name goes first when the full line no longer fits.
             ViewThatFits(in: .horizontal) {
                 headerStatusLine(conversation, metadata: headerMetadata(conversation))
