@@ -417,7 +417,7 @@ updated Toastty to install the hook with the longer answer window.
 Session rows follow the desktop sidebar: a status mark, the session name, and
 its latest summary. Touch and hold a row to see its path, last update, model,
 workspace, desktop tab, and agent, or to copy its path. In a conversation, the
-**Next** button beside the Scratchpad button opens another session that needs
+**Next** button beside the Panels button opens another session that needs
 you: approvals first, then errors, then unread results. Touch and hold it to
 choose from the list. It is hidden when no other session needs you.
 
@@ -577,10 +577,12 @@ phone does not focus or close its desktop panel, and the phone's zoom and
 scroll position are independent. Close the sheet or return to the workspace,
 then open the preview again to load current content from the Mac.
 
-For a Scratchpad linked to a session, use the **Scratchpad** button in the
-chat header to open it in a sheet. Close the sheet to return to your chat;
-an unfinished message draft is preserved. If more than one open Scratchpad
-is linked to that session, the button offers a menu identifying each panel.
+Use the **Panels** button in the chat header to open a panel from the
+session's workspace in a sheet. Its menu lists the same panels, in the same
+order and with the same titles, as the workspace page. A Scratchpad linked to
+the session that is open in another workspace follows, under that workspace's
+name. With only one panel, the button opens it directly. Close the sheet to
+return to your chat; an unfinished message draft is preserved.
 From a Scratchpad opened through the workspace list, use **Session** to open
 the linked chat. Back returns to the Scratchpad, then to the workspace.
 These links follow the exact live session association on the Mac. Standalone

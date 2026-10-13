@@ -18,7 +18,7 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
         app.typeText("Keep this draft while I check the Scratchpad.")
-        app.buttons["toastty-conversation-scratchpad"].tap()
+        app.buttons["toastty-conversation-panels"].tap()
         XCTAssertTrue(app.buttons["toastty-preview-close"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["toastty-scratchpad-session"].exists)
         let counter = app.webViews.buttons["Tap to count"]
@@ -30,6 +30,30 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertEqual(input.value as? String, "Keep this draft while I check the Scratchpad.")
         XCTAssertFalse(app.keyboards.firstMatch.exists)
+    }
+
+    func testConversationPanelsMenuListsEveryWorkspacePanelAndOpensABrowser() {
+        let app = launchWorkspace()
+        let session = app.buttons["toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000001"]
+        for _ in 0..<8 where !session.isHittable { app.swipeUp() }
+        session.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+        app.buttons["toastty-conversation-panels"].tap()
+        // The workspace page's six panels, in its order and with its titles.
+        // Native menu actions expose their title, not the SwiftUI identifier.
+        let titles = ["Workspace map", "mobile-preview.md", "preview.html",
+                      "Example website", "Earlier notes", "Undated notes"]
+        let items = titles.map { app.buttons[$0] }
+        XCTAssertTrue(items[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(items.allSatisfy(\.exists))
+        XCTAssertEqual(items.map(\.frame.minY), items.map(\.frame.minY).sorted())
+        attach(app, name: "conversation-panels-menu")
+        items[3].tap()
+        XCTAssertTrue(app.buttons["toastty-preview-close"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 10))
+        attach(app, name: "conversation-panels-browser-sheet")
+        app.buttons["toastty-preview-close"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
     }
 
     func testScratchpadSessionBackReturnsToSamePreviewAndThenWorkspace() {

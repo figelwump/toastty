@@ -958,7 +958,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(app.staticTexts["toastty-mobile-conversation-title"], "Mobile gateway design"))
     }
 
-    func testNextButtonSitsBesideScratchpadAndOpensSessionsThatNeedYou() {
+    func testNextButtonSitsBesidePanelsAndOpensSessionsThatNeedYou() {
         let app = launchFixtureApp()
         let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
         XCTAssertTrue(scrollHomeTo(row, in: app))
@@ -968,15 +968,15 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
         assertReadyMessageStartsWithContext(in: app)
         attachScreenshot(named: "fixture-ready-message-start-from-home", of: app)
-        let scratchpad = app.buttons["toastty-conversation-scratchpad"]
+        let panels = app.buttons["toastty-conversation-panels"]
         let next = app.buttons["toastty-conversation-next"]
-        XCTAssertTrue(scratchpad.waitForExistence(timeout: 5))
+        XCTAssertTrue(panels.waitForExistence(timeout: 5))
         XCTAssertTrue(next.exists)
-        XCTAssertTrue(scratchpad.isHittable)
+        XCTAssertTrue(panels.isHittable)
         XCTAssertTrue(next.isHittable)
-        XCTAssertGreaterThanOrEqual(next.frame.minX, scratchpad.frame.maxX)
+        XCTAssertGreaterThanOrEqual(next.frame.minX, panels.frame.maxX)
         XCTAssertEqual(next.value as? String, "6 need you")
-        attachScreenshot(named: "fixture-conversation-next-and-scratchpad", of: app)
+        attachScreenshot(named: "fixture-conversation-next-and-panels", of: app)
 
         let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
         jumpToLatest.tap()

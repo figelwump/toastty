@@ -18,6 +18,14 @@ enum ToasttyWorkspacePanels {
         }
     }
 
+    static func symbol(for kind: String) -> String {
+        switch kind {
+        case "scratchpad": "square.on.square"
+        case "browser": "globe"
+        default: "doc.text"
+        }
+    }
+
     /// The compact age session rows use, so both lists read alike.
     static func age(_ updatedAt: Date, now: Date) -> String {
         let seconds = max(0, now.timeIntervalSince(updatedAt))
