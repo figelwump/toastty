@@ -16,7 +16,7 @@ struct CursorConversationFeedTests {
         init() {
             store.startSession(
                 sessionID: sessionID, agent: .cursor, panelID: panelID,
-                windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
+                windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: date
             )
         }
 
@@ -79,7 +79,7 @@ struct CursorConversationFeedTests {
         let secondID = "second-cursor"
         fixture.store.startSession(
             sessionID: secondID, agent: .cursor, panelID: UUID(), windowID: UUID(),
-            workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: fixture.date
+            workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: fixture.date
         )
         #expect(fixture.store.handleCursorHookEvent(
             sessionID: secondID,

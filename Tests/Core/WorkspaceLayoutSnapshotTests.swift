@@ -340,7 +340,7 @@ struct WorkspaceLayoutSnapshotTests {
                     WebPanelState(
                         definition: .localDocument,
                         title: "notes.md",
-                        filePath: "/tmp/toastty/notes.md"
+                        localDocument: LocalDocumentState(filePath: "/tmp/toastty/notes.md")
                     )
                 ),
             ],
@@ -381,7 +381,7 @@ struct WorkspaceLayoutSnapshotTests {
 
         #expect(webState.definition == .localDocument)
         #expect(webState.title == "notes.md")
-        #expect(webState.filePath == "/tmp/toastty/notes.md")
+        #expect(webState.localDocument?.filePath == "/tmp/toastty/notes.md")
         #expect(
             webState.localDocument == LocalDocumentState(
                 filePath: "/tmp/toastty/notes.md",
@@ -426,7 +426,7 @@ struct WorkspaceLayoutSnapshotTests {
                                     WebPanelState(
                                         definition: .localDocument,
                                         title: "notes.md",
-                                        filePath: filePath
+                                        localDocument: LocalDocumentState(filePath: filePath)
                                     )
                                 ),
                             ],
@@ -475,7 +475,7 @@ struct WorkspaceLayoutSnapshotTests {
 
         #expect(webState.definition == .localDocument)
         #expect(webState.title == "notes.md")
-        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument?.filePath == filePath)
         #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .markdown))
     }
 

@@ -156,8 +156,8 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
     private let timing: ManagedAgentNativeSessionObserverTiming
     private let nowProvider: @Sendable () -> Date
     private let ownershipStateProvider: OwnershipStateProvider
-    /// Temporary legacy policy input for Claude. Codex ownership decisions are
-    /// exclusively made by CodexReconciliation in this migration slice.
+    /// Resolves existing Claude panel owners before accepting a native session.
+    /// Codex ownership decisions use CodexReconciliation instead.
     private let resumeRecordOwnerResolver: ResumeRecordOwnerResolver?
     private let recordHandler: ResumeRecordHandler
 

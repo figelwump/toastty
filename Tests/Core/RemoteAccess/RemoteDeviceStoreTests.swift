@@ -26,7 +26,7 @@ struct RemoteDeviceStoreTests {
         #expect(device.name == "Vishal's phone")
         #expect(token.count >= 40)
 
-        let authenticated = store.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(20))
+        let authenticated = store.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(20))
         #expect(authenticated?.id == device.id)
         #expect(authenticated?.lastSeenAt == Self.now.addingTimeInterval(20))
     }
@@ -69,7 +69,7 @@ struct RemoteDeviceStoreTests {
         }
 
         #expect(try store.revokeDevice(device.id, at: Self.now.addingTimeInterval(60)))
-        #expect(store.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(61)) == nil)
+        #expect(store.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(61)) == nil)
         #expect(store.devices.first?.isRevoked == true)
         // Revoking again is a no-op.
         #expect(try store.revokeDevice(device.id, at: Self.now.addingTimeInterval(62)) == false)
@@ -85,7 +85,7 @@ struct RemoteDeviceStoreTests {
         _ = store.issuePairingCode(at: Self.now)
 
         try store.revokeAllDevices(at: Self.now.addingTimeInterval(5))
-        #expect(store.authenticate(credentialToken: firstToken, at: Self.now.addingTimeInterval(6)) == nil)
+        #expect(store.authenticateBrowserCredential(firstToken, at: Self.now.addingTimeInterval(6)) == nil)
         #expect(store.hasActivePairingCode == false)
         let allRevoked = store.devices.allSatisfy(\.isRevoked)
         #expect(allRevoked)
@@ -118,7 +118,7 @@ struct RemoteDeviceStoreTests {
 
         let reloaded = RemoteDeviceStore(fileURL: fileURL)
         #expect(reloaded.devices.map(\.id) == [device.id])
-        #expect(reloaded.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(30))?.id == device.id)
+        #expect(reloaded.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(30))?.id == device.id)
 
         let permissions = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.posixPermissions] as? Int
         #expect(permissions == 0o600)
@@ -177,17 +177,17 @@ struct RemoteDeviceStoreTests {
             try failingStore.revokeDevice(device.id, at: Self.now.addingTimeInterval(1))
         }
         #expect(failingStore.devices.first?.isRevoked == false)
-        #expect(failingStore.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(2)) != nil)
+        #expect(failingStore.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(2)) != nil)
 
         _ = failingStore.issuePairingCode(at: Self.now.addingTimeInterval(3))
         #expect(throws: ExpectedFailure.self) {
             try failingStore.revokeAllDevices(at: Self.now.addingTimeInterval(4))
         }
         #expect(failingStore.hasActivePairingCode)
-        #expect(failingStore.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(5)) != nil)
+        #expect(failingStore.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(5)) != nil)
 
         let reloaded = RemoteDeviceStore(fileURL: fileURL)
-        #expect(reloaded.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(6)) != nil)
+        #expect(reloaded.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(6)) != nil)
     }
 
     @Test func corruptStoreFileStartsEmpty() throws {
@@ -381,7 +381,7 @@ struct RemoteDeviceStoreTests {
             return
         }
         #expect(authenticated.id == device.id)
-        #expect(reloaded.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(4)) == nil)
+        #expect(reloaded.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(4)) == nil)
     }
 
     @Test func nativeIdentityComparisonDoesNotUnicodeNormalize() throws {

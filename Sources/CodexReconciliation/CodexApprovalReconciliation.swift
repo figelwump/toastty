@@ -5,9 +5,8 @@ import Foundation
 public enum CodexApprovalAuthority: Equatable, Sendable {
     case hooks
     case sessionLogFallback
-    /// Temporary compatibility for sessions created before source selection
-    /// was made explicit. New callers should choose a fixed authority.
-    case legacyPermissive
+    /// External sessions may report approvals through either signal.
+    case externallyReported
 }
 
 public enum CodexApprovalSource: Equatable, Sendable {
@@ -213,7 +212,7 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
 
     private func accepts(_ source: CodexApprovalSource) -> Bool {
         switch (authority, source) {
-        case (.hooks, .hook), (.sessionLogFallback, .sessionLog), (.legacyPermissive, _):
+        case (.hooks, .hook), (.sessionLogFallback, .sessionLog), (.externallyReported, _):
             return true
         case (.hooks, .sessionLog), (.sessionLogFallback, .hook):
             return false

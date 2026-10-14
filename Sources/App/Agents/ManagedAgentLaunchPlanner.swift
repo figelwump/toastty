@@ -491,7 +491,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             workspaceID: target.workspaceID,
             parentSessionID: parentSessionID,
             usesSessionStatusNotifications: true,
-            codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
+            codexStatusTrackingSource: codexStatusTrackingSource,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
             scopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
@@ -924,7 +924,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         logURL: URL,
         codexStatusTrackingSource: CodexStatusTrackingSource
     ) -> CodexSessionLogWatcher {
-        // TODO: Remove this watcher once Codex exposes stable start/approval hooks.
+        // Hooks do not supply every launch identity and input-context observation.
+        // Keep the launch log for those facts and for sessions using log fallback.
         CodexSessionLogWatcher(
             logURL: logURL,
             cursorState: codexSessionLogCursorState(

@@ -656,7 +656,7 @@ final class SessionRuntimeStore: ObservableObject {
         workspaceID: UUID,
         parentSessionID: String? = nil,
         usesSessionStatusNotifications: Bool = false,
-        codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
+        codexStatusTrackingSource: CodexStatusTrackingSource,
         displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
@@ -691,16 +691,9 @@ final class SessionRuntimeStore: ObservableObject {
         completedHookLifecycleSessionIDs.remove(sessionID)
         clearHookTransitionState(sessionID: sessionID)
         if agent == .codex {
-            if let codexStatusTrackingSource {
-                codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
-            } else {
-                codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
-            }
+            codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
             codexSubagentReconcilerBySessionID[sessionID] = CodexSubagentReconciler(
-                // Nil source temporarily preserves the legacy permissive path:
-                // hooks retain lifecycle authority while rollout events project
-                // through the compatibility adapter below.
-                authority: codexStatusTrackingSource.map { codexSubagentAuthority(for: $0) } ?? .hooks
+                authority: codexSubagentAuthority(for: codexStatusTrackingSource)
             )
         } else {
             codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
@@ -775,6 +768,7 @@ final class SessionRuntimeStore: ObservableObject {
             windowID: windowID,
             workspaceID: workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             displayTitleOverride: displayTitleOverride,
             cwd: cwd,
             repoRoot: repoRoot,
@@ -2230,7 +2224,7 @@ final class SessionRuntimeStore: ObservableObject {
             guard record.isActive else {
                 return stateChanged
             }
-            if codexStatusTrackingSourceBySessionID[sessionID] != nil {
+            if codexSessionUsesFixedStatusAuthority(sessionID: sessionID) {
                 let didProject = applyCodexRootProgressObservation(
                     sessionID: sessionID,
                     observation: .hookWorking(summary: status.summary, detail: status.detail),
@@ -2785,8 +2779,8 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
-        if codexStatusTrackingSourceBySessionID[sessionID] == nil {
-            return applyLegacyNilSourceCodexSubagentRolloutObservation(
+        if codexSessionUsesFixedStatusAuthority(sessionID: sessionID) == false {
+            return applyExternallyReportedCodexSubagentRolloutObservation(
                 sessionID: sessionID,
                 observation: observation,
                 at: now
@@ -2910,10 +2904,8 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
-    /// Temporary compatibility for callers that predate fixed Codex status
-    /// authority. Historically nil source admitted hooks in the Store while the
-    /// planner also projected rollout activity through its fallback path.
-    private func applyLegacyNilSourceCodexSubagentRolloutObservation(
+    /// External sessions report hook lifecycle and rollout display independently.
+    private func applyExternallyReportedCodexSubagentRolloutObservation(
         sessionID: String,
         observation: CodexSubagentRolloutObservation,
         at now: Date
@@ -3493,7 +3485,7 @@ final class SessionRuntimeStore: ObservableObject {
         for source: CodexStatusTrackingSource
     ) -> CodexSubagentAuthority {
         switch source {
-        case .hooks:
+        case .hooks, .externallyReported:
             return .hooks
         case .sessionLogFallback:
             return .rolloutFallback
@@ -4343,8 +4335,20 @@ final class SessionRuntimeStore: ObservableObject {
         switch source {
         case .hooks:
             return false
-        case .sessionLogFallback:
+        case .sessionLogFallback, .externallyReported:
             return true
+        }
+    }
+
+    private func codexSessionUsesFixedStatusAuthority(sessionID: String) -> Bool {
+        guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
+            return false
+        }
+        switch source {
+        case .hooks, .sessionLogFallback:
+            return true
+        case .externallyReported:
+            return false
         }
     }
 
@@ -4360,6 +4364,7 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) -> Bool {
         guard let source = codexStatusTrackingSourceBySessionID[sessionID],
+              let authority = codexRootProgressAuthority(for: source),
               let record = sessionRegistry.activeSession(sessionID: sessionID),
               record.agent == .codex,
               record.usesSessionStatusNotifications else {
@@ -4367,7 +4372,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         let decision = CodexRootProgressEvaluator.evaluate(
-            authority: codexRootProgressAuthority(for: source),
+            authority: authority,
             currentRegistryKind: codexRootProgressRegistryKind(for: record.status?.kind),
             observation: observation
         )
@@ -4407,12 +4412,14 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func codexRootProgressAuthority(
         for source: CodexStatusTrackingSource
-    ) -> CodexRootProgressAuthority {
+    ) -> CodexRootProgressAuthority? {
         switch source {
         case .hooks:
             return .hooks
         case .sessionLogFallback:
             return .sessionLogFallback
+        case .externallyReported:
+            return nil
         }
     }
 
@@ -4450,9 +4457,9 @@ final class SessionRuntimeStore: ObservableObject {
         case .sessionLogFallback:
             rootTurnAuthority = .sessionLogFallback
             approvalAuthority = .sessionLogFallback
-        case nil:
-            rootTurnAuthority = .legacyPermissive
-            approvalAuthority = .legacyPermissive
+        case .externallyReported, nil:
+            rootTurnAuthority = .externallyReported
+            approvalAuthority = .externallyReported
         }
         return CodexSessionReconciliationRuntime(
             rootTurn: CodexRootTurnReconciler(authority: rootTurnAuthority),
@@ -5666,7 +5673,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
-        if codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+        if codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
             guard let detail = nextStatus.detail else {
                 return false
             }
@@ -5711,7 +5718,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
 
         if record.agent == .codex,
-           codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+           codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
             let interrupt: CodexRootProgressInterrupt = switch kind {
             case .escape:
                 .escape

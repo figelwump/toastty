@@ -27,6 +27,7 @@ struct AutomationSocketServerDiagnosticsTests: AutomationSocketServerTestSupport
                 panelID: server.panelID,
                 windowID: windowID,
                 workspaceID: server.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/tmp/repo",
                 repoRoot: "/tmp/repo",
                 at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -175,6 +176,7 @@ struct AutomationSocketServerDiagnosticsTests: AutomationSocketServerTestSupport
                 panelID: server.panelID,
                 windowID: windowID,
                 workspaceID: server.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/tmp/repo",
                 repoRoot: "/tmp/repo",
                 at: Date(timeIntervalSince1970: 1_700_000_000)

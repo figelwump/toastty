@@ -353,7 +353,7 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
                     panel: WebPanelState(
                         definition: .localDocument,
                         title: "README.md",
-                        filePath: "/tmp/README.md"
+                        localDocument: LocalDocumentState(filePath: "/tmp/README.md")
                     ),
                     placement: .newTab
                 )

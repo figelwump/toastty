@@ -959,6 +959,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 panelID: panelID,
                 windowID: location.windowID,
                 workspaceID: location.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: event.payload.string("cwd"),
                 repoRoot: event.payload.string("repoRoot"),
                 at: now
@@ -2085,7 +2086,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
             "stateTitle": .string(webState.title),
-            "stateFilePath": webState.filePath.map { .string($0) } ?? .null,
+            "stateFilePath": webState.localDocument?.filePath.map { .string($0) } ?? .null,
             "stateFormat": webState.localDocument.map { .string($0.format.rawValue) } ?? .null,
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
@@ -2193,7 +2194,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 webDefinition = .string(webState.definition.rawValue)
                 panelTitle = webState.title
                 if webState.definition == .localDocument {
-                    filePath = webState.filePath.map(AutomationJSONValue.string) ?? .null
+                    filePath = webState.localDocument?.filePath.map(AutomationJSONValue.string) ?? .null
                 } else if webState.definition == .browser {
                     url = webState.restorableURL.map(AutomationJSONValue.string) ?? .null
                 } else if webState.definition == .scratchpad, let scratchpad = webState.scratchpad {

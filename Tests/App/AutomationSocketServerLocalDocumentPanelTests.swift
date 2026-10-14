@@ -52,7 +52,7 @@ final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServe
                 return
             }
             XCTAssertEqual(webState.definition, .localDocument)
-            XCTAssertEqual(webState.filePath, markdownURL.path)
+            XCTAssertEqual(webState.localDocument?.filePath, markdownURL.path)
 
             var snapshotResponse: AutomationSocketTestResponse?
             for _ in 0 ..< 40 {

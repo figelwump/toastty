@@ -36,7 +36,7 @@ struct WebPanelStateCodableTests {
 
         let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
         #expect(decoded == state)
-        #expect(decoded.filePath == "/tmp/project/README.md")
+        #expect(decoded.localDocument?.filePath == "/tmp/project/README.md")
     }
 
     @Test
@@ -57,7 +57,7 @@ struct WebPanelStateCodableTests {
 
         let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
         #expect(decoded == state)
-        #expect(decoded.filePath == nil)
+        #expect(decoded.localDocument?.filePath == nil)
         #expect(decoded.localDocument == LocalDocumentState(filePath: nil, format: .markdown))
     }
 
@@ -217,7 +217,7 @@ struct WebPanelStateCodableTests {
 
         #expect(decoded.definition == .localDocument)
         #expect(decoded.title == "README.md")
-        #expect(decoded.filePath == "/tmp/project/README.md")
+        #expect(decoded.localDocument?.filePath == "/tmp/project/README.md")
         #expect(
             decoded.localDocument == LocalDocumentState(
                 filePath: "/tmp/project/README.md",

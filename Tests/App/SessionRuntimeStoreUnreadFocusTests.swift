@@ -25,6 +25,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -55,6 +56,7 @@ extension SessionRuntimeStoreTests {
             panelID: focusedPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -85,6 +87,7 @@ extension SessionRuntimeStoreTests {
             panelID: focusedPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -199,6 +202,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -270,6 +274,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -308,6 +313,7 @@ extension SessionRuntimeStoreTests {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -357,6 +363,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -473,6 +480,7 @@ extension SessionRuntimeStoreTests {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -517,6 +525,7 @@ extension SessionRuntimeStoreTests {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -563,6 +572,7 @@ extension SessionRuntimeStoreTests {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -605,6 +615,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -647,6 +658,7 @@ extension SessionRuntimeStoreTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -676,6 +688,7 @@ extension SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -708,6 +721,7 @@ extension SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -740,6 +754,7 @@ extension SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt

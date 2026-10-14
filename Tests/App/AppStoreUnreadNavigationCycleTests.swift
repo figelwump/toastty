@@ -71,6 +71,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: currentTab.panelIDs[0],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -87,6 +88,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: remoteTab.panelIDs[1],
             windowID: secondWindowID,
             workspaceID: remoteWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -103,6 +105,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: laterTab.panelIDs[1],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)
@@ -211,6 +214,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: currentTab.panelIDs[0],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -227,6 +231,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: remoteTab.panelIDs[1],
             windowID: secondWindowID,
             workspaceID: remoteWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -243,6 +248,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: laterTab.panelIDs[1],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)
@@ -348,6 +354,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: currentTab.panelIDs[0],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -364,6 +371,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: remoteTab.panelIDs[1],
             windowID: secondWindowID,
             workspaceID: remoteWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -380,6 +388,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: laterTab.panelIDs[1],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)
@@ -480,6 +489,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: currentTab.panelIDs[0],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -496,6 +506,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: remoteTab.panelIDs[1],
             windowID: secondWindowID,
             workspaceID: remoteWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -512,6 +523,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: laterTab.panelIDs[1],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)
@@ -613,6 +625,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: currentTab.panelIDs[0],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -629,6 +642,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: remoteTab.panelIDs[1],
             windowID: secondWindowID,
             workspaceID: remoteWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -645,6 +659,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: laterTab.panelIDs[1],
             windowID: firstWindowID,
             workspaceID: currentWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)
@@ -742,6 +757,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: secondReadyTab.panelIDs[2],
             windowID: secondWindowID,
             workspaceID: secondWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -836,6 +852,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: secondApprovalTab.panelIDs[2],
             windowID: secondWindowID,
             workspaceID: secondWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -909,6 +926,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: workingTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -925,6 +943,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: approvalTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -1018,6 +1037,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: secondErrorTab.panelIDs[2],
             windowID: secondWindowID,
             workspaceID: secondWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -1095,6 +1115,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: firstErrorTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -1111,6 +1132,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: secondErrorTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -1127,6 +1149,7 @@ final class AppStoreUnreadNavigationCycleTests: AppStoreCommandTestCase {
             panelID: workingTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(4)

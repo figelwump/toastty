@@ -10,6 +10,7 @@ final class TerminalAppControlTests: XCTestCase {
         fixture.sessionRuntimeStore.startSession(
             sessionID: "scoped-caller", agent: .codex, panelID: fixture.panelID,
             windowID: fixture.windowID, workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp", repoRoot: nil, scopedWorkspaceIDs: [fixture.workspaceID], at: Date()
         )
         XCTAssertTrue(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Outside scope", activate: true)))
@@ -18,6 +19,7 @@ final class TerminalAppControlTests: XCTestCase {
         fixture.sessionRuntimeStore.startSession(
             sessionID: "outside-source", agent: .codex, panelID: sourcePanel,
             windowID: fixture.windowID, workspaceID: sourceWorkspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp", repoRoot: nil, at: Date()
         )
         let args: [String: AutomationJSONValue] = [
@@ -88,6 +90,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -118,6 +121,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -128,6 +132,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: Date(timeIntervalSince1970: 1_700_000_001)
@@ -217,6 +222,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -620,7 +626,7 @@ final class TerminalAppControlTests: XCTestCase {
                         panelID: UUID(),
                         panelState: .web(WebPanelState(
                             definition: .localDocument,
-                            filePath: "/tmp/notes.md"
+                            localDocument: LocalDocumentState(filePath: "/tmp/notes.md")
                         ))
                     ),
                     browserTabID: RightAuxPanelTabState(
@@ -693,6 +699,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [],
@@ -730,6 +737,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [],
@@ -766,6 +774,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [],
@@ -806,6 +815,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [explicitWorkspaceID],
@@ -854,6 +864,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -968,6 +979,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -1013,6 +1025,7 @@ final class TerminalAppControlTests: XCTestCase {
             panelID: readerPanelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -1089,6 +1102,7 @@ final class TerminalAppControlTests: XCTestCase {
                 panelID: unreadPanelID,
                 windowID: fixture.windowID,
                 workspaceID: targetWorkspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/repo",
                 repoRoot: "/repo",
                 at: Date(timeIntervalSince1970: 1_700_000_000)

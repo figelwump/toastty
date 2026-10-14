@@ -74,6 +74,7 @@ final class AutomationSocketServerBrowserPanelTargetingTests: AutomationSocketSe
                 harness.sessionRuntimeStore.startSession(
                     sessionID: "reload-scoped-caller", agent: .codex, panelID: callerPanelID,
                     windowID: fixture.firstWindowID, workspaceID: fixture.firstWorkspaceID,
+                    codexStatusTrackingSource: .externallyReported,
                     cwd: nil, repoRoot: nil, scopedWorkspaceIDs: [], at: Date()
                 )
             }

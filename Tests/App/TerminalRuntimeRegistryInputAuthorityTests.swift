@@ -20,6 +20,7 @@ struct TerminalRuntimeRegistryInputAuthorityTests {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt

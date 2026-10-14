@@ -232,7 +232,7 @@ struct TerminalProgramStatusRuntimeTests {
         let panelID = UUID()
         store.startSession(sessionID: "agent", agent: agent, panelID: panelID,
                            windowID: UUID(), workspaceID: UUID(), usesSessionStatusNotifications: true,
-                           codexStatusTrackingSource: agent == .codex ? .hooks : nil,
+                           codexStatusTrackingSource: agent == .codex ? .hooks : .externallyReported,
                            cwd: nil, repoRoot: nil, at: Date())
         store.updateStatus(sessionID: "agent", status: .init(kind: .working, summary: "Working"), at: Date())
         store.allowProgramStatusFallback(sessionID: "agent")
@@ -270,7 +270,7 @@ struct TerminalProgramStatusRuntimeTests {
         defer { store.reset() }
         let panelID = UUID()
         store.startSession(sessionID: "agent", agent: .claude, panelID: panelID,
-                           windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil, at: Date())
+                           windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date())
         store.allowProgramStatusFallback(sessionID: "agent")
         store.handleProgramStatusEvent(.report(.init(state: state)), panelID: panelID)
         store.stopSession(sessionID: "agent", at: Date())
@@ -297,7 +297,7 @@ struct TerminalProgramStatusRuntimeTests {
         defer { store.reset() }
         let panelID = UUID()
         store.startSession(sessionID: "agent", agent: .claude, panelID: panelID,
-                           windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil, at: Date())
+                           windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date())
         store.handleProgramStatusEvent(.report(.init(state: .working)), panelID: panelID)
         store.noteLocalInputForActiveSession(panelID: panelID)
         store.updateStatus(sessionID: "agent", status: .init(kind: .working, summary: "Working"), at: Date())
@@ -324,6 +324,7 @@ struct TerminalProgramStatusRuntimeTests {
         store.handleProgramStatusEvent(.prompt, panelID: panelID)
         store.startSession(sessionID: "agent", agent: .claude, panelID: panelID,
                            windowID: try #require(appStore.state.windows.first?.id), workspaceID: workspace.id,
+                           codexStatusTrackingSource: .externallyReported,
                            cwd: nil, repoRoot: nil, at: Date())
         store.allowProgramStatusFallback(sessionID: "agent")
         store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID)
@@ -399,7 +400,7 @@ struct TerminalProgramStatusRuntimeTests {
         defer { store.reset() }
         let panelID = UUID()
         store.startSession(sessionID: "agent", agent: .claude, panelID: panelID,
-                           windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil, at: Date())
+                           windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date())
         let report = TerminalProgramStatusEvent.report(.init(state: .blocked, kind: .question))
         store.handleProgramStatusEvent(report, panelID: panelID)
         #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
@@ -420,7 +421,7 @@ struct TerminalProgramStatusRuntimeTests {
         let panelID = UUID()
         if usesShellIntegration { store.handleProgramStatusEvent(.prompt, panelID: panelID) }
         store.startSession(sessionID: "agent", agent: .claude, panelID: panelID,
-                           windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil, at: Date())
+                           windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date())
         store.stopSession(sessionID: "agent", at: Date())
         store.handleProgramStatusEvent(.report(.init(state: .working)), panelID: panelID)
         #expect((store.programStatusRuntime.recordsByPanel[panelID] == nil) == usesShellIntegration)

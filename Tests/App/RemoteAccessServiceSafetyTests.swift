@@ -2531,6 +2531,7 @@ struct RemoteAccessServiceSafetyTests {
             panelID: panelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Date(timeIntervalSince1970: 1_786_000_000)
@@ -2763,7 +2764,7 @@ private final class RemoteBootstrapFixture {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: codexStatusTrackingSource != nil,
-            codexStatusTrackingSource: codexStatusTrackingSource,
+            codexStatusTrackingSource: codexStatusTrackingSource ?? .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: confirmedAt

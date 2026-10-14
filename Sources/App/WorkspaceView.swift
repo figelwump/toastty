@@ -4233,7 +4233,7 @@ struct PanelCardView: View {
                 .font(ToastyTheme.fontMonoHeader)
                 .foregroundStyle(ToastyTheme.primaryText)
 
-            if let filePath = state.filePath {
+            if let filePath = state.localDocument?.filePath {
                 Text(filePath)
                     .font(ToastyTheme.fontWorkspaceSubtitle)
                     .foregroundStyle(ToastyTheme.mutedText)

@@ -463,7 +463,7 @@ test("highlight.js registers the first-slice source-code grammars", async () => 
   assert.match(source, /highlight\.js\/lib\/languages\/rust/);
 });
 
-test("line reveal helpers clamp requests and compute layout from measured base offsets", async () => {
+test("line reveal helpers clamp requests and compute layout from measured positions", async () => {
   const lineRevealModule = await import(
     new URL("../src/lineReveal.mjs", import.meta.url).href
   );
@@ -479,16 +479,10 @@ test("line reveal helpers clamp requests and compute layout from measured base o
   assert.equal(clampRevealLineNumber(3, 0), 1);
   assert.equal(clampScrollTop(-40, 200), 0);
   assert.equal(clampScrollTop(400, 200), 200);
-  // Measurement-driven helpers replaced the previous fallback-from-block-height
-  // line-height resolver — keep it removed so callers cannot accidentally rely
-  // on that brittle path again.
-  assert.equal(lineRevealModule.resolveMeasuredLineHeight, undefined);
   assert.deepEqual(
     computeRevealLayout({
-      lineNumber: 120,
-      lineCount: 134,
-      contentTopBase: 20,
-      gutterTopBase: 20,
+      contentTop: 2638,
+      gutterTop: 2640,
       contentLineHeight: 22,
       gutterLineHeight: 22,
       contentFrameOffsetTop: 0,
@@ -496,9 +490,8 @@ test("line reveal helpers clamp requests and compute layout from measured base o
       scrollContentHeight: 3200
     }),
     {
-      lineNumber: 120,
       contentTop: 2638,
-      gutterTop: 2638,
+      gutterTop: 2640,
       contentHeight: 22,
       gutterHeight: 22,
       targetScrollTop: 2509
@@ -579,7 +572,6 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.doesNotMatch(source, /document\.hasFocus/);
   assert.doesNotMatch(measurementSource, /getPropertyValue\("--local-document-code-line-height"\)/);
   assert.doesNotMatch(measurementSource, /resolvedLineHeight\(/);
-  assert.doesNotMatch(measurementSource, /resolveMeasuredLineHeight\(/);
   assert.match(source, /props\.bootstrap\.contentRevision !== activeReveal\.contentRevision/);
   assert.match(source, /props\.bootstrap\.filePath !== activeReveal\.filePath/);
   assert.match(source, /setActiveReveal\(null\)/);

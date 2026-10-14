@@ -174,6 +174,7 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
                     panelID: backgroundPanelID,
                     windowID: windowID,
                     workspaceID: workspaceID,
+                    codexStatusTrackingSource: .externallyReported,
                     cwd: "/tmp/repo",
                     repoRoot: "/tmp/repo",
                     at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -231,6 +232,7 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
                     panelID: panelID,
                     windowID: fixture.windowID,
                     workspaceID: fixture.workspaceID,
+                    codexStatusTrackingSource: .externallyReported,
                     cwd: "/tmp/repo",
                     repoRoot: "/tmp/repo",
                     at: Date(timeIntervalSince1970: 1_700_000_000)

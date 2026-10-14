@@ -3466,6 +3466,7 @@ private func startManagedSession(
         panelID: panelID,
         windowID: try XCTUnwrap(store.state.windows.first?.id),
         workspaceID: workspaceID,
+        codexStatusTrackingSource: .externallyReported,
         cwd: "/tmp/repo",
         repoRoot: "/tmp/repo",
         at: now

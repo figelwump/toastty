@@ -105,6 +105,7 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
                 sessionID: sessionID, agent: .grok, panelID: server.panelID,
                 windowID: try #require(server.store.state.windows.first?.id),
                 workspaceID: server.workspaceID, usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: rootURL.path, repoRoot: rootURL.path,
                 at: Date(timeIntervalSince1970: 1_700_000_000)
             )

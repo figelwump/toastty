@@ -303,6 +303,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         runtime.startSession(
             sessionID: "activity", agent: .codex, panelID: panelID,
             windowID: selection.windowID, workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo", repoRoot: "/repo", at: Date(timeIntervalSince1970: 1)
         )
         defer { runtime.stopSession(sessionID: "activity", at: Date()) }

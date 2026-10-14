@@ -28,6 +28,7 @@ final class AutomationSocketServerUnreadNavigationTests: AutomationSocketServerW
                         panelID: panelID,
                         windowID: fixture.windowID,
                         workspaceID: fixture.workspaceID,
+                        codexStatusTrackingSource: .externallyReported,
                         cwd: "/repo",
                         repoRoot: "/repo",
                         at: startedAt
@@ -92,6 +93,7 @@ final class AutomationSocketServerUnreadNavigationTests: AutomationSocketServerW
                     panelID: fixture.activePanelID,
                     windowID: fixture.windowID,
                     workspaceID: fixture.workspaceID,
+                    codexStatusTrackingSource: .externallyReported,
                     cwd: "/repo",
                     repoRoot: "/repo",
                     at: startedAt
@@ -136,6 +138,7 @@ final class AutomationSocketServerUnreadNavigationTests: AutomationSocketServerW
                     panelID: fixture.targetPanelID,
                     windowID: fixture.windowID,
                     workspaceID: fixture.workspaceID,
+                    codexStatusTrackingSource: .externallyReported,
                     cwd: "/repo",
                     repoRoot: "/repo",
                     at: startedAt

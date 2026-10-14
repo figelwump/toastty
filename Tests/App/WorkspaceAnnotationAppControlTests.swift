@@ -224,6 +224,7 @@ struct WorkspaceAnnotationAppControlTests {
             panelID: panelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [],

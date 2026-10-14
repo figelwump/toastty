@@ -244,7 +244,7 @@ final class FocusedPanelCommandControllerTests: XCTestCase {
                     panel: WebPanelState(
                         definition: .localDocument,
                         title: confirmationState.displayName,
-                        filePath: "/tmp/\(confirmationState.displayName)"
+                        localDocument: LocalDocumentState(filePath: "/tmp/\(confirmationState.displayName)")
                     ),
                     placement: .newTab
                 )

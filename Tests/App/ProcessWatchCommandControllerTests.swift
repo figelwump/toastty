@@ -28,6 +28,7 @@ final class ProcessWatchCommandControllerTests: XCTestCase {
             panelID: fixture.panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: Date(timeIntervalSinceReferenceDate: 10)

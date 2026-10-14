@@ -251,7 +251,7 @@ public enum RightAuxPanelTabIdentity: Codable, Equatable, Hashable, Sendable {
     public static func identity(for webState: WebPanelState, panelID: UUID) -> RightAuxPanelTabIdentity {
         switch webState.definition {
         case .localDocument:
-            if let filePath = WebPanelState.normalizedFilePath(webState.filePath) {
+            if let filePath = WebPanelState.normalizedFilePath(webState.localDocument?.filePath) {
                 return .localDocument(path: (filePath as NSString).standardizingPath)
             }
             return .browserSession(panelID)

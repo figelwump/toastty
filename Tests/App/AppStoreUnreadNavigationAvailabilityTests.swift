@@ -74,6 +74,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -131,6 +132,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: readyTab.panelIDs[1],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -184,6 +186,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -242,6 +245,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -317,6 +321,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -381,6 +386,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -557,6 +563,7 @@ final class AppStoreUnreadNavigationAvailabilityTests: AppStoreCommandTestCase {
             panelID: tab.panelIDs[0],
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt

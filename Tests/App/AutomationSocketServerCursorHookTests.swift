@@ -154,6 +154,7 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
                 windowID: try #require(server.store.state.windows.first?.id),
                 workspaceID: server.workspaceID,
                 usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/tmp/repo",
                 repoRoot: "/tmp/repo",
                 at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -713,6 +714,7 @@ private extension AutomationSocketServerCursorHookTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: now

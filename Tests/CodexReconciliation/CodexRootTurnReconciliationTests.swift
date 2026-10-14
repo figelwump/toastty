@@ -546,7 +546,7 @@ struct CodexRootTurnReconciliationTests {
 
     @Test
     func nilCompatibilityAuthorityAcceptsBothHookAndFallbackNotify() {
-        var hookRoute = CodexRootTurnReconciler(authority: .legacyPermissive)
+        var hookRoute = CodexRootTurnReconciler(authority: .externallyReported)
         #expect(hookRoute.reduce(hook(
             .userPromptSubmit,
             thread: "hook-thread",
@@ -554,7 +554,7 @@ struct CodexRootTurnReconciliationTests {
             fingerprint: "fp"
         )).qualification == .proceed)
 
-        var notifyRoute = CodexRootTurnReconciler(authority: .legacyPermissive)
+        var notifyRoute = CodexRootTurnReconciler(authority: .externallyReported)
         _ = notifyRoute.reduce(rootInput(fingerprint: "fp"))
         let notify = notifyRoute.reduce(.fallbackNotifyThreadCandidate(
             threadID: "notify-thread",
@@ -780,7 +780,7 @@ struct CodexRootTurnReconciliationTests {
 private let allAuthorities: [CodexRootTurnAuthority] = [
     .hooks,
     .sessionLogFallback,
-    .legacyPermissive,
+    .externallyReported,
 ]
 
 private func context(

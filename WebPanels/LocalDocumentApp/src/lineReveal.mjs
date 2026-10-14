@@ -21,26 +21,19 @@ export function clampScrollTop(scrollTop, maxScrollTop) {
 }
 
 export function computeRevealLayout({
-  lineNumber,
-  lineCount,
-  contentTopBase,
-  gutterTopBase,
+  contentTop: measuredContentTop,
+  gutterTop: measuredGutterTop,
   contentLineHeight,
   gutterLineHeight,
   contentFrameOffsetTop,
   scrollViewportHeight,
   scrollContentHeight
 }) {
-  const normalizedLineNumber = clampRevealLineNumber(lineNumber, lineCount);
-  const normalizedContentTopBase = Number.isFinite(contentTopBase) ? contentTopBase : 0;
-  const normalizedGutterTopBase = Number.isFinite(gutterTopBase) ? gutterTopBase : 0;
+  const contentTop = Number.isFinite(measuredContentTop) ? measuredContentTop : 0;
+  const gutterTop = Number.isFinite(measuredGutterTop) ? measuredGutterTop : 0;
   const normalizedContentFrameOffsetTop = Number.isFinite(contentFrameOffsetTop)
     ? contentFrameOffsetTop
     : 0;
-  const contentTop = normalizedContentTopBase
-    + (normalizedLineNumber - 1) * contentLineHeight;
-  const gutterTop = normalizedGutterTopBase
-    + (normalizedLineNumber - 1) * gutterLineHeight;
   const maxScrollTop = scrollContentHeight - scrollViewportHeight;
   const targetScrollTop = clampScrollTop(
     normalizedContentFrameOffsetTop
@@ -51,7 +44,6 @@ export function computeRevealLayout({
   );
 
   return {
-    lineNumber: normalizedLineNumber,
     contentTop,
     gutterTop,
     contentHeight: contentLineHeight,

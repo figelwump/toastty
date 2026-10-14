@@ -106,7 +106,6 @@ test("computed line-height resolution rejects missing and non-positive geometry"
     assert.equal(
       measureRevealLayout({
         lineNumber: 1,
-        lineCount: 1,
         scrollElement: { clientHeight: 100, scrollHeight: 500 },
         contentFrameElement: {
           offsetTop: 10,
@@ -138,7 +137,6 @@ test("reveal measurement centers direct glyph rectangles in line-height bands", 
     assert.deepEqual(
       measureRevealLayout({
         lineNumber: 2,
-        lineCount: 2,
         scrollElement: { clientHeight: 100, scrollHeight: 500 },
         contentFrameElement: {
           offsetTop: 10,
@@ -151,7 +149,6 @@ test("reveal measurement centers direct glyph rectangles in line-height bands", 
         gutterElement
       }),
       {
-        lineNumber: 1,
         contentTop: 49,
         gutterTop: 49,
         contentHeight: 20,
@@ -176,7 +173,6 @@ test("empty target lines extrapolate from the nearest rendered glyph", () => {
 
     const layout = measureRevealLayout({
       lineNumber: 2,
-      lineCount: 3,
       scrollElement: { clientHeight: 100, scrollHeight: 500 },
       contentFrameElement: {
         offsetTop: 10,
@@ -219,7 +215,6 @@ test("direct glyph measurement crosses highlighted text-node boundaries", () => 
 
     const layout = measureRevealLayout({
       lineNumber: 2,
-      lineCount: 2,
       scrollElement: { clientHeight: 100, scrollHeight: 500 },
       contentFrameElement: {
         offsetTop: 10,

@@ -69,7 +69,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
                 return LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -80,7 +80,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -190,7 +190,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Draft",
                     diskRevision: nil
@@ -201,7 +201,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -227,7 +227,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Draft",
                     diskRevision: nil
@@ -238,7 +238,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -265,7 +265,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original",
                     diskRevision: nil
@@ -276,7 +276,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -305,7 +305,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original",
                     diskRevision: nil
@@ -316,7 +316,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -341,7 +341,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: nil,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -365,7 +365,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: nil,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Draft",
                     diskRevision: nil
@@ -376,7 +376,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -396,7 +396,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: nil,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: webState.title,
                     diskRevision: nil
@@ -407,12 +407,12 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let originalState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
         let refreshedState = WebPanelState(
             definition: .localDocument,
             title: "README copy.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: originalState)
@@ -441,7 +441,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: entryURL,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -455,7 +455,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.requestReveal(lineNumber: 12)
@@ -508,7 +508,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -523,7 +523,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         await loader.resume(
             with: LocalDocumentPanelDocumentSnapshot(
-                filePath: webState.filePath,
+                filePath: webState.localDocument?.filePath,
                 displayName: webState.title,
                 content: "# Docs",
                 diskRevision: nil
@@ -563,7 +563,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: entryURL,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -577,7 +577,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -610,7 +610,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: entryURL,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -624,7 +624,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -658,7 +658,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             entryURL: entryURL,
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -672,7 +672,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -802,7 +802,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original",
                     diskRevision: nil
@@ -813,7 +813,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -852,7 +852,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -886,7 +886,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original",
                     diskRevision: nil
@@ -897,7 +897,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -928,7 +928,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original",
                     diskRevision: nil
@@ -939,7 +939,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -987,7 +987,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -999,7 +999,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1051,7 +1051,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -1063,7 +1063,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1093,7 +1093,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -1105,7 +1105,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1139,7 +1139,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -1151,7 +1151,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1178,7 +1178,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -1190,7 +1190,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1220,7 +1220,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Toastty",
                     diskRevision: nil
@@ -1232,7 +1232,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -1262,7 +1262,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Original\n",
                     diskRevision: nil
@@ -1273,7 +1273,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -1309,7 +1309,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     format: .code,
                     content: "struct App {}\n",
@@ -1362,7 +1362,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     format: .code,
                     content: "struct App {}\n",
@@ -1409,7 +1409,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Notes",
                     diskRevision: nil
@@ -1446,7 +1446,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Notes",
                     diskRevision: nil
@@ -1496,7 +1496,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -1548,7 +1548,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -1615,7 +1615,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -1739,7 +1739,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -2301,7 +2301,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
                 return LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -2312,7 +2312,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
@@ -2338,7 +2338,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
                 return LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -2349,7 +2349,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -2375,7 +2375,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
                 return LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -2386,7 +2386,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -2411,7 +2411,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -2422,7 +2422,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -2447,7 +2447,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     content: "# Docs",
                     diskRevision: nil
@@ -2458,7 +2458,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: "/tmp/toastty/readme.md"
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
         )
 
         runtime.apply(webState: webState)
@@ -2508,7 +2508,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "README.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -2553,7 +2553,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let webState = WebPanelState(
             definition: .localDocument,
             title: "notes.md",
-            filePath: fileURL.path
+            localDocument: LocalDocumentState(filePath: fileURL.path)
         )
 
         runtime.apply(webState: webState)
@@ -2607,7 +2607,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             webState: WebPanelState(
                 definition: .localDocument,
                 title: "first.md",
-                filePath: firstFileURL.path
+                localDocument: LocalDocumentState(filePath: firstFileURL.path)
             )
         )
         try await waitUntil { metadataCallCount >= 1 }
@@ -2616,7 +2616,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             webState: WebPanelState(
                 definition: .localDocument,
                 title: "second.md",
-                filePath: secondFileURL.path
+                localDocument: LocalDocumentState(filePath: secondFileURL.path)
             )
         )
         try await waitUntil { metadataCallCount >= 2 }

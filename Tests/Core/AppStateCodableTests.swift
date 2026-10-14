@@ -478,7 +478,7 @@ struct AppStateCodableTests {
                     WebPanelState(
                         definition: .localDocument,
                         title: "notes.md",
-                        filePath: filePath
+                        localDocument: LocalDocumentState(filePath: filePath)
                     )
                 ),
             ],
@@ -541,7 +541,7 @@ struct AppStateCodableTests {
 
         #expect(webState.definition == .localDocument)
         #expect(webState.title == "notes.md")
-        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument?.filePath == filePath)
         #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .markdown))
         try StateValidator.validate(decoded)
     }
@@ -564,7 +564,6 @@ struct AppStateCodableTests {
                     WebPanelState(
                         definition: .localDocument,
                         title: "notes.txt",
-                        filePath: filePath,
                         localDocument: LocalDocumentState(filePath: filePath, format: .code)
                     )
                 ),
@@ -606,7 +605,7 @@ struct AppStateCodableTests {
 
         #expect(webState.definition == .localDocument)
         #expect(webState.title == "notes.txt")
-        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument?.filePath == filePath)
         #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .code))
         try StateValidator.validate(decoded)
     }
