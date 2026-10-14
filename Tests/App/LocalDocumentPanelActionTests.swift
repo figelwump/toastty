@@ -23,10 +23,10 @@ final class LocalDocumentPanelActionTests: XCTestCase {
             defer: false
         )
         window.contentView = webView
-        // WebKit schedules reveal frames only while the test window is on screen.
+        // WebKit needs an unoccluded window to schedule reveal frames. Remote test
+        // hosts can remain inactive, so show the window without requiring activation.
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
         defer {
             window.orderOut(nil)
             webView.stopLoading()
