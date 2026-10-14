@@ -1,9 +1,10 @@
 import Foundation
 
-/// Shared wire hygiene for short user-visible preview strings. The wire
-/// models remain responsible for their own length and optionality semantics;
-/// this helper only centralizes grapheme-safe bounding and scalar filtering.
-private enum RemoteWirePreviewText {
+/// Shared wire hygiene for short user-visible preview strings in this module's
+/// wire models. The models remain responsible for their own length and
+/// optionality semantics; this helper only centralizes grapheme-safe bounding
+/// and scalar filtering.
+enum RemoteWirePreviewText {
     static func sanitized(_ value: String, maximumGraphemeCount: Int) -> String {
         String(
             value.filter { character in
@@ -181,6 +182,14 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var turnStartedAt: Date?
     /// Length of the last finished turn, in seconds.
     public var lastTurnDuration: TimeInterval?
+    /// What the session waits on while its own turn has ended but work it
+    /// started is still running. Present only in that state, and absent from
+    /// older hosts, which report the same session as plain `working`.
+    private var storedWaiting: SessionWaitingSummary?
+    public var waiting: SessionWaitingSummary? {
+        get { storedWaiting }
+        set { storedWaiting = newValue.flatMap { $0.totalCount > 0 ? $0.boundedForWire : nil } }
+    }
     /// Turn identity, steer/stop readiness, and the Mac-side queue. Sent by
     /// hosts that advertise `conversation_input_control`; absent otherwise.
     public var inputControl: RemoteConversationInputControl?
@@ -209,6 +218,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        waiting: SessionWaitingSummary? = nil,
         inputControl: RemoteConversationInputControl? = nil,
         projectionGeneration: UInt64 = 0,
         latestSequence: UInt64,
@@ -228,6 +238,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.storedWaiting = waiting.flatMap { $0.totalCount > 0 ? $0.boundedForWire : nil }
         self.inputControl = inputControl
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
@@ -257,6 +268,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
             isFlaggedForLater: try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false,
             turnStartedAt: try container.decodeIfPresent(Date.self, forKey: .turnStartedAt),
             lastTurnDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .lastTurnDuration),
+            waiting: try container.decodeIfPresent(SessionWaitingSummary.self, forKey: .waiting),
             inputControl: try container.decodeIfPresent(RemoteConversationInputControl.self, forKey: .inputControl),
             projectionGeneration: try container.decode(UInt64.self, forKey: .projectionGeneration),
             latestSequence: try container.decode(UInt64.self, forKey: .latestSequence),
@@ -280,6 +292,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         if isFlaggedForLater { try container.encode(true, forKey: .isFlaggedForLater) }
         try container.encodeIfPresent(turnStartedAt, forKey: .turnStartedAt)
         try container.encodeIfPresent(lastTurnDuration, forKey: .lastTurnDuration)
+        try container.encodeIfPresent(waiting, forKey: .waiting)
         try container.encodeIfPresent(inputControl, forKey: .inputControl)
         try container.encode(projectionGeneration, forKey: .projectionGeneration)
         try container.encode(latestSequence, forKey: .latestSequence)
@@ -313,6 +326,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         case isFlaggedForLater
         case turnStartedAt
         case lastTurnDuration
+        case waiting
         case inputControl
         case projectionGeneration
         case latestSequence

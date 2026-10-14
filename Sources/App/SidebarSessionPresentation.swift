@@ -349,6 +349,7 @@ enum SidebarSessionPresentation {
         agentName: String,
         chipKind: SessionStatusKind?,
         projection: SessionStatusProjection = .none,
+        waitingSummary: SessionWaitingSummary? = nil,
         childCount: Int = 0,
         detailText: String?,
         cwd: String?,
@@ -361,11 +362,17 @@ enum SidebarSessionPresentation {
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
         }
-        if let projectionLabel = sessionStatusProjectionChipLabel(for: projection) {
-            components.append(projectionLabel)
-        }
-        if childCount > 0 {
-            components.append(childCount == 1 ? "1 sub-agent" : "\(childCount) sub-agents")
+        if let waitingSummary {
+            // The line the row's summary shows; the agent's last message
+            // still follows as the detail.
+            components.append("waiting on \(waitingSummary.rowText(.full))")
+        } else {
+            if let projectionLabel = sessionStatusProjectionChipLabel(for: projection) {
+                components.append(projectionLabel)
+            }
+            if childCount > 0 {
+                components.append(childCount == 1 ? "1 sub-agent" : "\(childCount) sub-agents")
+            }
         }
         if let workspaceScopeHelpText {
             components.append("workspace-scoped")
@@ -621,8 +628,29 @@ enum SidebarSessionPresentation {
 
     /// A working row sets its name and summary in italics, so a busy agent
     /// reads apart from an idle one without looking at the rail.
-    static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
-        kind == .working
+    /// Working rows lean while the agent generates. A waiting row stands
+    /// upright: the agent itself is not generating.
+    static func sessionTextUsesItalic(for kind: SessionStatusKind, projection: SessionStatusProjection) -> Bool {
+        kind == .working && projection.isWaitingOnChildren == false
+    }
+
+    /// What a waiting session waits on, or `nil` when it is not waiting. A
+    /// status without an item list falls back to the projection's counts.
+    static func sessionWaitingSummary(for session: WorkspaceSessionStatus) -> SessionWaitingSummary? {
+        guard case .waitingOnChildren(let childCount, let pendingCount) = session.projection else {
+            return nil
+        }
+        if let summary = session.waitingSummary, summary.totalCount > 0 {
+            return summary
+        }
+        let fallback = SessionWaitingSummary(
+            agentCount: childCount,
+            processCount: 0,
+            workflowCount: 0,
+            taskCount: pendingCount,
+            items: []
+        )
+        return fallback.totalCount > 0 ? fallback : nil
     }
 
     static let workspaceNewBadgeLabel = "New"
@@ -716,6 +744,7 @@ enum SidebarSessionPresentation {
         now: Date
     ) -> SessionRowHoverTipModel {
         let statusKind = session.status.kind
+        let waitingSummary = sessionWaitingSummary(for: session)
         var metaItems: [SessionRowHoverTipModel.MetaItem] = []
 
         if let path = normalizedSidebarHelperText(session.cwd) {
@@ -735,11 +764,14 @@ enum SidebarSessionPresentation {
                 wraps: true
             ))
         }
-        metaItems.append(.init(
-            label: "status",
-            value: sessionHoverTipStatusValue(kind: statusKind, projection: session.projection),
-            wraps: false
-        ))
+        // A waiting card says what it waits on in its own box instead.
+        if waitingSummary == nil {
+            metaItems.append(.init(
+                label: "status",
+                value: sessionHoverTipStatusValue(kind: statusKind, projection: session.projection),
+                wraps: false
+            ))
+        }
         metaItems.append(.init(
             label: "updated",
             value: sessionUpdatedRelativeText(updatedAt: session.updatedAt, now: now),
@@ -749,7 +781,11 @@ enum SidebarSessionPresentation {
            let lastTurn = sessionLastTurnText(session.lastTurnDuration) {
             metaItems.append(.init(label: "last turn", value: lastTurn, wraps: false))
         }
-        if session.children.isEmpty == false {
+        // The waiting box lists sub-agents; only child sessions it does not
+        // cover keep this row.
+        let waitingBoxListsEveryChild = waitingSummary != nil
+            && session.children.allSatisfy { $0.source == .activity }
+        if session.children.isEmpty == false, waitingBoxListsEveryChild == false {
             metaItems.append(.init(
                 label: session.children.count == 1 ? "sub-agent" : "sub-agents",
                 value: sessionChildSummaryValue(session.children),
@@ -770,6 +806,7 @@ enum SidebarSessionPresentation {
             statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind(statusKind: statusKind),
             bodyText: normalizedSidebarHelperText(session.status.detail),
             turnStartedAt: session.turnStartedAt,
+            waiting: waitingSummary.map(SessionRowHoverTipModel.Waiting.init(summary:)),
             metaItems: metaItems
         )
     }
@@ -778,10 +815,8 @@ enum SidebarSessionPresentation {
         kind: SessionStatusKind,
         projection: SessionStatusProjection
     ) -> String {
-        if case .waitingOnChildren(let childCount, _) = projection {
-            return childCount == 1
-                ? "waiting on 1 sub-agent"
-                : "waiting on \(childCount) sub-agents"
+        if case .waitingOnChildren = projection {
+            return "waiting"
         }
         if case .resuming = projection {
             return "resuming"

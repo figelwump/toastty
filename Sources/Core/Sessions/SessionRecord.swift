@@ -29,7 +29,9 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var status: SessionStatus?
     public var statusUpdatedAt: Date?
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
-    public var pendingBackgroundTaskCount: Int
+    /// Provider work outside agents, such as background shells, that the
+    /// session still waits on. Kept in the provider's reported order.
+    public var pendingBackgroundTasks: [SessionPendingBackgroundTask]
     public var lastActivityFinishedAt: Date?
     /// When the session's reported status last became `.working`, i.e. the
     /// start of the current turn. `startedAt` covers the whole session and
@@ -65,7 +67,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         status: SessionStatus? = nil,
         statusUpdatedAt: Date? = nil,
         backgroundActivitiesByID: [String: SessionBackgroundActivity] = [:],
-        pendingBackgroundTaskCount: Int = 0,
+        pendingBackgroundTasks: [SessionPendingBackgroundTask] = [],
         lastActivityFinishedAt: Date? = nil,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
@@ -91,7 +93,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.status = status
         self.statusUpdatedAt = statusUpdatedAt
         self.backgroundActivitiesByID = backgroundActivitiesByID
-        self.pendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        self.pendingBackgroundTasks = pendingBackgroundTasks
         self.lastActivityFinishedAt = lastActivityFinishedAt
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
@@ -109,6 +111,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
 
     public var isActive: Bool {
         stoppedAt == nil
+    }
+
+    public var pendingBackgroundTaskCount: Int {
+        pendingBackgroundTasks.count
     }
 
     public init(from decoder: any Decoder) throws {
@@ -132,7 +138,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         // registry snapshots, because child processes from an old app run cannot
         // safely keep a restored sidebar row in a working state.
         backgroundActivitiesByID = [:]
-        pendingBackgroundTaskCount = 0
+        pendingBackgroundTasks = []
         lastActivityFinishedAt = nil
         // Turn timing is runtime-only for the same reason as background
         // activity: a turn recorded by an old app run cannot be resumed as if

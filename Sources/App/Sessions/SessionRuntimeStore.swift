@@ -1260,7 +1260,7 @@ final class SessionRuntimeStore: ObservableObject {
         sessionID: String,
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivity],
-        pendingBackgroundTaskCount: Int,
+        pendingBackgroundTasks: [SessionPendingBackgroundTask],
         preserveUnlistedActivities: Bool = false,
         at now: Date
     ) -> Bool {
@@ -1277,7 +1277,7 @@ final class SessionRuntimeStore: ObservableObject {
             sessionID: sessionID,
             kind: kind,
             entries: filteredEntries,
-            pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            pendingBackgroundTasks: pendingBackgroundTasks,
             preserveUnlistedActivities: preserveUnlistedActivities,
             at: now
         ) else {
@@ -1291,7 +1291,7 @@ final class SessionRuntimeStore: ObservableObject {
                 "activity_kind": kind.rawValue,
                 "entry_count": String(filteredEntries.count),
                 "skipped_tombstoned_entry_count": String(entries.count - filteredEntries.count),
-                "pending_background_task_count": String(max(0, pendingBackgroundTaskCount)),
+                "pending_background_task_count": String(pendingBackgroundTasks.count),
             ]
         )
         publish(nextRegistry, reason: "sync_background_activities", at: now)
@@ -2943,7 +2943,7 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID: sessionID,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 0,
+                pendingBackgroundTasks: [],
                 at: now
             )
         }
@@ -3646,7 +3646,7 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID: sessionID,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 0,
+                pendingBackgroundTasks: [],
                 at: now
             )
         }

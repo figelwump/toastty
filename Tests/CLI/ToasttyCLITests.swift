@@ -1,4 +1,5 @@
 import CoreState
+import RemoteProtocol
 import Darwin
 import Foundation
 import Testing
@@ -889,7 +890,10 @@ struct ToasttyCLITests {
                     )
                 ),
             ],
-            pendingBackgroundTaskCount: 2,
+            pendingBackgroundTasks: [
+                SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+                SessionPendingBackgroundTask(id: "workflow-1", kind: .workflow),
+            ],
             preserveUnlistedActivities: true
         )
 
@@ -899,7 +903,18 @@ struct ToasttyCLITests {
         #expect(envelope.panelID == panelID.uuidString)
         #expect(envelope.payload.string("phase") == "sync")
         #expect(envelope.payload.string("kind") == "subagent")
+        // Apps before typed pending tasks still read the count.
         #expect(envelope.payload.int("pendingCount") == 2)
+        guard case .array(let pendingTasks)? = envelope.payload["pendingTasks"],
+              case .object(let shellTask)? = pendingTasks.first else {
+            Issue.record("expected pendingTasks array")
+            return
+        }
+        #expect(pendingTasks.count == 2)
+        #expect(shellTask.string("id") == "shell-1")
+        #expect(shellTask.string("kind") == "process")
+        #expect(shellTask.string("label") == "shell")
+        #expect(shellTask.string("detail") == "npm test")
         #expect(envelope.payload.bool("preserveUnlistedActivities") == true)
         guard case .array(let entries)? = envelope.payload["entries"] else {
             Issue.record("expected entries array")

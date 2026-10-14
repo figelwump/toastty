@@ -160,7 +160,7 @@ struct AgentEventParsersTests {
                         command: "Test background agent sleep command"
                     ),
                 ],
-                pendingBackgroundTaskCount: 0,
+                pendingBackgroundTasks: [],
                 preserveUnlistedActivities: false
             ),
             .sessionStatus(
@@ -190,7 +190,14 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 1,
+                pendingBackgroundTasks: [
+                    SessionPendingBackgroundTask(
+                        id: "workflow-1",
+                        kind: .workflow,
+                        label: "workflow",
+                        detail: "Review the diff"
+                    ),
+                ],
                 preserveUnlistedActivities: true
             ),
             .sessionStatus(
@@ -204,13 +211,13 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func claudeStopWithOnlyShellTasksSyncsPendingCount() throws {
+    func claudeStopWithOnlyShellTasksSyncsPendingShell() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"hook_event_name":"Stop","last_assistant_message":"Shell still running","background_tasks":[{"id":"shell-1","type":"shell","status":"running","description":"npm test"}]}"#.utf8
+                #"{"hook_event_name":"Stop","last_assistant_message":"Shell still running","background_tasks":[{"id":"shell-1","type":"shell","status":"running","description":"Run the unread tests","command":"npm test -- unread"}]}"#.utf8
             )
         )
 
@@ -220,7 +227,14 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 1,
+                pendingBackgroundTasks: [
+                    SessionPendingBackgroundTask(
+                        id: "shell-1",
+                        kind: .process,
+                        label: "shell",
+                        detail: "npm test -- unread"
+                    ),
+                ],
                 preserveUnlistedActivities: false
             ),
             .sessionStatus(
@@ -250,7 +264,7 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 0,
+                pendingBackgroundTasks: [],
                 preserveUnlistedActivities: false
             ),
             .sessionStatus(
@@ -286,7 +300,17 @@ struct AgentEventParsersTests {
                         command: "Check tests"
                     ),
                 ],
-                pendingBackgroundTaskCount: 2,
+                pendingBackgroundTasks: [
+                    // A shell without a command line falls back to its
+                    // description.
+                    SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+                    SessionPendingBackgroundTask(
+                        id: "workflow-1",
+                        kind: .workflow,
+                        label: "workflow",
+                        detail: "Review the diff"
+                    ),
+                ],
                 preserveUnlistedActivities: true
             ),
             .sessionStatus(
@@ -316,7 +340,7 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 0,
+                pendingBackgroundTasks: [],
                 preserveUnlistedActivities: false
             ),
             .sessionStatus(
@@ -660,7 +684,7 @@ struct AgentEventParsersTests {
         )
         #expect(commands.first == .sessionBackgroundActivitySync(
             sessionID: "sess-123", panelID: nil, kind: .subagent, entries: [],
-            pendingBackgroundTaskCount: 0, preserveUnlistedActivities: false
+            pendingBackgroundTasks: [], preserveUnlistedActivities: false
         ))
     }
 
@@ -679,7 +703,10 @@ struct AgentEventParsersTests {
         )
         #expect(commands.first == .sessionBackgroundActivitySync(
             sessionID: "sess-123", panelID: nil, kind: .subagent, entries: [],
-            pendingBackgroundTaskCount: withShell ? 1 : 0, preserveUnlistedActivities: true
+            pendingBackgroundTasks: withShell
+                ? [SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell")]
+                : [],
+            preserveUnlistedActivities: true
         ))
     }
 

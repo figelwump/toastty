@@ -1251,6 +1251,99 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func waitingSessionSummaryTellsThePhoneWhatItWaitsOn() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        func summary() throws -> RemoteConversationSummary {
+            try #require(fixture.service.facadeSessionList(at: fixture.confirmedAt).conversations.first {
+                $0.conversationID == fixture.conversationID
+            })
+        }
+        #expect(try summary().waiting == nil)
+
+        #expect(fixture.sessionRuntimeStore.syncBackgroundActivities(
+            sessionID: fixture.sessionID,
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "agent-1",
+                    kind: .subagent,
+                    displayName: "reviewer",
+                    command: "Check tests",
+                    startedAt: fixture.confirmedAt,
+                    lastUpdatedAt: fixture.confirmedAt
+                ),
+            ],
+            pendingBackgroundTasks: [
+                SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+            ],
+            at: fixture.confirmedAt
+        ))
+        let waitingSummary = try summary()
+        // The phone keeps its working bucket and learns what the session waits on.
+        #expect(waitingSummary.presentationStatus == .working)
+        let waiting = try #require(waitingSummary.waiting)
+        #expect(waiting.rowText(.full) == "1 sub-agent · 1 background process")
+        #expect(waiting.items.map(\.label) == ["reviewer", "shell"])
+        #expect(waiting.items.first?.startedAt == fixture.confirmedAt)
+
+        #expect(fixture.sessionRuntimeStore.syncBackgroundActivities(
+            sessionID: fixture.sessionID,
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTasks: [],
+            at: fixture.confirmedAt.addingTimeInterval(1)
+        ))
+        #expect(try summary().waiting == nil)
+    }
+
+    @Test func conversationWaitingSummaryIsBoundedAndTolerantOnTheWire() throws {
+        let updatedAt = Date(timeIntervalSince1970: 1_788_696_000)
+        let items = (0..<10).map { index in
+            SessionWaitingSummary.Item(
+                id: "shell-\(index)",
+                kind: .process,
+                label: "shell",
+                detail: "npm test\n  -- part \(index)"
+            )
+        }
+        let summary = RemoteConversationSummary(
+            conversationID: RemoteConversationID(), provider: .claude, title: "Session",
+            state: .working, inputAvailability: .unavailable(reason: .unknownProviderState),
+            waiting: SessionWaitingSummary(items: items),
+            latestSequence: 0, updatedAt: updatedAt
+        )
+        let waiting = try #require(summary.waiting)
+        // The wire keeps every count but only the first items.
+        #expect(waiting.processCount == 10)
+        #expect(waiting.items.count == SessionWaitingSummary.maximumWireItemCount)
+        #expect(waiting.items.first?.detail == "npm test -- part 0")
+
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoded = try ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationSummary.self, from: try encoder.encode(summary))
+        #expect(decoded.waiting == waiting)
+
+        // A kind from a newer host reads as a generic task instead of
+        // failing the session list.
+        let futureJSON = Data(#"{"taskCount":1,"items":[{"id":"x","kind":"future_kind","label":"MCP task"}]}"#.utf8)
+        let future = try ConversationEventCoding.makeDecoder().decode(SessionWaitingSummary.self, from: futureJSON)
+        #expect(future.items.first?.kind == .task)
+        #expect(future.countsText(.full) == "1 background task")
+
+        // A session that is not waiting leaves the JSON as older clients expect it.
+        let quiet = RemoteConversationSummary(
+            conversationID: RemoteConversationID(), provider: .claude, title: "Session",
+            state: .ready, inputAvailability: .unavailable(reason: .unknownProviderState),
+            waiting: SessionWaitingSummary(items: []),
+            latestSequence: 0, updatedAt: updatedAt
+        )
+        #expect(quiet.waiting == nil)
+        let json = try #require(String(data: try encoder.encode(quiet), encoding: .utf8))
+        #expect(json.contains("waiting") == false)
+    }
+
+    @MainActor
     @Test func remoteFlagSetsAndClearsTheSessionsLaterFlagAndPublishesIt() throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
         defer { fixture.removeRuntimeFiles() }

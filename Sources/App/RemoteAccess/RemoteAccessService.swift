@@ -1862,6 +1862,7 @@ final class RemoteAccessService: ObservableObject {
         var isFlaggedForLater: Bool
         var turnStartedAt: Date?
         var lastTurnDuration: TimeInterval?
+        var waiting: SessionWaitingSummary?
         var updatedAt: Date
         var transcriptPath: String?
         var providerFeed: ManagedProviderConversationFeedSnapshot?
@@ -2379,6 +2380,9 @@ final class RemoteAccessService: ObservableObject {
                         && activeSessionID.map(sessionRuntimeStore.isLaterFlagged(sessionID:)) == true,
                     turnStartedAt: panelStatus?.turnStartedAt,
                     lastTurnDuration: panelStatus?.lastTurnDuration,
+                    waiting: panelStatus?.projection.isWaitingOnChildren == true
+                        ? panelStatus?.waitingSummary
+                        : nil,
                     updatedAt: max(
                         activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
                         providerFeed?.updatedAt ?? .distantPast
@@ -2451,6 +2455,7 @@ final class RemoteAccessService: ObservableObject {
                     isFlaggedForLater: candidate.isFlaggedForLater,
                     turnStartedAt: candidate.turnStartedAt,
                     lastTurnDuration: candidate.lastTurnDuration,
+                    waiting: candidate.waiting,
                     inputControl: inputControl(for: candidate),
                     projectionGeneration: projector.generation,
                     latestSequence: projector.latestSequence,
@@ -2470,6 +2475,7 @@ final class RemoteAccessService: ObservableObject {
                 isFlaggedForLater: candidate.isFlaggedForLater,
                 turnStartedAt: candidate.turnStartedAt,
                 lastTurnDuration: candidate.lastTurnDuration,
+                waiting: candidate.waiting,
                 latestSequence: 0,
                 updatedAt: candidate.updatedAt
             )

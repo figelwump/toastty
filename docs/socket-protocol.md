@@ -1395,6 +1395,8 @@ Accepted payload keys:
 - `processID?: Int` (positive 32-bit integer)
 - `preserveWhenUnlisted?: Bool` (optional for `start`; defaults to `false`)
 - `pendingCount?: Int` (required and non-negative for `sync`)
+- `pendingTasks?: [{ id, kind, label?, detail? }]` (optional for `sync`; `kind`
+  is `process`, `workflow`, or `task`, and an unknown kind is read as `task`)
 - `entries?: [{ id, displayName?, command?, modelIdentifier?, reasoningEffort? }]`
   (required for `sync`)
 - `preserveUnlistedActivities?: Bool` (optional for `sync`; defaults to `false`)
@@ -1408,7 +1410,9 @@ Behavior:
   field-by-field when a later update supplies only one of them
 - `finish` requires `activityID` and removes that activity
 - `sync` is valid only for `kind: "subagent"`; it replaces the current
-  subagent activity set and records the pending background-task count
+  subagent activity set and the pending background tasks. With
+  `pendingTasks`, each task keeps its kind, label, and detail; without it,
+  Toastty records `pendingCount` unnamed tasks (at most 9,999)
 - `sync` with `preserveUnlistedActivities: true` also retains unlisted rows
   previously started with `preserveWhenUnlisted: true`; other unlisted rows
   still follow replacement semantics

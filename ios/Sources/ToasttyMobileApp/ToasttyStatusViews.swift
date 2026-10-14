@@ -73,6 +73,7 @@ struct ToasttySessionStatusPresentation: Equatable, Sendable {
         let facts: [String?] = [
             ToasttySessionRowPresentation.title(for: conversation),
             isVisible ? accessibilityLabel : conversation.state.accessibilityLabel,
+            conversation.waiting.map { "waiting on \($0.summary.rowText(.full))" },
             conversation.lastActivity,
             conversation.workspaceTitle,
             conversation.agent.displayName,

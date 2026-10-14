@@ -563,9 +563,13 @@ struct ToasttySubspaceDetailCard: View {
                                     .font(.caption2)
                                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                             }
-                            Text(conversation.lastActivity)
+                            Text(conversation.waiting?.summary.rowText(.compact) ?? conversation.lastActivity)
                                 .font(.caption2.monospaced())
-                                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                                .foregroundStyle(
+                                    conversation.waiting != nil && freshness == .live
+                                        ? ToasttyDesignTokens.waitingText
+                                        : ToasttyDesignTokens.secondaryText
+                                )
                                 .lineLimit(1)
                         }
                     }

@@ -958,6 +958,26 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(app.staticTexts["toastty-mobile-conversation-title"], "Mobile gateway design"))
     }
 
+    func testWaitingSessionRowAndCardSayWhatItWaitsOn() {
+        let app = launchFixtureApp()
+        let row = app.buttons["toastty-mobile-grouped-card-\(activeResearchConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        // The row stays a working row and says what it waits on.
+        XCTAssertTrue(row.label.contains("working, waiting on 2 sub-agents · 1 background process"), row.label)
+        attachScreenshot(named: "fixture-waiting-row", of: app)
+
+        row.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Open"].waitForExistence(timeout: 5))
+        for label in ["Waiting on 2 sub-agents · 1 process", "reviewer", "npm test -- unread"] {
+            XCTAssertTrue(
+                app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch.exists,
+                "The detail card should show \(label)"
+            )
+        }
+        attachScreenshot(named: "fixture-waiting-detail-card", of: app)
+    }
+
     func testNextButtonSitsBesidePanelsAndOpensSessionsThatNeedYou() {
         let app = launchFixtureApp()
         let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]

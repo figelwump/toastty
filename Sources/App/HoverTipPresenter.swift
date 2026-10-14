@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 struct SessionChildHoverTipModel: Hashable {
@@ -119,7 +120,25 @@ struct SessionRowHoverTipModel: Hashable {
     var statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind
     var bodyText: String?
     var turnStartedAt: Date?
+    /// Present while the session waits on work it started.
+    var waiting: Waiting? = nil
     var metaItems: [MetaItem]
+
+    /// What a waiting session waits on, shown first after the summary.
+    struct Waiting: Hashable {
+        static let maximumVisibleItemCount = 4
+
+        let headline: String
+        let items: [SessionWaitingSummary.Item]
+        /// Work the counts include but the card does not list.
+        let hiddenItemCount: Int
+
+        init(summary: SessionWaitingSummary) {
+            headline = summary.headline
+            items = Array(summary.items.prefix(Self.maximumVisibleItemCount))
+            hiddenItemCount = summary.totalCount - items.count
+        }
+    }
 }
 
 struct SessionRowHoverTipCard: View {
@@ -139,6 +158,12 @@ struct SessionRowHoverTipCard: View {
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 6)
+            }
+
+            if let waiting = model.waiting {
+                HoverTipWaitingBox(waiting: waiting)
+                    .padding(.top, 2)
+                    .padding(.bottom, 8)
             }
 
             if model.metaItems.isEmpty == false || model.turnStartedAt != nil {
@@ -438,6 +463,89 @@ private struct HoverTipHeader: View {
             }
         }
         .padding(.bottom, 4)
+    }
+}
+
+/// The work a waiting session waits on: a headline with the counts, then one
+/// spinning line per item that is still running.
+private struct HoverTipWaitingBox: View {
+    let waiting: SessionRowHoverTipModel.Waiting
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(waiting.headline)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sessionWaitingText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.bottom, waiting.items.isEmpty ? 0 : 2)
+
+            ForEach(waiting.items) { item in
+                HoverTipWaitingItemRow(item: item)
+            }
+
+            if waiting.hiddenItemCount > 0, waiting.items.isEmpty == false {
+                Text("+\(waiting.hiddenItemCount) more")
+                    .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                    .padding(.leading, 16)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToastyTheme.sessionWaitingBackground, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(ToastyTheme.sessionWaitingChipRing, lineWidth: 1)
+        }
+    }
+}
+
+private struct HoverTipWaitingItemRow: View {
+    let item: SessionWaitingSummary.Item
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            SessionStatusIndicator(state: .spinner, size: 7, lineWidth: 1.2)
+                .frame(width: 10, height: 10)
+            .alignmentGuide(.firstTextBaseline) { dimensions in dimensions[.bottom] - 1 }
+
+            // The label keeps its width first but still truncates, so a long
+            // provider label cannot push the card wider.
+            Text(item.label)
+                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(ToastyTheme.sessionWaitingText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+
+            if let detail = item.detail {
+                Text(detail)
+                    .font(item.kind == .process
+                        ? .system(size: 9.5, weight: .regular, design: .monospaced)
+                        : .system(size: 10.5))
+                    .foregroundStyle(item.kind == .process ? ToastyTheme.hoverTipText : ToastyTheme.hoverTipBodyText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 4)
+
+            if let startedAt = item.startedAt {
+                TimelineView(.periodic(from: startedAt, by: 1)) { timeline in
+                    Text(SidebarSessionPresentation.elapsedChildActivityText(
+                        startedAt: startedAt,
+                        now: timeline.date
+                    ))
+                    .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                }
+            }
+        }
     }
 }
 

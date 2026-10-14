@@ -249,7 +249,7 @@ extension SessionRuntimeStoreTests {
                     lastUpdatedAt: now.addingTimeInterval(1)
                 ),
             ],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(1)
         ))
 
@@ -1130,7 +1130,7 @@ extension SessionRuntimeStoreTests {
                     lastUpdatedAt: now.addingTimeInterval(1)
                 ),
             ],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(1)
         ) == false)
         #expect(store.sessionRegistry.sessionsByID["sess-tombstone-sync"]?.backgroundActivitiesByID.isEmpty == true)
@@ -1147,7 +1147,7 @@ extension SessionRuntimeStoreTests {
                     lastUpdatedAt: now.addingTimeInterval(121)
                 ),
             ],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(121)
         ))
         #expect(store.sessionRegistry.sessionsByID["sess-tombstone-sync"]?.backgroundActivitiesByID["subagent-1"] != nil)

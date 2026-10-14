@@ -323,6 +323,7 @@ private struct SessionRowHoverTipRefreshKey: Hashable {
     let turnStartedAt: Date?
     let lastTurnDuration: TimeInterval?
     let childCount: Int
+    let waitingSummary: SessionWaitingSummary?
     let customTabTitle: String?
     let parentSessionName: String?
     let isLaterFlagged: Bool
@@ -1610,6 +1611,7 @@ struct SidebarView: View {
             for: workspaceSessionStatus,
             in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
         )
+        let waitingSummary = SidebarSessionPresentation.sessionWaitingSummary(for: workspaceSessionStatus)
         // Only the card's inputs are gathered here. Building the model itself
         // standardizes a filesystem path and formats a relative date, which is
         // main-thread work this row does not need until the card is shown —
@@ -1625,6 +1627,7 @@ struct SidebarView: View {
             turnStartedAt: workspaceSessionStatus.turnStartedAt,
             lastTurnDuration: workspaceSessionStatus.lastTurnDuration,
             childCount: workspaceSessionStatus.children.count,
+            waitingSummary: waitingSummary,
             customTabTitle: customTabTitle,
             parentSessionName: parentSessionName,
             isLaterFlagged: isLaterFlagged,
@@ -1642,6 +1645,7 @@ struct SidebarView: View {
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
             projection: workspaceSessionStatus.projection,
+            waitingSummary: waitingSummary,
             childCount: workspaceSessionStatus.children.count,
             detailText: normalizedSessionDetail(status.detail),
             cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
@@ -1690,6 +1694,7 @@ struct SidebarView: View {
             marker: workspaceSessionStatus.agent == .processWatch ? .processWatch : nil,
             title: rowTitle,
             summary: rowSummary,
+            waitingSummary: waitingSummary,
             isLaterFlagged: isLaterFlagged,
             showsUnreadSessionAccent: showsUnreadSessionAccent,
             isActivePanel: isActivePanel,
@@ -1893,6 +1898,7 @@ struct SidebarView: View {
         progress: Int? = nil,
         title: String,
         summary: String?,
+        waitingSummary: SessionWaitingSummary? = nil,
         isLaterFlagged: Bool,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
@@ -1917,7 +1923,7 @@ struct SidebarView: View {
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
         let isEmphasized = attentionKind != nil
-        let isItalic = SidebarSessionPresentation.sessionTextUsesItalic(for: status.kind)
+        let isItalic = SidebarSessionPresentation.sessionTextUsesItalic(for: status.kind, projection: projection)
         let isResuming = projection == .resuming
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
 
@@ -1957,7 +1963,11 @@ struct SidebarView: View {
                 // height and the list does not reflow as summaries or names
                 // arrive.
                 sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                    sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                    if let waitingSummary {
+                        sessionWaitingSummaryLabel(waitingSummary)
+                    } else {
+                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                    }
                 }
             }
         }
@@ -3145,6 +3155,29 @@ struct SidebarView: View {
         }
     }
 
+    /// While waiting, the summary line says what the session waits on; the
+    /// agent's last message stays in the hover card. A narrow row takes the
+    /// shorter wording before it truncates.
+    private func sessionWaitingSummaryLabel(_ summary: SessionWaitingSummary) -> some View {
+        ViewThatFits(in: .horizontal) {
+            sessionWaitingSummaryText(summary.rowText(.full))
+            sessionWaitingSummaryText(summary.rowText(.compact))
+                .truncationMode(.tail)
+        }
+        .background {
+            SidebarSemanticTextBridge(text: summary.rowText(.full))
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func sessionWaitingSummaryText(_ text: String) -> some View {
+        Text(text)
+            .font(ToastyTheme.fontSidebarSummary)
+            .foregroundStyle(ToastyTheme.sessionWaitingText)
+            .lineLimit(1)
+    }
+
     private func sessionSummaryLabel(_ text: String, isResuming: Bool, isItalic: Bool) -> some View {
         Self.styledSessionSummaryText(text, isItalic: isItalic)
             .foregroundStyle(isResuming ? ToastyTheme.sessionResumingDetailText : ToastyTheme.sidebarSummaryText)
@@ -3268,7 +3301,9 @@ struct SidebarView: View {
                     statusKind: status.status.kind,
                     isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
                     showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
-                    summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary),
+                    summary: SidebarSessionPresentation.sessionWaitingSummary(for: status)?.rowText(.compact)
+                        ?? normalizedSessionDetail(status.status.detail)
+                        ?? normalizedSessionDetail(status.status.summary),
                     turnStartedAt: status.turnStartedAt,
                     statusUpdatedAt: status.statusUpdatedAt
                 )

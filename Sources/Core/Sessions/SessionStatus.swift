@@ -25,6 +25,11 @@ public enum SessionStatusProjection: Equatable, Sendable {
     case none
     case waitingOnChildren(childCount: Int, pendingBackgroundTaskCount: Int)
     case resuming
+
+    public var isWaitingOnChildren: Bool {
+        if case .waitingOnChildren = self { return true }
+        return false
+    }
 }
 
 public enum SessionChildRowSource: Equatable, Sendable {
@@ -77,6 +82,9 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var agent: AgentKind
     public var status: SessionStatus
     public var projection: SessionStatusProjection
+    /// What the session waits on; present only while `projection` is
+    /// `.waitingOnChildren`.
+    public var waitingSummary: SessionWaitingSummary?
     public var children: [SessionChildRow]
     public var displayTitleOverride: String?
     public var providerSessionName: String?
@@ -106,6 +114,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         agent: AgentKind,
         status: SessionStatus,
         projection: SessionStatusProjection = .none,
+        waitingSummary: SessionWaitingSummary? = nil,
         children: [SessionChildRow] = [],
         displayTitleOverride: String? = nil,
         providerSessionName: String? = nil,
@@ -125,6 +134,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.agent = agent
         self.status = status
         self.projection = projection
+        self.waitingSummary = waitingSummary
         self.children = children
         self.displayTitleOverride = displayTitleOverride
         self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
