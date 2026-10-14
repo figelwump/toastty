@@ -257,7 +257,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionID: String,
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivity],
-        pendingBackgroundTaskCount: Int,
+        pendingBackgroundTasks: [SessionPendingBackgroundTask],
         preserveUnlistedActivities: Bool = false,
         at now: Date
     ) -> Bool {
@@ -284,18 +284,17 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             }
         }
 
-        let nextPendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
         let removedActivity = record.backgroundActivitiesByID.contains { id, activity in
             activity.kind == kind && nextActivities[id] == nil
         }
-        let clearedPendingBackgroundTasks = record.pendingBackgroundTaskCount > 0 &&
-            nextPendingBackgroundTaskCount == 0
+        let clearedPendingBackgroundTasks = record.pendingBackgroundTasks.isEmpty == false &&
+            pendingBackgroundTasks.isEmpty
         guard record.backgroundActivitiesByID != nextActivities ||
-            record.pendingBackgroundTaskCount != nextPendingBackgroundTaskCount else {
+            record.pendingBackgroundTasks != pendingBackgroundTasks else {
             return false
         }
         record.backgroundActivitiesByID = nextActivities
-        record.pendingBackgroundTaskCount = nextPendingBackgroundTaskCount
+        record.pendingBackgroundTasks = pendingBackgroundTasks
         if removedActivity || clearedPendingBackgroundTasks {
             record.lastActivityFinishedAt = now
         }
@@ -431,7 +430,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     public mutating func stopSession(sessionID: String, at now: Date) {
         guard var record = sessionsByID[sessionID] else { return }
         record.backgroundActivitiesByID.removeAll()
-        record.pendingBackgroundTaskCount = 0
+        record.pendingBackgroundTasks.removeAll()
         // A stopped session has no turn in flight, so its elapsed time must
         // not keep counting up in the sidebar. The turn it was in still
         // counts as the last turn.
@@ -448,7 +447,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     public mutating func removeSession(sessionID: String) {
         guard var record = sessionsByID.removeValue(forKey: sessionID) else { return }
         record.backgroundActivitiesByID.removeAll()
-        record.pendingBackgroundTaskCount = 0
+        record.pendingBackgroundTasks.removeAll()
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
@@ -563,6 +562,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             agent: record.agent,
             status: projected.status,
             projection: projected.projection,
+            waitingSummary: projected.projection.isWaitingOnChildren
+                ? Self.waitingSummary(for: record)
+                : nil,
             children: record.isActive
                 ? childRows(for: record, activeRecordsByID: activeRecordsByID, at: now)
                 : [],
@@ -629,6 +631,35 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             }
             return lhs.id < rhs.id
         }
+    }
+
+    /// Agents in the order they started, then provider tasks in the order the
+    /// provider listed them. Item IDs are namespaced by source and tasks also
+    /// by position, so an activity and a task, or two tasks the provider gave
+    /// the same ID, never share an identity.
+    private static func waitingSummary(for record: SessionRecord) -> SessionWaitingSummary {
+        let agentItems = record.backgroundActivitiesByID.values
+            .sorted { lhs, rhs in
+                lhs.startedAt != rhs.startedAt ? lhs.startedAt < rhs.startedAt : lhs.id < rhs.id
+            }
+            .map { activity in
+                SessionWaitingSummary.Item(
+                    id: "agent:\(activity.id)",
+                    kind: .agent,
+                    label: activity.displayName ?? Self.defaultActivityDisplayName(for: activity.kind),
+                    detail: activity.command,
+                    startedAt: activity.startedAt
+                )
+            }
+        let taskItems = record.pendingBackgroundTasks.enumerated().map { offset, task in
+            SessionWaitingSummary.Item(
+                id: "task:\(offset):\(task.id)",
+                kind: task.kind,
+                label: task.label,
+                detail: task.detail
+            )
+        }
+        return SessionWaitingSummary(items: agentItems + taskItems)
     }
 
     private func activeRecordsByID() -> [String: SessionRecord] {

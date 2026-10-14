@@ -187,6 +187,11 @@ public struct GatewayCompatibilityDecoder: Sendable {
             isFlaggedForLater: (try? object.optionalBool("isFlaggedForLater")) == true,
             turnStartedAt: try? object.requiredDate("turnStartedAt"),
             lastTurnDuration: object.lossyDouble("lastTurnDuration"),
+            // Additive like `inputControl`: a malformed value reads as "not
+            // waiting" rather than failing the snapshot.
+            waiting: object.lossyObject("waiting").flatMap {
+                try? decode(SessionWaitingSummary.self, from: $0).boundedForWire
+            },
             // Additive: an older host omits it, and a malformed value reads
             // as "no controls" rather than failing the whole snapshot.
             inputControl: object.lossyObject("inputControl").flatMap {

@@ -75,7 +75,7 @@ enum CLICommand: Equatable {
         panelID: UUID?,
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivitySyncEntry],
-        pendingBackgroundTaskCount: Int,
+        pendingBackgroundTasks: [SessionPendingBackgroundTask],
         preserveUnlistedActivities: Bool
     )
     case sessionClaudeSubagentEvent(sessionID: String, panelID: UUID?, event: ClaudeSubagentEvent)
@@ -284,7 +284,7 @@ enum CLICommand: Equatable {
             let panelID,
             let kind,
             let entries,
-            let pendingBackgroundTaskCount,
+            let pendingBackgroundTasks,
             let preserveUnlistedActivities
         ):
             let entryValues = entries.map { entry -> AutomationJSONValue in
@@ -309,7 +309,19 @@ enum CLICommand: Equatable {
                     "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
                     "kind": .string(kind.rawValue),
                     "entries": .array(entryValues),
-                    "pendingCount": .int(max(0, pendingBackgroundTaskCount)),
+                    // Apps before typed pending tasks read only the count.
+                    "pendingCount": .int(pendingBackgroundTasks.count),
+                    "pendingTasks": .array(pendingBackgroundTasks.map { task in
+                        var object: [String: AutomationJSONValue] = [
+                            "id": .string(task.id),
+                            "kind": .string(task.kind.rawValue),
+                            "label": .string(task.label),
+                        ]
+                        if let detail = task.detail {
+                            object["detail"] = .string(detail)
+                        }
+                        return .object(object)
+                    }),
                     "preserveUnlistedActivities": .bool(preserveUnlistedActivities),
                 ]
             )
@@ -628,8 +640,8 @@ enum CLICommand: Equatable {
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
         case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
-        case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount, _):
-            return "synced \(entries.count) background activities and \(pendingBackgroundTaskCount) pending tasks for \(sessionID)"
+        case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTasks, _):
+            return "synced \(entries.count) background activities and \(pendingBackgroundTasks.count) pending tasks for \(sessionID)"
         case .sessionClaudeSubagentEvent(let sessionID, _, let event):
             return "processed Claude child \(event.phase.rawValue) for \(sessionID)"
         case .sessionCodexHookEvent(let sessionID, _, let event):

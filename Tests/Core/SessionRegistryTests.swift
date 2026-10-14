@@ -139,7 +139,10 @@ struct SessionRegistryTests {
                     lastUpdatedAt: now
                 ),
             ],
-            pendingBackgroundTaskCount: 2,
+            pendingBackgroundTasks: [
+                SessionPendingBackgroundTask(id: "shell-1", kind: .process),
+                SessionPendingBackgroundTask(id: "shell-2", kind: .process),
+            ],
             lastActivityFinishedAt: now.addingTimeInterval(2),
             startedAt: now,
             updatedAt: now
@@ -1446,7 +1449,7 @@ struct SessionRegistryTests {
                     lastUpdatedAt: now.addingTimeInterval(3)
                 ),
             ],
-            pendingBackgroundTaskCount: 1,
+            pendingBackgroundTasks: [SessionPendingBackgroundTask(id: "shell-1", kind: .process)],
             at: now.addingTimeInterval(3)
         )
         #expect(didSyncInitialSubagent)
@@ -1468,7 +1471,7 @@ struct SessionRegistryTests {
                     lastUpdatedAt: now.addingTimeInterval(4)
                 ),
             ],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(4)
         )
         #expect(didSyncMergedSubagent)
@@ -1498,7 +1501,7 @@ struct SessionRegistryTests {
             sessionID: "parent",
             kind: .subagent,
             entries: [],
-            pendingBackgroundTaskCount: 1,
+            pendingBackgroundTasks: [SessionPendingBackgroundTask(id: "shell-1", kind: .process)],
             preserveUnlistedActivities: true,
             at: now.addingTimeInterval(6)
         )
@@ -1515,7 +1518,7 @@ struct SessionRegistryTests {
             sessionID: "parent",
             kind: .subagent,
             entries: [],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(7)
         )
         #expect(didClearSubagents)
@@ -1552,7 +1555,7 @@ struct SessionRegistryTests {
                     lastUpdatedAt: now.addingTimeInterval(1)
                 ),
             ],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(1)
         )
         #expect(didSyncMinimalSubagent)
@@ -1663,7 +1666,9 @@ struct SessionRegistryTests {
             sessionID: "parent",
             kind: .subagent,
             entries: [],
-            pendingBackgroundTaskCount: 1,
+            pendingBackgroundTasks: [
+                SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+            ],
             at: now.addingTimeInterval(2)
         )
         #expect(didSetPendingCount)
@@ -1675,13 +1680,41 @@ struct SessionRegistryTests {
             childCount: 0,
             pendingBackgroundTaskCount: 1
         ))
+        let waitingSummary = try #require(registry.workspaceStatuses(for: workspaceID).first?.waitingSummary)
+        #expect(waitingSummary.processCount == 1)
+        #expect(waitingSummary.items.map(\.detail) == ["npm test"])
+        #expect(waitingSummary.rowText(.full) == "1 background process · npm test")
         #expect(registry.sessionsByID["parent"]?.status?.kind == .ready)
+
+        // An activity and a task, or two tasks the provider gave one ID, keep
+        // separate identities.
+        let didSyncCollidingIDs = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "pending-0",
+                    kind: .subagent,
+                    startedAt: now.addingTimeInterval(2),
+                    lastUpdatedAt: now.addingTimeInterval(2)
+                ),
+            ],
+            pendingBackgroundTasks: [
+                SessionPendingBackgroundTask(id: "pending-0", kind: .task),
+                SessionPendingBackgroundTask(id: "pending-0", kind: .task),
+            ],
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didSyncCollidingIDs)
+        let collidingItems = try #require(registry.workspaceStatuses(for: workspaceID).first?.waitingSummary?.items)
+        #expect(collidingItems.count == 3)
+        #expect(Set(collidingItems.map(\.id)).count == 3)
 
         let didClearPendingCount = registry.syncBackgroundActivities(
             sessionID: "parent",
             kind: .subagent,
             entries: [],
-            pendingBackgroundTaskCount: 0,
+            pendingBackgroundTasks: [],
             at: now.addingTimeInterval(3)
         )
         #expect(didClearPendingCount)

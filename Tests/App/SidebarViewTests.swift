@@ -2239,7 +2239,8 @@ final class SidebarViewTests: XCTestCase {
             )
             XCTAssertTrue(harness.sessionRuntimeStore.syncBackgroundActivities(
                 sessionID: "working-agent", kind: .subagent, entries: [],
-                pendingBackgroundTaskCount: 1, at: now.addingTimeInterval(1)
+                pendingBackgroundTasks: [SessionPendingBackgroundTask(id: "shell-1", kind: .process)],
+                at: now.addingTimeInterval(1)
             ))
             pumpMainRunLoop(duration: 0.6)
             rootView.layoutSubtreeIfNeeded()
@@ -2276,7 +2277,7 @@ final class SidebarViewTests: XCTestCase {
 
             XCTAssertTrue(harness.sessionRuntimeStore.syncBackgroundActivities(
                 sessionID: "working-agent", kind: .subagent, entries: [],
-                pendingBackgroundTaskCount: 0, at: now.addingTimeInterval(4)
+                pendingBackgroundTasks: [], at: now.addingTimeInterval(4)
             ))
             harness.sessionRuntimeStore.updateStatus(
                 sessionID: "working-agent",

@@ -34,6 +34,11 @@ enum ToasttyDesignTokens {
     static let userBubbleBorder = Color(red: 90 / 255, green: 62 / 255, blue: 27 / 255)
     static let userBubbleText = Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255)
     static let interactionSurface = Color(red: 24 / 255, green: 21 / 255, blue: 9 / 255)
+    /// The desktop's waiting colors, for a session whose own turn has ended
+    /// while work it started is still running.
+    static let waitingText = Color(red: 230 / 255, green: 207 / 255, blue: 169 / 255)
+    static let waitingSurface = Color(red: 193 / 255, green: 170 / 255, blue: 138 / 255).opacity(0.14)
+    static let waitingBorder = Color(red: 193 / 255, green: 170 / 255, blue: 138 / 255).opacity(0.42)
     private static let sessionWorking = Color(red: 193 / 255, green: 138 / 255, blue: 74 / 255)
     private static let sessionNeedsApproval = Color(red: 232 / 255, green: 166 / 255, blue: 53 / 255)
 

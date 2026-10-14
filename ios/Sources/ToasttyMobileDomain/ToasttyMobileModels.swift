@@ -187,6 +187,25 @@ public struct MobileActivityAge: Equatable, Sendable {
     }
 }
 
+/// What a waiting session waits on: its own turn has ended, but work it
+/// started is still running. Agents carry a running time anchored like
+/// `MobileConversation.turnElapsed`.
+public struct MobileWaitingSummary: Equatable, Sendable {
+    public let summary: SessionWaitingSummary
+    public let elapsedByItemID: [String: MobileActivityAge]
+
+    public init(summary: SessionWaitingSummary, elapsedByItemID: [String: MobileActivityAge] = [:]) {
+        self.summary = summary
+        self.elapsedByItemID = elapsedByItemID
+    }
+
+    public func elapsedLabel(for item: SessionWaitingSummary.Item, atMonotonicTime now: TimeInterval) -> String? {
+        elapsedByItemID[item.id].map {
+            MobileConversation.durationLabel(seconds: TimeInterval($0.seconds(atMonotonicTime: now)))
+        }
+    }
+}
+
 public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let workspaceID: UUID
@@ -213,6 +232,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let turnElapsed: MobileActivityAge?
     /// Length of the last finished turn, in seconds.
     public let lastTurnDuration: TimeInterval?
+    /// Present while a working session waits on work it started; nil from a
+    /// host that predates it.
+    public let waiting: MobileWaitingSummary?
     /// Queue, steer, and stop controls while the agent works; nil from a
     /// host that predates them.
     public let inputControl: RemoteConversationInputControl?
@@ -266,6 +288,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnElapsed: MobileActivityAge? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        waiting: MobileWaitingSummary? = nil,
         inputControl: RemoteConversationInputControl? = nil
     ) {
         self.id = id
@@ -275,6 +298,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.inputControl = inputControl
         self.turnElapsed = turnElapsed
+        self.waiting = waiting.flatMap { $0.summary.totalCount > 0 ? $0 : nil }
         self.lastTurnDuration = lastTurnDuration.flatMap {
             $0.isFinite && $0 >= 0 ? min($0, Self.maximumDurationSeconds) : nil
         }
@@ -312,6 +336,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnElapsed: MobileActivityAge? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        waiting: MobileWaitingSummary? = nil,
         inputControl: RemoteConversationInputControl? = nil
     ) {
         self.init(
@@ -333,6 +358,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             isFlaggedForLater: isFlaggedForLater,
             turnElapsed: turnElapsed,
             lastTurnDuration: lastTurnDuration,
+            waiting: waiting,
             inputControl: inputControl
         )
     }
@@ -346,7 +372,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             activityAge: activityAge, stateEnteredAge: stateEnteredAge, lastActivity: lastActivity,
             executionProfile: executionProfile, workspaceTabID: workspaceTabID,
             workspaceTabTitle: workspaceTabTitle, isFlaggedForLater: isFlaggedForLater,
-            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, inputControl: inputControl
+            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, waiting: waiting,
+            inputControl: inputControl
         )
     }
 
@@ -359,7 +386,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             activityAge: activityAge, stateEnteredAge: stateEnteredAge, lastActivity: lastActivity,
             executionProfile: executionProfile, workspaceTabID: workspaceTabID,
             workspaceTabTitle: workspaceTabTitle, isFlaggedForLater: isFlaggedForLater,
-            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, inputControl: inputControl
+            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, waiting: waiting,
+            inputControl: inputControl
         )
     }
 

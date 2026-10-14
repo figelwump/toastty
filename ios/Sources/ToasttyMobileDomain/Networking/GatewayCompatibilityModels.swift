@@ -72,6 +72,8 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var isFlaggedForLater: Bool
     public var turnStartedAt: Date?
     public var lastTurnDuration: TimeInterval?
+    /// What a waiting session waits on, from a host that sends it.
+    public var waiting: SessionWaitingSummary?
     /// Queue, steer, and stop controls from a host that advertises them.
     public var inputControl: RemoteConversationInputControl?
     public var projectionGeneration: UInt64
@@ -93,6 +95,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        waiting: SessionWaitingSummary? = nil,
         inputControl: RemoteConversationInputControl? = nil,
         projectionGeneration: UInt64,
         latestSequence: UInt64,
@@ -102,6 +105,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
+        self.waiting = waiting
         self.inputControl = inputControl
         self.provider = provider
         self.title = title
@@ -216,6 +220,29 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     }
                     : nil,
                 lastTurnDuration: summary.lastTurnDuration,
+                // Waiting is a kind of working; a stale field from a status
+                // the Mac has moved past is dropped.
+                waiting: status.bucket == .working
+                    ? summary.waiting.map { waiting in
+                        MobileWaitingSummary(
+                            summary: waiting,
+                            elapsedByItemID: Dictionary(
+                                waiting.items.compactMap { item in
+                                    item.startedAt.map { startedAt in
+                                        (item.id, MobileActivityAge(
+                                            secondsAtReceipt: Self.relativeAgeSeconds(
+                                                from: startedAt,
+                                                receivedAt: generatedAt
+                                            ),
+                                            receivedAtMonotonicTime: receivedAtMonotonicTime
+                                        ))
+                                    }
+                                },
+                                uniquingKeysWith: { first, _ in first }
+                            )
+                        )
+                    }
+                    : nil,
                 inputControl: summary.inputControl
             )
         }

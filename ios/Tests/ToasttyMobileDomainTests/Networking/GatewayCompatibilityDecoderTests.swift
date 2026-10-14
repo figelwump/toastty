@@ -193,6 +193,62 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertFalse(mobile.inputAvailability.allowsReply)
     }
 
+    func testWaitingSummaryIsBoundedOnReceiptAndMalformedValuesAreDropped() throws {
+        let items: [[String: Any]] = (0..<10).map { index in
+            ["id": "task:\(index)", "kind": "process", "label": "shell", "detail": "npm test \(index)"]
+        }
+        let snapshot = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                presentationStatus: "working",
+                waiting: ["processCount": 10, "items": items]
+            )
+        )
+        let waiting = try XCTUnwrap(snapshot.conversations.first?.waiting)
+        XCTAssertEqual(waiting.processCount, 10)
+        XCTAssertEqual(waiting.items.count, SessionWaitingSummary.maximumWireItemCount)
+        let mobile = try XCTUnwrap(snapshot.presentation().workspaces.first?.conversations.first)
+        XCTAssertEqual(mobile.waiting?.summary.rowText(.full), "10 background processes")
+
+        // Counts that would overflow are clamped instead of trapping.
+        let huge = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                presentationStatus: "working",
+                waiting: ["agentCount": Int.max, "processCount": 1]
+            )
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(huge.conversations.first?.waiting).totalCount,
+            SessionWaitingSummary.maximumCount + 1
+        )
+
+        // A malformed value reads as "not waiting" and keeps the session.
+        let malformed = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                presentationStatus: "working",
+                waiting: ["items": [["id": 1]]]
+            )
+        )
+        XCTAssertEqual(malformed.conversations.count, 1)
+        XCTAssertNil(malformed.conversations.first?.waiting)
+
+        // A session the Mac no longer shows as working drops a stale field.
+        let ready = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                presentationStatus: "ready",
+                waiting: ["processCount": 1]
+            )
+        )
+        XCTAssertNil(try XCTUnwrap(ready.presentation().workspaces.first?.conversations.first).waiting)
+    }
+
     func testSessionSnapshotNormalizesAbsentNullAndBlankCWDToNil() throws {
         let absent = try decoder.decodeSessionListResponse(
             sessionSnapshotData(
@@ -679,7 +735,8 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         statusDetail: Any? = nil,
         executionProfile: Any? = nil,
         placement: [String: Any] = [:],
-        inputControl: Any? = nil
+        inputControl: Any? = nil,
+        waiting: Any? = nil
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
@@ -707,6 +764,9 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
         if let inputControl {
             conversation["inputControl"] = inputControl
+        }
+        if let waiting {
+            conversation["waiting"] = waiting
         }
         return try JSONSerialization.data(withJSONObject: [
             "protocolVersion": "1.0",

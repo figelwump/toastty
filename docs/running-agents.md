@@ -887,7 +887,8 @@ While a managed agent session is active, Toastty suppresses overlapping terminal
 
 A session row reserves a fixed gutter at its left edge, which carries what is
 true about the session in two slots. The top slot is current status, so states
-line up down the list: a spinner while working, an amber dot when the session
+line up down the list: a spinner while working, a still ring while waiting on
+work the session started, an amber dot when the session
 needs approval, a green dot for an unread reply, a red dot on error, and nothing
 when idle. The slot underneath carries a standing mark — a violet flag when the
 session is flagged for later, or a bell when the row is a watched process. The
@@ -900,6 +901,11 @@ sub-agent controls. Until the provider names a session, the agent's name (such
 as "Claude Code" or "Codex") stands in as the title, so naming a session changes
 only the first line's text. In a narrow sidebar the waiting chip drops out
 before the name gets too short, and the row's tooltip names it instead.
+
+While a session is waiting, its second line says what it waits on instead of
+the latest summary: "2 sub-agents · 1 background process", or the item's name
+when there is only one, such as "1 background process · npm test". A narrow
+sidebar uses the shorter "1 process". The summary stays in the hover card.
 
 A session launched by another session in the same workspace has its own normal
 row when it has its own terminal panel, including when both panels are in the
@@ -928,7 +934,9 @@ title, and show the provider only as an unnamed session's title. Hovering a row 
 row, carrying up to two lines of the summary, the full path, the scoped
 workspaces, status, when the session last changed, the current or previous turn
 duration, the sub-agent count, the parent session, and the flag state, and ending
-with the tab title and provider as pills. The card appears after a short delay;
+with the tab title and provider as pills. A waiting session's card puts a box
+under the summary that lists up to four sub-agents and background processes,
+with each sub-agent's elapsed time, in place of the status and sub-agent rows. The card appears after a short delay;
 moving to another row swaps it immediately, and clicking, typing, or scrolling
 hides it. Everything the card shows also remains in the row's accessibility
 label.
@@ -1053,7 +1061,9 @@ response. Their lifetime entries in a root Stop snapshot do not count as pending
 work. `SubagentStart` reopens a known teammate, and `SubagentStop` or
 `TeammateIdle` removes its active row. An idle teammate can stay alive without
 keeping the workspace in **Waiting**. A real shell job still keeps it waiting
-until Claude's next Stop snapshot removes that job. These events were verified
+until Claude's next Stop snapshot removes that job. The snapshot names each
+shell by its command line and each workflow by its description, so a waiting
+row can say what it waits on; these tasks have no start time. These events were verified
 with Claude Code 2.1.293 in in-process mode; split-pane teammates are not covered.
 
 A known teammate's tool events update its own activity instead of setting the

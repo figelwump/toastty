@@ -222,7 +222,10 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
         }
         #expect(syncedRecord?.backgroundActivitiesByID["agent-1"]?.kind == .subagent)
         #expect(syncedRecord?.backgroundActivitiesByID["agent-1"]?.displayName == "general-purpose")
-        #expect(syncedRecord?.pendingBackgroundTaskCount == 1)
+        // A CLI that sends only the count gets unnamed tasks.
+        #expect(syncedRecord?.pendingBackgroundTasks == [
+            SessionPendingBackgroundTask(id: "pending-0", kind: .task),
+        ])
         let waitingStatus = await MainActor.run {
             server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
         }
@@ -256,6 +259,20 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
                     "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
                     "entries": .array([]),
                     "pendingCount": .int(2),
+                    "pendingTasks": .array([
+                        .object([
+                            "id": .string("shell-1"),
+                            "kind": .string("process"),
+                            "label": .string("shell"),
+                            "detail": .string("npm test"),
+                        ]),
+                        // A kind from a newer CLI reads as a generic task.
+                        .object([
+                            "id": .string("future-1"),
+                            "kind": .string("future_kind"),
+                            "label": .string("MCP task"),
+                        ]),
+                    ]),
                     "preserveUnlistedActivities": .bool(true),
                 ]
             ),
@@ -269,7 +286,14 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
         }
         #expect(preservedRecord?.backgroundActivitiesByID["agent-1"] == nil)
         #expect(preservedRecord?.backgroundActivitiesByID["workflow-subagent-1"]?.preserveWhenUnlisted == true)
-        #expect(preservedRecord?.pendingBackgroundTaskCount == 2)
+        #expect(preservedRecord?.pendingBackgroundTasks == [
+            SessionPendingBackgroundTask(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+            SessionPendingBackgroundTask(id: "future-1", kind: .task, label: "MCP task"),
+        ])
+        let preservedSummary = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.waitingSummary
+        }
+        #expect(preservedSummary?.countsText(.full) == "1 sub-agent · 1 background process · 1 background task")
 
         let clearResponse = try sendEvent(
             AutomationEventEnvelope(
@@ -802,6 +826,27 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
         #expect(missingEntriesResponse.ok == false)
         #expect(missingEntriesResponse.error?.code == "INVALID_PAYLOAD")
         #expect(missingEntriesResponse.error?.message == "entries must be an array")
+
+        let hugePendingResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([]),
+                    "pendingCount": .int(1_000_000_000),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(hugePendingResponse.ok)
+        let hugePendingRecord = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]
+        }
+        #expect(hugePendingRecord?.pendingBackgroundTaskCount == SessionWaitingSummary.maximumCount)
 
         let negativePendingResponse = try sendEvent(
             AutomationEventEnvelope(

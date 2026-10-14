@@ -1105,11 +1105,15 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                         lastUpdatedAt: now
                     )
                 }
+                let pendingTasks = try pendingBackgroundTasks(
+                    from: event.payload["pendingTasks"],
+                    pendingCount: pendingCount
+                )
                 didMutate = sessionRuntimeStore.syncBackgroundActivities(
                     sessionID: sessionID,
                     kind: kind,
                     entries: entries,
-                    pendingBackgroundTaskCount: pendingCount,
+                    pendingBackgroundTasks: pendingTasks,
                     preserveUnlistedActivities: preserveUnlistedActivities ?? false,
                     at: now
                 )
@@ -2384,6 +2388,37 @@ final class AutomationCommandExecutor: @unchecked Sendable {
 
     private func normalizedOptionalText(_ value: String?, limit: Int) -> String? {
         normalizedOptionalText(value).map { String($0.prefix(limit)) }
+    }
+
+    /// A CLI from before typed pending tasks sends only `pendingCount`; its
+    /// tasks are counted as unnamed background tasks, up to the most a card
+    /// can count.
+    private func pendingBackgroundTasks(
+        from value: AutomationJSONValue?,
+        pendingCount: Int
+    ) throws -> [SessionPendingBackgroundTask] {
+        guard let value else {
+            return (0..<min(pendingCount, SessionWaitingSummary.maximumCount)).map { index in
+                SessionPendingBackgroundTask(id: "pending-\(index)", kind: .task)
+            }
+        }
+        guard case .array(let taskValues) = value else {
+            throw AutomationSocketError.invalidPayload("pendingTasks must be an array")
+        }
+        return try taskValues.map { taskValue in
+            guard case .object(let object) = taskValue,
+                  let id = normalizedOptionalText(object.string("id")),
+                  let kindRaw = object.string("kind") else {
+                throw AutomationSocketError.invalidPayload("pendingTasks entries need an id and a kind")
+            }
+            return SessionPendingBackgroundTask(
+                id: id,
+                // A newer CLI may name a kind this app does not know yet.
+                kind: SessionWaitingSummary.ItemKind(rawValue: kindRaw) ?? .task,
+                label: normalizedOptionalText(object.string("label"), limit: 80),
+                detail: normalizedOptionalText(object.string("detail"), limit: 500)
+            )
+        }
     }
 
     private func executionProfile(

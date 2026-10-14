@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import CoreState
+import RemoteProtocol
 import SwiftUI
 import XCTest
 
@@ -576,29 +577,40 @@ final class SidebarSessionPresentationTests: XCTestCase {
 
     func testSessionRailStateMapsEachStatusAndSplitsReadyOnUnread() {
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .working, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .working, isWaiting: false, showsUnreadSessionAccent: false),
             .spinner
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .needsApproval, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .needsApproval, isWaiting: false, showsUnreadSessionAccent: false),
             .approvalDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .error, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .error, isWaiting: false, showsUnreadSessionAccent: false),
             .errorDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: true),
             .unreadDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: false),
             .empty
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .idle, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .idle, isWaiting: false, showsUnreadSessionAccent: true),
             .empty
         )
+        // Waiting is projected as working, but nothing spins: the agent's own
+        // turn has ended.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .working, isWaiting: true, showsUnreadSessionAccent: false),
+            .waitingRing
+        )
+        XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(
+            for: .working,
+            projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0)
+        ))
+        XCTAssertTrue(SidebarSessionPresentation.sessionTextUsesItalic(for: .working, projection: .none))
     }
 
     func testSessionSummaryResolvesInlineMarkdownAndKeepsPlainCharacters() {
@@ -848,17 +860,21 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
-    func testSessionRowHoverTipModelReportsWaitingProjectionAndHidesLastTurnMidTurn() throws {
+    func testSessionRowHoverTipModelListsWaitingWorkInPlaceOfStatusRows() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         var session = try makeSession(in: makeWorkspace(title: "Workspace"))
         session.cwd = nil
-        session.status = SessionStatus(kind: .working, summary: "Working", detail: nil)
-        session.projection = .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 0)
+        session.status = SessionStatus(kind: .working, summary: "Working", detail: "Launched two reviewers")
+        session.projection = .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 1)
         session.children = [
             SessionChildRow(id: "a", source: .activity, displayName: "Explore", startedAt: now),
             SessionChildRow(id: "b", source: .activity, displayName: "Plan", startedAt: now),
         ]
-        session.turnStartedAt = now.addingTimeInterval(-45)
+        session.waitingSummary = SessionWaitingSummary(items: [
+            .init(id: "a", kind: .agent, label: "Explore", detail: "Find callers", startedAt: now),
+            .init(id: "b", kind: .agent, label: "Plan", startedAt: now),
+            .init(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+        ])
         session.lastTurnDuration = 252
 
         let model = SidebarSessionPresentation.sessionRowHoverTipModel(
@@ -870,20 +886,22 @@ final class SidebarSessionPresentationTests: XCTestCase {
             now: now
         )
 
-        XCTAssertNil(model.bodyText)
-        XCTAssertEqual(model.turnStartedAt, session.turnStartedAt)
-        // `last turn` belongs to a row at rest; a turn in flight shows elapsed
-        // instead, and the card never shows both.
-        XCTAssertEqual(model.metaItems.map(\.label), ["status", "updated", "sub-agents"])
-        let valuesByLabel = Dictionary(
-            uniqueKeysWithValues: model.metaItems.map { ($0.label, $0.value) }
-        )
-        XCTAssertEqual(valuesByLabel["status"], "waiting on 2 sub-agents")
-        XCTAssertEqual(valuesByLabel["sub-agents"], "2 · 2 working")
+        // The agent's last message stays in the card.
+        XCTAssertEqual(model.bodyText, "Launched two reviewers")
+        let waiting = try XCTUnwrap(model.waiting)
+        XCTAssertEqual(waiting.headline, "Waiting on 2 sub-agents · 1 process")
+        XCTAssertEqual(waiting.items.map(\.label), ["Explore", "Plan", "shell"])
+        XCTAssertEqual(waiting.hiddenItemCount, 0)
+        // The box replaces the status and sub-agent rows.
+        XCTAssertEqual(model.metaItems.map(\.label), ["updated", "last turn"])
 
-        session.projection = .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0)
-        session.children = [session.children[0]]
-        let singleChildModel = SidebarSessionPresentation.sessionRowHoverTipModel(
+        // A session waiting only on a shell names it, never "0 sub-agents".
+        session.projection = .waitingOnChildren(childCount: 0, pendingBackgroundTaskCount: 1)
+        session.children = []
+        session.waitingSummary = SessionWaitingSummary(items: [
+            .init(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+        ])
+        let shellModel = SidebarSessionPresentation.sessionRowHoverTipModel(
             session: session,
             customTabTitle: nil,
             parentSessionName: nil,
@@ -891,11 +909,69 @@ final class SidebarSessionPresentationTests: XCTestCase {
             isLaterFlagged: false,
             now: now
         )
-        XCTAssertEqual(
-            singleChildModel.metaItems.first(where: { $0.label == "status" })?.value,
-            "waiting on 1 sub-agent"
+        XCTAssertEqual(shellModel.waiting?.headline, "Waiting on 1 process")
+
+        // A working session keeps today's card.
+        session.projection = .none
+        session.waitingSummary = nil
+        session.turnStartedAt = now.addingTimeInterval(-45)
+        let workingModel = SidebarSessionPresentation.sessionRowHoverTipModel(
+            session: session,
+            customTabTitle: nil,
+            parentSessionName: nil,
+            workspaceScopeNames: [],
+            isLaterFlagged: false,
+            now: now
         )
-        XCTAssertEqual(singleChildModel.metaItems.map(\.label), ["status", "updated", "sub-agent"])
+        XCTAssertNil(workingModel.waiting)
+        XCTAssertEqual(workingModel.metaItems.map(\.label), ["status", "updated"])
+        XCTAssertEqual(workingModel.metaItems.first?.value, "working")
+    }
+
+    func testSessionWaitingSummaryListsWorkAndFallsBackToCounts() throws {
+        var session = try makeSession(in: makeWorkspace(title: "Workspace"))
+        XCTAssertNil(SidebarSessionPresentation.sessionWaitingSummary(for: session))
+
+        session.projection = .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 1)
+        let fallback = try XCTUnwrap(SidebarSessionPresentation.sessionWaitingSummary(for: session))
+        XCTAssertEqual(fallback.rowText(.full), "2 sub-agents · 1 background task")
+
+        session.waitingSummary = SessionWaitingSummary(items: [
+            .init(id: "a", kind: .agent, label: "reviewer", detail: "Check tests"),
+            .init(id: "b", kind: .agent, label: "Explore"),
+            .init(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+        ])
+        let summary = try XCTUnwrap(SidebarSessionPresentation.sessionWaitingSummary(for: session))
+        XCTAssertEqual(summary.rowText(.full), "2 sub-agents · 1 background process")
+        XCTAssertEqual(summary.rowText(.compact), "2 sub-agents · 1 process")
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionAccessibilityLabel(
+                agentName: "Claude Code",
+                chipKind: nil,
+                projection: session.projection,
+                waitingSummary: summary,
+                childCount: 2,
+                detailText: "Launched two reviewers",
+                cwd: nil,
+                isLaterFlagged: false
+            ),
+            "Claude Code, waiting on 2 sub-agents · 1 background process, Launched two reviewers"
+        )
+        // VoiceOver hears the single item the row names.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionAccessibilityLabel(
+                agentName: "Claude Code",
+                chipKind: nil,
+                projection: .waitingOnChildren(childCount: 0, pendingBackgroundTaskCount: 1),
+                waitingSummary: SessionWaitingSummary(items: [
+                    .init(id: "shell-1", kind: .process, label: "shell", detail: "npm test"),
+                ]),
+                detailText: nil,
+                cwd: nil,
+                isLaterFlagged: false
+            ),
+            "Claude Code, waiting on 1 background process · npm test"
+        )
     }
 
     func testLaterFlagActionTitleUsesLaterCopy() {

@@ -65,7 +65,7 @@ struct ToasttySessionRow: View {
                         .font(titleFont)
                         .frame(width: 12)
                         .overlay {
-                            ToasttySessionRailMark(bucket: bucket, freshness: freshness)
+                            ToasttySessionRailMark(bucket: bucket, freshness: freshness, isWaiting: waiting != nil)
                         }
                     if conversation.isFlaggedForLater {
                         ToasttyLaterFlagMark()
@@ -156,6 +156,9 @@ struct ToasttySessionRow: View {
 
     @ViewBuilder
     private var trailingFacts: some View {
+        if waiting != nil {
+            ToasttyWaitingChip(freshness: freshness)
+        }
         if let badge = ToasttySessionRowPresentation.badge(for: bucket) {
             Text(badge)
                 .font(.caption2.weight(.semibold))
@@ -186,13 +189,24 @@ struct ToasttySessionRow: View {
 
     private var summaryLine: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(conversation.lastActivity)
-                .font(isWorking ? .caption.monospaced().italic() : .caption.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if let waiting {
+                    // What the session waits on replaces its last message,
+                    // which the long-press card still shows.
+                    ViewThatFits(in: .horizontal) {
+                        waitingSummaryText(waiting.rowText(.full))
+                        waitingSummaryText(waiting.rowText(.compact))
+                    }
+                } else {
+                    Text(conversation.lastActivity)
+                        .font(isGenerating ? .caption.monospaced().italic() : .caption.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let spawnerChip {
                 // Holds the place of the chip button drawn over the row.
                 ToasttySpawnerChipLabel(
@@ -206,15 +220,29 @@ struct ToasttySessionRow: View {
         }
     }
 
+    private func waitingSummaryText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospaced())
+            .foregroundStyle(freshness == .live ? ToasttyDesignTokens.waitingText : ToasttyDesignTokens.secondaryText)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var isWorking: Bool { bucket == .working }
 
-    /// Rows that want the user read heavier, and working rows lean, as on
+    private var waiting: SessionWaitingSummary? { conversation.waiting?.summary }
+
+    /// Working but not waiting: the agent itself is generating.
+    private var isGenerating: Bool { isWorking && waiting == nil }
+
+    /// Rows that want the user read heavier, and generating rows lean, as on
     /// the desktop sidebar.
     private var titleFont: Font {
         let font = Font.subheadline.weight(
             ToasttySessionRowPresentation.needsAttention(bucket) ? .bold : .medium
         )
-        return isWorking ? font.italic() : font
+        return isGenerating ? font.italic() : font
     }
 
     private var statusColor: Color {
@@ -360,10 +388,15 @@ struct ToasttyLaterFlagMark: View {
 struct ToasttySessionRailMark: View {
     let bucket: MobileSessionBucket
     let freshness: LiveProjectionFreshness
+    /// The agent's own turn has ended while work it started runs: a still
+    /// ring instead of the spinner.
+    let isWaiting: Bool
 
     var body: some View {
         let presentation = ToasttySessionStatusPresentation(bucket: bucket, freshness: freshness)
-        if presentation.showsWorkingSpinner {
+        if isWaiting, presentation.isVisible {
+            ToasttyWaitingRing(size: 8, freshness: freshness)
+        } else if presentation.showsWorkingSpinner {
             ToasttySpinner(size: 9, color: color)
         } else if presentation.isVisible {
             Circle()
@@ -384,6 +417,48 @@ struct ToasttySessionRailMark: View {
     }
 }
 
+/// The still ring of a waiting session.
+struct ToasttyWaitingRing: View {
+    var size: CGFloat
+    let freshness: LiveProjectionFreshness
+
+    var body: some View {
+        Circle()
+            .strokeBorder(
+                freshness == .live ? ToasttyDesignTokens.waitingText : ToasttyDesignTokens.mutedText,
+                lineWidth: 1.5
+            )
+            .frame(width: size, height: size)
+    }
+}
+
+/// The desktop's "waiting" chip, in the slot the approval badge uses.
+struct ToasttyWaitingChip: View {
+    let freshness: LiveProjectionFreshness
+
+    var body: some View {
+        let color = freshness == .live ? ToasttyDesignTokens.waitingText : ToasttyDesignTokens.mutedText
+        Text("waiting")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(
+                freshness == .live ? ToasttyDesignTokens.waitingSurface : ToasttyDesignTokens.chipSurface,
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(
+                        freshness == .live ? ToasttyDesignTokens.waitingBorder : ToasttyDesignTokens.chipBorder,
+                        lineWidth: 1
+                    )
+            }
+            .fixedSize()
+            .accessibilityHidden(true)
+    }
+}
+
 /// The long-press card: the phone's version of the desktop session hover
 /// card, built only from fields the Mac already sends.
 struct ToasttySessionDetailCard: View {
@@ -400,7 +475,11 @@ struct ToasttySessionDetailCard: View {
                     .font(.headline)
                     .frame(width: 12)
                     .overlay {
-                        ToasttySessionRailMark(bucket: conversation.state.bucket, freshness: freshness)
+                        ToasttySessionRailMark(
+                            bucket: conversation.state.bucket,
+                            freshness: freshness,
+                            isWaiting: conversation.waiting != nil
+                        )
                     }
                 Text(ToasttySessionRowPresentation.title(for: conversation))
                     .font(.headline)
@@ -412,9 +491,15 @@ struct ToasttySessionDetailCard: View {
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
+            if let waiting = conversation.waiting {
+                ToasttyWaitingBox(waiting: waiting, freshness: freshness)
+            }
             divider
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
-                fact("status", statusText)
+                // The waiting box says what the session waits on instead.
+                if conversation.waiting == nil {
+                    fact("status", statusText)
+                }
                 if conversation.turnElapsed != nil, freshness == .live {
                     GridRow {
                         Text("elapsed").foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -513,5 +598,101 @@ struct ToasttySessionDetailCard: View {
                 cornerRadius: ToasttyDesignTokens.chipCornerRadius,
                 style: .continuous
             ))
+    }
+}
+
+/// What a waiting session waits on, in the long-press card: the counts, then
+/// one line per item. Agents spin because they are working; other work shows
+/// the still ring.
+struct ToasttyWaitingBox: View {
+    static let maximumVisibleItemCount = 4
+
+    let waiting: MobileWaitingSummary
+    let freshness: LiveProjectionFreshness
+
+    var body: some View {
+        let items = Array(waiting.summary.items.prefix(Self.maximumVisibleItemCount))
+        let hiddenCount = waiting.summary.totalCount - items.count
+        VStack(alignment: .leading, spacing: 5) {
+            // A stale projection keeps the last-known work, and says so, as
+            // the status row's "last seen working" did.
+            Text(freshness == .live
+                ? waiting.summary.headline
+                : "Last seen waiting on \(waiting.summary.countsText(.compact))")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(accent)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(items) { item in
+                itemRow(item)
+            }
+            if hiddenCount > 0, items.isEmpty == false {
+                Text("+\(hiddenCount) more")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .padding(.leading, 18)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            freshness == .live ? ToasttyDesignTokens.waitingSurface : ToasttyDesignTokens.chipSurface,
+            in: RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
+                .strokeBorder(
+                    freshness == .live ? ToasttyDesignTokens.waitingBorder : ToasttyDesignTokens.chipBorder,
+                    lineWidth: 1
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("toastty-session-waiting-box")
+    }
+
+    private var accent: Color {
+        freshness == .live ? ToasttyDesignTokens.waitingText : ToasttyDesignTokens.secondaryText
+    }
+
+    private func itemRow(_ item: SessionWaitingSummary.Item) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(" ")
+                .font(.caption)
+                .frame(width: 11)
+                .overlay {
+                    if item.kind == .agent, freshness == .live {
+                        ToasttySpinner(size: 8, color: accent)
+                    } else {
+                        ToasttyWaitingRing(size: 7, freshness: freshness)
+                    }
+                }
+                .accessibilityHidden(true)
+            // The label keeps its width first but still truncates, so a long
+            // provider label cannot push the card wider.
+            Text(item.label)
+                .font(.caption2.monospaced())
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+            if let detail = item.detail {
+                Text(detail)
+                    .font(item.kind == .process ? .caption2.monospaced() : .caption)
+                    .foregroundStyle(item.kind == .process ? ToasttyDesignTokens.primaryText : ToasttyDesignTokens.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer(minLength: 0)
+            }
+            if freshness == .live, waiting.elapsedByItemID[item.id] != nil {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(waiting.elapsedLabel(for: item, atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? "")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .fixedSize()
+                }
+            }
+        }
     }
 }

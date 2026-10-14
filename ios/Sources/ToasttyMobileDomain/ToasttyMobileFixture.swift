@@ -106,8 +106,19 @@ public enum ToasttyMobileFixture {
                     cwd: "~/GiantThings/playground/herdr", agent: .claude,
                     title: "Architecture review", status: .working,
                     availability: .unavailable(reason: "working"),
-                    age: "now", last: "Reading the handoff path",
-                    turnElapsedSeconds: 47
+                    age: "now", last: "Launched two reviewers; will merge their findings",
+                    // Waiting: its own turn ended, so it has no running turn.
+                    waiting: MobileWaitingSummary(
+                        summary: SessionWaitingSummary(items: [
+                            .init(id: "agent-1", kind: .agent, label: "reviewer", detail: "Check tests for the race"),
+                            .init(id: "agent-2", kind: .agent, label: "Explore", detail: "Find unread callers"),
+                            .init(id: "shell-1", kind: .process, label: "shell", detail: "npm test -- unread"),
+                        ]),
+                        elapsedByItemID: [
+                            "agent-1": MobileActivityAge(secondsAtReceipt: 160, receivedAtMonotonicTime: fixtureReceiptTime),
+                            "agent-2": MobileActivityAge(secondsAtReceipt: 65, receivedAtMonotonicTime: fixtureReceiptTime),
+                        ]
+                    )
                 ),
                 conversation(
                     6, workspaceID: researchID, workspaceTitle: "herdr research",
@@ -323,7 +334,8 @@ public enum ToasttyMobileFixture {
         executionProfile: RemoteSessionExecutionProfile? = nil,
         isFlaggedForLater: Bool = false,
         turnElapsedSeconds: Int? = nil,
-        lastTurnDuration: TimeInterval? = nil
+        lastTurnDuration: TimeInterval? = nil,
+        waiting: MobileWaitingSummary? = nil
     ) -> MobileConversation {
         MobileConversation(
             id: UUID(uuidString: String(format: "B1000000-0000-0000-0000-%012d", number))!,
@@ -348,7 +360,8 @@ public enum ToasttyMobileFixture {
             turnElapsed: turnElapsedSeconds.map {
                 MobileActivityAge(secondsAtReceipt: $0, receivedAtMonotonicTime: fixtureReceiptTime)
             },
-            lastTurnDuration: lastTurnDuration
+            lastTurnDuration: lastTurnDuration,
+            waiting: waiting
         )
     }
 

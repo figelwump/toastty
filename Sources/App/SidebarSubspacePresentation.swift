@@ -417,6 +417,7 @@ enum SidebarSubspacePresentation {
                     isUnread: session.statusKind == .ready && session.showsUnreadSessionAccent,
                     railState: SidebarSessionPresentation.sessionRailState(
                         for: session.statusKind,
+                        isWaiting: session.isWaiting,
                         showsUnreadSessionAccent: session.showsUnreadSessionAccent
                     ),
                     badgeKind: session.statusKind == .needsApproval || session.statusKind == .error

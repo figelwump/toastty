@@ -551,7 +551,11 @@ struct ToasttySubspaceDetailCard: View {
                             .font(.caption.weight(.semibold))
                             .frame(width: 12)
                             .overlay {
-                                ToasttySessionRailMark(bucket: conversation.state.bucket, freshness: freshness)
+                                ToasttySessionRailMark(
+                                    bucket: conversation.state.bucket,
+                                    freshness: freshness,
+                                    isWaiting: conversation.waiting != nil
+                                )
                             }
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -563,9 +567,13 @@ struct ToasttySubspaceDetailCard: View {
                                     .font(.caption2)
                                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                             }
-                            Text(conversation.lastActivity)
+                            Text(conversation.waiting?.summary.rowText(.compact) ?? conversation.lastActivity)
                                 .font(.caption2.monospaced())
-                                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                                .foregroundStyle(
+                                    conversation.waiting != nil && freshness == .live
+                                        ? ToasttyDesignTokens.waitingText
+                                        : ToasttyDesignTokens.secondaryText
+                                )
                                 .lineLimit(1)
                         }
                     }

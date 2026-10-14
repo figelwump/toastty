@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 public enum SessionBackgroundActivityKind: String, Codable, Equatable, Sendable {
     case childAgent = "child_agent"
@@ -62,6 +63,25 @@ public struct SessionBackgroundActivity: Codable, Equatable, Sendable {
     }
 }
 
+/// Provider work that a session waits on but that is not an agent, such as a
+/// background shell command or a workflow. Claude reports these only as a
+/// snapshot at the end of each turn, so they carry no start time.
+public struct SessionPendingBackgroundTask: Codable, Equatable, Sendable {
+    public var id: String
+    public var kind: SessionWaitingSummary.ItemKind
+    /// The provider's task type, such as "shell" or "workflow".
+    public var label: String
+    /// The shell command, workflow name, or task description.
+    public var detail: String?
+
+    public init(id: String, kind: SessionWaitingSummary.ItemKind, label: String? = nil, detail: String? = nil) {
+        self.id = id
+        self.kind = kind
+        self.label = SessionBackgroundActivity.normalizedOptionalText(label) ?? kind.defaultLabel
+        self.detail = SessionBackgroundActivity.normalizedOptionalText(detail)
+    }
+}
+
 private extension SessionAgentExecutionProfile {
     static func normalizedOptionalText(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -72,7 +92,7 @@ private extension SessionAgentExecutionProfile {
     }
 }
 
-private extension SessionBackgroundActivity {
+extension SessionBackgroundActivity {
     static func normalizedOptionalText(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               trimmed.isEmpty == false else {

@@ -317,10 +317,10 @@ enum ClaudeHookEventParser {
     ) -> CLICommand {
         let backgroundTasks = object["background_tasks"] as? [[String: Any]] ?? []
         var entries: [SessionBackgroundActivitySyncEntry] = []
-        var pendingBackgroundTaskCount = 0
+        var pendingBackgroundTasks: [SessionPendingBackgroundTask] = []
         var preserveUnlistedActivities = false
 
-        for task in backgroundTasks {
+        for (index, task) in backgroundTasks.enumerated() {
             let taskType = normalizedString(task["type"])
             if taskType == "monitor" {
                 // Claude Code 2.1.239 reports an Artifact watch as a running
@@ -345,7 +345,7 @@ enum ClaudeHookEventParser {
                     )
                 )
             } else {
-                pendingBackgroundTaskCount += 1
+                pendingBackgroundTasks.append(pendingBackgroundTask(task, type: taskType, index: index))
                 if taskType == "workflow" {
                     // Workflow children are reported through SubagentStart/Stop rather
                     // than as individual entries in Claude's root Stop snapshot.
@@ -359,8 +359,39 @@ enum ClaudeHookEventParser {
             panelID: panelID,
             kind: .subagent,
             entries: entries,
-            pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            pendingBackgroundTasks: pendingBackgroundTasks,
             preserveUnlistedActivities: preserveUnlistedActivities
+        )
+    }
+
+    /// Claude names the work by type: a shell carries its command line, and a
+    /// workflow its name beside the description. Any other type, such as an
+    /// MCP task, keeps Claude's own label.
+    private static func pendingBackgroundTask(
+        _ task: [String: Any],
+        type: String?,
+        index: Int
+    ) -> SessionPendingBackgroundTask {
+        let description = normalizedString(task["description"])
+        let kind: SessionWaitingSummary.ItemKind
+        let detail: String?
+        switch type {
+        case "shell":
+            kind = .process
+            detail = normalizedString(task["command"]) ?? description
+        case "workflow":
+            kind = .workflow
+            detail = description ?? normalizedString(task["name"])
+        default:
+            kind = .task
+            detail = description
+        }
+        return SessionPendingBackgroundTask(
+            // Every entry is counted, even one without an id.
+            id: normalizedString(task["id"]) ?? "pending-\(index)",
+            kind: kind,
+            label: type,
+            detail: detail
         )
     }
 
