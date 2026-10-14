@@ -55,6 +55,7 @@ private final class WorkspaceSubspaceAppControlFixture {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: scopedWorkspaceIDs,
@@ -333,6 +334,7 @@ struct WorkspaceSubspaceAppControlTests {
             panelID: taskPanelID,
             windowID: fixture.windowID,
             workspaceID: task.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: start
@@ -406,6 +408,7 @@ struct WorkspaceSubspaceAppControlTests {
                 panelID: taskPanelID,
                 windowID: fixture.windowID,
                 workspaceID: task.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: nil,
                 repoRoot: nil,
                 launchReason: reason,

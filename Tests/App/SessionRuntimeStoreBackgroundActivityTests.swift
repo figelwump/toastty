@@ -18,6 +18,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -60,6 +61,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -143,6 +145,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -214,6 +217,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -272,6 +276,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: parentWorkspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -300,6 +305,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: childWorkspaceID,
             parentSessionID: "parent",
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now.addingTimeInterval(3)
@@ -336,6 +342,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -376,6 +383,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -441,6 +449,7 @@ extension SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -467,6 +476,7 @@ extension SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now.addingTimeInterval(3)
@@ -502,6 +512,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -544,6 +555,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -980,11 +992,11 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexSubagentNilSourcePreservesLegacyHookAndRolloutResetBehavior() {
+    func codexSubagentExternalSourcePreservesHookAndRolloutResetBehavior() {
         let store = SessionRuntimeStore()
         defer { store.reset() }
         let now = Date(timeIntervalSince1970: 1_700_001_295)
-        let sessionID = "sess-codex-legacy-nil-source"
+        let sessionID = "sess-codex-externally-reported"
 
         store.startSession(
             sessionID: sessionID,
@@ -993,7 +1005,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
-            codexStatusTrackingSource: nil,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -1095,6 +1107,7 @@ extension SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now

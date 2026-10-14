@@ -496,7 +496,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             "has_pending_bootstrap_script": pendingBootstrapScript != nil ? "true" : "false",
         ]
 
-        if let filePath = currentBootstrap?.filePath ?? session?.filePath ?? currentWebState?.filePath,
+        if let filePath = currentBootstrap?.filePath ?? session?.filePath ?? currentWebState?.localDocument?.filePath,
            filePath.isEmpty == false {
             metadata["file_path"] = filePath
         }
@@ -819,7 +819,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         )
         let didChangeState = currentWebState != webState
         currentWebState = webState
-        synchronizeFileObservation(with: webState.filePath)
+        synchronizeFileObservation(with: webState.localDocument?.filePath)
 
         guard didChangeState else { return }
         requestReload(debounced: false)
@@ -908,7 +908,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             "LocalDocumentPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         let format = resolvedFormat(for: webState)
-        let normalizedFilePath = WebPanelState.normalizedFilePath(webState.filePath)
+        let normalizedFilePath = WebPanelState.normalizedFilePath(webState.localDocument?.filePath)
         let displayName = resolvedDisplayName(for: webState, filePath: normalizedFilePath ?? "")
 
         guard let normalizedFilePath else {

@@ -304,6 +304,7 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
                 panelID: panelID,
                 windowID: fixture.windowID,
                 workspaceID: workspace.id,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/repo",
                 repoRoot: "/repo",
                 at: startedAt

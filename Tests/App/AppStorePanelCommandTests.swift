@@ -153,7 +153,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
 
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
-        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.canonicalPath)
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
@@ -188,7 +188,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
 
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
-        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.canonicalPath)
         XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertEqual(
             webState.localDocument,
@@ -224,7 +224,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
 
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md:42")
-        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.canonicalPath)
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
@@ -258,7 +258,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixturePath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixturePath)
         XCTAssertEqual(webState.title, "config.yaml")
         XCTAssertEqual(
             webState.localDocument,
@@ -296,7 +296,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixturePath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixturePath)
         XCTAssertEqual(webState.title, "package.json")
         XCTAssertEqual(
             webState.localDocument,
@@ -335,7 +335,7 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixturePath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixturePath)
         XCTAssertEqual(webState.title, "config")
         XCTAssertEqual(
             webState.localDocument,

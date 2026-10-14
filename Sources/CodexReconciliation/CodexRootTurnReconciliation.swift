@@ -5,9 +5,8 @@ import Foundation
 public enum CodexRootTurnAuthority: Equatable, Sendable {
     case hooks
     case sessionLogFallback
-    /// Temporary compatibility for sessions launched before source selection was
-    /// made explicit. New callers should choose one of the fixed authorities.
-    case legacyPermissive
+    /// External sessions may report lifecycle through either hook or log events.
+    case externallyReported
 }
 
 /// A lossless session-log field: omission retains an existing value, `null`

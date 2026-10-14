@@ -92,6 +92,7 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
                 panelID: server.panelID,
                 windowID: try #require(server.store.state.windows.first?.id),
                 workspaceID: server.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/tmp/repo",
                 repoRoot: "/tmp/repo",
                 at: Date(timeIntervalSince1970: 2_000)
@@ -176,6 +177,7 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
                 panelID: server.panelID,
                 windowID: try #require(server.store.state.windows.first?.id),
                 workspaceID: server.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/tmp/repo",
                 repoRoot: "/tmp/repo",
                 at: now

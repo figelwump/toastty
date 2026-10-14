@@ -1497,7 +1497,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private static func localPreviewPath(_ web: WebPanelState) -> String? {
-        if web.definition == .localDocument { return web.filePath }
+        if web.definition == .localDocument { return web.localDocument?.filePath }
         if web.definition == .browser,
            let rawURL = web.currentURL ?? web.initialURL,
            let url = URL(string: rawURL), url.isFileURL {

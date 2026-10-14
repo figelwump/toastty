@@ -150,6 +150,7 @@ struct WorkspaceListAppControlTests {
             panelID: panelID,
             windowID: fixture.windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -181,6 +182,7 @@ struct WorkspaceListAppControlTests {
             panelID: panelID,
             windowID: fixture.windowID,
             workspaceID: fixture.firstWorkspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: nil,
             repoRoot: nil,
             scopedWorkspaceIDs: [],

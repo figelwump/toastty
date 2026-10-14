@@ -751,7 +751,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         XCTAssertEqual(webState.title, "command-palette.md")
         try StateValidator.validate(store.state)
     }
@@ -799,7 +799,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         try StateValidator.validate(store.state)
     }
 
@@ -902,7 +902,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         try StateValidator.validate(store.state)
     }
 
@@ -981,7 +981,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         XCTAssertEqual(webState.localDocument?.format, .yaml)
         try StateValidator.validate(store.state)
     }
@@ -1178,7 +1178,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         try StateValidator.validate(store.state)
     }
 
@@ -1245,7 +1245,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
-        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.markdownPath)
         try StateValidator.validate(store.state)
     }
 
@@ -1511,7 +1511,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.filePath, fixture.documentPath)
+        XCTAssertEqual(webState.localDocument?.filePath, fixture.documentPath)
         XCTAssertEqual(
             webPanelRuntimeRegistry.localDocumentRuntime(for: panelID).automationState().pendingRevealLine,
             89

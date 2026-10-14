@@ -23,6 +23,7 @@ struct ManagedAgentNativeSessionObserverTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             scopedWorkspaceIDs: [],

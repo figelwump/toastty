@@ -333,6 +333,7 @@ final class TerminalCreationAppControlTests: XCTestCase {
         fixture.sessionRuntimeStore.startSession(
             sessionID: "creation-caller", agent: .codex, panelID: fixture.panelID,
             windowID: fixture.windowID, workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp", repoRoot: nil, scopedWorkspaceIDs: scope, at: Date()
         )
     }

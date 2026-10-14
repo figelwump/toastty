@@ -111,7 +111,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 WebPanelState(
                     definition: .localDocument,
                     title: "README.md",
-                    filePath: "/tmp/toastty/readme.md"
+                    localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
                 )
             ),
         ])
@@ -144,7 +144,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 WebPanelState(
                     definition: .localDocument,
                     title: "README.md",
-                    filePath: "/tmp/toastty/readme.md"
+                    localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
                 )
             ),
         ])
@@ -178,7 +178,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 WebPanelState(
                     definition: .localDocument,
                     title: "README.md",
-                    filePath: "/tmp/toastty/readme.md"
+                    localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
                 )
             ),
         ])

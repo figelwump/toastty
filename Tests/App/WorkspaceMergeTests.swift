@@ -103,6 +103,7 @@ struct WorkspaceMergeTests {
             panelID: fixture.taskPanelID,
             windowID: fixture.windowID,
             workspaceID: fixture.taskWorkspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/work/toastty-fix-question/Sources",
             repoRoot: "/work/toastty-fix-question-root",
             at: fixture.start

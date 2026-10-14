@@ -173,7 +173,6 @@ function measureHighlightTopRelativeToFrame(args: {
 
 export function measureRevealLayout(args: {
   lineNumber: number;
-  lineCount: number;
   scrollElement: HTMLDivElement;
   contentFrameElement: HTMLDivElement;
   gutterFrameElement: HTMLDivElement;
@@ -186,31 +185,25 @@ export function measureRevealLayout(args: {
     return null;
   }
 
-  const contentTopBase = measureHighlightTopRelativeToFrame({
+  const contentTop = measureHighlightTopRelativeToFrame({
     element: args.contentElement,
     frameElement: args.contentFrameElement,
     lineNumber: args.lineNumber,
     lineHeight: contentLineHeight
   });
-  const gutterTopBase = measureHighlightTopRelativeToFrame({
+  const gutterTop = measureHighlightTopRelativeToFrame({
     element: args.gutterElement,
     frameElement: args.gutterFrameElement,
     lineNumber: args.lineNumber,
     lineHeight: gutterLineHeight
   });
-  if (contentTopBase === null || gutterTopBase === null) {
+  if (contentTop === null || gutterTop === null) {
     return null;
   }
 
-  // `computeRevealLayout` still takes a `contentTopBase`/`gutterTopBase` + a
-  // `(lineNumber - 1) * line-height` step, so to reuse it we pass the
-  // already-measured line-N top as the base and force `lineNumber: 1`. That
-  // keeps the pure helper and its test unchanged.
   return computeRevealLayout({
-    lineNumber: 1,
-    lineCount: args.lineCount,
-    contentTopBase,
-    gutterTopBase,
+    contentTop,
+    gutterTop,
     contentLineHeight,
     gutterLineHeight,
     contentFrameOffsetTop: args.contentFrameElement.offsetTop,

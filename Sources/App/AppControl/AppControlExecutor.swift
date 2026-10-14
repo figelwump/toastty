@@ -2227,7 +2227,7 @@ private extension AppControlExecutor {
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
             "stateTitle": .string(webState.title),
-            "stateFilePath": webState.filePath.map { .string($0) } ?? .null,
+            "stateFilePath": webState.localDocument?.filePath.map { .string($0) } ?? .null,
             "stateFormat": webState.localDocument.map { .string($0.format.rawValue) } ?? .null,
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
@@ -2809,7 +2809,7 @@ private extension AppControlExecutor {
                 webDefinition = .string(webState.definition.rawValue)
                 panelTitle = webState.title
                 if webState.definition == .localDocument {
-                    filePath = webState.filePath.map(AutomationJSONValue.string) ?? .null
+                    filePath = webState.localDocument?.filePath.map(AutomationJSONValue.string) ?? .null
                 } else if webState.definition == .browser {
                     url = webState.restorableURL.map(AutomationJSONValue.string) ?? .null
                 } else if webState.definition == .scratchpad, let scratchpad = webState.scratchpad {

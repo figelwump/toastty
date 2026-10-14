@@ -137,25 +137,25 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
     }
 
     @Test
-    func nilSourceHookProgressKeepsLegacyProjection() {
+    func externalSourceHookProgressKeepsExternalProjection() {
         let store = SessionRuntimeStore()
         let startedAt = Date(timeIntervalSince1970: 1_700_500_200)
         let panelID = UUID()
         startCodexSession(
             in: store,
-            sessionID: "nil-source-hook-progress",
+            sessionID: "external-source-hook-progress",
             panelID: panelID,
-            source: nil,
+            source: .externallyReported,
             at: startedAt
         )
         let expectedStatus = SessionStatus(
             kind: .working,
-            summary: "Legacy working",
-            detail: "Nil-source detail"
+            summary: "External working",
+            detail: "External-source detail"
         )
 
         #expect(store.handleCodexHookEvent(
-            sessionID: "nil-source-hook-progress",
+            sessionID: "external-source-hook-progress",
             event: rootWorkingHookEvent(status: expectedStatus),
             at: startedAt.addingTimeInterval(1)
         ))
@@ -248,16 +248,16 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
     }
 
     @Test
-    func sessionLogProgressDoesNotWriteNilSourceOrStoppedSession() throws {
+    func sessionLogProgressDoesNotWriteExternalSourceOrStoppedSession() throws {
         let store = SessionRuntimeStore()
         let startedAt = Date(timeIntervalSince1970: 1_700_500_400)
-        let nilSourcePanelID = UUID()
+        let externalSourcePanelID = UUID()
         let stoppedPanelID = UUID()
         startCodexSession(
             in: store,
-            sessionID: "nil-source-log-progress",
-            panelID: nilSourcePanelID,
-            source: nil,
+            sessionID: "external-source-log-progress",
+            panelID: externalSourcePanelID,
+            source: .externallyReported,
             at: startedAt
         )
         startCodexSession(
@@ -268,7 +268,7 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             at: startedAt
         )
         let initialStatus = SessionStatus(kind: .idle, summary: "Waiting", detail: "Initial")
-        store.updateStatus(sessionID: "nil-source-log-progress", status: initialStatus, at: startedAt)
+        store.updateStatus(sessionID: "external-source-log-progress", status: initialStatus, at: startedAt)
         store.updateStatus(sessionID: "stopped-log-progress", status: initialStatus, at: startedAt)
         store.stopSession(
             sessionID: "stopped-log-progress",
@@ -279,8 +279,8 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         )
 
         #expect(store.handleCodexSessionLogRootProgressObservation(
-            sessionID: "nil-source-log-progress",
-            observation: .sessionLogWorking(detail: "No explicit source"),
+            sessionID: "external-source-log-progress",
+            observation: .sessionLogWorking(detail: "External status stays caller-owned"),
             at: startedAt.addingTimeInterval(2)
         ) == false)
         #expect(store.handleCodexSessionLogRootProgressObservation(
@@ -289,19 +289,19 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             at: startedAt.addingTimeInterval(2)
         ) == false)
 
-        #expect(store.sessionRegistry.activeSession(for: nilSourcePanelID)?.status == initialStatus)
+        #expect(store.sessionRegistry.activeSession(for: externalSourcePanelID)?.status == initialStatus)
         let stoppedRecord = try #require(store.sessionRegistry.sessionsByID["stopped-log-progress"])
         #expect(stoppedRecord.status == initialStatus)
         #expect(stoppedRecord.statusUpdatedAt == stoppedUpdatedAt)
     }
 
     @Test
-    func localInterruptUsesExplicitAuthorityAndPreservesNilSourceBehavior() {
+    func localInterruptUsesExplicitAuthorityAndPreservesExternalSourceBehavior() {
         let store = SessionRuntimeStore()
         let startedAt = Date(timeIntervalSince1970: 1_700_500_500)
         let hookPanelID = UUID()
         let fallbackPanelID = UUID()
-        let nilSourcePanelID = UUID()
+        let externalSourcePanelID = UUID()
         startCodexSession(
             in: store,
             sessionID: "hook-local-interrupt",
@@ -318,15 +318,15 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         )
         startCodexSession(
             in: store,
-            sessionID: "nil-source-local-interrupt",
-            panelID: nilSourcePanelID,
-            source: nil,
+            sessionID: "external-source-local-interrupt",
+            panelID: externalSourcePanelID,
+            source: .externallyReported,
             at: startedAt
         )
         let working = SessionStatus(kind: .working, summary: "Working", detail: "Before interrupt")
         store.updateStatus(sessionID: "hook-local-interrupt", status: working, at: startedAt)
         store.updateStatus(sessionID: "fallback-local-interrupt", status: working, at: startedAt)
-        store.updateStatus(sessionID: "nil-source-local-interrupt", status: working, at: startedAt)
+        store.updateStatus(sessionID: "external-source-local-interrupt", status: working, at: startedAt)
 
         #expect(store.handleLocalInterruptForPanelIfActive(
             panelID: hookPanelID,
@@ -339,7 +339,7 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             at: startedAt.addingTimeInterval(1)
         ) == false)
         #expect(store.handleLocalInterruptForPanelIfActive(
-            panelID: nilSourcePanelID,
+            panelID: externalSourcePanelID,
             kind: .escape,
             at: startedAt.addingTimeInterval(1)
         ) == false)
@@ -349,7 +349,7 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             detail: "Ready for prompt"
         ))
         #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == working)
-        #expect(store.sessionRegistry.activeSession(for: nilSourcePanelID)?.status == working)
+        #expect(store.sessionRegistry.activeSession(for: externalSourcePanelID)?.status == working)
 
         store.updateStatus(
             sessionID: "hook-local-interrupt",
@@ -367,11 +367,11 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             at: startedAt.addingTimeInterval(3)
         ))
         #expect(store.handleLocalInterruptForPanelIfActive(
-            panelID: nilSourcePanelID,
+            panelID: externalSourcePanelID,
             kind: .controlC,
             at: startedAt.addingTimeInterval(3)
         ))
-        for panelID in [hookPanelID, fallbackPanelID, nilSourcePanelID] {
+        for panelID in [hookPanelID, fallbackPanelID, externalSourcePanelID] {
             #expect(store.sessionRegistry.activeSession(for: panelID)?.status == SessionStatus(
                 kind: .idle,
                 summary: "Waiting",
@@ -538,7 +538,7 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         in store: SessionRuntimeStore,
         sessionID: String,
         panelID: UUID,
-        source: CodexStatusTrackingSource?,
+        source: CodexStatusTrackingSource,
         at startedAt: Date
     ) {
         store.startSession(

@@ -257,7 +257,7 @@ struct RemotePreviewProviderTests {
         let id = UUID()
         return .init(
             id: UUID(), identity: .localDocument(path: path), panelID: id,
-            panelState: .web(.init(definition: .localDocument, title: title, filePath: path)))
+            panelState: .web(.init(definition: .localDocument, title: title, localDocument: .init(filePath: path))))
     }
 }
 

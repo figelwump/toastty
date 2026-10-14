@@ -877,6 +877,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Date(timeIntervalSince1970: 1_700_000_400)

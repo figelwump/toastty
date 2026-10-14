@@ -580,6 +580,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
             panelID: sourcePanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             displayTitleOverride: "Codex",
             cwd: nil,
             repoRoot: nil,

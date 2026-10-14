@@ -263,11 +263,6 @@ public final class RemoteDeviceStore: @unchecked Sendable {
         authenticateCredential(credentialToken, requiredAuthKind: .browser, at: date)
     }
 
-    /// Compatibility alias for the existing browser gateway.
-    public func authenticate(credentialToken: String, at date: Date) -> RemoteDeviceRecord? {
-        authenticateBrowserCredential(credentialToken, at: date)
-    }
-
     /// Native bearer authentication enforces both the credential and the exact
     /// case-sensitive Tailscale login recorded at pairing.
     public func authenticateNativeBearer(

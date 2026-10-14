@@ -321,6 +321,7 @@ final class AppStoreWorkspaceCommandTests: AppStoreCommandTestCase {
             panelID: secondLayout.leftPanelID,
             windowID: windowID,
             workspaceID: secondLayout.workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/left",
             repoRoot: "/repo",
             at: startedAt
@@ -337,6 +338,7 @@ final class AppStoreWorkspaceCommandTests: AppStoreCommandTestCase {
             panelID: secondLayout.rightPanelID,
             windowID: windowID,
             workspaceID: secondLayout.workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/right",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -387,6 +389,7 @@ final class AppStoreWorkspaceCommandTests: AppStoreCommandTestCase {
             panelID: secondLayout.rightPanelID,
             windowID: windowID,
             workspaceID: secondLayout.workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/right",
             repoRoot: "/repo",
             at: startedAt

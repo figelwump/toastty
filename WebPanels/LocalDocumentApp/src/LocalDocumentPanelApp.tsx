@@ -971,7 +971,6 @@ function CodeDocumentView(props: {
     setRevealLayout(
       measureRevealLayout({
         lineNumber: activeReveal.lineNumber,
-        lineCount: lines.length,
         scrollElement,
         gutterFrameElement,
         gutterElement: gutterPreElement,

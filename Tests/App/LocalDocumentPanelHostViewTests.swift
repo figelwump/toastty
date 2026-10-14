@@ -17,7 +17,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     format: .toml,
                     content: "title = 'Toastty'\n",
@@ -64,7 +64,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     format: .toml,
                     content: "key = 'value'\n",
@@ -147,7 +147,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
-                    filePath: webState.filePath,
+                    filePath: webState.localDocument?.filePath,
                     displayName: webState.title,
                     format: .markdown,
                     content: "# Toastty\n",

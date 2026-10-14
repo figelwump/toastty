@@ -13,7 +13,6 @@ struct ToastCharacterView: View {
             let cx = size.width / 2
             let cy = size.height / 2
 
-            // Warm radial glow behind the toast
             let glowCenter = CGPoint(x: cx, y: cy + 4)
             let glowRadius: CGFloat = 56
             context.drawLayer { glow in
@@ -38,19 +37,16 @@ struct ToastCharacterView: View {
                 )
             }
 
-            // Toast body - crust
             let crustRect = CGRect(x: cx - 28, y: cy - 22, width: 56, height: 48)
             let crustPath = RoundedRectangle(cornerRadius: 8)
                 .path(in: crustRect)
             context.fill(crustPath, with: .color(ToastyTheme.emptyStateToastCrust))
 
-            // Toast body - bread interior
             let breadRect = crustRect.insetBy(dx: 4, dy: 4)
             let breadPath = RoundedRectangle(cornerRadius: 5)
                 .path(in: breadRect)
             context.fill(breadPath, with: .color(ToastyTheme.emptyStateToastBread))
 
-            // Top highlight
             let highlightRect = CGRect(
                 x: breadRect.minX + 3,
                 y: breadRect.minY + 2,
@@ -61,7 +57,6 @@ struct ToastCharacterView: View {
                 .path(in: highlightRect)
             context.fill(highlightPath, with: .color(ToastyTheme.emptyStateToastHighlight))
 
-            // Butter pat
             let butterRect = CGRect(x: cx - 8, y: cy - 10, width: 16, height: 10)
             let butterPath = RoundedRectangle(cornerRadius: 2)
                 .path(in: butterRect)
@@ -169,7 +164,6 @@ struct EmptyStateView: View {
 
     // MARK: - Primary Action
 
-    // TODO: derive shortcut labels from actual keybinding configuration
     private var createWorkspaceCTA: some View {
         Button {
             onCreateWorkspace?()
@@ -179,7 +173,7 @@ struct EmptyStateView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(ToastyTheme.accentDark)
 
-                Text("\u{2318}\u{21E7}N")
+                Text(ToasttyBuiltInCommand.newWorkspace.requiredShortcut.symbolLabel)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(ToastyTheme.accentDark.opacity(0.72))
                     .padding(.horizontal, 8)

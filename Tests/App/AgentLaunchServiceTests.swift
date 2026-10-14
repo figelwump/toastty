@@ -19,6 +19,7 @@ struct AgentLaunchServiceTests {
             fixture.sessionRuntimeStore.startSession(
                 sessionID: "source-managed", agent: agent, panelID: fixture.panelID,
                 windowID: fixture.windowID, workspaceID: fixture.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
                 cwd: root.path, repoRoot: root.path, at: record.capturedAt
             )
             #expect(fixture.sessionRuntimeStore.confirmNativeSessionBinding(managedSessionID: "source-managed", panelID: fixture.panelID, record: record))
@@ -60,7 +61,7 @@ struct AgentLaunchServiceTests {
             let start = Date()
             let record = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: UUID().uuidString, sessionFilePath: transcript.path, cwd: root.path, capturedAt: failure == "stale" ? start.addingTimeInterval(-10) : start)
             if failure != "inactive" {
-                fixture.sessionRuntimeStore.startSession(sessionID: "source", agent: .codex, panelID: fixture.panelID, windowID: fixture.windowID, workspaceID: fixture.workspaceID, cwd: root.path, repoRoot: root.path, at: start)
+                fixture.sessionRuntimeStore.startSession(sessionID: "source", agent: .codex, panelID: fixture.panelID, windowID: fixture.windowID, workspaceID: fixture.workspaceID, codexStatusTrackingSource: .externallyReported, cwd: root.path, repoRoot: root.path, at: start)
                 #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: record)))
                 if failure != "unconfirmed" {
                     #expect(fixture.sessionRuntimeStore.confirmNativeSessionBinding(managedSessionID: "source", panelID: fixture.panelID, record: record))
@@ -776,6 +777,7 @@ struct AgentLaunchServiceTests {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
             at: Date(timeIntervalSince1970: 1_000)

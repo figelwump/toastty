@@ -31,7 +31,7 @@ struct SessionRuntimeStoreTests {
         )
         store.startSession(
             sessionID: sessionID, agent: agent, panelID: panelID,
-            windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
+            windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: date
         )
         if agent == .grok {
             #expect(store.handleGrokHookEvent(
@@ -168,7 +168,7 @@ struct SessionRuntimeStoreTests {
 
         store.startSession(
             sessionID: sessionID, agent: .claude, panelID: panelID,
-            windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
+            windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: date
         )
         let first = try bind("first")
         store.updateStatus(
@@ -215,6 +215,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: date
@@ -287,6 +288,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: date
@@ -374,6 +376,7 @@ struct SessionRuntimeStoreTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: date
@@ -432,6 +435,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: date
@@ -487,6 +491,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: date
@@ -559,6 +564,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: confirmedAt
@@ -618,6 +624,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -662,6 +669,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -706,6 +714,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             scopedWorkspaceIDs: [scopedWorkspaceID],
@@ -729,6 +738,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -756,6 +766,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -784,6 +795,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -816,6 +828,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: try #require(appStore.state.windows.first?.id),
             workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -844,6 +857,7 @@ struct SessionRuntimeStoreTests {
             panelID: originalPanelID,
             windowID: selection.windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -884,6 +898,7 @@ struct SessionRuntimeStoreTests {
             panelID: rightPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/right",
             repoRoot: "/repo",
             at: startedAt
@@ -900,6 +915,7 @@ struct SessionRuntimeStoreTests {
             panelID: leftPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/left",
             repoRoot: "/repo",
             at: startedAt
@@ -932,6 +948,7 @@ struct SessionRuntimeStoreTests {
             panelID: originalPanelID,
             windowID: selection.windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/original",
             repoRoot: "/repo",
             at: startedAt
@@ -954,6 +971,7 @@ struct SessionRuntimeStoreTests {
             panelID: newSelectedPanelID,
             windowID: selection.windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo/new",
             repoRoot: "/repo",
             at: startedAt.addingTimeInterval(2)
@@ -985,6 +1003,7 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt

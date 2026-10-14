@@ -27,6 +27,8 @@ struct PreparedAgentLaunchCommand {
 enum CodexStatusTrackingSource: Equatable, Sendable {
     case hooks
     case sessionLogFallback(reason: String)
+    /// Sessions started through automation may report both hook and log events.
+    case externallyReported
 
     var code: String {
         switch self {
@@ -34,12 +36,14 @@ enum CodexStatusTrackingSource: Equatable, Sendable {
             return "hooks"
         case .sessionLogFallback:
             return "session_log_fallback"
+        case .externallyReported:
+            return "externally_reported"
         }
     }
 
     var fallbackReason: String? {
         switch self {
-        case .hooks:
+        case .hooks, .externallyReported:
             return nil
         case .sessionLogFallback(let reason):
             return reason

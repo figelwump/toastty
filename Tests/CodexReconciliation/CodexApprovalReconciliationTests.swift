@@ -397,8 +397,8 @@ struct CodexApprovalReconciliationTests {
             (.hooks, .sessionLog, false),
             (.sessionLogFallback, .hook, false),
             (.sessionLogFallback, .sessionLog, true),
-            (.legacyPermissive, .hook, true),
-            (.legacyPermissive, .sessionLog, true),
+            (.externallyReported, .hook, true),
+            (.externallyReported, .sessionLog, true),
         ]
 
         for (authority, source, isAccepted) in cases {

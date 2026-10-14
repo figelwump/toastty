@@ -193,7 +193,7 @@ struct RemotePanelMetadataCacheTests {
         state.workspacesByID[workspaceID]?.tabsByID[tabID]?.rightAuxPanel.appendTab(
             .init(
                 id: UUID(), identity: .localDocument(path: path), panelID: panelID,
-                panelState: .web(.init(definition: .localDocument, filePath: path))))
+                panelState: .web(.init(definition: .localDocument, localDocument: .init(filePath: path)))))
         let date = Date(timeIntervalSince1970: 12)
         let inputs = RemoteAccessService.panelMetadataInputs(
             state: state,

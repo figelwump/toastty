@@ -19,6 +19,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -79,6 +80,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -134,6 +136,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -202,6 +205,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -242,6 +246,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -282,6 +287,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -362,6 +368,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -416,6 +423,7 @@ extension SessionRuntimeStoreTests {
             windowID: UUID(),
             workspaceID: UUID(),
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt

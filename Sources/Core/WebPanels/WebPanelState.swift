@@ -200,7 +200,6 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         title: String? = nil,
         initialURL: String? = nil,
         currentURL: String? = nil,
-        filePath: String? = nil,
         localDocument: LocalDocumentState? = nil,
         scratchpad: ScratchpadState? = nil,
         browserPageZoom: Double? = nil
@@ -214,7 +213,6 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         self.currentURL = Self.normalizedCurrentURL(currentURL)
         self.localDocument = Self.resolvedLocalDocumentState(
             definition: definition,
-            filePath: filePath,
             localDocument: localDocument
         )
         self.scratchpad = Self.resolvedScratchpadState(
@@ -229,12 +227,6 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 
     public var displayPanelLabel: String {
         title
-    }
-
-    // Temporary compatibility shim while app/runtime call sites migrate from
-    // the old flat markdown shape to typed local-document state.
-    public var filePath: String? {
-        localDocument?.filePath
     }
 
     public var restorableURL: String? {
@@ -309,31 +301,24 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 
     private static func resolvedLocalDocumentState(
         definition: WebPanelDefinition,
-        filePath: String?,
         localDocument: LocalDocumentState?
     ) -> LocalDocumentState? {
-        let normalizedLegacyFilePath = normalizedFilePath(filePath)
-
         guard definition == .localDocument else {
             assert(
-                localDocument == nil && normalizedLegacyFilePath == nil,
+                localDocument == nil,
                 "Only localDocument panels may carry local document state."
             )
             return nil
         }
 
-        if let localDocument {
-            return LocalDocumentState(
-                filePath: localDocument.filePath,
-                format: localDocument.format
-            )
-        }
-
-        guard let normalizedLegacyFilePath else {
+        guard let localDocument else {
             return nil
         }
 
-        return LocalDocumentState(filePath: normalizedLegacyFilePath)
+        return LocalDocumentState(
+            filePath: localDocument.filePath,
+            format: localDocument.format
+        )
     }
 
     private static func resolvedScratchpadState(

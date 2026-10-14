@@ -41,7 +41,7 @@ struct PanelStateCodableTests {
                 WebPanelState(
                     definition: .localDocument,
                     title: "README.md",
-                    filePath: "/tmp/project/README.md"
+                    localDocument: LocalDocumentState(filePath: "/tmp/project/README.md")
                 )
             ),
         ]

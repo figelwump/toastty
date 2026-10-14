@@ -72,6 +72,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -97,6 +98,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             launchReason: .restore,
@@ -250,6 +252,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -275,6 +278,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: now
@@ -334,6 +338,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -388,6 +393,7 @@ struct SessionRuntimeStoreAgentHookTests {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -427,6 +433,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: baseDate
@@ -505,6 +512,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -564,6 +572,7 @@ struct SessionRuntimeStoreAgentHookTests {
                 panelID: UUID(),
                 windowID: UUID(),
                 workspaceID: UUID(),
+                codexStatusTrackingSource: .externallyReported,
                 cwd: "/repo",
                 repoRoot: "/repo",
                 at: Self.baseDate
@@ -640,6 +649,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -671,6 +681,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -712,6 +723,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: backgroundPanelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -737,6 +749,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -778,6 +791,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate
@@ -788,6 +802,7 @@ struct SessionRuntimeStoreAgentHookTests {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported,
             cwd: "/repo",
             repoRoot: "/repo",
             at: Self.baseDate.addingTimeInterval(1)

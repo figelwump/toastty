@@ -2455,7 +2455,7 @@ final class WorkspaceViewTests: XCTestCase {
                 WebPanelState(
                     definition: .localDocument,
                     title: documentURL.lastPathComponent,
-                    filePath: documentURL.path
+                    localDocument: LocalDocumentState(filePath: documentURL.path)
                 )
             )
         )
