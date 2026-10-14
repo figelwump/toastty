@@ -43,11 +43,22 @@ record the exact Ghostty commit because the branch name is not a stable pin.
 ## Recommended Ghostty build
 
 This checkout requires the OSC 7501 bridge and clipboard API from Ghostty fork commit
-[`e696c5ba94121d76b7dc2e56f2c29bf578b6a211`](https://github.com/figelwump/ghostty/commit/e696c5ba94121d76b7dc2e56f2c29bf578b6a211),
+[`056ffe2a80aab09c478946406dc7ec1b489d4ac3`](https://github.com/figelwump/ghostty/commit/056ffe2a80aab09c478946406dc7ec1b489d4ac3),
 which is based on upstream `c770410dbb57909ff4f6921a6497688a957f85db` and preserves
 the downstream changes above. Use Zig **0.16.0** for this revision. The embedded
 clipboard API now passes MIME requests and explicit byte lengths. Rebuild older
 local artifacts before compiling this Toastty checkout.
+
+This revision also contains upstream fix `ffaaf5d7a9951886d72f2c0dd8ba7380c1aea92c`
+(ghostty-org/ghostty#14691). Artifacts built from older revisions on this base,
+such as `e696c5ba9`, can hang. The render thread starts and stops its
+CVDisplayLink while CoreVideo does the same on the main thread after a display
+change. The render thread can then wait forever in `CVDisplayLinkStop`. That
+terminal stops drawing, and closing it hangs the app in `ghostty_surface_free`.
+The fix changes the display link only on the main thread. A downstream
+commit on top of it queues that main-thread change whenever the renderer's
+request changes. Without it, a stop that is already in progress can win over a
+newer start request, and an idle terminal keeps showing a stale frame.
 
 Clone the maintained branch as a sibling of the Toastty checkout:
 
@@ -55,7 +66,7 @@ Clone the maintained branch as a sibling of the Toastty checkout:
 git clone --branch toastty-downstream \
   https://github.com/figelwump/ghostty.git \
   ../ghostty
-git -C ../ghostty checkout e696c5ba94121d76b7dc2e56f2c29bf578b6a211
+git -C ../ghostty checkout 056ffe2a80aab09c478946406dc7ec1b489d4ac3
 ```
 
 Then, from that Ghostty checkout:
