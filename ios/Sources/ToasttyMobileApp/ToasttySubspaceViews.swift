@@ -551,11 +551,7 @@ struct ToasttySubspaceDetailCard: View {
                             .font(.caption.weight(.semibold))
                             .frame(width: 12)
                             .overlay {
-                                ToasttySessionRailMark(
-                                    bucket: conversation.state.bucket,
-                                    freshness: freshness,
-                                    isWaiting: conversation.waiting != nil
-                                )
+                                ToasttySessionRailMark(bucket: conversation.state.bucket, freshness: freshness)
                             }
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {

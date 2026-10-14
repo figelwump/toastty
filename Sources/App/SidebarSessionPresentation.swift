@@ -258,9 +258,6 @@ enum SidebarSessionPresentation {
     enum SessionRailState: Hashable {
         case empty
         case spinner
-        /// A still ring: the agent's own turn has ended, and work it started
-        /// is still running.
-        case waitingRing
         case approvalDot
         case unreadDot
         case errorDot
@@ -268,12 +265,8 @@ enum SidebarSessionPresentation {
 
     nonisolated static func sessionRailState(
         for kind: SessionStatusKind,
-        isWaiting: Bool,
         showsUnreadSessionAccent: Bool
     ) -> SessionRailState {
-        if isWaiting {
-            return .waitingRing
-        }
         switch kind {
         case .working:
             return .spinner
@@ -294,8 +287,6 @@ enum SidebarSessionPresentation {
             return "empty"
         case .spinner:
             return "spinner"
-        case .waitingRing:
-            return "waiting_ring"
         case .approvalDot:
             return "approval_dot"
         case .unreadDot:

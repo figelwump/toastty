@@ -146,11 +146,7 @@ struct SessionRowHoverTipCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HoverTipHeader(
-                dotColor: model.statusDotColorKind.color,
-                showsWaitingRing: model.waiting != nil,
-                name: model.name
-            )
+            HoverTipHeader(dotColor: model.statusDotColorKind.color, name: model.name)
 
             if let bodyText = model.bodyText {
                 // One line more than the row; the full text stays in the
@@ -433,16 +429,12 @@ struct SubspaceHoverTipCard: View {
 /// whose body already shows status leave out the dot.
 private struct HoverTipHeader: View {
     var dotColor: Color? = nil
-    var showsWaitingRing = false
     let name: String
     var tag: String? = nil
 
     var body: some View {
         HStack(spacing: 6) {
-            if showsWaitingRing {
-                SessionWaitingRing(size: 6, lineWidth: 1.2)
-                    .accessibilityHidden(true)
-            } else if let dotColor {
+            if let dotColor {
                 Circle()
                     .fill(dotColor.opacity(0.85))
                     .frame(width: 6, height: 6)
@@ -475,8 +467,7 @@ private struct HoverTipHeader: View {
 }
 
 /// The work a waiting session waits on: a headline with the counts, then one
-/// line per item. Agents spin because they are working; other work shows the
-/// still waiting ring.
+/// spinning line per item that is still running.
 private struct HoverTipWaitingBox: View {
     let waiting: SessionRowHoverTipModel.Waiting
 
@@ -516,14 +507,8 @@ private struct HoverTipWaitingItemRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Group {
-                if item.kind == .agent {
-                    SessionStatusIndicator(state: .spinner, size: 7, lineWidth: 1.2)
-                } else {
-                    SessionWaitingRing(size: 6, lineWidth: 1.1)
-                }
-            }
-            .frame(width: 10, height: 10)
+            SessionStatusIndicator(state: .spinner, size: 7, lineWidth: 1.2)
+                .frame(width: 10, height: 10)
             .alignmentGuide(.firstTextBaseline) { dimensions in dimensions[.bottom] - 1 }
 
             // The label keeps its width first but still truncates, so a long

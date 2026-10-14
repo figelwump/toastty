@@ -361,8 +361,6 @@ private struct SidebarSessionRowDiagnosticState: Equatable {
         switch railState {
         case .spinner:
             return "working_spinner"
-        case .waitingRing:
-            return "waiting_ring"
         case .approvalDot, .unreadDot, .errorDot:
             return "\(SidebarSessionPresentation.sessionRailLogValue(railState))_rail"
         case .empty:
@@ -407,8 +405,6 @@ struct SessionRailStatusIcon: View {
             Color.clear
         case .spinner:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .waitingRing:
-            SessionWaitingRing(size: 8, lineWidth: 1.4)
         case .approvalDot:
             Circle()
                 .fill(ToastyTheme.sessionNeedsApprovalText)
@@ -426,19 +422,6 @@ struct SessionRailStatusIcon: View {
                 .fill(ToastyTheme.sessionErrorText)
                 .frame(width: Self.dotSize, height: Self.dotSize)
         }
-    }
-}
-
-/// The still ring of a waiting session: its own turn has ended, so nothing
-/// spins, but work it started is still running.
-struct SessionWaitingRing: View {
-    var size: CGFloat
-    var lineWidth: CGFloat
-
-    var body: some View {
-        Circle()
-            .strokeBorder(ToastyTheme.sessionWaitingText.opacity(0.9), lineWidth: lineWidth)
-            .frame(width: size, height: size)
     }
 }
 
@@ -1691,7 +1674,6 @@ struct SidebarView: View {
             projection: workspaceSessionStatus.projection,
             railState: SidebarSessionPresentation.sessionRailState(
                 for: status.kind,
-                isWaiting: workspaceSessionStatus.projection.isWaitingOnChildren,
                 showsUnreadSessionAccent: showsUnreadSessionAccent
             ),
             showsUnreadSessionAccent: showsUnreadSessionAccent,
@@ -1933,7 +1915,6 @@ struct SidebarView: View {
     ) -> some View {
         let railState = SidebarSessionPresentation.sessionRailState(
             for: status.kind,
-            isWaiting: projection.isWaitingOnChildren,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
         // Ready (unread), approval, and error: the states that want the user.

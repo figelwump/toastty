@@ -435,7 +435,7 @@ length of its last turn.
 
 A session is waiting when its agent has finished its own turn but sub-agents or
 background work it started are still running. Its row stays in the working
-group, shows a still ring and a `waiting` chip, and replaces the summary with
+group, keeps its spinner, shows a `waiting` chip, and replaces the summary with
 what it waits on, such as "2 sub-agents · 1 background process". The
 touch-and-hold card lists each sub-agent and background process. A Mac from
 before this feature reports the same session as plain working.

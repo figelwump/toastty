@@ -887,8 +887,7 @@ While a managed agent session is active, Toastty suppresses overlapping terminal
 
 A session row reserves a fixed gutter at its left edge, which carries what is
 true about the session in two slots. The top slot is current status, so states
-line up down the list: a spinner while working, a still ring while waiting on
-work the session started, an amber dot when the session
+line up down the list: a spinner while working, an amber dot when the session
 needs approval, a green dot for an unread reply, a red dot on error, and nothing
 when idle. The slot underneath carries a standing mark — a violet flag when the
 session is flagged for later, or a bell when the row is a watched process. The

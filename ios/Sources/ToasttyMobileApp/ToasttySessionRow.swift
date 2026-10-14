@@ -65,7 +65,7 @@ struct ToasttySessionRow: View {
                         .font(titleFont)
                         .frame(width: 12)
                         .overlay {
-                            ToasttySessionRailMark(bucket: bucket, freshness: freshness, isWaiting: waiting != nil)
+                            ToasttySessionRailMark(bucket: bucket, freshness: freshness)
                         }
                     if conversation.isFlaggedForLater {
                         ToasttyLaterFlagMark()
@@ -388,15 +388,10 @@ struct ToasttyLaterFlagMark: View {
 struct ToasttySessionRailMark: View {
     let bucket: MobileSessionBucket
     let freshness: LiveProjectionFreshness
-    /// The agent's own turn has ended while work it started runs: a still
-    /// ring instead of the spinner.
-    let isWaiting: Bool
 
     var body: some View {
         let presentation = ToasttySessionStatusPresentation(bucket: bucket, freshness: freshness)
-        if isWaiting, presentation.isVisible {
-            ToasttyWaitingRing(size: 8, freshness: freshness)
-        } else if presentation.showsWorkingSpinner {
+        if presentation.showsWorkingSpinner {
             ToasttySpinner(size: 9, color: color)
         } else if presentation.isVisible {
             Circle()
@@ -414,21 +409,6 @@ struct ToasttySessionRailMark: View {
 
     private var color: Color {
         freshness == .live ? ToasttyDesignTokens.color(for: bucket) : ToasttyDesignTokens.mutedText
-    }
-}
-
-/// The still ring of a waiting session.
-struct ToasttyWaitingRing: View {
-    var size: CGFloat
-    let freshness: LiveProjectionFreshness
-
-    var body: some View {
-        Circle()
-            .strokeBorder(
-                freshness == .live ? ToasttyDesignTokens.waitingText : ToasttyDesignTokens.mutedText,
-                lineWidth: 1.5
-            )
-            .frame(width: size, height: size)
     }
 }
 
@@ -475,11 +455,7 @@ struct ToasttySessionDetailCard: View {
                     .font(.headline)
                     .frame(width: 12)
                     .overlay {
-                        ToasttySessionRailMark(
-                            bucket: conversation.state.bucket,
-                            freshness: freshness,
-                            isWaiting: conversation.waiting != nil
-                        )
+                        ToasttySessionRailMark(bucket: conversation.state.bucket, freshness: freshness)
                     }
                 Text(ToasttySessionRowPresentation.title(for: conversation))
                     .font(.headline)
@@ -602,8 +578,7 @@ struct ToasttySessionDetailCard: View {
 }
 
 /// What a waiting session waits on, in the long-press card: the counts, then
-/// one line per item. Agents spin because they are working; other work shows
-/// the still ring.
+/// one line per item, spinning while live as the row's mark does.
 struct ToasttyWaitingBox: View {
     static let maximumVisibleItemCount = 4
 
@@ -660,10 +635,12 @@ struct ToasttyWaitingBox: View {
                 .font(.caption)
                 .frame(width: 11)
                 .overlay {
-                    if item.kind == .agent, freshness == .live {
+                    if freshness == .live {
                         ToasttySpinner(size: 8, color: accent)
                     } else {
-                        ToasttyWaitingRing(size: 7, freshness: freshness)
+                        Circle()
+                            .fill(ToasttyDesignTokens.mutedText)
+                            .frame(width: 6, height: 6)
                     }
                 }
                 .accessibilityHidden(true)

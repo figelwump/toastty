@@ -577,35 +577,31 @@ final class SidebarSessionPresentationTests: XCTestCase {
 
     func testSessionRailStateMapsEachStatusAndSplitsReadyOnUnread() {
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .working, isWaiting: false, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .working, showsUnreadSessionAccent: false),
             .spinner
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .needsApproval, isWaiting: false, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .needsApproval, showsUnreadSessionAccent: false),
             .approvalDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .error, isWaiting: false, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .error, showsUnreadSessionAccent: false),
             .errorDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: true),
             .unreadDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: false),
             .empty
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .idle, isWaiting: false, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .idle, showsUnreadSessionAccent: true),
             .empty
         )
-        // Waiting is projected as working, but nothing spins: the agent's own
+        // A waiting row keeps the spinner but stands upright: the agent's own
         // turn has ended.
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .working, isWaiting: true, showsUnreadSessionAccent: false),
-            .waitingRing
-        )
         XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(
             for: .working,
             projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0)
