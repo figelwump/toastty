@@ -230,7 +230,7 @@ final class ToasttyPushController {
     }
 
     func retry() {
-        if storedState?.blockedDeviceToken == token, storedState?.blockedBuildID == buildID { return }
+        if invalidToken || (storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID) { return }
         if relayCooldown.map({ now() < $0 }) == true { return }
         errorMessage = nil
         transientRetryAt = nil
@@ -354,7 +354,7 @@ final class ToasttyPushController {
             }
             await notifications.removeVerificationNotifications(registrationIDs: Set(consumedProofs.map(\.registrationID)))
             guard await isCurrent(operationRevision, generation: generation), let token else { return }
-            if storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID {
+            if invalidToken || (storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID) {
                 errorMessage = "Apple could not use this notification token. Check this app’s notification build settings."
                 return
             }

@@ -646,15 +646,27 @@ final class ToasttyPushControllerTests: XCTestCase {
     func testTerminalSetupFailuresDoNotScheduleAutomaticRequests() async throws {
         for scenario in ["invalid-token", "permission", "configuration"] {
             let h = try await Harness.make(desired: true)
-            if scenario == "invalid-token" { await h.relay.failBeginOnce(.invalidDeviceToken) }
+            if scenario == "invalid-token" {
+                await h.relay.pauseBegin()
+                await h.relay.failBeginOnce(.invalidDeviceToken)
+            }
             if scenario == "permission" { h.notifications.currentPermission = .denied }
             if scenario == "configuration" { await h.native.setMismatch() }
             let sleeper = PushRetrySleeper()
             let controller = h.makeController(automaticallyReconciles: true, sleep: { try await sleeper.sleep($0) })
             await h.connect(controller)
+            if scenario == "invalid-token" {
+                try await waitUntil { await h.relay.beginCount == 1 }
+                h.store.saveFailure = .locked
+                await h.relay.finishBegin()
+            }
             try await waitUntil { controller.errorMessage != nil || controller.permission == .denied }
+            h.store.saveFailure = nil
+            controller.enteredForeground()
+            controller.retry()
             try await Task.sleep(for: .milliseconds(20))
             XCTAssertTrue(sleeper.delays.isEmpty, scenario)
+            if scenario == "invalid-token" { await assertBeginCount(1, h.relay) }
             controller.enteredBackground()
         }
     }
