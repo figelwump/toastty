@@ -449,8 +449,9 @@ A session is waiting when its agent has finished its own turn but sub-agents or
 background work it started are still running. Its row stays in the working
 group, keeps its spinner, shows a `waiting` chip, and replaces the summary with
 what it waits on, such as "2 sub-agents · 1 background process". The
-touch-and-hold card lists each sub-agent and background process. A Mac from
-before this feature reports the same session as plain working.
+touch-and-hold card lists up to four sub-agents and background processes, with
+a count of the remaining items. A Mac from before this feature reports the
+same session as plain working.
 
 ### Task Spaces
 
@@ -561,9 +562,12 @@ the switch: it rewrites the device record without it, and the switch is on
 again when you return to a newer build.
 
 Toastty Mobile reconnects automatically after transient network loss and
-reloads from Toastty's current snapshots when it detects an event gap. Keep
-Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
-stopped local gateway.
+reloads from Toastty's current snapshots when it detects an event gap. For a
+brief app switch, it requests up to 10 seconds of background time to preserve
+a live connection. iOS can end that time early. On return, sends stay disabled
+until Toastty verifies the retained connection or reconnects. Keep Toastty
+running and Remote Access enabled; Tailscale Serve alone cannot reach a stopped
+local gateway.
 
 ## Workspace panels and file previews
 

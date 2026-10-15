@@ -369,7 +369,8 @@ snapshots and are not copied to audit entries, logs, or diagnostics.
 
 Notifications require explicit build configuration on both the Mac and iPhone
 and the user's permission on the phone. Unconfigured builds hide the controls.
-The default TestFlight Release configuration has push disabled.
+The signed TestFlight release workflow requires production notification
+configuration. See [iOS Release CI](ios-release-ci.md) for the build requirements.
 
 When enabled, the Mac sends the session title, Ready or Needs approval status,
 and identifiers for the registration, pairing, conversation, and event to the
