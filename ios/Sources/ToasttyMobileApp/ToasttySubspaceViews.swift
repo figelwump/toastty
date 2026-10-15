@@ -67,6 +67,19 @@ enum ToasttySubspaceGroupPresentation {
     static func doneActionTitle(isDone: Bool) -> String {
         isDone ? "Mark as Not Done" : "Mark as Done"
     }
+
+    /// The session a tap on the row opens instead of the subspace's own
+    /// screen. Most subspaces hold one session, so that screen would only
+    /// list it. A subspace with more sessions, none, or subspaces of its own
+    /// opens its screen.
+    static func directConversation(
+        for row: MobileSubspaceRow,
+        in snapshot: MobileHomeSnapshot
+    ) -> MobileConversation? {
+        guard row.workspace.conversations.count == 1,
+              snapshot.subspaceRows(of: row.id).isEmpty else { return nil }
+        return row.workspace.conversations.first
+    }
 }
 
 /// The Subspaces group under a workspace: a collapsible header with a count
@@ -295,7 +308,8 @@ struct ToasttySubspaceRailMark: View {
 
 /// One subspace under its parent: the status mark, the title with its badge
 /// and chip, and the summary of the session that sets the status. Tapping
-/// the row opens the subspace; tapping a quiet row's box marks it done.
+/// the row opens the subspace, or its session when it holds only one;
+/// tapping a quiet row's box marks it done.
 struct ToasttySubspaceRow: View {
     let row: MobileSubspaceRow
     let parentTitle: String
@@ -307,14 +321,14 @@ struct ToasttySubspaceRow: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            Button {
-                openWorkspace(row.id)
-            } label: {
+            Button(action: open) {
                 label
             }
             .buttonStyle(ToasttySessionRowButtonStyle(tint: ToasttySubspaceStatusStyle.rowTint(row.status)))
             .accessibilityLabel(accessibilityLabel)
-            .accessibilityHint("Opens the task space. Touch and hold for details.")
+            .accessibilityHint(directConversation == nil
+                ? "Opens the task space. Touch and hold for details."
+                : "Opens its session. Touch and hold for details.")
             .accessibilityIdentifier("toastty-subspace-row-\(row.id.uuidString)")
             if showsDoneToggle {
                 // The box is small; its button covers the row's leading
@@ -361,6 +375,19 @@ struct ToasttySubspaceRow: View {
 
     private func toggleDone() {
         controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
+    }
+
+    private var directConversation: MobileConversation? {
+        ToasttySubspaceGroupPresentation.directConversation(for: row, in: controller.snapshot)
+    }
+
+    /// The context menu's Open Task Space still reaches the subspace's
+    /// screen, for its other actions such as starting a session.
+    private func open() {
+        if let conversation = directConversation, controller.openConversation(id: conversation.id) {
+            return
+        }
+        openWorkspace(row.id)
     }
 
     private var label: some View {
