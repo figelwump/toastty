@@ -119,6 +119,19 @@ enum CodexRolloutFixtures {
         ])
     }
 
+    /// Memory citations: a commentary message that quotes the citation format,
+    /// then a `final_answer` whose text ends with the `<oai-mem-citation>`
+    /// block Codex appends after using its memory files (real shape audited
+    /// on 2026-10-15). `task_complete` already omits the block.
+    static let memoryCitationSession = lines([
+        #"{"timestamp":"2026-10-15T07:00:00.000Z","type":"session_meta","payload":{"session_id":"01900000-aaaa-7000-8000-000000000006","id":"01900000-aaaa-7000-8000-000000000006","timestamp":"2026-10-15T07:00:00.000Z","cwd":"/tmp/demo","originator":"codex_cli","cli_version":"0.151.0","source":"cli","model_provider":"openai","base_instructions":{"text":"You are Codex."},"history_mode":"legacy"}}"#,
+        #"{"timestamp":"2026-10-15T07:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"Why does setup say busy?","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}}"#,
+        #"{"timestamp":"2026-10-15T07:00:05.100Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-601","started_at":1791817205,"model_context_window":258400,"collaboration_mode_kind":"default"}}"#,
+        #"{"timestamp":"2026-10-15T07:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"msg_0601","phase":"commentary","content":[{"type":"output_text","text":"Memory replies end with <oai-mem-citation>...</oai-mem-citation>.\n\nChecking the relay next."}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-601"}}}"#,
+        #"{"timestamp":"2026-10-15T07:00:20.000Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"msg_0602","phase":"final_answer","content":[{"type":"output_text","text":"The relay is in a cooldown.\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:606-607|note=[Used prior push identity guidance]\n</citation_entries>\n<rollout_ids>\n01900000-eeee-7000-8000-000000000001\n</rollout_ids>\n</oai-mem-citation>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-601"}}}"#,
+        #"{"timestamp":"2026-10-15T07:00:21.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-601","last_agent_message":"The relay is in a cooldown.\n\n","started_at":1791817205,"completed_at":1791817221,"duration_ms":16000}}"#,
+    ])
+
     /// A subagent's own rollout file; its session identity must not be
     /// ingested as root conversation identity.
     static let subagentRolloutFile = lines([
