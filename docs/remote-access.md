@@ -148,8 +148,20 @@ resend it, including a request that still needs approval. There is no new settin
 or Mac permission prompt. If presence data is unavailable, delivery continues;
 if lock detection is unavailable, the two-minute idle rule still applies.
 
-Interrupted setup resumes when the app returns to the foreground. A failure shows
-a small Retry message. Off and unpairing retain pending notification revocation
+Toastty reuses an existing notification registration when the Apple token and
+pairing still match. It checks the registration when the app returns to the
+foreground or the Mac connection restarts. Session-list updates do not trigger
+additional checks. Successful checks and notification sends extend the service's
+90-day registration expiry.
+
+Interrupted setup retries automatically while the app is open and connected.
+Transient failures wait 30 seconds, then increase the wait up to 10 minutes.
+A service cooldown takes priority over setup retries. A failure shows a small
+Retry message; Retry does not bypass a service cooldown. The Gateway diagnostic
+log records fixed notification setup reasons and failed operations, without
+tokens, credentials, addresses, or notification content.
+
+Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;
 alerts already sent can still arrive. Unconfigured builds hide these controls
 and do not request notification permission.

@@ -288,6 +288,8 @@ final class LiveSessionsController {
         coordinatorState.capabilities.contains(.pushNotifications) && deviceScopes.contains(.read)
     }
 
+    var connectionGeneration: UInt64 { coordinatorState.connectionGeneration }
+
     var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
 
     private let runtime: any LiveConnectionRuntime
