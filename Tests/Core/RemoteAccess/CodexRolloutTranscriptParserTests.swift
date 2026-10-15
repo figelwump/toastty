@@ -118,6 +118,18 @@ struct CodexRolloutTranscriptParserTests {
         })
     }
 
+    @Test func hidesTrailingMemoryCitationFromAssistantText() {
+        let result = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.memoryCitationSession)
+        let assistantTexts = result.observations.compactMap { observation -> String? in
+            guard case .transcript(.assistantMessage(let payload)) = observation.payload else { return nil }
+            return payload.text
+        }
+        #expect(assistantTexts == [
+            "Memory replies end with <oai-mem-citation>...</oai-mem-citation>.\n\nChecking the relay next.",
+            "The relay is in a cooldown.",
+        ])
+    }
+
     @Test func countsMalformedLinesAndKeepsParsing() {
         let result = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.malformedSession)
         // "not json" + missing-timestamp line.

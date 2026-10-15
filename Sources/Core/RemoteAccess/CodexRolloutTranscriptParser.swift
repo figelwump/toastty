@@ -128,7 +128,7 @@ private extension CodexRolloutTranscriptParser {
         switch payloadType {
         case "message":
             guard Self.nonEmptyString(payload["role"]) == "assistant" else { return [] }
-            let text = Self.joinedContentText(payload["content"])
+            let text = Self.removingTrailingMemoryCitation(Self.joinedContentText(payload["content"]))
             guard text.isEmpty == false else { return [] }
             let phase = Self.assistantPhase(payload["phase"])
             let messageID = Self.nonEmptyString(payload["id"])
@@ -400,6 +400,20 @@ private extension CodexRolloutTranscriptParser {
             .compactMap { $0["text"] as? String }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Codex appends an `<oai-mem-citation>` block as the last content of a
+    /// reply that used its memory files. The block is provenance for Codex,
+    /// which already omits it from `task_complete`, so it is not shown here.
+    /// Only a trailing block is removed, so a reply that quotes the format
+    /// earlier in its text keeps that quote.
+    static func removingTrailingMemoryCitation(_ text: String) -> String {
+        let openTag = "<oai-mem-citation>"
+        guard text.hasSuffix("</oai-mem-citation>"),
+              let open = text.range(of: openTag, options: .backwards) else {
+            return text
+        }
+        return String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func assistantPhase(_ value: Any?) -> ConversationAssistantMessagePhase {
