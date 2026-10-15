@@ -634,6 +634,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["compact-session-rows"].waitForExistence(timeout: 5))
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
+
+        // A subspace with one session opens that session, and Back returns
+        // straight to Home.
+        let single = app.buttons["toastty-subspace-row-\(doneSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(single, in: app))
+        single.tap()
+        XCTAssertTrue(waitForLabel(
+            app.staticTexts["toastty-mobile-conversation-title"], "Mark subspaces done"
+        ))
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        attachScreenshot(named: "fixture-single-session-subspace-opens-chat", of: app)
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
     }
 
     func testSwipeFlagsASessionAndUndoClearsIt() throws {
