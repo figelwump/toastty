@@ -661,6 +661,9 @@ struct ToasttyApp: App {
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var remoteAccessService: RemoteAccessService
     @StateObject private var annotationStyleStore: AnnotationStyleStore
+    @StateObject private var tasksConfigStore: TasksConfigStore
+    @StateObject private var taskInboxStore: TaskInboxStore
+    private let taskInboxCoordinator: TaskInboxCoordinator
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -952,6 +955,7 @@ struct ToasttyApp: App {
         )
         systemNotificationResponseCoordinator.installDelegate()
         let slotFocusRestoreCoordinator = SlotFocusRestoreCoordinator()
+        let tasksConfigStore = TasksConfigStore()
         if persistUserSettings {
             Self.applyInitialToasttyConfigState(
                 to: store,
@@ -961,6 +965,7 @@ struct ToasttyApp: App {
             )
             Self.ensureToasttyConfigTemplateExists()
             Self.ensureAgentHookTemplateExists()
+            tasksConfigStore.ensureTemplateExists()
         }
         Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
@@ -1038,6 +1043,21 @@ struct ToasttyApp: App {
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
+        let taskInboxStore = TaskInboxStore(fileURL: runtimePaths.taskInboxFileURL)
+        let taskInboxCoordinator = TaskInboxCoordinator(
+            store: store,
+            inbox: taskInboxStore,
+            configStore: tasksConfigStore,
+            sessionRuntimeStore: sessionRuntimeStore,
+            launcher: agentLaunchService,
+            runtimePaths: runtimePaths,
+            acceptedUserSkillNames: {
+                Set(ToasttyUserSkillValidator()
+                    .scan(userSkillsDirectoryURL: runtimePaths.userSkillsDirectoryURL)
+                    .state.acceptedPackages.map(\.name))
+            },
+            commandPath: { codexProcessPathStore.currentPath() }
+        )
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1068,7 +1088,8 @@ struct ToasttyApp: App {
                     codexProcessPathStore: codexProcessPathStore,
                     managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    agentHookDispatcher: agentHookDispatcher
+                    agentHookDispatcher: agentHookDispatcher,
+                    tasksConfigStore: tasksConfigStore
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1224,6 +1245,10 @@ struct ToasttyApp: App {
             sessionLauncher: remoteSessionLauncher
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
+        _tasksConfigStore = StateObject(wrappedValue: tasksConfigStore)
+        _taskInboxStore = StateObject(wrappedValue: taskInboxStore)
+        self.taskInboxCoordinator = taskInboxCoordinator
+        taskInboxCoordinator.resume()
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
             usesPersistentPreferences: persistUserSettings,
@@ -1286,6 +1311,7 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+                taskInboxCoordinator: taskInboxCoordinator,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
@@ -1298,7 +1324,8 @@ struct ToasttyApp: App {
                         codexProcessPathStore: codexProcessPathStore,
                         managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        agentHookDispatcher: agentHookDispatcher
+                        agentHookDispatcher: agentHookDispatcher,
+                        tasksConfigStore: tasksConfigStore
                     )
                 }
             )
@@ -1599,6 +1626,8 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 annotationStyleStore: annotationStyleStore,
+                taskInboxStore: taskInboxStore,
+                taskInboxCoordinator: taskInboxCoordinator,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
@@ -1687,7 +1716,8 @@ struct ToasttyApp: App {
             codexProcessPathStore: codexProcessPathStore,
             managedAgentResolutionContextStore: managedAgentResolutionContextStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            agentHookDispatcher: agentHookDispatcher
+            agentHookDispatcher: agentHookDispatcher,
+            tasksConfigStore: tasksConfigStore
         )
     }
 
@@ -1703,7 +1733,8 @@ struct ToasttyApp: App {
         codexProcessPathStore: CodexProcessPathStore,
         managedAgentResolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        agentHookDispatcher: AgentHookDispatcher
+        agentHookDispatcher: AgentHookDispatcher,
+        tasksConfigStore: TasksConfigStore
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
@@ -1712,6 +1743,10 @@ struct ToasttyApp: App {
         case .success:
             break
         case .failure(let error):
+            failureMessages.append(error.localizedDescription)
+        }
+
+        if case .failure(let error) = tasksConfigStore.reload() {
             failureMessages.append(error.localizedDescription)
         }
 

@@ -73,6 +73,10 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case configReload = "config.reload"
     case terminalSendText = "terminal.send-text"
     case terminalDropImageFiles = "terminal.drop-image-files"
+    case taskCreate = "task.create"
+    case taskPlace = "task.place"
+    case taskRetry = "task.retry"
+    case taskDelete = "task.delete"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -454,6 +458,40 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Send text to a terminal panel, optionally only when it still hosts an expected managed session.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.text(required: true), .submit(required: false), .expectedSessionID(required: false), .allowUnavailable(required: false)])
         case .terminalDropImageFiles:
             return .init(id: rawValue, kind: .action, summary: "Drop local files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
+        case .taskCreate:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Add a quick task to the Inbox. Toastty places it with the triage model from tasks.toml, runs the create script, and starts the agent in a new task space. workspace, profileID, model and reasoningEffort fix those choices. Not available to workspace-scoped sessions. Returns taskID and phase.",
+                selectors: [],
+                parameters: [
+                    .taskText(required: false),
+                    .taskFiles(required: false),
+                    .cwd(required: false),
+                    .taskWorkspace(required: false),
+                    .profileID(required: false),
+                    .model(required: false),
+                    .reasoningEffort(required: false),
+                ]
+            )
+        case .taskPlace:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Start an Inbox task that waits for a workspace or whose setup failed, in the given top-level workspace. Not available to workspace-scoped sessions.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .taskWorkspace(required: true),
+                    .profileID(required: false),
+                    .model(required: false),
+                    .reasoningEffort(required: false),
+                ]
+            )
+        case .taskRetry:
+            return .init(id: rawValue, kind: .action, summary: "Run triage again for an Inbox task that waits for a workspace, or setup again for one whose setup failed. Not available to workspace-scoped sessions.", selectors: [], parameters: [.taskID(required: true)])
+        case .taskDelete:
+            return .init(id: rawValue, kind: .action, summary: "Remove a task from the Inbox and stop its triage or setup. A directory or task space that setup made stays. Not available to workspace-scoped sessions.", selectors: [], parameters: [.taskID(required: true)])
         }
     }
 
@@ -481,6 +519,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelScratchpadList = "panel.scratchpad.list"
     case panelScratchpadState = "panel.scratchpad.state"
     case agentProfileState = "agent.profile.state"
+    case taskList = "task.list"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -559,6 +598,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.profileID(required: true)]
             )
+        case .taskList:
+            return .init(id: rawValue, kind: .query, summary: "List the quick tasks in the Inbox with phase, text, files, triage suggestion and problem. Not available to workspace-scoped sessions.", selectors: [])
         }
     }
 }
@@ -720,6 +761,22 @@ private extension AppControlParameterDescriptor {
             required: required,
             allowedValues: ScratchpadPanelCreatePolicy.allCases.map(\.rawValue)
         )
+    }
+
+    static func taskText(required: Bool) -> Self {
+        .init(name: "text", summary: "The task, as the agent will read it. Required unless files are given.", valueType: .string, required: required)
+    }
+
+    static func taskFiles(required: Bool) -> Self {
+        .init(name: "files", summary: "Image, PDF or text file to attach; Toastty copies it. Repeat for up to 4 files. Relative paths need cwd.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskWorkspace(required: Bool) -> Self {
+        .init(name: "workspace", summary: "Top-level workspace ID the task starts in.", valueType: .uuid, required: required)
+    }
+
+    static func taskID(required: Bool) -> Self {
+        .init(name: "taskID", summary: "Inbox task ID from task.create or task.list.", valueType: .uuid, required: required)
     }
 
     static func files(required: Bool) -> Self {

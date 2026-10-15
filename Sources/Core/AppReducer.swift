@@ -133,6 +133,28 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .createTaskSpace(let windowID, let workspaceID, let panelID, let parentWorkspaceID, let title, let terminalCWD):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  let rootID = state.resolvedParentWorkspaceID(
+                      forNewWorkspaceIn: windowID,
+                      under: parentWorkspaceID
+                  ) else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: normalizedWorkspaceTitle(title)
+                    ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state),
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.parentWorkspaceID = rootID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
         case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
                 title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",

@@ -17,6 +17,7 @@ final class AppControlExecutor {
     private let agentLaunchService: AgentLaunchService
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+    let taskInboxCoordinator: TaskInboxCoordinator?
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -30,6 +31,7 @@ final class AppControlExecutor {
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
+        taskInboxCoordinator: TaskInboxCoordinator? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)?,
         scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
@@ -41,6 +43,7 @@ final class AppControlExecutor {
         self.agentLaunchService = agentLaunchService
         self.annotationStyleStore = annotationStyleStore
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
+        self.taskInboxCoordinator = taskInboxCoordinator
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
@@ -50,12 +53,17 @@ final class AppControlExecutor {
             if action == .configReload, reloadConfigurationAction == nil {
                 return nil
             }
+            if action.isTaskAction, taskInboxCoordinator == nil {
+                return nil
+            }
             return action.descriptor
         }
     }
 
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
-        AppControlQueryID.allCases.map(\.descriptor)
+        AppControlQueryID.allCases.compactMap { query in
+            query == .taskList && taskInboxCoordinator == nil ? nil : query.descriptor
+        }
     }
 
     func runAction(
@@ -760,6 +768,12 @@ final class AppControlExecutor {
                 }
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
+
+        case .taskCreate:
+            throw AutomationSocketError.invalidPayload("task.create runs asynchronously; send it through app_control.run_action")
+
+        case .taskPlace, .taskRetry, .taskDelete:
+            return try runTaskAction(action, args: args)
         }
         }
     }
@@ -772,6 +786,10 @@ final class AppControlExecutor {
             commandName: "app_control.run_action"
         )
     ) async throws -> AppControlActionOutcome {
+        if AppControlActionID.resolve(rawID) == .taskCreate {
+            let preparation = try withRequestContext(context) { try prepareTaskCreate(args: args) }
+            return try await runTaskCreate(preparation)
+        }
         guard AppControlActionID.resolve(rawID) == .agentLaunch else {
             return try runAction(id: rawID, args: args, context: context)
         }
@@ -938,6 +956,9 @@ final class AppControlExecutor {
             return agentProfileStateSnapshot(
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
+
+        case .taskList:
+            return try taskListSnapshot()
         }
         }
     }
@@ -995,6 +1016,12 @@ extension AppControlExecutor {
             )
             throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
         }
+    }
+
+    /// Whether the caller is a managed session limited to some workspaces.
+    func callerIsWorkspaceScoped() -> Bool {
+        guard let callerSessionID = requestContext().callerSessionID else { return false }
+        return sessionRuntimeStore.isWorkspaceScoped(sessionID: callerSessionID)
     }
 
     func callerManagedSession() -> SessionRecord? {

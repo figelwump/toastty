@@ -57,8 +57,7 @@ extension AgentLaunchService: RemoteSessionLaunching {
 @MainActor
 final class RemoteSessionStarter {
     /// How long a new terminal may take to show its first shell prompt.
-    static let defaultTerminalReadinessTimeout: Duration = .seconds(10)
-    private static let terminalReadinessRetryInterval: Duration = .milliseconds(250)
+    static let defaultTerminalReadinessTimeout = AgentLaunchReadiness.defaultTimeout
     private static let maximumRememberedStarts = 64
 
     private struct RequestKey: Hashable {
@@ -175,13 +174,7 @@ final class RemoteSessionStarter {
     /// The effort values each provider's command accepts. Empty for a
     /// provider with no effort setting.
     static func reasoningEfforts(for summary: AgentLaunchProfileSummary) -> [String] {
-        guard summary.supportsReasoningEffort else { return [] }
-        switch summary.agent {
-        case .claude: return ["low", "medium", "high", "xhigh", "max"]
-        case .codex: return ["low", "medium", "high", "xhigh"]
-        case .pi: return ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
-        default: return []
-        }
+        summary.reasoningEffortChoices
     }
 
     /// The directory a new session starts in: the first terminal, in tab
@@ -189,17 +182,7 @@ final class RemoteSessionStarter {
     /// follow focus, so the answer is the same between the options request
     /// and the start.
     func launchDirectory(in workspace: WorkspaceState) -> String? {
-        for tab in workspace.orderedTabs {
-            for slot in tab.layoutTree.allSlotInfos {
-                guard case .terminal(let terminal) = tab.panels[slot.panelID],
-                      let directory = terminal.agentLaunchWorkingDirectory else { continue }
-                var isDirectory: ObjCBool = false
-                if fileManager.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue {
-                    return directory
-                }
-            }
-        }
-        return nil
+        AgentLaunchReadiness.launchDirectory(in: workspace, fileManager: fileManager)
     }
 
     // MARK: - Start
@@ -373,12 +356,6 @@ final class RemoteSessionStarter {
         }
     }
 
-    /// A new terminal is not ready at once: it reports itself busy until its
-    /// shell prints the first prompt, and its surface can refuse input for a
-    /// moment after that. Both refusals happen before any text is sent, so
-    /// they are retried until the readiness timeout passes. A delivery the
-    /// terminal did not confirm is never retried, because part of the
-    /// command may already be in the terminal.
     private func launchWhenTerminalIsReady(
         launcher: any RemoteSessionLaunching,
         request: RemoteSessionStartRequest,
@@ -388,30 +365,20 @@ final class RemoteSessionStarter {
         beforeEachAttempt: @MainActor () -> Void,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: terminalReadinessTimeout)
-        while true {
-            beforeEachAttempt()
-            do {
-                return try await launcher.launchForRemoteStart(
-                    profileID: request.profileID,
-                    workspaceID: request.workspaceID,
-                    panelID: panelID,
-                    cwd: directory,
-                    model: request.model,
-                    reasoningEffort: request.reasoningEffort,
-                    initialPrompt: initialPrompt,
-                    beforeDispatch: beforeDispatch
-                )
-            } catch let error as AgentLaunchError {
-                switch error {
-                case .panelBusy, .terminalUnavailable:
-                    guard clock.now < deadline else { throw error }
-                    try await Task.sleep(for: Self.terminalReadinessRetryInterval)
-                default:
-                    throw error
-                }
-            }
+        try await AgentLaunchReadiness.launchWhenTerminalIsReady(
+            timeout: terminalReadinessTimeout,
+            beforeEachAttempt: beforeEachAttempt
+        ) {
+            try await launcher.launchForRemoteStart(
+                profileID: request.profileID,
+                workspaceID: request.workspaceID,
+                panelID: panelID,
+                cwd: directory,
+                model: request.model,
+                reasoningEffort: request.reasoningEffort,
+                initialPrompt: initialPrompt,
+                beforeDispatch: beforeDispatch
+            )
         }
     }
 

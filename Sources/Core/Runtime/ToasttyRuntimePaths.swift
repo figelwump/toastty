@@ -30,6 +30,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
     private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
+    private static let tasksConfigFileName = "tasks.toml"
+    private static let tasksDirectoryName = "tasks"
+    private static let taskInboxFileName = "inbox.json"
+    private static let taskAttachmentsDirectoryName = "attachments"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -87,6 +91,23 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var recentRightPanelItemsFileURL: URL {
         configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
+    }
+
+    public var tasksConfigFileURL: URL {
+        configDirectoryURL.appending(path: Self.tasksConfigFileName, directoryHint: .notDirectory)
+    }
+
+    /// Quick-task state: the Inbox file and the tasks' attached files.
+    public var tasksDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.tasksDirectoryName, directoryHint: .isDirectory)
+    }
+
+    public var taskInboxFileURL: URL {
+        tasksDirectoryURL.appending(path: Self.taskInboxFileName, directoryHint: .notDirectory)
+    }
+
+    public var taskAttachmentsDirectoryURL: URL {
+        tasksDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
     }
 
     public var defaultLogFileURL: URL {

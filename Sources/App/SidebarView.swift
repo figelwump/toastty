@@ -548,6 +548,9 @@ struct SidebarView: View {
     // Observed so first-use claims, unlocked replacements, and legacy
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
+    /// Not observed here: only the Inbox section redraws when tasks change.
+    let taskInboxStore: TaskInboxStore?
+    let taskInboxCoordinator: TaskInboxCoordinator?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -717,6 +720,8 @@ struct SidebarView: View {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
+        taskInboxStore: TaskInboxStore? = nil,
+        taskInboxCoordinator: TaskInboxCoordinator? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -729,6 +734,8 @@ struct SidebarView: View {
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
+        self.taskInboxStore = taskInboxStore
+        self.taskInboxCoordinator = taskInboxCoordinator
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
@@ -754,6 +761,15 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
+                        if let taskInboxStore {
+                            // Inbox tasks have no workspace yet, so they sit
+                            // above every card.
+                            SidebarInboxSection(
+                                inbox: taskInboxStore,
+                                store: store,
+                                coordinator: taskInboxCoordinator
+                            )
+                        }
                         if store.window(id: windowID) != nil {
                             // Subspaces render inside their parent's card, so
                             // the card list, its numbering, and drag reordering

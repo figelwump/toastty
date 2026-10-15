@@ -31,12 +31,18 @@ public actor RemoteMessageAttachmentStore {
         self.maximumBytes = maximumBytes
     }
 
-    public func stage(_ attachments: [RemoteMessageAttachment], at date: Date = Date()) throws -> Staged {
+    /// `protecting` names staged directories that must outlive retention,
+    /// such as those of quick tasks still waiting in the Inbox.
+    public func stage(
+        _ attachments: [RemoteMessageAttachment],
+        at date: Date = Date(),
+        protecting protectedDirectoryNames: Set<String> = []
+    ) throws -> Staged {
         guard !attachments.isEmpty, RemoteAttachmentPolicy.validationError(for: attachments) == nil else {
             throw StorageError.invalidAttachments
         }
         try prepareRoot()
-        let used = try sweepAndMeasure(at: date)
+        let used = try sweepAndMeasure(at: date, protecting: protectedDirectoryNames)
         guard attachments.reduce(used, { $0 + $1.data.count }) <= maximumBytes else { throw StorageError.unavailable }
         let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
         guard mkdir(directory.path, 0o700) == 0 else { throw StorageError.unavailable }
@@ -58,15 +64,30 @@ public actor RemoteMessageAttachmentStore {
     }
 
     public func discard(_ staged: Staged) {
-        guard staged.directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
-              UUID(uuidString: staged.directory.lastPathComponent) != nil,
-              isOwnedDirectory(staged.directory) else { return }
-        try? FileManager.default.removeItem(at: staged.directory)
+        discard(directory: staged.directory)
     }
 
-    public func cleanup(at date: Date = Date()) throws {
+    /// Removes one staged directory; anything outside this store's root is
+    /// left alone.
+    public func discard(directory: URL) {
+        guard directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
+              UUID(uuidString: directory.lastPathComponent) != nil,
+              isOwnedDirectory(directory) else { return }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    public func cleanup(at date: Date = Date(), protecting protectedDirectoryNames: Set<String> = []) throws {
         try prepareRoot()
-        _ = try sweepAndMeasure(at: date)
+        _ = try sweepAndMeasure(at: date, protecting: protectedDirectoryNames)
+    }
+
+    /// Restarts retention for a staged directory, for files whose reader
+    /// gets them later than staging.
+    public func renew(directory: URL, at date: Date = Date()) {
+        guard directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
+              UUID(uuidString: directory.lastPathComponent) != nil,
+              isOwnedDirectory(directory) else { return }
+        try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: directory.path)
     }
 
     private func prepareRoot() throws {
@@ -82,13 +103,14 @@ public actor RemoteMessageAttachmentStore {
         return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR && info.st_uid == getuid()
     }
 
-    private func sweepAndMeasure(at date: Date) throws -> Int {
+    private func sweepAndMeasure(at date: Date, protecting protectedDirectoryNames: Set<String>) throws -> Int {
         var total = 0
         for directory in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
             guard UUID(uuidString: directory.lastPathComponent) != nil, isOwnedDirectory(directory) else { continue }
             var info = stat()
             guard lstat(directory.path, &info) == 0 else { throw StorageError.unavailable }
-            if date.timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec) > Self.retention {
+            if date.timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec) > Self.retention,
+               protectedDirectoryNames.contains(directory.lastPathComponent) == false {
                 // Foundation removes symlinks themselves; it does not traverse
                 // their targets. Only generated direct-child directories qualify.
                 try FileManager.default.removeItem(at: directory)
