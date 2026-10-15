@@ -315,11 +315,19 @@ struct TaskInboxPopover: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ToastyTheme.mutedText)
                 } else {
-                    VStack(spacing: 2) {
-                        ForEach(Array(workspaces.prefix(9).enumerated()), id: \.element.id) { index, workspace in
-                            workspaceChoice(workspace, number: index + 1, isSuggested: workspace.id == item.suggestion?.workspaceID)
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(Array(workspaces.enumerated()), id: \.element.id) { index, workspace in
+                                workspaceChoice(
+                                    workspace,
+                                    number: index < 9 ? index + 1 : nil,
+                                    isSuggested: workspace.id == item.suggestion?.workspaceID
+                                )
+                            }
                         }
                     }
+                    .frame(maxHeight: 220)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -352,7 +360,18 @@ struct TaskInboxPopover: View {
         .padding(12)
     }
 
-    private func workspaceChoice(_ workspace: TaskPlacementContext.Workspace, number: Int, isSuggested: Bool) -> some View {
+    /// `number` is the key that picks it, for the first nine.
+    @ViewBuilder
+    private func workspaceChoice(_ workspace: TaskPlacementContext.Workspace, number: Int?, isSuggested: Bool) -> some View {
+        if let number {
+            workspaceChoiceButton(workspace, number: number, isSuggested: isSuggested)
+                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [])
+        } else {
+            workspaceChoiceButton(workspace, number: nil, isSuggested: isSuggested)
+        }
+    }
+
+    private func workspaceChoiceButton(_ workspace: TaskPlacementContext.Workspace, number: Int?, isSuggested: Bool) -> some View {
         let isSelected = selectedWorkspaceID == workspace.id
         return Button {
             selectedWorkspaceID = workspace.id
@@ -374,9 +393,11 @@ struct TaskInboxPopover: View {
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(ToastyTheme.accent)
                 }
-                Text("\(number)")
-                    .font(ToastyTheme.fontShortcutBadge)
-                    .foregroundStyle(ToastyTheme.subtleText)
+                if let number {
+                    Text("\(number)")
+                        .font(ToastyTheme.fontShortcutBadge)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -384,7 +405,6 @@ struct TaskInboxPopover: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [])
         .accessibilityLabel("\(workspace.title)\(isSuggested ? ", suggested" : "")")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

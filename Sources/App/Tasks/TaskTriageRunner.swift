@@ -40,6 +40,16 @@ enum TaskTriageFailure: Error, Equatable, Sendable {
 /// Runs one triage call: no tools, no session saved, no hooks, and for
 /// Codex none of the user's config, in an empty temporary folder.
 struct TaskTriageRunner: Sendable {
+    /// Codex features that give the model a tool. A read-only sandbox still
+    /// lets the shell read files, which could then reach the provider, so
+    /// each one is turned off. A feature name a later Codex drops makes the
+    /// call fail, which leaves the task for the user rather than running it
+    /// with tools.
+    static let disabledCodexFeatures = [
+        "shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use",
+        "in_app_browser", "image_generation", "memories", "tool_suggest", "skill_search",
+    ]
+
     let runner: any TaskCommandRunning
     var temporaryDirectory: URL = FileManager.default.temporaryDirectory
 
@@ -147,6 +157,12 @@ struct TaskTriageRunner: Sendable {
                 "--ignore-rules",
                 "-s", "read-only",
                 "--color", "never",
+                "-c", #"web_search="disabled""#,
+            ]
+            for feature in disabledCodexFeatures {
+                arguments += ["--disable", feature]
+            }
+            arguments += [
                 "-C", directory,
                 "--output-schema", schemaPath,
                 "-o", answerPath,

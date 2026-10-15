@@ -196,7 +196,7 @@ struct TaskInboxCoordinatorTests {
         #expect(create.environment["TOASTTY_TASK_ID"] == item.id.uuidString)
         #expect(create.environment["TOASTTY_TASK_SLUG"] == "ios-unread-dot")
         #expect(create.environment["TOASTTY_TASK_BRANCH_PREFIX"] == "fix")
-        #expect(create.environment["TOASTTY_TASK_STATE_DIR"]?.hasSuffix("/tasks/state/\(item.id.uuidString)") == true)
+        #expect(create.environment["TOASTTY_TASK_STATE_DIR"]?.hasSuffix("/tasks/state/\(item.id.uuidString)/\(fixture.workspaceID.uuidString)") == true)
 
         // One unvisited task space, its terminal in the new directory.
         let taskSpaceID = try #require(fixture.taskSpaceIDs.first)
@@ -351,6 +351,21 @@ struct TaskInboxCoordinatorTests {
         try fixture.coordinator.place(taskID: second.id, workspaceID: fixture.workspaceID)
         #expect(fixture.inbox.item(id: first.id)?.plan?.slug == "ios-unread-dot")
         #expect(fixture.inbox.item(id: second.id)?.plan?.slug == "ios-unread-dot-2")
+    }
+
+    @MainActor
+    @Test func aPlacementThatFailsChangesNothing() async throws {
+        let fixture = try Fixture(config: { _ in TasksConfig() })
+        let item = try await fixture.coordinator.add(text: "Fix the dot", source: .cli)
+        let before = try #require(fixture.inbox.item(id: item.id))
+
+        #expect(throws: TaskInboxError.invalidPin("That workspace is not open.")) {
+            try fixture.coordinator.place(taskID: item.id, workspaceID: UUID())
+        }
+        #expect(throws: TaskInboxError.invalidPin("Codex does not take effort \"max\".")) {
+            try fixture.coordinator.place(taskID: item.id, workspaceID: fixture.workspaceID, profileID: "codex", effort: "max")
+        }
+        #expect(fixture.inbox.item(id: item.id) == before)
     }
 
     @MainActor

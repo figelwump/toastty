@@ -71,13 +71,10 @@ struct TaskAttachmentRetentionTests {
     @Test func protectedDirectoriesOutliveRetentionAndRenewRestartsIt() async throws {
         let (store, root) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
-        let staged = Date(timeIntervalSince1970: 1_800_000_000)
+        // Staging sweeps by the real modification time, so the clock starts now.
+        let staged = Date()
         let waiting = try await store.stage([file], at: staged)
         let started = try await store.stage([file], at: staged)
-        let old = staged.addingTimeInterval(-1)
-        for directory in [waiting.directory, started.directory] {
-            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: directory.path)
-        }
 
         // Eight days later the task still waiting in the Inbox keeps its
         // files; the started one was renewed at delivery and keeps them too.

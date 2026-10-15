@@ -122,6 +122,8 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         guard spawnStatus == 0 else {
             return launchFailure("Could not run \(command.executablePath): \(String(cString: strerror(spawnStatus)))")
         }
+        Self.runningGroups.insert(processID)
+        defer { Self.runningGroups.remove(processID) }
 
         // Only the child keeps the write ends of the output pipes and the
         // read end of stdin, so EOF arrives when the child's tree is done.
@@ -161,6 +163,12 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         while true {
             if exitedAt == nil, waitpid(processID, &waitStatus, WNOHANG) == processID {
                 exitedAt = Date()
+            }
+            if exitedAt != nil, stopReason != nil {
+                // The first process is gone, but a stopped command must not
+                // leave anything behind: end the rest of its group now.
+                if killSent == false { killpg(processID, SIGKILL) }
+                break
             }
             let anyOpen = openDescriptors.values.contains(true)
             if let exitedAt, anyOpen == false || Date().timeIntervalSince(exitedAt) > outputDrainGracePeriod {
@@ -262,6 +270,33 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         let pointers = strings.map { strdup($0) } + [nil]
         defer { pointers.forEach { free($0) } }
         return pointers.withUnsafeBufferPointer { body($0.baseAddress!) }
+    }
+
+    // MARK: - Running groups
+
+    private static let runningGroups = RunningGroups()
+
+    /// Stops every task command still running, for app quit: their process
+    /// groups would otherwise outlive Toastty and race a later retry.
+    static func stopAllRunningCommands(gracePeriod: TimeInterval = 0.3) {
+        guard runningGroups.signalAll(SIGTERM) else { return }
+        Thread.sleep(forTimeInterval: gracePeriod)
+        _ = runningGroups.signalAll(SIGKILL)
+    }
+
+    private final class RunningGroups: @unchecked Sendable {
+        private let lock = NSLock()
+        private var groups = Set<pid_t>()
+
+        func insert(_ group: pid_t) { lock.withLock { _ = groups.insert(group) } }
+        func remove(_ group: pid_t) { lock.withLock { _ = groups.remove(group) } }
+
+        /// Returns whether any group was signaled.
+        func signalAll(_ signal: Int32) -> Bool {
+            let current = lock.withLock { groups }
+            for group in current { killpg(group, signal) }
+            return current.isEmpty == false
+        }
     }
 
     private struct BoundedBuffer {

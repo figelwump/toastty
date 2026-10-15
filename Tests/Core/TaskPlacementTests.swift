@@ -53,6 +53,11 @@ struct TaskPlacementTests {
     @Test func uniqueSlugAddsTheFirstFreeNumber() {
         #expect(TaskPlacement.uniqueSlug("fix", taken: []) == "fix")
         #expect(TaskPlacement.uniqueSlug("fix", taken: ["fix", "fix-2"]) == "fix-3")
+        // A cut on a hyphen never leaves "--".
+        let long = String(repeating: "a", count: 37) + "-bb"
+        let second = TaskPlacement.uniqueSlug(long, taken: [long])
+        #expect(second == String(repeating: "a", count: 37) + "-2")
+        #expect(TaskPlacement.sanitizedSlug(second) == second)
     }
 
     @Test func suggestionKeepsValidFieldsAndDropsOnesThatFailChecks() {

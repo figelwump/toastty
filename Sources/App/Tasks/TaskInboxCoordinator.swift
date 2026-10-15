@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 import RemoteProtocol
@@ -108,6 +109,7 @@ final class TaskInboxCoordinator {
     /// before the agent command is sent, so a Delete, a new placement or a
     /// second Retry can never let an older attempt start an agent.
     private var setupAttempts: [UUID: UUID] = [:]
+    nonisolated(unsafe) private var terminationObserver: NSObjectProtocol?
 
     init(
         store: AppStore,
@@ -136,6 +138,21 @@ final class TaskInboxCoordinator {
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
+        // A quit stops the scripts and triage calls in flight; the setup
+        // shows as interrupted at the next launch.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            TaskLiveCommandRunner.stopAllRunningCommands()
+        }
+    }
+
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
     }
 
     /// Resumes work saved before the last quit: routing tasks go back to
@@ -237,23 +254,23 @@ final class TaskInboxCoordinator {
         guard item.phase == .needsWorkspace || item.phase == .setupFailed else {
             throw TaskInboxError.notAllowed("This task is already being placed or set up.")
         }
-        var pins = item.pins
-        pins.profileID = profileID ?? pins.profileID
-        pins.model = model ?? pins.model
-        pins.effort = effort ?? pins.effort
-        try validate(pins: pins)
-        let movesWorkspace = item.plan.map { $0.workspaceID != workspaceID } ?? true
-        inbox.update(id: taskID) {
-            $0.pins = pins
-            if movesWorkspace {
-                // The old directory and task space belong to the old
-                // workspace; they stay where they are.
-                $0.plan = nil
-                $0.createdDirectory = nil
-                $0.taskSpace = nil
-            }
+        // The user's pick replaces any earlier workspace pin, which may
+        // name a workspace that has since closed.
+        var candidate = item
+        candidate.pins.workspaceID = workspaceID
+        candidate.pins.profileID = profileID ?? item.pins.profileID
+        candidate.pins.model = model ?? item.pins.model
+        candidate.pins.effort = effort ?? item.pins.effort
+        try validate(pins: candidate.pins)
+        if item.plan.map({ $0.workspaceID != workspaceID }) ?? true {
+            // The old directory and task space belong to the old
+            // workspace; they stay where they are.
+            candidate.plan = nil
+            candidate.createdDirectory = nil
+            candidate.taskSpace = nil
         }
-        try beginSetup(taskID: taskID, chosenWorkspaceID: workspaceID, replanning: true)
+        // Nothing is saved unless the new placement is valid.
+        try beginSetup(taskID: taskID, from: candidate, chosenWorkspaceID: workspaceID, replanning: true)
     }
 
     /// Runs triage again for a task that waits for a workspace, or setup
@@ -352,7 +369,7 @@ final class TaskInboxCoordinator {
         let profiles = offeredProfiles()
         let profile = pins.profileID.flatMap { id in profiles.first { $0.id == id } }
         if let profileID = pins.profileID, profile == nil {
-            throw TaskInboxError.invalidPin("There is no agent profile \"\(profileID)\" that can start a task.")
+            throw TaskInboxError.invalidPin("agents.toml has no profile \"\(profileID)\" that can start a task.")
         }
         if let model = pins.model {
             guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
@@ -409,7 +426,7 @@ final class TaskInboxCoordinator {
         guard let executable = triageExecutable(for: triage) else {
             needsWorkspace(
                 taskID: taskID,
-                problem: "Triage needs the claude or codex CLI. Check [triage] profile in tasks.toml, then retry."
+                problem: "Triage needs a claude or codex profile in agents.toml that runs the plain CLI. Check [triage] profile in tasks.toml, then retry."
             )
             return
         }
@@ -480,8 +497,14 @@ final class TaskInboxCoordinator {
 
     /// Checks the placement, then starts setup. `replanning` makes a new
     /// plan; otherwise an existing plan is reused so a retry keeps its slug.
-    private func beginSetup(taskID: UUID, chosenWorkspaceID: UUID?, replanning: Bool = false) throws {
-        guard let item = inbox.item(id: taskID) else { throw TaskInboxError.taskNotFound }
+    private func beginSetup(
+        taskID: UUID,
+        from candidate: TaskInboxItem? = nil,
+        chosenWorkspaceID: UUID?,
+        replanning: Bool = false
+    ) throws {
+        guard let stored = inbox.item(id: taskID) else { throw TaskInboxError.taskNotFound }
+        let item = candidate ?? stored
         let context = placementContext(excluding: taskID)
         let plan: TaskInboxItem.Plan
         if replanning == false, let existing = item.plan {
@@ -507,6 +530,7 @@ final class TaskInboxCoordinator {
         let attempt = UUID()
         setupAttempts[taskID] = attempt
         inbox.update(id: taskID) {
+            $0 = item
             $0.phase = .settingUp
             $0.plan = plan
             $0.problem = nil
@@ -574,7 +598,7 @@ final class TaskInboxCoordinator {
         var createdTaskSpace = false
         if let existing = item.taskSpace, store.state.workspacesByID[existing.workspaceID] != nil {
             if hasActiveSession(in: existing.workspaceID) {
-                finishStarted(taskID: taskID, attempt: attempt, workspaceID: existing.workspaceID)
+                await finishStarted(taskID: taskID, attempt: attempt, workspaceID: existing.workspaceID)
                 return
             }
             guard let panelID = reusablePanel(in: existing.workspaceID, preferred: existing.panelID, directory: directory) else {
@@ -649,19 +673,19 @@ final class TaskInboxCoordinator {
             setupFailed(taskID: taskID, attempt: attempt, problem: Self.launchProblem(for: error))
             return
         }
-        finishStarted(taskID: taskID, attempt: attempt, workspaceID: taskSpace.workspaceID)
+        await finishStarted(taskID: taskID, attempt: attempt, workspaceID: taskSpace.workspaceID)
     }
 
-    private func finishStarted(taskID: UUID, attempt: UUID, workspaceID: UUID) {
-        guard setupAttempts[taskID] == attempt else { return }
+    private func finishStarted(taskID: UUID, attempt: UUID, workspaceID: UUID) async {
+        guard setupAttempts[taskID] == attempt, let item = inbox.item(id: taskID) else { return }
         setupAttempts[taskID] = nil
         setupTasks[taskID] = nil
-        guard let removed = inbox.remove(id: taskID) else { return }
-        // Retention of the files now counts from delivery.
-        let directories = Set(removed.attachments.map { URL(filePath: $0.path).deletingLastPathComponent() })
-        Task { [attachmentStore] in
-            for directory in directories { await attachmentStore.renew(directory: directory) }
+        // Retention of the files now counts from delivery. Renewed while the
+        // task is still in the Inbox, so no sweep can fall in between.
+        for directory in Set(item.attachments.map({ URL(filePath: $0.path).deletingLastPathComponent() })) {
+            await attachmentStore.renew(directory: directory)
         }
+        guard let removed = inbox.remove(id: taskID) else { return }
         ToasttyLog.info("Started a quick task", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
             "workspace_id": workspaceID.uuidString,
@@ -708,9 +732,12 @@ final class TaskInboxCoordinator {
         }
         // A folder the script may use to remember what it made for this
         // task, so running it again after a failure returns the same result.
+        // Per workspace too: after the user moves a task, the script must
+        // not hand back the directory it made in the old workspace.
         let stateDirectory = runtimePaths.tasksDirectoryURL
             .appending(path: "state", directoryHint: .isDirectory)
             .appending(path: item.id.uuidString, directoryHint: .isDirectory)
+            .appending(path: plan.workspaceID.uuidString, directoryHint: .isDirectory)
         try? fileManager.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let result = await runner.run(TaskCommand(
             executablePath: scriptPath,

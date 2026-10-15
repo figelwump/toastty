@@ -91,9 +91,9 @@ public enum TaskPlacementProblem: Error, Equatable, Sendable {
         case .workspaceHasNoDirectory(let title):
             "\(title) has no directory yet. Open a terminal in it, or pick another workspace."
         case .noAvailableAgent:
-            "No agent can start here. Install Claude or Codex, then retry."
+            "No agent profile in agents.toml can start a task. Add one, then retry."
         case .agentUnavailable(let profileID):
-            "The \(profileID) agent can't start. Check agents.toml, then retry."
+            "The \(profileID) profile in agents.toml can't start. Check it, then retry."
         case .modelNotSupported(let agent):
             "\(agent) does not take a model choice."
         case .effortNotSupported(let effort, let agent):
@@ -140,7 +140,11 @@ public enum TaskPlacement {
         var number = 2
         while true {
             let suffix = "-\(number)"
-            let candidate = String(slug.prefix(maximumSlugLength - suffix.count)) + suffix
+            // A cut that ends on a hyphen would give "--2", which is not a
+            // slug and would not match itself once it is a task-space title.
+            var stem = slug.prefix(maximumSlugLength - suffix.count)
+            while stem.hasSuffix("-") { stem = stem.dropLast() }
+            let candidate = String(stem) + suffix
             if taken.contains(candidate) == false { return candidate }
             number += 1
         }

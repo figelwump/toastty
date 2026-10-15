@@ -28,8 +28,12 @@ struct TaskCommandRunnerTests {
             directory: directory.path
         ))
 
+        // `pwd -P` reports the real path, with /private where Foundation
+        // would drop it.
+        let realDirectory = try #require(realpath(directory.path, nil))
+        defer { free(realDirectory) }
         #expect(result.termination == .exited(3))
-        #expect(result.stdoutText == "\(directory.resolvingSymlinksInPath().path)\nfrom-env\ntyped input\n")
+        #expect(result.stdoutText == "\(String(cString: realDirectory))\nfrom-env\ntyped input\n")
         #expect(result.stderrText == "oops\n")
     }
 
@@ -58,6 +62,21 @@ struct TaskCommandRunnerTests {
         ))
         #expect(result.termination == .timedOut)
         #expect(Date().timeIntervalSince(started) < 8)
+    }
+
+    @Test func aDescendantThatIgnoresTermIsKilledWhenTheLeaderDies() async throws {
+        let marker = FileManager.default.temporaryDirectory.appending(path: "task-runner-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        // The leader dies on SIGTERM; its child ignores it, and so does the
+        // sleep that inherits that disposition.
+        let result = await TaskLiveCommandRunner(terminationGracePeriod: 5).run(shell(
+            "(trap '' TERM; sleep 30) & echo $! > \(marker.path); wait",
+            timeout: 0.5
+        ))
+        #expect(result.termination == .timedOut)
+        let child = try #require(Int32(String(contentsOf: marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        // Gone well before the 5 s grace period would have sent SIGKILL.
+        try await waitUntil(timeout: .seconds(2)) { kill(child, 0) != 0 }
     }
 
     @Test func cancellationStopsTheCommand() async {
@@ -137,5 +156,52 @@ struct TaskCommandEnvironmentTests {
             "GH_PROMPT_DISABLED": "1",
             "TOASTTY_TASK_ID": "t",
         ])
+    }
+}
+
+struct TaskTriageCommandTests {
+    private func pairs(_ arguments: [String], flag: String) -> [String] {
+        zip(arguments, arguments.dropFirst()).filter { $0.0 == flag }.map(\.1)
+    }
+
+    @Test func codexTriageIgnoresUserConfigAndTurnsOffEveryTool() {
+        let command = TaskTriageRunner.command(
+            executable: .codex(path: "/opt/homebrew/bin/codex"),
+            triage: .init(profileID: "codex", model: "gpt-6.1-sol", effort: "low"),
+            prompt: "place it", directory: "/tmp/triage", schemaPath: "/tmp/triage/schema.json",
+            answerPath: "/tmp/triage/answer.json", environment: [:]
+        )
+        let arguments = command.arguments
+        #expect(arguments.first == "exec")
+        #expect(arguments.last == "-")
+        for flag in ["--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check"] {
+            #expect(arguments.contains(flag))
+        }
+        #expect(Set(pairs(arguments, flag: "--disable")) == Set(TaskTriageRunner.disabledCodexFeatures))
+        #expect(pairs(arguments, flag: "--disable").contains("shell_tool"))
+        #expect(pairs(arguments, flag: "-c").contains(#"web_search="disabled""#))
+        #expect(pairs(arguments, flag: "-c").contains(#"model_reasoning_effort="low""#))
+        #expect(pairs(arguments, flag: "-s") == ["read-only"])
+        #expect(command.standardInput == Data("place it".utf8))
+    }
+
+    @Test func claudeTriageHasNoToolsHooksOrSavedSession() {
+        let arguments = TaskTriageRunner.command(
+            executable: .claude(path: "/usr/local/bin/claude"),
+            triage: .init(profileID: "claude"),
+            prompt: "p", directory: "/tmp", schemaPath: "", answerPath: "", environment: [:]
+        ).arguments
+        #expect(pairs(arguments, flag: "--tools") == [""])
+        #expect(pairs(arguments, flag: "--settings") == [#"{"disableAllHooks":true}"#])
+        for flag in ["-p", "--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"] {
+            #expect(arguments.contains(flag))
+        }
+        #expect(arguments.contains("--model") == false)
+    }
+
+    @Test func onlyThePlainCLIsCanRunTriage() {
+        #expect(TaskTriageExecutable(agent: .codex, executablePath: "/opt/homebrew/bin/codex") == .codex(path: "/opt/homebrew/bin/codex"))
+        #expect(TaskTriageExecutable(agent: .codex, executablePath: "/usr/local/bin/agent-safehouse") == nil)
+        #expect(TaskTriageExecutable(agent: .pi, executablePath: "/usr/local/bin/codex") == nil)
     }
 }

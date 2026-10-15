@@ -85,6 +85,13 @@ Toastty is designed to run locally on your machine. The app itself does not send
     session IDs, or working directories.
 - `~/.toastty/scratchpad-documents/`
   - One JSON file per Scratchpad document, including the document ID, revision, title, optional purpose, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes. Closing a panel retains its saved document but removes its active session binding.
+- `~/.toastty/tasks.toml`
+  - The quick-task settings you write: triage, create script, and start skill. Toastty creates a commented template once and never overwrites it.
+- `~/.toastty/tasks/`
+  - `inbox.json` holds the quick tasks that wait in the Inbox: their text, file names and copied-file paths, fixed choices, triage suggestion, and setup state. A task leaves the file when its agent starts or when you delete it.
+  - `attachments/` holds private copies of files attached to quick tasks. Toastty deletes a copy 7 days after the task's agent starts; files of tasks still in the Inbox are kept.
+  - `state/<task-id>/<workspace-id>/` is a private folder that the create script may use for its own records. Toastty does not read it.
+  - Triage sends the task text, attached file names, and each placeable workspace's title, directory and recent task-space titles to the provider of the configured triage profile. See [Quick Tasks](quick-tasks.md).
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
 - `~/.toastty/hooks/agent-hook`
@@ -300,6 +307,7 @@ running on your Mac.
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
 - `Toastty > Send Diagnostics…` validates its bundled `toastty-send-diagnostics` skill and CLI, then copies a short agent handoff containing their runtime-resolved absolute paths. Opening the dialog or copying the handoff does not collect or upload anything. When an agent follows the skill, it first writes doctor output and a redacted diagnostics JSON bundle to private per-run temporary paths. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, recent complete-line tails of redacted Toastty logs, and a sanitized in-memory audit of recent automation socket requests when the running app can provide it.
+- Quick-task triage runs in a new empty folder under the system temp directory, named `toastty-triage-<uuid>`. Toastty removes the folder when the call ends.
 - Browser panel screenshot actions can write user-selected PNG files, place PNG data on the macOS pasteboard, or write temporary agent-share screenshots under the system temp directory in `toastty-browser-screenshots/`.
 - Browser and Scratchpad annotation sends can write temporary annotated PNG files under the system temp directory in `toastty-browser-annotations/`, then send the selected managed agent a prompt containing those file paths plus the title, viewport, and numbered comments. Browser feedback also includes the page URL when available; Scratchpad feedback identifies the document and revision without exposing the bundled renderer's file URL.
 
