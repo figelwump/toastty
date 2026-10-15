@@ -39,9 +39,32 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     case authRequired = "auth_required"
     case authRevoked = "auth_revoked"
 
+    case pushRegistrationMissing = "push_registration_missing"
+    case pushTokenChanged = "push_token_changed"
+    case pushRelayChanged = "push_relay_changed"
+    case pushPairingChanged = "push_pairing_changed"
+    case pushProofExpired = "push_proof_expired"
+    case pushRegistrationExpired = "push_registration_expired"
+    case pushStateUnavailable = "push_state_unavailable"
+    case pushMacConfigurationFailed = "push_mac_configuration_failed"
+    case pushRelayStatusFailed = "push_relay_status_failed"
+    case pushRelayBeginFailed = "push_relay_begin_failed"
+    case pushRelayCompleteFailed = "push_relay_complete_failed"
+    case pushMacRegistrationFailed = "push_mac_registration_failed"
+    case pushRelayRevokeFailed = "push_relay_revoke_failed"
+    case pushRateLimited = "push_rate_limited"
+    case pushRegistrationEnabled = "push_registration_enabled"
+    case pushRegistrationReused = "push_registration_reused"
+
     var category: ToasttyDiagnosticCategory {
         switch self {
-        case .gatewayRequestStarted, .gatewayRequestSucceeded, .gatewayRequestFailed:
+        case .gatewayRequestStarted, .gatewayRequestSucceeded, .gatewayRequestFailed,
+             .pushRegistrationMissing, .pushTokenChanged, .pushRelayChanged,
+             .pushPairingChanged, .pushProofExpired, .pushRegistrationExpired,
+             .pushStateUnavailable, .pushMacConfigurationFailed, .pushRelayStatusFailed,
+             .pushRelayBeginFailed, .pushRelayCompleteFailed, .pushMacRegistrationFailed,
+             .pushRelayRevokeFailed, .pushRateLimited, .pushRegistrationEnabled,
+             .pushRegistrationReused:
             .gateway
         case .streamConnecting, .streamConnected, .streamReconnecting, .streamDisconnected:
             .stream
@@ -70,6 +93,22 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
         case .authSucceeded: "Authentication succeeded"
         case .authRequired: "Authentication required"
         case .authRevoked: "Access revoked"
+        case .pushRegistrationMissing: "Push setup: no registration"
+        case .pushTokenChanged: "Push token changed"
+        case .pushRelayChanged: "Push service changed"
+        case .pushPairingChanged: "Push pairing changed"
+        case .pushProofExpired: "Push delivery verification expired"
+        case .pushRegistrationExpired: "Push registration expired"
+        case .pushStateUnavailable: "Push settings unavailable"
+        case .pushMacConfigurationFailed: "Push Mac settings request failed"
+        case .pushRelayStatusFailed: "Push registration check failed"
+        case .pushRelayBeginFailed: "Push delivery verification request failed"
+        case .pushRelayCompleteFailed: "Push delivery verification completion failed"
+        case .pushMacRegistrationFailed: "Push registration handoff failed"
+        case .pushRelayRevokeFailed: "Push registration removal failed"
+        case .pushRateLimited: "Push service requested a cooldown"
+        case .pushRegistrationEnabled: "Push registration enabled"
+        case .pushRegistrationReused: "Push registration reused"
         }
     }
 }

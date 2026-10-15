@@ -27,6 +27,12 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
                 "connecting", "connected", "reconnecting", "disconnected",
                 "send_started", "send_enqueued", "send_accepted", "send_rejected", "send_uncertain",
                 "auth_started", "auth_succeeded", "auth_required", "auth_revoked",
+                "push_registration_missing", "push_token_changed", "push_relay_changed",
+                "push_pairing_changed", "push_proof_expired", "push_registration_expired",
+                "push_state_unavailable", "push_mac_configuration_failed", "push_relay_status_failed",
+                "push_relay_begin_failed", "push_relay_complete_failed", "push_mac_registration_failed",
+                "push_relay_revoke_failed", "push_rate_limited", "push_registration_enabled",
+                "push_registration_reused",
             ]
         )
     }
@@ -49,6 +55,22 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
             .authSucceeded: .auth,
             .authRequired: .auth,
             .authRevoked: .auth,
+            .pushRegistrationMissing: .gateway,
+            .pushTokenChanged: .gateway,
+            .pushRelayChanged: .gateway,
+            .pushPairingChanged: .gateway,
+            .pushProofExpired: .gateway,
+            .pushRegistrationExpired: .gateway,
+            .pushStateUnavailable: .gateway,
+            .pushMacConfigurationFailed: .gateway,
+            .pushRelayStatusFailed: .gateway,
+            .pushRelayBeginFailed: .gateway,
+            .pushRelayCompleteFailed: .gateway,
+            .pushMacRegistrationFailed: .gateway,
+            .pushRelayRevokeFailed: .gateway,
+            .pushRateLimited: .gateway,
+            .pushRegistrationEnabled: .gateway,
+            .pushRegistrationReused: .gateway,
         ]
 
         XCTAssertEqual(expected.count, ToasttyConnectionDiagnosticEvent.allCases.count)

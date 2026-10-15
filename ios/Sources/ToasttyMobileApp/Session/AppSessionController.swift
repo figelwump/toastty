@@ -21,6 +21,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     var activeConversationCursor: UInt64? { get }
     var activeConversationController: LiveConversationController? { get }
     var supportsPushNotifications: Bool { get }
+    var connectionGeneration: UInt64 { get }
     func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation?
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
@@ -43,6 +44,7 @@ extension AppLiveSessionsControlling {
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {}
     var activeConversationController: LiveConversationController? { nil }
     var supportsPushNotifications: Bool { false }
+    var connectionGeneration: UInt64 { 0 }
     func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? { nil }
 }
 
@@ -159,6 +161,7 @@ final class AppSessionController {
         self.backgroundHoldCeiling = backgroundHoldCeiling
         self.onDiagnosticEvent = onDiagnosticEvent
         self.pushController = pushController
+        pushController?.installDiagnosticEventHandler(onDiagnosticEvent)
         state = initialState
         pairedDevice = initialPairedDevice
         homeController = HomeScreenController(
@@ -375,6 +378,7 @@ final class AppSessionController {
     ) {
         onDiagnosticEvent = handler
         liveController?.installDiagnosticEventHandler(handler)
+        pushController?.installDiagnosticEventHandler(handler)
     }
 
     func refreshCurrentDevice() async {
@@ -607,7 +611,8 @@ final class AppSessionController {
     private func updatePushConnection() {
         pushController?.updateConnection(gatewayURL: pairedDevice?.gatewayURL,
             pairingID: pairedDevice?.device.id, connected: state == .paired(.live),
-            supported: liveController?.supportsPushNotifications == true)
+            supported: liveController?.supportsPushNotifications == true,
+            connectionGeneration: liveController?.connectionGeneration ?? 0)
     }
 
     /// The fixture harness has no live runtime to advance freshness, so it

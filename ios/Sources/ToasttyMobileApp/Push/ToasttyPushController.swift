@@ -39,10 +39,22 @@ final class ToasttyPushController {
     private let now: @Sendable () -> Date
     private let buildID: String
     private let automaticallyReconciles: Bool
+    private let sleep: @Sendable (TimeInterval) async throws -> Void
+    private var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
+    @ObservationIgnored private var retryTask: Task<Void, Never>?
+    private var retryWakeID: UUID?
+    private var transientRetryAt: Date?
+    private var relayRetryAt: Date?
+    private var cleanupRetryAt: Date?
+    private var consecutiveFailures = 0
+    private var cleanupFailures = 0
+    private var invalidToken = false
+    private var reportedFailures: Set<ToasttyConnectionDiagnosticEvent> = []
     private var context: Context?
     private var revision: UInt64 = 0
     private var isForeground = true
     private var reconciling = false
+    private var reconcileScheduled = false
     private var reconcileAgain = false
     private var proofOperations: Set<UUID> = []
     private var token: String?
@@ -75,12 +87,20 @@ final class ToasttyPushController {
              NativePushClient(baseURL: $0, credentialProvider: $1)
          }, now: @escaping @Sendable () -> Date = Date.init,
          buildID: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-         automaticallyReconciles: Bool = true) {
+         automaticallyReconciles: Bool = true,
+         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.configuration = configuration; self.vault = vault; self.store = store
         self.notifications = notifications; self.installation = installation
         self.relayFactory = relayFactory; self.nativeFactory = nativeFactory; self.now = now; self.buildID = buildID
         self.automaticallyReconciles = automaticallyReconciles
+        self.sleep = sleep
         token = bridge?.deviceToken
+    }
+
+    deinit { retryTask?.cancel() }
+
+    func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {
+        onDiagnosticEvent = handler
     }
 
     /// Attach only after SwiftUI retains its State controller. Root view
@@ -93,6 +113,8 @@ final class ToasttyPushController {
             guard let self, self.desired, self.isForeground else { return }
             self.requestedToken = false
             self.errorMessage = "Couldn’t connect to Apple notifications. Try again."
+            self.transientRetryAt = self.now().addingTimeInterval(self.nextRetryDelay())
+            self.armRetry()
         }
         bridge.onForeground = { [weak self] payload in
             guard let self else { return true }
@@ -124,21 +146,29 @@ final class ToasttyPushController {
             queuedProofs.removeAll()
             for payload in proofs { Task { await acceptProof(payload) } }
         } catch {
+            recordFailure(.pushStateUnavailable)
             errorMessage = error as? MobilePushStoreFailure == .locked
                 ? "Unlock this iPhone to finish notification setup."
                 : "Couldn’t save notification settings. Try again."
+            transientRetryAt = now().addingTimeInterval(nextRetryDelay())
         }
     }
 
-    func updateConnection(gatewayURL: URL?, pairingID: UUID?, connected: Bool, supported: Bool) {
-        let next = gatewayURL.flatMap { url in pairingID.map { Context(gatewayURL: url, pairingID: $0, connected: connected, supported: supported) } }
-        if context != next {
-            revision &+= 1
-            configurationMatches = false
-            if context?.pairingID != next?.pairingID { pendingConversationID = nil }
+    func updateConnection(gatewayURL: URL?, pairingID: UUID?, connected: Bool, supported: Bool,
+                          connectionGeneration: UInt64 = 0) {
+        let next = gatewayURL.flatMap { url in pairingID.map { Context(gatewayURL: url, pairingID: $0,
+            connected: connected, supported: supported, connectionGeneration: connectionGeneration) } }
+        guard context != next else { return }
+        cancelRetry()
+        if context?.pairingID != next?.pairingID || context?.gatewayURL != next?.gatewayURL {
+            reportedFailures.removeAll()
         }
+        consecutiveFailures = 0
+        transientRetryAt = nil
+        revision &+= 1
+        configurationMatches = false
+        if context?.pairingID != next?.pairingID { pendingConversationID = nil }
         context = next
-        if !connected { configurationMatches = false }
         if let next {
             let queued = queuedTaps
             queuedTaps.removeAll()
@@ -147,8 +177,14 @@ final class ToasttyPushController {
         scheduleReconcile()
     }
 
-    func enteredBackground() { isForeground = false; revision &+= 1 }
-    func enteredForeground() { isForeground = true; requestedToken = false; scheduleReconcile() }
+    func enteredBackground() { isForeground = false; revision &+= 1; cancelRetry() }
+    func enteredForeground() {
+        isForeground = true
+        requestedToken = false
+        consecutiveFailures = 0
+        transientRetryAt = nil
+        scheduleReconcile()
+    }
     func setOpenConversation(_ id: UUID?) { openConversationID = id }
     func consumedConversationTap() { pendingConversationID = nil }
 
@@ -169,6 +205,8 @@ final class ToasttyPushController {
 
     func setDesired(_ value: Bool) async {
         errorMessage = nil
+        transientRetryAt = nil
+        consecutiveFailures = 0
         if value {
             do { try persist { $0.desired = true; $0.introHandled = true } }
             catch { errorMessage = "Couldn’t save notification settings. Try again."; return }
@@ -192,9 +230,11 @@ final class ToasttyPushController {
     }
 
     func retry() {
-        if storedState?.blockedDeviceToken == token, storedState?.blockedBuildID == buildID { return }
-        if storedState?.retryAfter.map({ now() < $0 }) == true { return }
+        if invalidToken || (storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID) { return }
+        if relayCooldown.map({ now() < $0 }) == true { return }
         errorMessage = nil
+        transientRetryAt = nil
+        consecutiveFailures = 0
         requestedToken = false
         if desired, permission == .undetermined {
             Task { await setDesired(true) }
@@ -222,7 +262,13 @@ final class ToasttyPushController {
         guard KeychainMobilePushStateStore.isDeviceToken(value) else { return }
         let changed = token != value
         token = value
-        if changed { revision &+= 1; scheduleReconcile() }
+        if changed {
+            invalidToken = false
+            transientRetryAt = nil
+            consecutiveFailures = 0
+            revision &+= 1
+            scheduleReconcile()
+        }
     }
 
     func receiveForeground(_ payload: RemotePushPayload) async -> Bool {
@@ -248,15 +294,19 @@ final class ToasttyPushController {
     func reconcile() async {
         guard isForeground else { return }
         guard !reconciling else { reconcileAgain = true; return }
+        cancelRetry()
         reconciling = true
         defer {
             reconciling = false
             if reconcileAgain { reconcileAgain = false; scheduleReconcile() }
+            else { armRetry() }
         }
         await restore()
         guard storedState != nil else { return }
         await cleanupRegistrations()
         guard isForeground, let configuration, let context, context.connected, context.supported else { return }
+        if automaticallyReconciles, transientRetryAt.map({ now() < $0 }) == true { return }
+        transientRetryAt = nil
         let operationRevision = revision
         let generation = await vault.currentGeneration()
         guard let credential = await vault.currentCredential(), credential.gatewayURL == context.gatewayURL,
@@ -265,14 +315,17 @@ final class ToasttyPushController {
         let native = nativeFactory(context.gatewayURL, ToasttyPushCredentialProvider(vault: vault,
             gatewayURL: context.gatewayURL, pairingID: context.pairingID, generation: generation))
         var operationRegistration: MobilePushRegistration?
+        var failedOperation = ToasttyConnectionDiagnosticEvent.pushStateUnavailable
         do {
             try abandonOtherPairing(context)
             await cleanupRegistrations()
+            failedOperation = .pushMacConfigurationFailed
             let host = try await native.configuration()
             guard await isCurrent(operationRevision, generation: generation) else { return }
             configurationMatches = host.relayID == configuration.relayID && host.apnsEnvironment == configuration.apnsEnvironment
             if !desired {
                 if storedState?.needsMacClear == true || host.registrationID != nil {
+                    failedOperation = .pushMacRegistrationFailed
                     _ = try await native.setRegistration(nil)
                     guard await isCurrent(operationRevision, generation: generation) else { return }
                     try persist { $0.needsMacClear = false }
@@ -301,11 +354,11 @@ final class ToasttyPushController {
             }
             await notifications.removeVerificationNotifications(registrationIDs: Set(consumedProofs.map(\.registrationID)))
             guard await isCurrent(operationRevision, generation: generation), let token else { return }
-            if storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID {
+            if invalidToken || (storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID) {
                 errorMessage = "Apple could not use this notification token. Check this app’s notification build settings."
                 return
             }
-            if storedState?.retryAfter.map({ now() < $0 }) == true {
+            if relayCooldown.map({ now() < $0 }) == true {
                 errorMessage = "Notification setup is busy. Try again later."
                 return
             }
@@ -319,16 +372,19 @@ final class ToasttyPushController {
                active.deviceToken == token, active.relayURL == configuration.relayURL,
                active.relayID == configuration.relayID, storedState?.pending == nil {
                 operationRegistration = active
+                failedOperation = .pushRelayStatusFailed
                 let status = try await relayFactory(active.relayURL).status(active)
                 guard await isCurrent(operationRevision, generation: generation) else { return }
                 if status.state == "active" {
                     if host.registrationID != active.registrationID {
+                        failedOperation = .pushMacRegistrationFailed
                         _ = try await native.setRegistration(grant(active))
                         guard await isCurrent(operationRevision, generation: generation) else { return }
                     }
                     active.stage = .enabled
-                    try persist { $0.active = active }
+                    try persist { $0.active = active; $0.retryAfter = nil }
                     errorMessage = nil
+                    succeeded(.pushRegistrationReused)
                     return
                 }
                 try persist { $0.cleanup.append(active); $0.active = nil }
@@ -337,6 +393,9 @@ final class ToasttyPushController {
                pending.deviceToken != token || pending.relayURL != configuration.relayURL
                 || pending.relayID != configuration.relayID
                 || (pending.stage == .pending && pending.nonce == nil && now().timeIntervalSince(pending.createdAt) >= 300) {
+                onDiagnosticEvent(pending.deviceToken != token ? .pushTokenChanged
+                    : pending.relayURL != configuration.relayURL || pending.relayID != configuration.relayID
+                        ? .pushRelayChanged : .pushProofExpired)
                 try persist { $0.cleanup.append(pending); $0.pending = nil }
             }
             if storedState?.pending == nil {
@@ -349,12 +408,18 @@ final class ToasttyPushController {
                     managementToken: try KeychainMobilePushStateStore.randomCapability(),
                     sendToken: try KeychainMobilePushStateStore.randomCapability(), createdAt: now())
                 try persist { $0.pending = attempt }
+                if let active = storedState?.active {
+                    onDiagnosticEvent(active.deviceToken != token ? .pushTokenChanged
+                        : active.relayURL != configuration.relayURL || active.relayID != configuration.relayID
+                            ? .pushRelayChanged : .pushRegistrationMissing)
+                } else { onDiagnosticEvent(.pushRegistrationMissing) }
             }
             guard let attempt = storedState?.pending else { return }
             if attempt.stage == .pending {
                 if attempt.nonce != nil { await finishProof(attempt, operationRevision: operationRevision, generation: generation) }
                 else if attempt.expiresAt == nil {
                     operationRegistration = attempt
+                    failedOperation = .pushRelayBeginFailed
                     let result = try await relayFactory(attempt.relayURL).begin(attempt)
                     guard await isCurrent(operationRevision, generation: generation), storedState?.pending?.registrationID == attempt.registrationID else { return }
                     try persist { state in
@@ -363,22 +428,27 @@ final class ToasttyPushController {
                         if result.state == "active" { current.stage = .relayActive }
                         state.pending = current
                     }
+                    consecutiveFailures = 0
                 }
             }
             guard let ready = storedState?.pending, ready.stage == .relayActive,
                   await isCurrent(operationRevision, generation: generation) else { return }
             operationRegistration = ready
+            failedOperation = .pushMacRegistrationFailed
             _ = try await native.setRegistration(grant(ready))
             guard await isCurrent(operationRevision, generation: generation), storedState?.pending?.registrationID == ready.registrationID else { return }
             try persist { state in
                 if let old = state.active { state.cleanup.append(old) }
                 var enabled = ready; enabled.stage = .enabled; enabled.nonce = nil
-                state.active = enabled; state.pending = nil; state.needsMacClear = false
+                state.active = enabled; state.pending = nil; state.needsMacClear = false; state.retryAfter = nil
             }
             errorMessage = nil
+            succeeded(.pushRegistrationEnabled)
         } catch {
+            guard !Self.isCancellation(error) else { return }
             let current = await isCurrent(operationRevision, generation: generation)
             if current || operationRegistration.map(isStoredRegistration) == true {
+                if current { recordFailure(error is MobilePushStoreFailure ? .pushStateUnavailable : failedOperation) }
                 handleFailure(error, registration: operationRegistration, displayError: current)
             }
         }
@@ -397,14 +467,17 @@ final class ToasttyPushController {
         catch { handleFailure(error); return }
         guard isForeground, context?.connected == true, context?.pairingID == payload.pairingID, configurationMatches else { return }
         let operationRevision = revision
+        transientRetryAt = nil
         let generation = await vault.currentGeneration()
         guard let current = storedState?.pending, current.registrationID == payload.registrationID else { return }
         await finishProof(current, operationRevision: operationRevision, generation: generation)
-        scheduleReconcile()
+        if storedState?.pending?.stage == .relayActive { scheduleReconcile() }
+        else { armRetry() }
     }
 
     private func finishProof(_ attempt: MobilePushRegistration, operationRevision: UInt64,
                              generation: MobileCredentialGeneration) async {
+        guard relayCooldown.map({ now() >= $0 }) ?? true else { return }
         guard let nonce = attempt.nonce, attempt.stage == .pending,
               proofOperations.insert(attempt.registrationID).inserted else { return }
         defer { proofOperations.remove(attempt.registrationID) }
@@ -420,27 +493,39 @@ final class ToasttyPushController {
             guard await isCurrent(operationRevision, generation: generation),
                   storedState?.pending?.registrationID == attempt.registrationID else { return }
             try persist { $0.pending?.stage = .relayActive; $0.pending?.nonce = nil }
+            consecutiveFailures = 0
             errorMessage = nil
         } catch {
+            guard !Self.isCancellation(error) else { return }
             guard storedState?.pending?.registrationID == attempt.registrationID else { return }
             let current = await isCurrent(operationRevision, generation: generation)
+            if current { recordFailure(.pushRelayCompleteFailed) }
             handleFailure(error, registration: attempt, displayError: current)
         }
     }
 
     private func cleanupRegistrations() async {
-        guard storedState?.cleanupRetryAfter.map({ now() >= $0 }) ?? true else { return }
+        guard cleanupCooldown.map({ now() >= $0 }) ?? true else { return }
         for item in Array((storedState?.cleanup ?? []).prefix(4)) {
             guard isForeground else { return }
             do {
                 try await relayFactory(item.relayURL).revoke(item)
                 try persist { $0.cleanup.removeAll { $0.registrationID == item.registrationID } }
+                cleanupFailures = 0
+                cleanupRetryAt = nil
             } catch {
+                guard !Self.isCancellation(error) else { return }
+                recordFailure(.pushRelayRevokeFailed)
                 let delay: TimeInterval
                 if case .rateLimited(let retry)? = error as? PushRelayFailure { delay = retry }
-                else { delay = 30 }
-                try? persist { state in
-                    state.cleanupRetryAfter = now().addingTimeInterval(delay)
+                else {
+                    delay = min(600, 30 * pow(2, Double(cleanupFailures)))
+                    cleanupFailures = min(cleanupFailures + 1, 5)
+                }
+                let deadline = now().addingTimeInterval(delay)
+                cleanupRetryAt = deadline
+                persistFailureState { state in
+                    state.cleanupRetryAfter = deadline
                     if let index = state.cleanup.firstIndex(where: { $0.registrationID == item.registrationID }) {
                         let failed = state.cleanup.remove(at: index)
                         state.cleanup.append(failed)
@@ -457,6 +542,7 @@ final class ToasttyPushController {
             $0.pairingID != context.pairingID || $0.gatewayURL != context.gatewayURL
         }
         guard !mismatched.isEmpty else { return }
+        onDiagnosticEvent(.pushPairingChanged)
         try persist { state in
             state.cleanup.append(contentsOf: mismatched)
             if mismatched.contains(where: { $0.registrationID == state.active?.registrationID }) { state.active = nil }
@@ -483,36 +569,129 @@ final class ToasttyPushController {
         storedState = state
     }
     private func scheduleReconcile() {
+        guard isForeground, automaticallyReconciles, !reconcileScheduled else { return }
+        reconcileScheduled = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.reconcileScheduled = false
+            await self.reconcile()
+        }
+    }
+
+    private func cancelRetry() {
+        retryWakeID = nil
+        retryTask?.cancel()
+        retryTask = nil
+    }
+
+    private var relayCooldown: Date? { [storedState?.retryAfter, relayRetryAt].compactMap { $0 }.max() }
+    private var cleanupCooldown: Date? { [storedState?.cleanupRetryAfter, cleanupRetryAt].compactMap { $0 }.max() }
+
+    /// Session snapshots are not a retry clock. Keep one foreground wake for
+    /// incomplete work, including cleanup after the pairing has been removed.
+    private func armRetry() {
+        cancelRetry()
         guard isForeground, automaticallyReconciles else { return }
-        Task { [weak self] in await self?.reconcile() }
+        var deadlines: [Date] = []
+        if storedState?.cleanup.isEmpty == false {
+            deadlines.append(cleanupCooldown ?? now().addingTimeInterval(1))
+        }
+        if configuration != nil, let context, context.connected, context.supported {
+            if let transientRetryAt { deadlines.append(transientRetryAt) }
+            let blocked = invalidToken || (storedState?.blockedDeviceToken == token && storedState?.blockedBuildID == buildID)
+            if desired, permission == .allowed, configurationMatches, token != nil, !blocked {
+                if let cooldown = relayCooldown, now() < cooldown { deadlines.append(cooldown) }
+                else if transientRetryAt == nil, let pending = storedState?.pending {
+                    if pending.stage == .pending, pending.nonce == nil, pending.expiresAt != nil {
+                        deadlines.append(pending.createdAt.addingTimeInterval(300))
+                    } else {
+                        deadlines.append(now().addingTimeInterval(30))
+                    }
+                }
+            }
+        }
+        guard let deadline = deadlines.min() else { return }
+        let delay = max(1, deadline.timeIntervalSince(now()))
+        let wakeID = UUID()
+        retryWakeID = wakeID
+        retryTask = Task { [weak self, sleep] in
+            do { try await sleep(delay) } catch { return }
+            guard !Task.isCancelled, let self, self.retryWakeID == wakeID else { return }
+            self.retryTask = nil
+            self.retryWakeID = nil
+            // The wake never owns network work, so re-arming cannot cancel it.
+            self.scheduleReconcile()
+        }
+    }
+
+    private func nextRetryDelay() -> TimeInterval {
+        let delay = min(600, 30 * pow(2, Double(consecutiveFailures)))
+        consecutiveFailures = min(consecutiveFailures + 1, 5)
+        return delay
+    }
+
+    private func recordFailure(_ event: ToasttyConnectionDiagnosticEvent) {
+        if reportedFailures.insert(event).inserted { onDiagnosticEvent(event) }
+    }
+
+    private func succeeded(_ event: ToasttyConnectionDiagnosticEvent) {
+        consecutiveFailures = 0
+        transientRetryAt = nil
+        relayRetryAt = nil
+        reportedFailures.removeAll()
+        onDiagnosticEvent(event)
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
     }
     private func isStoredRegistration(_ registration: MobilePushRegistration) -> Bool {
         storedState?.pending?.registrationID == registration.registrationID
             || storedState?.active?.registrationID == registration.registrationID
     }
     private func handleFailure(_ error: Error, registration: MobilePushRegistration? = nil, displayError: Bool = true) {
+        guard !Self.isCancellation(error) else { return }
+        if error is MobilePushStoreFailure { recordFailure(.pushStateUnavailable) }
         let message: String
         switch error as? PushRelayFailure {
         case .invalidDeviceToken:
-            try? persist { $0.blockedDeviceToken = registration?.deviceToken ?? token; $0.blockedBuildID = buildID }
+            if (registration?.deviceToken ?? token) == token {
+                invalidToken = true
+                transientRetryAt = nil
+                persistFailureState { $0.blockedDeviceToken = token; $0.blockedBuildID = buildID }
+            }
             message = "Apple could not use this notification token. Check this app’s notification build settings."
         case .rateLimited(let delay):
-            try? persist { $0.retryAfter = now().addingTimeInterval(delay) }
+            let deadline = now().addingTimeInterval(delay)
+            relayRetryAt = deadline
+            transientRetryAt = nil
+            persistFailureState { $0.retryAfter = deadline }
+            recordFailure(.pushRateLimited)
             message = "Notification setup is busy. Try again later."
         case .expired:
-            if let pending = storedState?.pending, registration == nil || pending.registrationID == registration?.registrationID {
-                try? persist { $0.cleanup.append(pending); $0.pending = nil }
-            } else if let active = storedState?.active, registration == nil || active.registrationID == registration?.registrationID {
-                try? persist { $0.cleanup.append(active); $0.active = nil }
+            recordFailure(.pushRegistrationExpired)
+            if displayError { transientRetryAt = now().addingTimeInterval(nextRetryDelay()) }
+            if let pending = storedState?.pending, pending.registrationID == registration?.registrationID {
+                persistFailureState { $0.cleanup.append(pending); $0.pending = nil }
+            } else if let active = storedState?.active, active.registrationID == registration?.registrationID {
+                persistFailureState { $0.cleanup.append(active); $0.active = nil }
             }
             message = "Notification setup expired. Try again."
         default:
+            if displayError { transientRetryAt = now().addingTimeInterval(nextRetryDelay()) }
             message = "Couldn’t finish notification setup. Retry when connected."
         }
         if displayError && isForeground { errorMessage = message }
+        armRetry()
+    }
+
+    private func persistFailureState(_ update: (inout MobilePushState) -> Void) {
+        do { try persist(update) }
+        catch { recordFailure(.pushStateUnavailable) }
     }
     private struct Context: Equatable {
         let gatewayURL: URL; let pairingID: UUID; let connected: Bool; let supported: Bool
+        let connectionGeneration: UInt64
     }
 }
 
