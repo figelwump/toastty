@@ -98,19 +98,20 @@ struct TasksConfigFileTests {
     }
 
     @Test
-    func ensureTemplateExistsWritesIntoTheRuntimeHomeOnce() throws {
-        let runtimeHome = FileManager.default.temporaryDirectory
-            .appending(path: "tasks-runtime-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: runtimeHome) }
-        let environment = ["TOASTTY_RUNTIME_HOME": runtimeHome.path]
+    func fileFollowsTheUserHomeInRuntimeIsolatedRuns() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "tasks-home-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appending(path: "home", directoryHint: .isDirectory)
+        let environment = ["TOASTTY_RUNTIME_HOME": root.appending(path: "runtime").path]
 
-        try TasksConfigFile.ensureTemplateExists(environment: environment)
-        let url = TasksConfigFile.fileURL(environment: environment)
-        #expect(url.path.hasPrefix(runtimeHome.path))
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path, environment: environment)
+        let url = TasksConfigFile.fileURL(homeDirectoryPath: home.path, environment: environment)
+        #expect(url.path == home.appending(path: ".toastty/tasks.toml").path)
         #expect(try String(contentsOf: url, encoding: .utf8) == TasksConfigFile.templateContents())
 
         try "[start]\nskill = \"mine\"\n".write(to: url, atomically: true, encoding: .utf8)
-        try TasksConfigFile.ensureTemplateExists(environment: environment)
-        #expect(try TasksConfigFile.load(environment: environment).start?.skill == "mine")
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path, environment: environment)
+        #expect(try TasksConfigFile.load(homeDirectoryPath: home.path, environment: environment).start?.skill == "mine")
     }
 }

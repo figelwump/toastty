@@ -96,10 +96,12 @@ public enum TasksConfigFile {
         if let overrideURL = overrideFileURL(environment: environment) {
             return overrideURL
         }
-        return ToasttyRuntimePaths.resolve(
-            homeDirectoryPath: homeDirectoryPath,
-            environment: environment
-        ).tasksConfigFileURL
+        // Like agents.toml and the user skills, tasks.toml is user-authored
+        // and names profiles, a script and a skill from the user's home, so
+        // runtime-isolated dev runs read the same file.
+        return URL(filePath: homeDirectoryPath)
+            .appending(path: ".toastty", directoryHint: .isDirectory)
+            .appending(path: "tasks.toml", directoryHint: .notDirectory)
     }
 
     private static func overrideFileURL(environment: [String: String]) -> URL? {

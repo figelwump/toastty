@@ -30,7 +30,6 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
     private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
-    private static let tasksConfigFileName = "tasks.toml"
     private static let tasksDirectoryName = "tasks"
     private static let taskInboxFileName = "inbox.json"
     private static let taskAttachmentsDirectoryName = "attachments"
@@ -91,10 +90,6 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var recentRightPanelItemsFileURL: URL {
         configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
-    }
-
-    public var tasksConfigFileURL: URL {
-        configDirectoryURL.appending(path: Self.tasksConfigFileName, directoryHint: .notDirectory)
     }
 
     /// Quick-task state: the Inbox file and the tasks' attached files.

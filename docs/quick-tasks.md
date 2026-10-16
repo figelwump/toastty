@@ -82,7 +82,7 @@ that setup already made.
 ## `tasks.toml`
 
 Toastty writes a commented template to `~/.toastty/tasks.toml` on first launch.
-In a runtime-isolated run, the file is `<runtime-home>/tasks.toml`. After you
+Runtime-isolated dev runs read the same file, as they do `agents.toml`. After you
 edit it, use **Toastty › Reload Configuration**.
 
 ```toml
