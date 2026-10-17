@@ -155,33 +155,67 @@ struct ClaudePermissionHook {
 
     // MARK: - Preview
 
+    private enum ShownValue {
+        case string, bool, edits
+    }
+
+    /// Arguments that each formatted preview shows, with the value type it
+    /// prints. Any other argument, or a shown one with another type, can change
+    /// what the tool does (Bash's `dangerouslyDisableSandbox`, for example), so
+    /// it is listed above the formatted text, where the phone shows it first
+    /// and shortening cannot drop it.
+    private static let formattedArguments: [String: [String: ShownValue]] = [
+        "Bash": ["command": .string, "description": .string],
+        "Edit": ["file_path": .string, "old_string": .string, "new_string": .string, "replace_all": .bool],
+        "MultiEdit": ["file_path": .string, "edits": .edits],
+        "Write": ["file_path": .string, "content": .string],
+    ]
+    private static let editArguments: [String: ShownValue] = [
+        "old_string": .string, "new_string": .string, "replace_all": .bool,
+    ]
+
     static func previewText(toolName: String, input: [String: AutomationJSONValue]) -> String {
+        guard let shown = formattedArguments[toolName],
+              let formatted = formattedPreview(toolName: toolName, input: input) else {
+            // Every argument can change what the tool does, so show them all.
+            return jsonPreview(input)
+        }
+        let others = input.filter { isShown($0.value, as: shown[$0.key]) == false }
+        guard others.isEmpty == false else { return formatted }
+        return "Other arguments:\n\(jsonPreview(others))\n\n\(formatted)"
+    }
+
+    private static func isShown(_ value: AutomationJSONValue, as kind: ShownValue?) -> Bool {
+        switch (kind, value) {
+        case (.string?, .string), (.bool?, .bool), (.edits?, .array): true
+        default: false
+        }
+    }
+
+    private static func formattedPreview(toolName: String, input: [String: AutomationJSONValue]) -> String? {
         switch toolName {
         case "Bash":
-            if let command = input.string("command") { return command }
+            return input.string("command")
         case "Edit":
-            if let path = input.string("file_path") {
-                let edit = editPreview(input)
-                let scope = input.bool("replace_all") == true ? "\n(all occurrences)" : ""
-                return "\(path)\n\(edit)\(scope)"
-            }
+            guard let path = input.string("file_path") else { return nil }
+            let scope = input.bool("replace_all") == true ? "\n(all occurrences)" : ""
+            return "\(path)\n\(editPreview(input))\(scope)"
         case "MultiEdit":
-            if let path = input.string("file_path"), case .array(let edits)? = input["edits"] {
-                let parts = edits.compactMap { edit -> String? in
-                    guard case .object(let object) = edit else { return nil }
-                    return editPreview(object) + (object.bool("replace_all") == true ? "\n(all occurrences)" : "")
-                }
-                return ([path] + parts).joined(separator: "\n")
+            guard let path = input.string("file_path"), case .array(let edits)? = input["edits"] else { return nil }
+            var parts = [path]
+            for edit in edits {
+                // An edit the formatter cannot show in full falls back to every argument.
+                guard case .object(let object) = edit,
+                      object.allSatisfy({ isShown($0.value, as: editArguments[$0.key]) }) else { return nil }
+                parts.append(editPreview(object) + (object.bool("replace_all") == true ? "\n(all occurrences)" : ""))
             }
+            return parts.joined(separator: "\n")
         case "Write":
-            if let path = input.string("file_path"), let content = input.string("content") {
-                return "\(path)\n\n\(content)"
-            }
+            guard let path = input.string("file_path"), let content = input.string("content") else { return nil }
+            return "\(path)\n\n\(content)"
         default:
-            // Every argument can change what the tool does, so show them all.
-            break
+            return nil
         }
-        return jsonPreview(input)
     }
 
     private static func editPreview(_ input: [String: AutomationJSONValue]) -> String {

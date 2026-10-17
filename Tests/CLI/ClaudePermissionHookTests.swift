@@ -134,6 +134,46 @@ struct ClaudePermissionHookTests {
     }
 
     @Test
+    func argumentsOutsideTheFormattedPreviewAreShownFirst() throws {
+        // A long command must not push the sandbox override out of the bounded preview.
+        let command = "ls " + String(repeating: "a", count: ClaudePermissionHook.maximumPreviewBytes)
+        let bash = try #require(ClaudeQuestionHookParser.parse(payload(name: "PermissionRequest", input: [
+            "command": .string(command), "description": .string("List"), "dangerouslyDisableSandbox": .bool(true),
+        ])))
+        let presentation = try #require(bash.event.permission)
+        #expect(presentation.detail.previewTruncated)
+        #expect(presentation.detail.preview.hasPrefix("Other arguments:\n{\n  \"dangerouslyDisableSandbox\" : true\n}\n\nls "))
+        #expect(presentation.decision.question.contains("\"dangerouslyDisableSandbox\" : true"))
+
+        let write = try #require(ClaudeQuestionHookParser.parse(payload(name: "PermissionRequest", tool: "Write", input: [
+            "file_path": .string("/repo/a.txt"), "content": .string("hi"), "mode": .string("append"),
+        ])))
+        #expect(write.event.permission?.detail.preview == "Other arguments:\n{\n  \"mode\" : \"append\"\n}\n\n/repo/a.txt\n\nhi")
+
+        // An edit with an argument the formatter does not show falls back to every argument.
+        let multi = try #require(ClaudeQuestionHookParser.parse(payload(name: "PermissionRequest", tool: "MultiEdit", input: [
+            "file_path": .string("/repo/a.swift"),
+            "edits": .array([.object(["old_string": .string("a"), "new_string": .string("b"), "target": .string("/etc/x")])]),
+        ])))
+        let multiPreview = try #require(multi.event.permission?.detail.preview)
+        #expect(multiPreview.contains("\"target\" : \"/etc/x\""))
+        #expect(multiPreview.contains("\"edits\""))
+
+        // A shown argument with a value the formatter does not print is listed too.
+        let edit = try #require(ClaudeQuestionHookParser.parse(payload(name: "PermissionRequest", tool: "Edit", input: [
+            "file_path": .string("/repo/a.swift"), "old_string": .object(["text": .string("a")]),
+            "new_string": .string("b"), "replace_all": .string("true"),
+        ])))
+        #expect(edit.event.permission?.detail.preview
+            == "Other arguments:\n{\n  \"old_string\" : {\n    \"text\" : \"a\"\n  },\n  \"replace_all\" : \"true\"\n}\n\n/repo/a.swift\n- \n+ b")
+        let multiType = try #require(ClaudeQuestionHookParser.parse(payload(name: "PermissionRequest", tool: "MultiEdit", input: [
+            "file_path": .string("/repo/a.swift"),
+            "edits": .array([.object(["old_string": .string("a"), "new_string": .string("b"), "replace_all": .string("true")])]),
+        ])))
+        #expect(multiType.event.permission?.detail.preview.contains("\"replace_all\" : \"true\"") == true)
+    }
+
+    @Test
     func runnerSendsPhoneDecisionAndSuppressesGenericTelemetry() throws {
         var sent: [ClaudeQuestionHookRequest] = []
         var replies: [ClaudeQuestionHookReply] = [
