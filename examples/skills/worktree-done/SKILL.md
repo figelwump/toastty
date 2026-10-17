@@ -55,7 +55,9 @@ Stop and report, without merging, when:
    top-level rather than a task space, set the `task-status` annotation with text
    `DONE` and no URL instead, following the workspace annotation rules in the
    toastty-capabilities skill. Skip this when an earlier step stopped without
-   merging or enabling auto-merge.
+   merging or enabling auto-merge. Marking done is how a task space finishes:
+   do not exit this session or request `session.exit-after-turn`. The session
+   stays until `worktree-cleanup` removes the workspace.
 
 Report the PR, the accepted commit, and whether it merged or will merge when
 checks pass. Mention that `worktree-cleanup` removes the workspace and worktree
