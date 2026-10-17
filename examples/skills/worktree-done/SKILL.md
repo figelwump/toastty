@@ -32,6 +32,35 @@ Stop and report, without merging, when:
   continue only after they confirm. Green CI or a linked PR having merged is not
   confirmation. Links to PRs in this repository alone are not prerequisites.
 
+## Check unresolved review comments
+
+Before marking the PR ready, enabling auto-merge, or merging directly, query
+GitHub for this PR's review threads. Use the PR's repository and number with
+`gh api graphql`; read `reviewThreads` with `id`, `isResolved`, and the first comment's `url`.
+Fetch every page (for example, use `--paginate --slurp` with an `$endCursor`
+variable and `pageInfo { hasNextPage endCursor }`). Inspect all returned pages
+and require the final page to have `hasNextPage: false`. A failed query,
+GraphQL errors, missing PR data, or incomplete pagination must stop the merge.
+`gh pr view --comments`, review approval, and green checks do not establish that
+all review threads are resolved.
+
+If any thread has `isResolved: false`, stop and report each thread's link (or
+its `id` and the PR URL if no comment link is available). Include outdated
+threads; an outdated comment is not necessarily resolved. Do not resolve
+threads, dismiss reviews, or change code as part of this acceptance. Leave the
+workspace unfinished. If this check blocks merging for any reason and auto-merge
+is already enabled, disable it with
+`gh pr merge <number> --disable-auto` and confirm it is off; report any failure.
+The user can run `worktree-done` again after the threads are resolved and any new
+commits have been reviewed. General PR conversation comments have no resolved
+state; this check uses GitHub's review-thread resolution state.
+
+Run this check again immediately before each merge or auto-merge command below,
+including direct-merge fallbacks after waiting for checks. This checks the state
+at command time. GitHub can merge later after auto-merge is enabled; blocking
+threads added after that point requires the repository to enforce conversation
+resolution. Do not claim this skill enforces that server-side rule.
+
 ## Merge when checks pass
 
 1. If the PR is a draft, mark it ready with `gh pr ready <number>`.
