@@ -14,9 +14,27 @@ public actor RemoteMessageAttachmentStore {
         }
 
         public func deliveryText(text: String) -> String {
-            let paths = files.map { TerminalDropPayloadBuilder.shellEscapedPath($0.path) }.joined(separator: "\n")
+            // Claude Code turns a pasted bare or quoted image path into an
+            // image attachment asynchronously and drops a Return that arrives
+            // meanwhile, so the send would wait unsubmitted in its prompt.
+            // Paths in code spans stay plain text.
+            let paths = files.map { Self.codeSpan($0.path) }.joined(separator: "\n")
             return [text, "Read the following files attached to this message on this Mac:\n" + paths]
                 .filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }
+
+        /// A CommonMark code span with a fence longer than any backtick run in
+        /// `path`, padded when the path itself starts or ends with a backtick.
+        static func codeSpan(_ path: String) -> String {
+            var longestRun = 0
+            var run = 0
+            for character in path {
+                run = character == "`" ? run + 1 : 0
+                longestRun = max(longestRun, run)
+            }
+            let fence = String(repeating: "`", count: longestRun + 1)
+            let padding = path.hasPrefix("`") || path.hasSuffix("`") ? " " : ""
+            return fence + padding + path + padding + fence
         }
     }
 

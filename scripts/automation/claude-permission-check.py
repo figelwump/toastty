@@ -35,7 +35,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import signal
 import subprocess
@@ -49,50 +48,14 @@ _spec = importlib.util.spec_from_file_location(
 check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check)
 require, wait_for, step, Gateway, App = check.require, check.wait_for, check.step, check.Gateway, check.App
+set_directory_trust = check.set_directory_trust
 
 DISABLED_TOKEN = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('=')
 
 
-CLAUDE_CONFIG = Path.home() / '.claude.json'
-
-
-def set_directory_trust(directory, trusted):
-    """Adds or removes one project entry, leaving the rest of the file alone."""
-    config = json.loads(CLAUDE_CONFIG.read_text()) if CLAUDE_CONFIG.exists() else {}
-    projects = config.setdefault('projects', {})
-    if trusted:
-        projects[str(directory)] = dict(projects.get(str(directory), {}), hasTrustDialogAccepted=True)
-    elif projects.pop(str(directory), None) is None:
-        return
-    temporary = CLAUDE_CONFIG.with_name(CLAUDE_CONFIG.name + '.toastty-check')
-    temporary.write_text(json.dumps(config, indent=2))
-    os.replace(temporary, CLAUDE_CONFIG)
-
-
-def run_in_gui_session():
-    """Reruns this check from Terminal in the logged-in GUI session."""
-    artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
-    artifacts.mkdir(parents=True, exist_ok=True)
-    done = artifacts / 'claude-permission-check-gui.exit'
-    output = artifacts / 'claude-permission-check-gui.log'
-    done.unlink(missing_ok=True)
-    command = ' '.join([
-        'cd', shlex.quote(os.getcwd()), '&&',
-        f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
-        f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
-        'python3', shlex.quote(str(Path(__file__).resolve())), '>', shlex.quote(str(output)), '2>&1;',
-        'echo $? >', shlex.quote(str(done)), '; exit',
-    ])
-    script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
-    wait_for('the GUI-session check', done.exists, timeout=1500, interval=2)
-    print(output.read_text())
-    raise SystemExit(int(done.read_text().strip() or 1))
-
-
 def main():
     if '--gui-session' in sys.argv[1:]:
-        run_in_gui_session()
+        check.run_in_gui_session('claude-permission-check', __file__)
     bundle = Path(os.environ['TOASTTY_APP_BUNDLE']).resolve()
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)

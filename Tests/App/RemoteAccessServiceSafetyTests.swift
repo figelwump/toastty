@@ -1862,6 +1862,40 @@ struct RemoteAccessServiceSafetyTests {
         #expect(correlator.conversationIDs.isEmpty)
     }
 
+    /// A send past its deadline may still be recorded later, but its echo
+    /// must never cost a newer live send its confirmation.
+    @Test(arguments: [
+        // Late echoes confirm the expired sends; the live send follows.
+        (["first held", "second held", "next text"], ["first-held", "second-held", "next-request"]),
+        (["second held", "first held", "next text"], ["second-held", "first-held", "next-request"]),
+        // The live send's echo can come first without consuming them.
+        (["next text", "first held"], ["next-request", "first-held"]),
+        // A message that matches nothing consumes no live send and ends the
+        // expired sends' chance to confirm.
+        (["first held, altered", "next text", "first held"], [nil, "next-request", nil]),
+    ])
+    func expiredSendsNeverCostALiveSendItsConfirmation(
+        messages: [String],
+        expectedRequestIDs: [String?]
+    ) throws {
+        let conversationID = RemoteConversationID()
+        var correlator = RemotePendingSendCorrelator()
+        for (requestID, text) in [("first-held", "first held"), ("second-held", "second held"), ("next-request", "next text")] {
+            correlator.record(Self.request(conversationID: conversationID, clientRequestID: requestID, text: text))
+        }
+        correlator.expire(clientRequestID: "first-held", for: conversationID)
+        correlator.expire(clientRequestID: "second-held", for: conversationID)
+
+        let requestIDs = try messages.enumerated().map { index, text in
+            let stamped = correlator.stamp(
+                [Self.userObservation(text: text, fingerprint: "message-\(index)")],
+                for: conversationID
+            )
+            return try #require(Self.userPayload(from: stamped[0])).clientRequestID
+        }
+        #expect(requestIDs == expectedRequestIDs)
+    }
+
     @MainActor
     @Test func persistedResumeRecordStaysLockedUntilCurrentLaunchOwnershipIsConfirmed() throws {
         let fixture = try RemoteBootstrapFixture()
@@ -2313,7 +2347,7 @@ struct RemoteAccessServiceSafetyTests {
         let deliveredFile = fixture.attachmentRoot
             .appendingPathComponent(try #require(directories.first).lastPathComponent)
             .appendingPathComponent(file.lastPathComponent)
-        #expect(delivered.first == "Read this\n\nRead the following files attached to this message on this Mac:\n" + TerminalDropPayloadBuilder.shellEscapedPath(deliveredFile.path))
+        #expect(delivered.first == "Read this\n\nRead the following files attached to this message on this Mac:\n`" + deliveredFile.path + "`")
         #expect(try await send() == .duplicate)
         #expect(delivered.count == 1)
         #expect(try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).count == 1)
@@ -2467,6 +2501,125 @@ struct RemoteAccessServiceSafetyTests {
             at: "2026-08-07T10:00:06.000Z"
         ))
         try await Self.waitForReceipt(next.clientRequestID, mode: nil, in: fixture)
+    }
+
+    /// Claude Code held a pasted image path in its prompt until the Mac user
+    /// pressed Return, 90 s after delivery. The late echo must still confirm
+    /// the send for the phone, and that Return must not leave the next prompt
+    /// held as a local draft.
+    @MainActor
+    @Test func claudeEchoAfterTheDeadlineConfirmsTheUnconfirmedSend() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        let panelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
+            _, _, deliveredPanelID, _ in deliveredPanelID == panelID
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-late-echo", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-late-echo",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "held-in-claude-prompt",
+            expectedInputEpoch: epoch, text: "Here's another permission case"
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device).isAccepted)
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        observe(.transcript(.userMessage(.init(text: request.text))), fingerprint: "late-echo", offset: 1)
+        try await Self.waitForReceipt(request.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), fingerprint: "late-turn-end", offset: 2)
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt = reopened.inputAvailability else {
+            Issue.record("Expected an open prompt, not \(reopened.inputAvailability)")
+            return
+        }
+    }
+
+    /// Claude reads a Steer from its own input queue, possibly long after
+    /// the deadline. Its late echo confirms the send but says nothing about
+    /// the Mac composer, so a draft typed there stays protected.
+    @MainActor
+    @Test func lateClaudeSteerEchoKeepsTheMacDraftProtected() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            steerConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-late-steer", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-late-steer",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+        observe(.transcript(.userMessage(.init(text: "Original task"))), fingerprint: "first-user", offset: 1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turn = try #require(working.inputControl?.turnEpoch)
+        let steer = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "late-steer",
+            expectedInputEpoch: turn, text: "Correction", deliveryMode: .steer
+        )
+        #expect(fixture.service.performRemoteSend(steer, device: device) == .accepted(epoch: turn))
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(steer.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(steer.clientRequestID, in: fixture))
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        observe(.transcript(.userMessage(.init(text: steer.text))), fingerprint: "late-steer", offset: 2)
+        try await Self.waitForReceipt(steer.clientRequestID, mode: .steer, in: fixture, afterUnconfirmedReceipt: true)
+
+        observe(.turnEnded(turnID: "turn-1", reason: .completed), fingerprint: "turn-end", offset: 3)
+        let settled = try await Self.waitForSummary(fixture) {
+            if case .localDraft = $0.inputAvailability { return true }
+            return false
+        }
+        guard case .localDraft = settled.inputAvailability else {
+            Issue.record("Expected the Mac draft to hold the prompt, not \(settled.inputAvailability)")
+            return
+        }
     }
 
     enum CodexStartedTurnOutcome: CaseIterable, Sendable {
@@ -2825,6 +2978,7 @@ private final class RemoteBootstrapFixture {
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        steerConfirmationTimeout: Duration = .seconds(180),
         codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pairNativeDevice: Bool = false,
@@ -2900,6 +3054,7 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            steerConfirmationTimeout: steerConfirmationTimeout,
             codexTurnConfirmationTimeout: codexTurnConfirmationTimeout,
             localDraftEpochBroadcastInterval: localDraftEpochBroadcastInterval,
             pushConfiguration: pushConfiguration,
@@ -3427,7 +3582,8 @@ extension RemoteAccessServiceSafetyTests {
 
     @MainActor
     private static func waitForReceipt(
-        _ clientRequestID: String, mode: RemoteMessageDeliveryMode?, in fixture: RemoteBootstrapFixture
+        _ clientRequestID: String, mode: RemoteMessageDeliveryMode?, in fixture: RemoteBootstrapFixture,
+        afterUnconfirmedReceipt: Bool = false
     ) async throws {
         await SessionRuntimeStoreTestSupport.waitUntil {
             guard case .page(let page) = fixture.service.facadeConversationEvents(
@@ -3452,10 +3608,10 @@ extension RemoteAccessServiceSafetyTests {
         #expect(receipts.count == 1)
         #expect(receipts.first?.origin == .remote)
         #expect(receipts.first?.deliveryMode == mode)
-        #expect(!page.events.contains { event in
+        #expect(page.events.contains { event in
             guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return false }
             return payload.clientRequestID == clientRequestID
-        })
+        } == afterUnconfirmedReceipt)
     }
 
     @MainActor

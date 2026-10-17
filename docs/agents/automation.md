@@ -96,7 +96,7 @@ Run the live input check against the provider whose input behavior changed:
 
 ```bash
 sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
-  --validation-command 'python3 scripts/automation/remote-queue-steer-check.py --provider claude'
+  --validation-command 'python3 scripts/automation/remote-queue-steer-check.py --provider claude --gui-session'
 sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
   --validation-command 'python3 scripts/automation/remote-queue-steer-check.py --provider codex'
 ```
@@ -109,19 +109,22 @@ installation or login, report that blocker; a synthetic feed is not a substitute
 
 The Claude check creates its launch profile in a temporary app home. It allows
 only Bash commands that start with `sleep`, with a temporary working directory.
-If Claude shows a directory trust dialog, the runner prints the test window's
-PID and temporary working directory. Select Yes in that window to continue.
-Startup waits up to ten minutes. The message checks then run automatically.
+It marks only that directory trusted in `~/.claude.json` for the run. The
+validation Mac keeps the Claude login in the GUI session's keychain, which SSH
+cannot read, so `--gui-session` reruns the check through Terminal in that
+session. The message checks then run automatically.
 It checks one mid-turn attachment receipt, a following queued send, a direct
 send, and a late steer that is dequeued into an ordinary user turn. The direct
 send is long enough that Claude records it inside `<pasted_content>` tags, and
-the run fails if it was not recorded that way. The Codex
+the run fails if it was not recorded that way. A direct photo send must
+confirm with its file path still plain text, not a Claude `[Image #N]`
+attachment. The Codex
 check also covers Stop and a following send. Both record CLI versions and write
 `remote-queue-steer-<provider>.json` plus app logs under the run's artifacts
 directory. A run fails if the required provider transcript path is not observed.
 The Claude check also saves its transcript files, then removes the project
-directory for its temporary working directory. Provider history and trust
-entries for that directory can remain in the validation account.
+directory and trust entry for its temporary working directory. Other provider
+history for that directory can remain in the validation account.
 
 ## Remote Computer Use
 

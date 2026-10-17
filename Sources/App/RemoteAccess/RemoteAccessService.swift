@@ -267,6 +267,10 @@ struct RemotePendingSendCorrelator: Sendable {
         var trimmedText: String
         var displayText: String?
         var deliveryMode: RemoteMessageDeliveryMode
+        /// Reported unconfirmed after its deadline. It may still be the next
+        /// user message: a provider can hold a delivery in its prompt until
+        /// someone submits it on the Mac.
+        var isExpired = false
     }
 
     private var pendingSendsByConversationID: [RemoteConversationID: [PendingSend]] = [:]
@@ -307,11 +311,18 @@ struct RemotePendingSendCorrelator: Sendable {
     mutating func discard(clientRequestID: String, for conversationID: RemoteConversationID) {
         guard var pending = pendingSendsByConversationID[conversationID] else { return }
         pending.removeAll { $0.clientRequestID == clientRequestID }
-        if pending.isEmpty {
-            pendingSendsByConversationID.removeValue(forKey: conversationID)
-        } else {
-            pendingSendsByConversationID[conversationID] = pending
+        store(pending, for: conversationID)
+    }
+
+    /// Keeps a send whose deadline passed matchable by the next user message
+    /// only. See `stamp`.
+    mutating func expire(clientRequestID: String, for conversationID: RemoteConversationID) {
+        guard var pending = pendingSendsByConversationID[conversationID],
+              let index = pending.firstIndex(where: { $0.clientRequestID == clientRequestID }) else {
+            return
         }
+        pending[index].isExpired = true
+        pendingSendsByConversationID[conversationID] = pending
     }
 
     mutating func stamp(
@@ -330,14 +341,9 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Delivery and provider logs are ordered. Only the oldest pending
-            // send can confirm against the next user message; if it does not
-            // match, expire it rather than misattributing a later identical
-            // local message.
-            guard let pending = consumeOldest(for: conversationID) else {
+            guard let pending = takeConfirmingSend(text: trimmed, for: conversationID) else {
                 return observation
             }
-            guard pending.trimmedText == trimmed else { return observation }
             var stampedPayload = payload
             if let displayText = pending.displayText { stampedPayload.text = displayText }
             stampedPayload.origin = .remote
@@ -349,19 +355,43 @@ struct RemotePendingSendCorrelator: Sendable {
         }
     }
 
-    private mutating func consumeOldest(for conversationID: RemoteConversationID) -> PendingSend? {
+    /// Delivery and provider logs are ordered, so normally only the oldest
+    /// pending send can confirm against the next user message; a mismatch
+    /// expires it rather than misattributing a later identical local message.
+    /// An expired send breaks that order: its late echo can arrive at any
+    /// point, or never. While one is pending, a user message confirms
+    /// whichever pending send has its text and consumes no other send. A user
+    /// message that matches nothing ends every expired send's chance to
+    /// confirm, so a much later identical message cannot claim one.
+    private mutating func takeConfirmingSend(
+        text: String,
+        for conversationID: RemoteConversationID
+    ) -> PendingSend? {
         guard var pendingSends = pendingSendsByConversationID[conversationID],
               pendingSends.isEmpty == false else {
             pendingSendsByConversationID.removeValue(forKey: conversationID)
             return nil
         }
-        let oldest = pendingSends.removeFirst()
+        let match: PendingSend?
+        if pendingSends.contains(where: \.isExpired) {
+            match = pendingSends.firstIndex { $0.trimmedText == text }.map { pendingSends.remove(at: $0) }
+            if match == nil {
+                pendingSends.removeAll(where: \.isExpired)
+            }
+        } else {
+            let oldest = pendingSends.removeFirst()
+            match = oldest.trimmedText == text ? oldest : nil
+        }
+        store(pendingSends, for: conversationID)
+        return match
+    }
+
+    private mutating func store(_ pendingSends: [PendingSend], for conversationID: RemoteConversationID) {
         if pendingSends.isEmpty {
             pendingSendsByConversationID.removeValue(forKey: conversationID)
         } else {
             pendingSendsByConversationID[conversationID] = pendingSends
         }
-        return oldest
     }
 }
 
@@ -463,9 +493,6 @@ final class RemoteAccessService: ObservableObject {
     /// Claude Code labels it queued, but reads it after active tool calls
     /// finish. Toastty's queue instead waits for the next open prompt.
     static let steerCapableProviders: Set<AgentKind> = [.codex, .claude]
-    /// A steer's confirming user message arrives when the provider next reads
-    /// its input, which can be well after a long tool call.
-    private static let steerConfirmationTimeout: Duration = .seconds(180)
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
     private let port: UInt16
@@ -486,6 +513,9 @@ final class RemoteAccessService: ObservableObject {
     private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
+    /// A steer's confirming user message arrives when the provider next reads
+    /// its input, which can be well after a long tool call.
+    private let steerConfirmationTimeout: Duration
     /// Codex writes `task_started` before the user message, and pre-turn work
     /// such as automatic context compaction can separate them by more than a
     /// minute. While a Codex turn that started after the send is running, a
@@ -587,6 +617,7 @@ final class RemoteAccessService: ObservableObject {
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        steerConfirmationTimeout: Duration = .seconds(180),
         codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pushConfiguration: RemotePushConfiguration? = .configured(),
@@ -613,6 +644,7 @@ final class RemoteAccessService: ObservableObject {
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
+        self.steerConfirmationTimeout = steerConfirmationTimeout
         self.codexTurnConfirmationTimeout = codexTurnConfirmationTimeout
         self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
         self.pushConfiguration = pushConfiguration
@@ -2999,12 +3031,12 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
                 coordinator.markSteerDelivered(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 ToasttyLog.info(
                     "Remote steer delivered",
                     category: .automation,
@@ -3543,7 +3575,7 @@ final class RemoteAccessService: ObservableObject {
             } catch {
                 return
             }
-            self?.expireUnconfirmedSend(key)
+            self?.expireUnconfirmedSend(key, allowingLateEcho: true)
         }
         pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
             acceptedAt: acceptedAt,
@@ -3576,14 +3608,23 @@ final class RemoteAccessService: ObservableObject {
         return remaining
     }
 
-    private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey) {
+    /// Reports the send unconfirmed. When only the deadline passed, a late
+    /// echo may still confirm it.
+    private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey, allowingLateEcho: Bool) {
         guard isEnabled,
               let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
             return
         }
         work.task.cancel()
         let conversationID = key.conversationID
-        pendingSendCorrelator.discard(clientRequestID: key.clientRequestID, for: conversationID)
+        // Codex records a send's message within a turn, and a turn that ends
+        // without it settles the send (see `trackCodexTurn`), so only other
+        // providers keep an expired send matchable.
+        if allowingLateEcho, projectionStore.projectorState(for: conversationID)?.provider != .codex {
+            pendingSendCorrelator.expire(clientRequestID: key.clientRequestID, for: conversationID)
+        } else {
+            pendingSendCorrelator.discard(clientRequestID: key.clientRequestID, for: conversationID)
+        }
         let emitted = projectionStore.noteSendDeliveryUnconfirmed(
             for: conversationID,
             clientRequestID: key.clientRequestID,
@@ -3630,7 +3671,7 @@ final class RemoteAccessService: ObservableObject {
                     continue
                 }
                 if work.isWaitingForCodexTurn {
-                    expireUnconfirmedSend(key)
+                    expireUnconfirmedSend(key, allowingLateEcho: false)
                 } else {
                     pendingSendConfirmationWork[key]?.runningCodexTurnID = nil
                 }
@@ -3649,7 +3690,7 @@ final class RemoteAccessService: ObservableObject {
         where key.conversationID == conversationID
             && work.isWaitingForCodexTurn
             && pendingSendCorrelator.contains(clientRequestID: key.clientRequestID, for: conversationID) == false {
-            expireUnconfirmedSend(key)
+            expireUnconfirmedSend(key, allowingLateEcho: false)
         }
     }
 
@@ -3680,17 +3721,23 @@ final class RemoteAccessService: ObservableObject {
             let observation = pendingSendCorrelator.stamp([observation], for: conversationID)[0]
             stamped.append(observation)
             if case .transcript(.userMessage(let payload)) = observation.payload {
-                if payload.clientRequestID == nil, observation.mayAuthorizeCurrentRuntime {
-                    // The Mac user submitted what they typed: the running turn no
-                    // longer holds a local draft that a steer or the next prompt
-                    // must avoid.
-                    coordinator.noteLocalDraftSubmitted(for: conversationID)
-                }
+                var submittedOnMac = true
                 if let clientRequestID = payload.clientRequestID {
-                    confirmPendingSend(
+                    let confirmedInTime = confirmPendingSend(
                         conversationID: conversationID,
                         clientRequestID: clientRequestID
                     )
+                    // A late steer came from the provider's own input queue,
+                    // so it says nothing about the Mac composer.
+                    submittedOnMac = confirmedInTime == false && payload.deliveryMode != .steer
+                }
+                // The Mac user submitted what they typed, or a prompt send
+                // confirmed after its deadline waited in the provider's prompt
+                // until something, usually the Mac user's Return, submitted
+                // it. The running turn no longer holds a local draft that a
+                // steer or the next prompt must avoid.
+                if submittedOnMac, observation.mayAuthorizeCurrentRuntime {
+                    coordinator.noteLocalDraftSubmitted(for: conversationID)
                 }
             }
             if tracksCodexTurns {
@@ -3703,16 +3750,23 @@ final class RemoteAccessService: ObservableObject {
         return stamped
     }
 
+    /// Returns whether the send was still within its deadline. A later
+    /// confirmation corrects the earlier unconfirmed report on the phone.
     private func confirmPendingSend(
         conversationID: RemoteConversationID,
         clientRequestID: String
-    ) {
+    ) -> Bool {
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,
             clientRequestID: clientRequestID
         )
         guard let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
-            return
+            ToasttyLog.info(
+                "Remote send confirmed by provider transcript after it was reported unconfirmed",
+                category: .automation,
+                metadata: ["conversation_id": conversationID.rawValue.uuidString]
+            )
+            return false
         }
         work.task.cancel()
         let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
@@ -3724,6 +3778,7 @@ final class RemoteAccessService: ObservableObject {
                 "latency_ms": String(latencyMs),
             ]
         )
+        return true
     }
 
     private func cancelPendingSendConfirmations(for conversationID: RemoteConversationID) {
