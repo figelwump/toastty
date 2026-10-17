@@ -500,6 +500,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `config.reload`
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
+- `task.create`, `task.place`, `task.retry`, `task.delete` (quick tasks; see [Quick Tasks](quick-tasks.md))
 
 Explicit foreground navigation through workspace/tab selection and
 `workspace.focus-panel` participates in Toastty's session navigation history.
@@ -689,6 +690,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+- `task.list` (quick tasks in the Inbox; see [Quick Tasks](quick-tasks.md))
 
 `agent.profile.state` requires `profileID` and reports the executable that
 profile would run in Toastty's launch environment, skipping Toastty's command

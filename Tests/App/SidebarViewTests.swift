@@ -2000,7 +2000,10 @@ final class SidebarViewTests: XCTestCase {
     /// A parent card with two spawning sessions and four subspaces in one
     /// group, plus a second top-level card, so the test can see sorting,
     /// the spawner tags, and that subspaces do not render as cards.
-    private func makeSubspacesHarness(sidebarWidth: CGFloat = ToastyTheme.sidebarWidth) throws -> (SidebarHarness, SubspacesHarnessIDs) {
+    private func makeSubspacesHarness(
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        taskInboxStore: TaskInboxStore? = nil
+    ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
         let parentRightPanelID = UUID()
@@ -2068,7 +2071,12 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth)
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            sidebarWidth: sidebarWidth,
+            taskInboxStore: taskInboxStore
+        )
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2110,6 +2118,48 @@ final class SidebarViewTests: XCTestCase {
             readyUnreadID: readyUnread.id,
             siblingID: sibling.id
         ))
+    }
+
+    func testInboxTasksRenderAboveTheCardsWithWordTagsAndHideWhenEmpty() throws {
+        let now = Date()
+        let parentPlanWorkspaceID = UUID()
+        let inbox = TaskInboxStore.inMemory([
+            TaskInboxItem(text: "Make the iOS composer keep drafts", source: .mac, createdAt: now, phase: .routing),
+            TaskInboxItem(
+                text: "Flaky scratchpad unread test", source: .cli, createdAt: now, phase: .settingUp,
+                plan: .init(
+                    workspaceID: parentPlanWorkspaceID, title: "Flaky scratchpad unread test", slug: "flaky-unread",
+                    branchPrefix: "fix", profileID: "codex", model: "gpt-6.1-sol", effort: nil
+                )
+            ),
+            TaskInboxItem(
+                text: "Pricing table says per user", source: .cli, createdAt: now, phase: .needsWorkspace,
+                problem: "Triage did not answer in 60 s."
+            ),
+            TaskInboxItem(
+                text: "Fix the unread dot", source: .cli, createdAt: now, phase: .setupFailed,
+                problem: "The create script failed (exit 1): fatal: branch exists"
+            ),
+        ])
+        let (harness, _) = try makeSubspacesHarness(taskInboxStore: inbox)
+        let textValues = renderedTextValues(in: harness.hostingView)
+
+        XCTAssertTrue(textValues.contains("Inbox, 4 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Make the iOS composer keep drafts, Inbox task, routing…, Mac · just now"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test, Inbox task, setting up, → workspace · codex · gpt-6.1-sol") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Pricing table says per user, Inbox task, pick a workspace, Triage did not answer in 60 s."), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The create script failed (exit 1): fatal: branch exists"), "\(textValues)")
+        // The cards still render below.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("4 task spaces, expanded") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-inbox")
+
+        for item in inbox.items {
+            inbox.remove(id: item.id)
+        }
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let emptied = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(emptied.contains { $0.hasPrefix("Inbox") }, "An empty Inbox should not render: \(emptied)")
     }
 
     func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
@@ -2975,7 +3025,8 @@ final class SidebarViewTests: XCTestCase {
     private func makeSidebarHarness(
         state: AppState,
         windowID: UUID,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        taskInboxStore: TaskInboxStore? = nil
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -2988,6 +3039,7 @@ final class SidebarViewTests: XCTestCase {
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
             annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskInboxStore: taskInboxStore,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))

@@ -11,6 +11,8 @@ struct AppWindowSceneView: View {
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let annotationStyleStore: AnnotationStyleStore
+    var taskInboxStore: TaskInboxStore? = nil
+    var taskInboxCoordinator: TaskInboxCoordinator? = nil
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -97,6 +99,8 @@ struct AppWindowSceneView: View {
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     annotationStyleStore: annotationStyleStore,
+                    taskInboxStore: taskInboxStore,
+                    taskInboxCoordinator: taskInboxCoordinator,
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,

@@ -49,6 +49,18 @@ public enum AppAction: Equatable, Sendable {
     /// terminal takes no profile binding: a profile's startup command would
     /// occupy the shell that the caller is about to use.
     case createBackgroundTerminalTab(workspaceID: UUID, tabID: UUID, panelID: UUID, terminalCWD: String)
+    /// Creates a task space under `parentWorkspaceID`'s root, without
+    /// selecting it. Its one terminal starts in `terminalCWD`, with the IDs
+    /// the caller chose and no profile binding, for the same reason as
+    /// `createBackgroundTerminalTab`.
+    case createTaskSpace(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID,
+        parentWorkspaceID: UUID,
+        title: String,
+        terminalCWD: String
+    )
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -165,6 +177,8 @@ public extension AppAction {
             return "createWorkspaceTab"
         case .createBackgroundTerminalTab:
             return "createBackgroundTerminalTab"
+        case .createTaskSpace:
+            return "createTaskSpace"
         case .createWindow:
             return "createWindow"
         case .closeWindow:

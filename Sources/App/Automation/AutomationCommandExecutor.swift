@@ -71,6 +71,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let agentLaunchService: AgentLaunchService
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+    private let taskInboxCoordinator: TaskInboxCoordinator?
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
     private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
@@ -98,6 +99,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         agentLaunchService: agentLaunchService,
         annotationStyleStore: annotationStyleStore,
         inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+        taskInboxCoordinator: taskInboxCoordinator,
         reloadConfigurationAction: reloadConfigurationAction
     )
 
@@ -110,6 +112,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
+        taskInboxCoordinator: TaskInboxCoordinator? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)?,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
@@ -124,6 +127,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.agentLaunchService = agentLaunchService
         self.annotationStyleStore = annotationStyleStore
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
+        self.taskInboxCoordinator = taskInboxCoordinator
         self.reloadConfigurationAction = reloadConfigurationAction
         self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
         self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter

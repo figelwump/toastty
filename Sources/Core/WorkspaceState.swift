@@ -375,17 +375,20 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static func bootstrap(
+        id: UUID = UUID(),
+        panelID: UUID = UUID(),
         title: String = "Workspace 1",
         initialTerminalCWD: String? = nil,
         initialTerminalProfileBinding: TerminalProfileBinding? = nil,
         hasBeenVisited: Bool = true
     ) -> WorkspaceState {
         let tab = WorkspaceTabState.bootstrap(
+            panelID: panelID,
             initialTerminalCWD: initialTerminalCWD,
             initialTerminalProfileBinding: initialTerminalProfileBinding
         )
         return WorkspaceState(
-            id: UUID(),
+            id: id,
             title: title,
             hasBeenVisited: hasBeenVisited,
             selectedTabID: tab.id,

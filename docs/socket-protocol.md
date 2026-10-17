@@ -243,6 +243,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `config.reload`
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
+- `task.create`, `task.place`, `task.retry`, `task.delete`
 
 Notable action-specific behavior:
 
@@ -512,6 +513,17 @@ Common query IDs include:
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+- `task.list`
+
+The `task.*` actions and `task.list` manage the quick-task Inbox described in
+[Quick Tasks](quick-tasks.md). They take no selectors and are refused for
+workspace-scoped callers. `task.create` accepts `text`, repeatable `files`
+(relative paths need `cwd`), and optional `workspace`, `profileID`, `model`,
+and `reasoningEffort` that fix those choices; it returns `taskID`, `phase`, and
+`title`. `task.place` requires `taskID` and `workspace`; `task.retry` and
+`task.delete` require `taskID`. `task.list` returns `tasks`, each with
+`taskID`, `phase`, `title`, `text`, `source`, `createdAt`, `files`, `problem`,
+and, when known, `suggestion`, `plan`, and `taskSpaceID`.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

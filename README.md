@@ -152,6 +152,7 @@ See the [full shortcut reference](docs/keyboard-shortcuts.md).
 - Toastty settings: `~/.toastty/config` ([Configuration](docs/configuration.md))
 - Agent launchers: `~/.toastty/agents.toml` ([Running Agents](docs/running-agents.md#agentstoml))
 - Terminal profiles: `~/.toastty/terminal-profiles.toml` ([Terminal Profiles](docs/terminal-profiles.md))
+- Quick tasks: `~/.toastty/tasks.toml` ([Quick Tasks](docs/quick-tasks.md))
 
 Use `Toastty > Manage Config…` to edit settings inside Toastty and `Toastty > Reload Configuration` to apply them without relaunching.
 
@@ -173,6 +174,7 @@ Toastty is local-first and sends no usage analytics or telemetry. It checks for 
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Terminal Profiles](docs/terminal-profiles.md) — `terminal-profiles.toml` schema, shortcuts, and example profile setups
+- [Quick Tasks](docs/quick-tasks.md) — the task Inbox, triage, create scripts, start skills, and `tasks.toml`
 - [Shell Integration](docs/shell-integration.md) — manual shell setup for live pane titles and restored-pane command journals
 - [Runtime Sandboxing](docs/runtime-sandboxing.md) — runtime-home strategies, `instance.json`, and cleanup guidance
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
