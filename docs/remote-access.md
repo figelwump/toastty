@@ -275,13 +275,13 @@ a newer prompt, a modal interaction, an offline session, or an unavailable
 terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation. If that event does not arrive in time, the phone reports that
-the send was not confirmed and does not retry it. If the message is the next
-one the agent records, for example after you press Return on the Mac, the phone
-replaces that report with the confirmed message. Codex starts a turn before
-it records the turn's message, and an automatic context compaction can delay
-the message by more than a minute. While a Codex turn that started after the
-send is still running, Toastty waits up to five minutes and reports the send
-only if that turn ends without it.
+the send was not confirmed and does not retry it. For agents other than Codex,
+if the agent records the message later, for example after you press Return on
+the Mac, the phone replaces that report with the confirmed message. Codex
+starts a turn before it records the turn's message, and an automatic context
+compaction can delay the message by more than a minute. While a Codex turn
+that started after the send is still running, Toastty waits up to five minutes
+and reports the send only if that turn ends without it.
 
 ### Queue, steer, and stop while the agent works
 

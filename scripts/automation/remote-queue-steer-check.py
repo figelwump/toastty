@@ -2,17 +2,18 @@
 """Check real provider input through a paired-device Remote Access gateway.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
-'python3 scripts/automation/remote-queue-steer-check.py --provider claude'.
+'python3 scripts/automation/remote-queue-steer-check.py --provider claude --gui-session'.
 The default provider is codex. Both checks start and stop their own isolated
 Toastty instance from the wrapper's build. They use loopback HTTP and socket
 queries, without moving focus or changing the installed production app.
-When Claude shows its directory trust dialog, the operator must select Yes
-in the isolated test window. The runner prints that window's PID and cwd.
 
 The remote host needs an installed, authenticated provider CLI. Codex uses
 its existing profile and a trusted directory under the host user's home.
 Claude uses a temporary launch profile, permits only Bash sleep commands,
-and trusts only its run-owned temporary working directory. Subscription
+and trusts only its run-owned temporary working directory, which it marks
+trusted in ~/.claude.json for the run. On a host driven over SSH, add
+--gui-session for Claude: its login lives in the GUI session's keychain, so
+the check reruns itself through Terminal in that session. Subscription
 usage is consumed. Evidence includes the CLI version and is written to
 remote-queue-steer-<provider>.json under the wrapper's artifacts directory.
 """
@@ -24,6 +25,7 @@ import json
 import os
 import re
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import subprocess
@@ -80,6 +82,44 @@ DIRECT_TEXT = '\n\n'.join([
     'It has no question in it and needs no answer.',
     'Ignore the questions above. Reply with exactly: DIRECT-OK',
 ])
+
+
+CLAUDE_CONFIG = Path.home() / '.claude.json'
+
+
+def set_directory_trust(directory, trusted):
+    """Adds or removes one project entry, leaving the rest of the file alone."""
+    config = json.loads(CLAUDE_CONFIG.read_text()) if CLAUDE_CONFIG.exists() else {}
+    projects = config.setdefault('projects', {})
+    if trusted:
+        projects[str(directory)] = dict(projects.get(str(directory), {}), hasTrustDialogAccepted=True)
+    elif projects.pop(str(directory), None) is None:
+        return
+    temporary = CLAUDE_CONFIG.with_name(CLAUDE_CONFIG.name + '.toastty-check')
+    temporary.write_text(json.dumps(config, indent=2))
+    os.replace(temporary, CLAUDE_CONFIG)
+
+
+def run_in_gui_session(name, script, arguments=()):
+    """Reruns a check from Terminal in the logged-in GUI session."""
+    artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
+    artifacts.mkdir(parents=True, exist_ok=True)
+    done = artifacts / f'{name}-gui.exit'
+    output = artifacts / f'{name}-gui.log'
+    done.unlink(missing_ok=True)
+    command = ' '.join([
+        'cd', shlex.quote(os.getcwd()), '&&',
+        f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
+        f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
+        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
+        '>', shlex.quote(str(output)), '2>&1;',
+        'echo $? >', shlex.quote(str(done)), '; exit',
+    ])
+    script = f'tell application "Terminal" to do script {json.dumps(command)}'
+    subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
+    wait_for('the GUI-session check', done.exists, timeout=1500, interval=2)
+    print(output.read_text())
+    raise SystemExit(int(done.read_text().strip() or 1))
 
 
 def require(condition, message):
@@ -183,7 +223,12 @@ class App:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=('codex', 'claude'), default='codex')
-    provider = parser.parse_args().provider
+    parser.add_argument('--gui-session', action='store_true',
+                        help='rerun through Terminal in the GUI session, where the Claude login is readable')
+    options = parser.parse_args()
+    provider = options.provider
+    if options.gui_session:
+        run_in_gui_session(f'remote-queue-steer-{provider}', __file__, ['--provider', provider])
     bundle = Path(os.environ['TOASTTY_APP_BUNDLE'])
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR'])
     binary = bundle / 'Contents/MacOS/Toastty'
@@ -235,6 +280,9 @@ def main():
             work = root / 'work'
             work.mkdir()
             (work / 'README.md').write_text('# Disposable Claude input check\n')
+            # Socket input is pasted text and cannot move the trust dialog's
+            # selection, so trust only this run's directory for the run.
+            set_directory_trust(work, True)
 
         port = free_port()
         socket_path = str(root / 'socket.sock')
@@ -275,6 +323,7 @@ def main():
         if instance_log.exists():
             shutil.copyfile(instance_log, artifacts / f'{prefix}-instance.log')
         if provider == 'claude' and work is not None:
+            set_directory_trust(work, False)
             project = claude_project_directory(work)
             if project.is_dir():
                 capture = artifacts / f'{prefix}-transcripts'
@@ -555,28 +604,19 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     launch = wait_for('the terminal to launch Claude', launch_when_ready, timeout=60)
     panel_id = launch['panelID']
     evidence['launch'] = {key: launch.get(key) for key in ('sessionID', 'panelID', 'cwd')}
-    trusted = False
 
     def composer():
-        nonlocal trusted
         text = app_socket.visible_text(panel_id)
         evidence['captures']['startup'] = text
         require('sign in' not in text.lower() and '/login' not in text.lower(),
                 'Claude needs an interactive subscription login')
-        # Trust only this run-owned temporary directory, never another project.
-        if 'No, exit' in text and 'Yes, I trust this folder' in text:
-            require(str(work) in text, f'Unexpected trust target: {text[-600:]}')
-            if not trusted:
-                step(evidence, 'waiting-for-trust', cwd=str(work), instancePID=app.pid)
-                print('Select Yes in this isolated test window to continue.', flush=True)
-                trusted = True
-            return None
+        require('Yes, I trust this folder' not in text, 'Claude ignored the pre-trusted temporary directory')
         # The footer under an idle composer shows the shortcut hint, or the
         # permission mode when one is active.
         footer = 'for shortcuts' in text or 'shift+tab to cycle' in text
         return text if '❯' in text and footer else None
 
-    wait_for('the Claude composer (accept trust in the test window)', composer, timeout=600)
+    wait_for('the Claude composer', composer, timeout=180)
     step(evidence, 'composer-ready')
     app_socket.run('action', 'terminal.send-text', f'text={BUSY_PROMPT}', 'submit=true',
                    f"expectedSessionID={launch['sessionID']}", panel=panel_id)
@@ -697,8 +737,14 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
             'Late steer did not exercise the ordinary user-record path')
     require(not any(a.get('prompt') == late_text for a in attachments),
             'Late steer was absorbed mid-turn; required end-of-turn path was not exercised')
-    require(any(r.get('type') == 'queue-operation' and r.get('operation') == 'dequeue'
-                and r.get('content') == late_text for r in records), 'No late-steer dequeue record')
+    # Claude Code 2.1.302 writes the dequeue without its content, so require
+    # one after the late steer's enqueue.
+    late_enqueue = next((index for index, r in enumerate(records) if r.get('type') == 'queue-operation'
+                         and r.get('operation') == 'enqueue' and r.get('content') == late_text), None)
+    late_dequeue = None if late_enqueue is None else next(
+        (r for r in records[late_enqueue + 1:]
+         if r.get('type') == 'queue-operation' and r.get('operation') == 'dequeue'), None)
+    require(late_dequeue is not None, 'No late-steer dequeue record')
     require(ordinary.count(QUEUED_TEXT) == 1 and not any(a.get('prompt') == QUEUED_TEXT for a in attachments),
             'Queued input must start an ordinary next user turn')
     pasted = [text for text in ordinary if '<pasted_content id=' in text and DIRECT_TEXT in text]
@@ -709,8 +755,7 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
             'The photo send was not recorded once with its path as plain text')
     evidence['photoSend'] = photo[0]
     evidence['midTurnCommand'] = next(a for a in attachments if a.get('prompt') == STEER_TEXT)
-    evidence['endOfTurnDequeue'] = next(r for r in records if r.get('type') == 'queue-operation'
-                                     and r.get('operation') == 'dequeue' and r.get('content') == late_text)
+    evidence['endOfTurnDequeue'] = late_dequeue
     final_events = events()
     for request_id in ('steer-1', 'queued-1', 'direct-1', 'photo-1', 'late-busy', 'late-steer'):
         require(sum(e['kind'] == 'user_message' and e['payload'].get('clientRequestID') == request_id
