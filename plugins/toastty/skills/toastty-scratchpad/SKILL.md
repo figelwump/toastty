@@ -151,7 +151,7 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
 3. Keep it self-contained:
    - no remote scripts, stylesheets, images, or network fetches
    - use remote HTTPS font files only through inline `@font-face` declarations, and only when they materially improve the artifact
-   - use inline SVG, CSS, HTML, and small inline data assets when useful
+   - use inline SVG, CSS, HTML, and small inline data assets when useful; images, audio, and video can load from `data:` URIs or `blob:` URLs built by inline script, but not from file paths or remote URLs
    - keep content under roughly 1 MB
 4. Make artifacts responsive by default for resizable panels and smaller desktops, and support mobile widths where practical:
    - adapt to the available panel width, not just a large desktop viewport; include a device-width viewport meta tag
