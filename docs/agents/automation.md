@@ -209,6 +209,8 @@ sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
   -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble
 ```
 
+The share extension has one end-to-end UI test, `ToasttyMobileUITests/ToasttyMobileShareSheetUITests`. It opens `https://example.com/` in Safari, shares the page to the extension, and expects Toastty's new-session sheet to open with the link. It needs network access on the simulator, and it depends on Safari's toolbar layout, so a failure after an iOS update can be a test-query problem; its hierarchy attachments show Safari's controls. Fixture tests cover the app side with a seeded draft (`TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT=link|waiting`).
+
 This generates, builds, and tests a disposable remote checkout and simulator; it does not sign or upload a release or pair with a production host. To inspect the dispatcher plan locally without invoking Tuist or a simulator, use `TOASTTY_IOS_CONFIGURATION=Release node ios/scripts/toastty-ios.mjs test --dry-run`.
 
 Automatic dispatcher selection uses the newest installed compatible iOS runtime. It does not establish coverage of the iOS 18 minimum or compact phones. Before a release, record the installed runtime/device inventory and, where available, run the focused suite on an explicitly provisioned iOS 18 compact iPhone destination. Use an exact simulator ID through `TOASTTY_IOS_DESTINATION` in CI or `-destination` after the remote wrapper's `--`; caller-supplied remote devices remain caller-owned. Record unavailable runtime/device coverage as a gap rather than substituting a newer large phone silently.

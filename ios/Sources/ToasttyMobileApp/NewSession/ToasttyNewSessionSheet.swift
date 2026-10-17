@@ -479,10 +479,12 @@ private struct ToasttyNewSessionSheetModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.sheet(item: $model, onDismiss: didDismiss) { model in
             ToasttyNewSessionSheet(model: model) { finish = $0 }
+                .onAppear { controller.isShowingNewSessionForm = true }
         }
     }
 
     private func didDismiss() {
+        controller.isShowingNewSessionForm = false
         guard let finish else { return }
         self.finish = nil
         switch finish {

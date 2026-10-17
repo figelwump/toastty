@@ -418,6 +418,8 @@ verify_archive_configuration() {
   [[ -s "$ARCHIVE_PATH/dSYMs/$APP_PRODUCT_NAME.app.dSYM/Contents/Resources/DWARF/$APP_PRODUCT_NAME" ]] \
     || fail "archived app is missing its dSYM debug symbols"
 
+  [[ ! -e "$app_path/PlugIns" ]] || fail "archived app must not embed extensions its profile does not cover"
+
   assert_plist_value "$app_plist" "CFBundleIdentifier" "$RELEASE_BUNDLE_ID"
   assert_plist_value "$app_plist" "CFBundleShortVersionString" "$TUIST_TOASTTY_MOBILE_VERSION"
   assert_plist_value "$app_plist" "CFBundleVersion" "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
@@ -655,6 +657,10 @@ export TUIST_TOASTTY_MOBILE_RELEASE_CODE_SIGN_IDENTITY="Apple Distribution"
 export TUIST_TOASTTY_MOBILE_RELEASE_PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME"
 export TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH"
 export TUIST_TOASTTY_MOBILE_PROD_TEST=0
+# The App Store profile covers only the app. The share extension needs its
+# own App ID, App Group, and distribution profile before release builds can
+# include it.
+export TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=0
 
 log "Generating the production iOS workspace."
 (

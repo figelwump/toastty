@@ -132,6 +132,7 @@ printf 'tuist %s\\n' "$*" >>"$TOOL_LOG"
 if [ "$1" = version ]; then printf '4.202.6\\n'; fi
 if [ "$1" = generate ]; then
   printf 'tuist push %s %s %s\\n' "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT" >>"$TOOL_LOG"
+  printf 'tuist share-extension %s\\n' "\${TUIST_TOASTTY_MOBILE_SHARE_EXTENSION-unset}" >>"$TOOL_LOG"
 fi
 `);
   writeExecutable(binDirectory, "security", `#!/bin/sh
@@ -291,6 +292,7 @@ esac
     assert.match(documentedSkip.invocations, /tuist install/);
     assert.match(documentedSkip.invocations, /tuist generate --no-open/);
     assert.match(documentedSkip.invocations, /tuist push https:\/\/push\.example\.com toastty-push-production-v1 production/);
+    assert.match(documentedSkip.invocations, /tuist share-extension 0/);
     assert.match(documentedSkip.invocations, /xcodebuild .* -scheme ToasttyMobileApp-Release .* archive/);
     assert.ok(fs.existsSync(path.join(documentedSkip.outputDirectory, "export/Toastty.ipa")));
     assert.match(documentedSkip.output, /Upload request suppressed by validate-only skip input/);

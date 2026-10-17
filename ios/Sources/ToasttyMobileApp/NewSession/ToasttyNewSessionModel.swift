@@ -113,11 +113,16 @@ final class ToasttyNewSessionModel: Identifiable {
     /// Late import or options answers must not restore a canceled draft.
     @ObservationIgnored private var isDiscarded = false
 
+    /// `message`, `attachments`, and `notice` start the draft with content
+    /// shared from another app. The Mac's limits still apply at Start.
     init(
         workspaceID: UUID,
         workspaceTitle: String,
         host: any ToasttyNewSessionHost,
         preferences: ToasttyNewSessionPreferences,
+        message: String = "",
+        attachments: [RemoteMessageAttachment] = [],
+        notice: String? = nil,
         now: @escaping () -> Date = Date.init,
         makeRequestID: @escaping () -> String = { UUID().uuidString },
         startedSessionTimeout: Duration = .seconds(10),
@@ -132,12 +137,15 @@ final class ToasttyNewSessionModel: Identifiable {
         self.makeRequestID = makeRequestID
         self.startedSessionTimeout = startedSessionTimeout
         self.pollInterval = pollInterval
+        self.message = message
+        self.attachments = attachments
+        errorMessage = notice
 #if DEBUG
         if let controller = host as? HomeScreenController,
            controller.runtimeMode == .fixture,
            let count = Int(ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_NEW_SESSION_ATTACHMENT_DRAFT"] ?? ""),
            (1...RemoteAttachmentPolicy.maximumCount).contains(count) {
-            attachments = (1...count).map { index in
+            self.attachments = (1...count).map { index in
                 RemoteMessageAttachment(
                     filename: index == 1 ? "fixture-notes.txt" : "fixture-notes-\(index).txt",
                     data: Data("New session attachment fixture".utf8)

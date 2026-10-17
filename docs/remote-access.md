@@ -561,6 +561,32 @@ off and then run an older Toastty build on the Mac, that build does not know
 the switch: it rewrites the device record without it, and the switch is on
 again when you return to a newer build.
 
+### Share to Toastty from other apps
+
+In Photos, Safari, Files, or any app with a share sheet, tap **Share**, then
+**Toastty**. Toastty opens with the new-session sheet filled in. Images, PDFs,
+and supported text files become attachments. A link becomes the page title and
+URL in the message, and shared text goes in the message as is. The sheet starts
+on the same workspace as **+** on Home. Choose the agent and tap **Start** as
+usual. Nothing goes to the Mac until you tap **Start**.
+
+The share applies the same limits as the attachment picker: up to four files,
+8 MiB in total, with photos resized and re-encoded as JPEG. When you share more,
+Toastty keeps what fits and the sheet says how many items it left out. Shared
+content waits on the phone in Toastty's App Group container. The app deletes it
+when the sheet opens, and deletes unopened content after 30 minutes.
+
+The sheet waits when it cannot open right away: while another new-session
+sheet is open, before the Mac connects, or while the phone is not paired. It
+opens when that ends, or the next time you open Toastty within 30 minutes. If
+iOS does not let the share open Toastty, the share sheet says so; open Toastty
+yourself. A notification you tap goes first, and the shared sheet waits for
+the next time you open Toastty.
+
+TestFlight builds do not include the share extension yet. It needs its own
+App ID, App Group, and distribution profile; see
+[iOS Release CI](ios-release-ci.md#share-extension).
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. For a
 brief app switch, it requests up to 10 seconds of background time to preserve

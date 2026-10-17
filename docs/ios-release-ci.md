@@ -45,6 +45,22 @@ their syntax and the signed artifact. It does not deploy the relay, install APNs
 keys, or prove that the service can deliver a notification. Those prerequisites
 and a real-device delivery check remain separate release requirements.
 
+## Share extension
+
+Development and simulator builds include the **Share to Toastty** extension.
+The TestFlight script generates with `TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=0`,
+and it fails if an archived app embeds any extension, because the App Store
+profile above covers only the app. Before release builds can include the
+extension, create:
+
+- the App Group `group.com.giantthings.toastty.mobile`, enabled on the app's
+  App ID, and a regenerated app distribution profile;
+- the explicit App ID `com.giantthings.toastty.mobile.share` with the same
+  App Group, and its own App Store distribution profile.
+
+The release script then needs a second profile secret and an
+`exportOptions` entry for the extension.
+
 ## GitHub configuration
 
 Create a GitHub Actions Environment named `testflight` and store these
