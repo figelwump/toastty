@@ -139,6 +139,14 @@ Run `node --test Tests/RemoteScripts/ComputerUseProtocolTests.mjs` locally to ch
 
 ## Remote Xcode Tests
 
+macOS CI and disposable remote test, smoke, and Computer Use builds explicitly
+set `TUIST_TOASTTY_DISABLE_PUSH=1` during generation. They do not validate APNs
+delivery. Normal developer generation still requires a configured relay; see
+[generation flags](../environment-and-build-flags.md#build-and-generate).
+`node --test Tests/BuildConfig/PushManifestTests.mjs` checks this contract through
+Tuist manifest evaluation locally without changing the generated project or
+contacting a push service. It also runs in macOS CI and the full local gate.
+
 Agent-driven `xcodebuild test` runs should start with:
 
 ```bash

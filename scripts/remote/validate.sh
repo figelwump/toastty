@@ -853,6 +853,7 @@ run_remote_smoke_mode() {
     fi
     RUN_ID="$run_id" \
     DEV_RUN_ROOT="$run_root" \
+    TUIST_TOASTTY_DISABLE_PUSH=1 \
     /bin/bash "$script_relative_path"
   ) >"$stdout_log" 2>"$stderr_log"; then
     :
@@ -922,7 +923,7 @@ run_remote_custom_mode() {
   REMOTE_CUSTOM_CLEANUP_APP_PID=""
   trap cleanup_remote_custom_mode EXIT
 
-  ./scripts/dev/bootstrap-worktree.sh >/dev/null
+  TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh >/dev/null
 
   xcodebuild \
     -workspace toastty.xcworkspace \

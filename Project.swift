@@ -111,16 +111,33 @@ let diagnosticsUploadKey = resolvedOptionalManifestEnvironmentValue(
     manifestKey: "TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY",
     compatibilityKey: "TOASTTY_DIAGNOSTICS_UPLOAD_KEY"
 )
-let pushRelayURL = resolvedOptionalManifestEnvironmentValue(
+// These toggles are consumed by this manifest, not by Tuist itself.
+let distributionSigning = environment["TUIST_DISTRIBUTION_SIGNING"] == "1"
+let disablePushValue = environment["TUIST_TOASTTY_DISABLE_PUSH"] ?? ""
+guard ["", "0", "1"].contains(disablePushValue) else {
+    fatalError("TUIST_TOASTTY_DISABLE_PUSH must be 0 or 1 when set.")
+}
+let disablePush = disablePushValue == "1"
+if disablePush && distributionSigning {
+    fatalError("Distribution builds cannot disable push. Configure the production push relay instead.")
+}
+// An explicit test-build opt-out takes precedence over settings injected by sv.
+// Keep the previous no-push plist shape for runtime readers.
+let defaultPushRelayID = "toastty-push-dev-v1"
+let defaultPushAPNsEnvironment = "development"
+let pushRelayURL = disablePush ? "" : resolvedOptionalManifestEnvironmentValue(
     manifestKey: "TUIST_TOASTTY_PUSH_RELAY_URL", compatibilityKey: "TOASTTY_PUSH_RELAY_URL"
 )
-let pushRelayID = resolvedManifestEnvironmentValue(
-    manifestKey: "TUIST_TOASTTY_PUSH_RELAY_ID", compatibilityKey: "TOASTTY_PUSH_RELAY_ID", defaultValue: "toastty-push-dev-v1"
+let pushRelayID = disablePush ? defaultPushRelayID : resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_PUSH_RELAY_ID", compatibilityKey: "TOASTTY_PUSH_RELAY_ID", defaultValue: defaultPushRelayID
 )
-let pushAPNsEnvironment = resolvedManifestEnvironmentValue(
-    manifestKey: "TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT", compatibilityKey: "TOASTTY_PUSH_APNS_ENVIRONMENT", defaultValue: "development"
+let pushAPNsEnvironment = disablePush ? defaultPushAPNsEnvironment : resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT", compatibilityKey: "TOASTTY_PUSH_APNS_ENVIRONMENT", defaultValue: defaultPushAPNsEnvironment
 )
-if !pushRelayURL.isEmpty {
+if !disablePush {
+    guard !pushRelayURL.isEmpty else {
+        fatalError("Configure the Mac push relay with TUIST_TOASTTY_PUSH_RELAY_URL and matching relay ID/environment. Use `sv exec -- tuist generate --no-open` to load stored settings, or set TUIST_TOASTTY_DISABLE_PUSH=1 for an intentional no-push build.")
+    }
     // Mirror RemotePushConfiguration's runtime checks; values it rejects disable push silently.
     guard pushRelayURL.utf8.count <= 512, let url = URL(string: pushRelayURL), url.scheme == "https", url.host?.isEmpty == false,
           url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
@@ -138,8 +155,6 @@ if !pushRelayURL.isEmpty {
 }
 let sparkleFeedURL = "https://updates.toastty.dev/appcast.xml"
 let sparklePublicEDKey = "TmgFEcjPjqplsktNMX2rJSj+2YjJyVX5UvGMvSBHjlM="
-// Repo-local toggle consumed by Project.swift, not a Tuist built-in.
-let distributionSigning = environment["TUIST_DISTRIBUTION_SIGNING"] == "1"
 let ghosttyMacOSSliceDirectoryCandidates = [
     "macos-arm64_x86_64",
     "macos-arm64",

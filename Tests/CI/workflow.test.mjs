@@ -29,6 +29,8 @@ for (const [path, expected] of [
   ['Sources/App/Resources/WebPanels/scratchpad-panel/index.html', ['ios', 'macos', 'web']],
   ['Tuist/Package.resolved', ['macos']],
   ['Project.swift', ['macos']],
+  ['.secrets', ['macos']],
+  ['Tests/BuildConfig/PushManifestTests.mjs', ['macos']],
   ['scripts/dev/bootstrap-worktree.sh', ['macos']],
   ['scripts/remote/test.sh', ['ios', 'macos']],
   ['examples/skills/worktree-create/scripts/open-toastty-worktree-session.sh', ['macos']],

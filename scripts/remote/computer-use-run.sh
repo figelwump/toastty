@@ -428,7 +428,7 @@ run_remote_prepare_mode() {
 
   (
     cd "$remote_worktree_dir"
-    ./scripts/dev/bootstrap-worktree.sh
+    TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
   ) >"$bootstrap_log" 2>&1
 
   (

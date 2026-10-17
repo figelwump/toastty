@@ -19,6 +19,7 @@ cp "$ROOT_DIR/scripts/remote/"{test.sh,live-gateway-test-environment.sh,ios-simu
 cat >"$FIXTURE_ROOT/scripts/dev/bootstrap-worktree.sh" <<'BOOTSTRAP'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "${TUIST_TOASTTY_DISABLE_PUSH:-}" == 1 ]]
 if [[ "$FIXTURE_MODE" == generation-failed ]]; then exit 42; fi
 mkdir -p toastty.xcodeproj
 case "$FIXTURE_MODE" in
