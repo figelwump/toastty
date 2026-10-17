@@ -102,6 +102,9 @@ let releaseProvisioningProfile = optionalManifestValue([
 let releaseOtherCodeSignFlags = optionalManifestValue([
     "TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS",
 ])
+let releaseShareExtensionProvisioningProfile = optionalManifestValue([
+    "TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER",
+])
 
 let productionBundleID = "com.giantthings.toastty.mobile"
 let prodTestBundleID = "com.giantthings.toastty.mobile.prodtest"
@@ -169,6 +172,9 @@ let deploymentTarget: DeploymentTargets = .iOS("18.0")
 // The TestFlight script turns it off until its distribution profiles do.
 let sharesFromOtherApps = manifestFlag("TUIST_TOASTTY_MOBILE_SHARE_EXTENSION", default: true)
 let shareExtensionBundleSuffix = ".share"
+if sharesFromOtherApps, releaseProvisioningProfile != nil, releaseShareExtensionProvisioningProfile == nil {
+    fatalError("Manual Release signing needs TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER for the share extension, or TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=0.")
+}
 
 /// Settings the app and its share extension must agree on: one version, one
 /// name in the share sheet, and the URL scheme and App Group they hand off by.
@@ -269,6 +275,30 @@ if localHTTPAllowed(for: gatewayURL) {
     ])
 }
 
+var shareExtensionSettings: SettingsDictionary = identitySettings.merging([
+    "CODE_SIGN_ENTITLEMENTS": "Entitlements/AppGroup.entitlements",
+    "CODE_SIGN_STYLE": "Automatic",
+    "DEVELOPMENT_TEAM": SettingValue(stringLiteral: developmentTeam),
+    "PRODUCT_BUNDLE_IDENTIFIER[config=Release]": SettingValue(
+        stringLiteral: "\(releaseBundleID)\(shareExtensionBundleSuffix)"
+    ),
+    "PRODUCT_MODULE_NAME": "ToasttyMobileShareExtension",
+]) { _, extensionValue in extensionValue }
+// The extension has its own App Store profile, so Release signs it with the
+// app's identity and keychain but that profile.
+if let releaseShareExtensionProvisioningProfile {
+    shareExtensionSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
+    shareExtensionSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(
+        stringLiteral: releaseShareExtensionProvisioningProfile
+    )
+}
+if let releaseCodeSignIdentity {
+    shareExtensionSettings["CODE_SIGN_IDENTITY[config=Release]"] = SettingValue(stringLiteral: releaseCodeSignIdentity)
+}
+if let releaseOtherCodeSignFlags {
+    shareExtensionSettings["OTHER_CODE_SIGN_FLAGS[config=Release]"] = SettingValue(stringLiteral: releaseOtherCodeSignFlags)
+}
+
 let shareExtensionTargets: [Target] = sharesFromOtherApps ? [
     .target(
         name: "ToasttyMobileShareExtension",
@@ -305,15 +335,7 @@ let shareExtensionTargets: [Target] = sharesFromOtherApps ? [
             "Sources/ToasttyMobileShared/**",
         ],
         dependencies: [.target(name: "RemoteProtocol")],
-        settings: .settings(base: identitySettings.merging([
-            "CODE_SIGN_ENTITLEMENTS": "Entitlements/AppGroup.entitlements",
-            "CODE_SIGN_STYLE": "Automatic",
-            "DEVELOPMENT_TEAM": SettingValue(stringLiteral: developmentTeam),
-            "PRODUCT_BUNDLE_IDENTIFIER[config=Release]": SettingValue(
-                stringLiteral: "\(releaseBundleID)\(shareExtensionBundleSuffix)"
-            ),
-            "PRODUCT_MODULE_NAME": "ToasttyMobileShareExtension",
-        ]) { _, extensionValue in extensionValue })
+        settings: .settings(base: shareExtensionSettings)
     ),
 ] : []
 

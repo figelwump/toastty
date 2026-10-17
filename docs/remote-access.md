@@ -583,10 +583,6 @@ iOS does not let the share open Toastty, the share sheet says so; open Toastty
 yourself. A notification you tap goes first, and the shared sheet waits for
 the next time you open Toastty.
 
-TestFlight builds do not include the share extension yet. It needs its own
-App ID, App Group, and distribution profile; see
-[iOS Release CI](ios-release-ci.md#share-extension).
-
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. For a
 brief app switch, it requests up to 10 seconds of background time to preserve
