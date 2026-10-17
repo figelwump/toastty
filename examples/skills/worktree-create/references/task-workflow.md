@@ -83,6 +83,10 @@ applicable, with any retained earlier evidence identified. Verify that the repor
 is the selected, visible tab in the task workspace's right panel. Do not open
 another artifact after this final display step.
 
+After opening or selecting a PR panel, open or restore the verification report
+before any progress or completion response. Show pending checks explicitly if
+verification is still running.
+
 Also annotate this workspace with the PR: set the `github-pr` annotation to the
 PR number and its URL, following the workspace
 annotation rules in the toastty-capabilities skill. Agent session status already
