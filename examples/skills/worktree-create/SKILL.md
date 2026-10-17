@@ -151,6 +151,9 @@ handoff pointing into it pins the child to a superseded copy. Explicitly instruc
 the child to read and follow that linked file; do not paste its contents. Keep the
 private handoff out of commits.
 
+Explicitly ask the launched agent in the handoff to provide verification proof
+under the linked [task workflow standard](references/task-workflow.md).
+
 For forks, use inherited history for the request, decisions, authorization,
 progress, and next steps. Add a brief task pointer only when the history contains
 multiple tasks. Reference settled plans unchanged; do not summarize the discussion
