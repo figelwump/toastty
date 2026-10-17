@@ -20,6 +20,8 @@ struct RemoteSessionStarterTests {
         let originalPanelID: UUID
         var deviceMayStart = true
         var publishCount = 0
+        /// Sessions the starter launched into a tab it opened for them.
+        var startedInNewTab: [String] = []
         var currentDate = Date(timeIntervalSince1970: 1_786_200_000)
         private(set) var starter: RemoteSessionStarter!
         let device = RemoteDeviceRecord(
@@ -79,7 +81,8 @@ struct RemoteSessionStarterTests {
                 terminalReadinessTimeout: readinessTimeout,
                 deviceMayStart: { [unowned self] _ in self.deviceMayStart },
                 recentModels: { $0 == .claude ? ["claude-opus-5-5", "claude-fable-5-1"] : [] },
-                publishSessionList: { [unowned self] in self.publishCount += 1 }
+                publishSessionList: { [unowned self] in self.publishCount += 1 },
+                sessionStartedInNewTab: { [unowned self] in self.startedInNewTab.append($0) }
             )
         }
 
@@ -155,6 +158,8 @@ struct RemoteSessionStarterTests {
         #expect(fixture.router.focusPolicyByPanelID[panelID] == .preserveFirstResponder)
         let session = try #require(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         #expect(session.agent == .claude)
+        // The tab exists for this session, so a clean agent exit closes it.
+        #expect(fixture.startedInNewTab == [session.sessionID])
     }
 
     @MainActor
@@ -312,6 +317,7 @@ struct RemoteSessionStarterTests {
         #expect(result == .rejected(reason: .launchFailed))
         #expect(fixture.workspace.tabIDs == before)
         #expect(fixture.publishCount == 0)
+        #expect(fixture.startedInNewTab.isEmpty)
         #expect(fixture.router.sentTextByPanelID.isEmpty)
         #expect(try fixture.stagedFiles().isEmpty)
 

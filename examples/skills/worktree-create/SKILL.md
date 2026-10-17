@@ -286,37 +286,41 @@ and report the exact blocker. Creating a workspace or delivering a launch comman
 alone is insufficient. Do not exit while another authorized parent task remains.
 
 Exit belongs to the launcher after all setup and artifact work, never inside
-`open-toastty-worktree-session.sh`. Before exiting, save the resource identities
-and verification results in the durable completion record and give the user the
-handoff summary, including where to continue and that the parent is about to
-exit. Complete any Toastty notification before the exit request. The child must
-not depend on a reply to a parent that is exiting.
+`open-toastty-worktree-session.sh`. Before requesting the exit, save the resource
+identities and verification results in the durable completion record. Complete
+any Toastty notification before the exit request. The child must not depend on a
+reply to a parent that is exiting.
 
-For a Codex or Claude Code interactive parent, use the provider's native `/exit`
-command through `terminal.send-text`, targeting the injected parent panel and
-requiring its exact managed session identity. Resolve both from the launcher's
-injected `TOASTTY_PANEL_ID` and `TOASTTY_SESSION_ID`; never use the currently
-focused panel, the returned child IDs, or an inherited child environment.
-Discover the live descriptor and require `expectedSessionID` support. If the
-parent composer contains a draft or queued user input, retain the parent rather
-than appending to or replacing it; when that cannot be established safely,
-report the exit as blocked. Other providers require a verified native exit
-mechanism; do not guess an equivalent.
+For a Codex or Claude Code interactive parent, ask Toastty to exit the parent
+after its current turn with `session.exit-after-turn`, targeting the injected
+parent panel and requiring its exact managed session identity. Resolve both from
+the launcher's injected `TOASTTY_PANEL_ID` and `TOASTTY_SESSION_ID`; never use the
+currently focused panel, the returned child IDs, or an inherited child
+environment. When the turn completes, Toastty types the provider's native
+`/exit`. It skips the exit, and the parent stays, when anyone typed into the
+parent or sent it a phone message during the turn, or when the turn ends without
+completing. Other providers have no verified native exit, and the action refuses
+them; retain the parent and report it.
 
-After the handoff summary, this is the final tool action:
+Make the request as the last tool action, then give the handoff summary as the
+final message, including where to continue and that the parent will exit:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run terminal.send-text \
-  --panel "$TOASTTY_PANEL_ID" \
-  "expectedSessionID=$TOASTTY_SESSION_ID" text=/exit submit=true
+"$TOASTTY_CLI_PATH" --json action run session.exit-after-turn \
+  --panel "$TOASTTY_PANEL_ID" "expectedSessionID=$TOASTTY_SESSION_ID"
 ```
 
-The exit may terminate the parent before the tool returns. End the turn without
-further work after delivery; do not rely on a later final response or polling by
-the exiting agent. A successful response proves input delivery, not process exit.
-Describe the action as an exit request, never as a verified parent exit. If
-delivery returns an error, retain the parent and report it. Make at most one exit
-request; do not retry or weaken the identity check. Never substitute
-`session stop` (registry bookkeeping), `exit` in a tool shell (only exits that
-shell), delayed process kills, or panel or workspace closure. Preserve the
-parent's terminal, workspace, and source artifacts.
+The request does not end the turn, so a final answer can follow it in Codex as
+well as in Claude Code. Make no tool calls after it. A successful response proves
+the request was armed, not that the parent will exit; describe it as an exit
+request. If the request returns an error, retain the parent and report it. Make
+at most one request; do not retry or weaken the identity check.
+
+If the running Toastty does not list `session.exit-after-turn` in `action list`,
+retain the parent and say so in the handoff summary.
+
+Never substitute `session stop` (registry bookkeeping), `exit` in a tool shell
+(only exits that shell), process kills, or panel or workspace closure. When the
+parent ran in a tab that Toastty opened for a session started from the phone,
+Toastty closes that tab after the parent's clean exit; otherwise the parent's
+terminal stays. Preserve the parent's workspace and source artifacts.
