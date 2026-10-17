@@ -441,6 +441,15 @@ device; the Mac still clears the flag itself when the session starts new work.
 Flag needs a Mac that advertises it and a device with send access, and is
 hidden otherwise.
 
+**Close** closes the session's pane on the Mac, and its tab when the pane was
+the tab's last, the same as **Close Session** in the Mac's sidebar. The row
+leaves the list at once. When the agent is still running, the phone asks
+first, and **Stop and Close** stops it. The Mac decides, with the same rules
+as its sidebar. The Mac refuses to close a session
+that is its workspace's last pane, and a session whose remote writes are
+turned off. Close needs a Mac that advertises it and a device with send
+access, and is hidden otherwise.
+
 While a session is working, its row shows the running turn's time, ticking,
 in place of its age. Touch and hold the row for the elapsed time and the
 length of its last turn.
@@ -487,8 +496,9 @@ The host sends optional `parentWorkspaceID`, `spawningConversationID`,
 `primaryAnnotationKey`, and `doneAt` fields on each workspace summary, and
 optional `isFlaggedForLater`, `turnStartedAt`, and `lastTurnDuration` fields on
 each conversation summary. It advertises the `workspace_done` capability for
-`POST /api/workspace.done.set` and `conversation_flag` for
-`POST /api/conversation.flag.set`. An older Mac
+`POST /api/workspace.done.set`, `conversation_flag` for
+`POST /api/conversation.flag.set`, and `conversation_close` for
+`POST /api/conversation.close`. An older Mac
 omits them, so the phone lists every workspace at the top level and shows no
 checkbox. An older phone ignores them and keeps its flat list.
 

@@ -1380,6 +1380,40 @@ struct RemoteAccessServiceSafetyTests {
             .init(conversationID: fixture.conversationID, flagged: false), device: device) == .conversationNotFound)
     }
 
+    @MainActor
+    @Test func remoteCloseAsksForABusyAgentRefusesTheLastPaneAndPublishesTheClose() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, closesSessions: true)
+        defer { fixture.removeRuntimeFiles() }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func close(stopIfBusy: Bool = false) -> RemoteConversationCloseResult {
+            fixture.service.closeConversation(
+                .init(conversationID: fixture.conversationID, stopIfBusy: stopIfBusy), device: device
+            )
+        }
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+
+        // The agent's tab is the workspace's only tab.
+        #expect(close(stopIfBusy: true) == .lastPaneInWorkspace)
+        #expect(fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+
+        #expect(close() == .confirmationRequired)
+        fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
+        #expect(close(stopIfBusy: true) == .sessionWritesDisabled)
+        fixture.service.setSessionWriteEnabled(true, for: fixture.conversationID)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) != nil)
+
+        fixture.server.removeAllBroadcasts()
+        #expect(close(stopIfBusy: true) == .closed)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) == nil)
+        #expect(fixture.service.facadeSessionList(at: fixture.confirmedAt).conversations.contains {
+            $0.conversationID == fixture.conversationID
+        } == false)
+        #expect(fixture.server.sessionListSnapshots.last?.conversations.contains {
+            $0.conversationID == fixture.conversationID
+        } == false)
+        #expect(close() == .conversationNotFound)
+    }
+
     @Test func conversationSummaryCarriesTurnTimingAndOmitsAbsentMarks() throws {
         let startedAt = Date(timeIntervalSince1970: 1_788_696_000)
         let full = RemoteConversationSummary(
@@ -2831,7 +2865,8 @@ private final class RemoteBootstrapFixture {
         pushConfiguration: RemotePushConfiguration? = nil,
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .init(screenIsLocked: false, idleSeconds: 120) },
-        pendingPushCleanupCount: Int = 0
+        pendingPushCleanupCount: Int = 0,
+        closesSessions: Bool = false
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -2890,12 +2925,26 @@ private final class RemoteBootstrapFixture {
                 }
             }
         } else { nativeCredential = nil }
+        let sessionCloseController = closesSessions ? SessionCloseController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: terminalRuntimeRegistry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator(),
+                shouldConfirmClose: false
+            ),
+            terminalCloseAssessment: { _ in TerminalCloseConfirmationAssessment(requiresConfirmation: true) },
+            localDocumentCloseConfirmationState: { _ in nil },
+            shouldBypassConfirmation: false
+        ) : nil
         service = RemoteAccessService(
             store: store,
             annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
+            sessionCloseController: sessionCloseController,
             port: 42_997,
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,

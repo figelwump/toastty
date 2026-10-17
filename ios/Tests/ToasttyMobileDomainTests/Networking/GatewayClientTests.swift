@@ -462,6 +462,32 @@ final class GatewayClientTests: XCTestCase {
         )
     }
 
+    func testConversationCloseUsesAuthenticatedPOSTContract() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","result":"confirmation_required"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteConversationCloseRequest(conversationID: Self.conversationID, stopIfBusy: false)
+
+        let response = try await client.closeConversation(request)
+
+        XCTAssertEqual(response.result, .confirmationRequired)
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, "/api/conversation.close")
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationCloseRequest.self, from: try XCTUnwrap(recorded.httpBody)),
+            request
+        )
+    }
+
     func testDraftReleasePostsTheSeenEpochAndReturnsAScopeRefusalAsAResult() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":{"status":"released"}}"#.utf8)),

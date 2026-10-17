@@ -117,6 +117,21 @@ final class RemoteAccessConversationFlagBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated close request into the main-actor-owned
+/// workspace layout.
+final class RemoteAccessConversationCloseBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func close(
+        _ request: RemoteConversationCloseRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationCloseResult {
+        MainActor.assumeIsolated {
+            service?.closeConversation(request, device: device) ?? .conversationNotFound
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated queue edit into the main-actor-owned
 /// send queue.
 final class RemoteAccessQueueUpdateBridge: @unchecked Sendable {
@@ -448,6 +463,8 @@ final class RemoteAccessService: ObservableObject {
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
+    private let conversationCloseBridge = RemoteAccessConversationCloseBridge()
+    private let sessionCloseController: SessionCloseController?
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -583,6 +600,7 @@ final class RemoteAccessService: ObservableObject {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
+        sessionCloseController: SessionCloseController? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -609,6 +627,7 @@ final class RemoteAccessService: ObservableObject {
         self.annotationStyleStore = annotationStyleStore
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.sessionCloseController = sessionCloseController
         self.port = port
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
@@ -641,6 +660,9 @@ final class RemoteAccessService: ObservableObject {
             conversationFlagHandler: { [conversationFlagBridge] request, device in
                 conversationFlagBridge.setFlag(request, device: device)
             },
+            conversationCloseHandler: { [conversationCloseBridge] request, device in
+                conversationCloseBridge.close(request, device: device)
+            },
             queueUpdateHandler: { [queueUpdateBridge] request, device in
                 queueUpdateBridge.update(request, device: device)
             },
@@ -669,6 +691,7 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
+        conversationCloseBridge.service = self
         queueUpdateBridge.service = self
         interruptBridge.service = self
         localDraftReleaseBridge.service = self
@@ -1770,6 +1793,52 @@ final class RemoteAccessService: ObservableObject {
         )
         if result == .updated {
             broadcastSessionList()
+        }
+        return result
+    }
+
+    /// Closes a session's pane for a remote client, through the same controller
+    /// as the sidebar's Close Session item. Like interrupt, it needs session
+    /// writes, because it can stop a running agent.
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteConversationCloseResult {
+        var result = RemoteConversationCloseResult.conversationNotFound
+        // A fresh scan, as for flags, so a pane closed a moment ago is
+        // reported missing rather than closed twice.
+        if isReady, let candidate = scanConversationCandidates(mintingIDs: false)
+            .first(where: { $0.conversationID == request.conversationID }) {
+            if sessionWritePolicy.isEnabled(for: request.conversationID) == false {
+                result = .sessionWritesDisabled
+            } else if let sessionCloseController {
+                result = switch sessionCloseController.closeSession(
+                    panelID: candidate.panelID,
+                    stopIfBusy: request.stopIfBusy,
+                    source: AppActionSource("remote_access", detail: "conversation_close")
+                ) {
+                case .closed: .closed
+                case .confirmationRequired: .confirmationRequired
+                case .lastPaneInWorkspace: .lastPaneInWorkspace
+                case .unsavedDocument: .unsavedDocument
+                case .notFound: .conversationNotFound
+                case .failed: .failed
+                }
+            } else {
+                result = .failed
+            }
+        }
+        ToasttyLog.info(
+            "Remote conversation close request evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "stop_if_busy": String(request.stopIfBusy),
+                "result": result.rawValue,
+            ]
+        )
+        if result == .closed {
+            syncConversations()
         }
         return result
     }

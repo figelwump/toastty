@@ -124,6 +124,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.renameWorkspace.id,
                 ToasttyBuiltInCommand.closeWorkspace.id,
                 ToasttyBuiltInCommand.renameTab.id,
+                ToasttyBuiltInCommand.closeTab.id,
                 ToasttyBuiltInCommand.selectPreviousTab.id,
                 ToasttyBuiltInCommand.selectNextTab.id,
                 ToasttyBuiltInCommand.selectPreviousRightPanelTab.id,

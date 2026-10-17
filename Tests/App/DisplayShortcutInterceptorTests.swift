@@ -349,6 +349,25 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(repeatedEvent))
     }
 
+    func testCloseTabShortcutMatchesOptionShiftPhysicalWOnly() throws {
+        // Option+Shift+W types „ on a US layout; the physical key decides.
+        let matchingEvent = try makeKeyEvent(characters: "„", modifiers: [.option, .shift], keyCode: 0x0D)
+        let renameTabEvent = try makeKeyEvent(characters: "´", modifiers: [.option, .shift], keyCode: 0x0E)
+        let closePanelEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "„",
+            modifiers: [.option, .shift],
+            keyCode: 0x0D,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isCloseTabShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCloseTabShortcut(renameTabEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCloseTabShortcut(closePanelEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCloseTabShortcut(repeatedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(matchingEvent))
+    }
+
     func testFocusSplitDirectionMatchesPlainCommandBrackets() throws {
         let leftBracket = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
         let rightBracket = try makeKeyEvent(characters: "]", modifiers: [.command], keyCode: 0x1E)

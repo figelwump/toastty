@@ -227,6 +227,9 @@ struct ToasttyMobileRootView: View {
         }
         .tint(ToasttyDesignTokens.amber)
         .background(ToasttyDesignTokens.background.ignoresSafeArea())
+        // Once for the whole stack: Home stays in it under a pushed
+        // workspace, so a per-screen dialog would present twice.
+        .toasttySessionCloseConfirmation(sessionController.homeController)
         .safeAreaInset(edge: .top, spacing: 0) {
             PairedConnectionBanner(presentation: presentation)
         }

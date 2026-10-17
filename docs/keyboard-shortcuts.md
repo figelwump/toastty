@@ -13,10 +13,13 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
+| `Option+Shift+W` | Close tab, as the tab's close button does |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
+
+`Option+Shift+W` and the tab's close button ask before closing a tab only when something in it is still running. A managed agent that has finished its turn does not count as running; one that is working or waiting on approval does. Closing a workspace's last tab also closes the workspace.
 
 `Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 

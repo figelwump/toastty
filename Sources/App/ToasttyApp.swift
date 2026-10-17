@@ -1215,13 +1215,25 @@ struct ToasttyApp: App {
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         // A local, because the StateObject autoclosure cannot capture `self`.
         let remoteSessionLauncher = agentLaunchService
+        let remoteSessionCloseController = SessionCloseController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            terminalCloseAssessment: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.terminalCloseConfirmationAssessment(panelID: panelID)
+            },
+            localDocumentCloseConfirmationState: { [weak webPanelRuntimeRegistry] panelID in
+                webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID)
+            }
+        )
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
-            sessionLauncher: remoteSessionLauncher
+            sessionLauncher: remoteSessionLauncher,
+            sessionCloseController: remoteSessionCloseController
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle

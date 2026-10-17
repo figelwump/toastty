@@ -1085,6 +1085,20 @@ Later flags are intentionally a lower-priority reminder, not a pin. When you use
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
 
+### Closing sessions
+
+Right-click a session row in the sidebar and choose **Close Session** to close
+that session's pane, and its tab when the pane was the tab's last. The close
+works the same from the iOS app's session rows. A session whose agent has
+finished its turn closes at once. A session whose agent is still working,
+waiting on approval, or waiting on sub-agents asks first, and **Stop and
+Close** stops the agent. A session that has not finished a turn since the
+agent started, or since Toastty relaunched, also asks.
+
+Toastty refuses to close a session that is the last pane in its workspace,
+because closing that pane would also remove the workspace. Close the workspace,
+or clean up the task space, instead.
+
 ### Automatic program status
 
 Programs can report [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)

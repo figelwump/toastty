@@ -484,7 +484,7 @@ public struct AppReducer {
             state.selectedWindowID = detachedWindowID
             return true
 
-        case .closePanel(let panelID):
+        case .closePanel(let panelID, let preservesTabSelection):
             if let rightAuxLocation = locateRightAuxPanel(panelID, in: state) {
                 return closeRightAuxPanelTab(
                     workspaceID: rightAuxLocation.workspaceID,
@@ -516,6 +516,9 @@ public struct AppReducer {
                 sourceTabSuccessorID = nil
             }
             let sourceTabCustomTitle = workspace.tab(id: sourceLocation.tabID)?.customTitle
+            // The tab-scoped workspace accessors below read and write the
+            // selected tab, so the source tab is selected while it is edited.
+            let selectedTabIDBeforeClose = workspace.resolvedSelectedTabID
             workspace.selectedTabID = sourceLocation.tabID
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
@@ -550,6 +553,7 @@ public struct AppReducer {
             _ = workspace.updateTab(id: sourceLocation.tabID) { tab in
                 _ = tab.selectedPanelIDs.remove(panelID)
             }
+            let restoredSelectedTabID = preservesTabSelection ? selectedTabIDBeforeClose : nil
 
             if let updatedTree = removal.node {
                 workspace.layoutTree = updatedTree
@@ -564,8 +568,16 @@ public struct AppReducer {
                 if wasFocusedPanel, workspace.focusedPanelID != nil {
                     workspace.selectedPanelIDs.removeAll()
                 }
+                if let restoredSelectedTabID {
+                    workspace.selectedTabID = restoredSelectedTabID
+                }
                 commitWorkspace(workspace, workspaceID: sourceLocation.workspaceID, state: &state)
             } else {
+                // Restoring a different tab first lets the tab removal keep
+                // it selected instead of selecting the closed tab's neighbor.
+                if let restoredSelectedTabID, restoredSelectedTabID != sourceLocation.tabID {
+                    workspace.selectedTabID = restoredSelectedTabID
+                }
                 commitWorkspace(workspace, workspaceID: sourceLocation.workspaceID, state: &state)
                 removeWorkspaceTab(
                     sourceLocation.tabID,

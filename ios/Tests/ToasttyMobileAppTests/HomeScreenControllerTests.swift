@@ -353,6 +353,171 @@ final class ConversationFlagControllerTests: XCTestCase {
 }
 
 @MainActor
+final class ConversationCloseControllerTests: XCTestCase {
+    // Failure modes: a closed row coming back from a stale snapshot, a lost
+    // reply resurrecting a session the Mac dropped, a working agent stopped
+    // without asking, and a refusal leaving the row hidden.
+    private let workspaceID = UUID()
+    private let conversationID = UUID()
+    private let otherConversationID = UUID()
+
+    private func snapshot(listsSession: Bool = true, generation: Int = 0) -> MobileHomeSnapshot {
+        func conversation(_ id: UUID, title: String) -> MobileConversation {
+            MobileConversation(
+                id: id, workspaceID: workspaceID, workspaceTitle: "toastty", cwd: nil,
+                agent: .claude, title: title, state: MobileSessionStatus.ready,
+                inputAvailability: .unavailable(reason: "test"), age: "now", lastActivity: "Done"
+            )
+        }
+        var conversations = [conversation(otherConversationID, title: "Other")]
+        if listsSession { conversations.append(conversation(conversationID, title: "Session")) }
+        return MobileHomeSnapshot(hostName: "Mac \(generation)", workspaces: [
+            MobileWorkspace(id: workspaceID, title: "toastty", conversations: conversations),
+        ])
+    }
+
+    private func liveController(supportsClose: Bool = true) -> HomeScreenController {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: snapshot(), connectionState: .live
+        )
+        controller.update(
+            snapshot: snapshot(), connectionState: .live, freshness: .live,
+            hostSupportsConversationClose: supportsClose
+        )
+        return controller
+    }
+
+    private func isShown(_ controller: HomeScreenController) -> Bool {
+        controller.conversation(id: conversationID) != nil
+    }
+
+    private func update(_ controller: HomeScreenController, listsSession: Bool, generation: Int) {
+        controller.update(
+            snapshot: snapshot(listsSession: listsSession, generation: generation),
+            connectionState: .live, freshness: .live,
+            hostSnapshotStamp: Date(timeIntervalSince1970: TimeInterval(generation))
+        )
+    }
+
+    func testClosedRowStaysHiddenUntilTheMacDropsItEvenThroughAStaleSnapshot() async throws {
+        let controller = liveController()
+        var requests: [Bool] = []
+        controller.installConversationClose { _, stopIfBusy in
+            requests.append(stopIfBusy)
+            return .closed
+        }
+
+        controller.closeConversation(conversationID)
+        XCTAssertFalse(isShown(controller))
+        try await waitUntil { controller.subspaceDoneNotice?.kind == .sessionClosed }
+        XCTAssertEqual(requests, [false])
+        XCTAssertEqual(controller.subspaceDoneNotice?.message, "Closed Session")
+        XCTAssertEqual(controller.subspaceDoneNotice?.canUndo, false)
+
+        // A snapshot the Mac sent before the close still lists the session.
+        update(controller, listsSession: true, generation: 1)
+        XCTAssertFalse(isShown(controller))
+        update(controller, listsSession: false, generation: 2)
+        XCTAssertFalse(isShown(controller))
+        XCTAssertNotNil(controller.conversation(id: otherConversationID))
+    }
+
+    func testAWorkingAgentAsksFirstAndOnlyTheConfirmedCloseStopsIt() async throws {
+        let controller = liveController()
+        var requests: [Bool] = []
+        controller.installConversationClose { _, stopIfBusy in
+            requests.append(stopIfBusy)
+            return stopIfBusy ? .closed : .confirmationRequired
+        }
+
+        controller.closeConversation(conversationID)
+        try await waitUntil { controller.closeConfirmation != nil }
+        XCTAssertEqual(controller.closeConfirmation?.title, "Session")
+        XCTAssertTrue(isShown(controller), "The row comes back while the user decides")
+
+        controller.cancelConversationClose()
+        XCTAssertNil(controller.closeConfirmation)
+        XCTAssertEqual(requests, [false])
+
+        controller.closeConversation(conversationID)
+        try await waitUntil { controller.closeConfirmation != nil }
+        controller.confirmConversationClose()
+        XCTAssertNil(controller.closeConfirmation)
+        XCTAssertFalse(isShown(controller))
+        try await waitUntil { requests == [false, false, true] }
+    }
+
+    func testALostReplyDoesNotBringBackASessionTheMacDropped() async throws {
+        let controller = liveController()
+        let reply = AsyncStream<ConversationCloseOutcome>.makeStream()
+        controller.installConversationClose { _, _ in
+            for await outcome in reply.stream { return outcome }
+            return .failed
+        }
+
+        controller.closeConversation(conversationID)
+        update(controller, listsSession: false, generation: 1)
+        reply.continuation.yield(.failed)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertFalse(isShown(controller))
+        XCTAssertNil(controller.subspaceDoneNotice)
+    }
+
+    func testRefusalsShowTheRowAgainAndSaySo() async throws {
+        let controller = liveController()
+        var outcome = ConversationCloseOutcome.lastPaneInWorkspace
+        controller.installConversationClose { _, _ in outcome }
+
+        controller.closeConversation(conversationID)
+        try await waitUntil { controller.subspaceDoneNotice?.kind == .failed }
+        XCTAssertTrue(isShown(controller))
+        XCTAssertEqual(
+            controller.subspaceDoneNotice?.message,
+            "Session is the last pane in its workspace. Clean up the task space on your Mac instead."
+        )
+
+        outcome = .failed
+        controller.closeConversation(conversationID)
+        try await waitUntil {
+            controller.subspaceDoneNotice?.message == "Couldn't close Session. Check the connection to your Mac."
+        }
+        XCTAssertTrue(isShown(controller))
+    }
+
+    func testCloseIsUnavailableWithoutHostSupportOrALiveConnection() {
+        var requests = 0
+        let unsupported = liveController(supportsClose: false)
+        unsupported.installConversationClose { _, _ in requests += 1; return .closed }
+        XCTAssertFalse(unsupported.canCloseConversations)
+        unsupported.closeConversation(conversationID)
+        XCTAssertTrue(isShown(unsupported))
+
+        let stale = liveController()
+        stale.installConversationClose { _, _ in requests += 1; return .closed }
+        stale.update(snapshot: snapshot(), connectionState: .live, freshness: .stale)
+        XCTAssertFalse(stale.canCloseConversations)
+        stale.closeConversation(conversationID)
+        XCTAssertTrue(isShown(stale))
+        XCTAssertEqual(requests, 0)
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Condition was not met in time", file: file, line: line)
+    }
+}
+
+@MainActor
 final class SubspaceDoneControllerTests: XCTestCase {
     private let parentID = UUID()
     private let subspaceID = UUID()

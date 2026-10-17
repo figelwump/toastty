@@ -138,6 +138,42 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
         )
     }
 
+    func testAssessmentCountsUnsavedDocumentsInTheTabsRightPanel() {
+        var (tab, _) = makeTab(panelStates: [makeTerminalPanelState(title: "Claude")])
+        let documentPanelID = UUID()
+        let documentTabID = UUID()
+        tab.rightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: documentTabID,
+            tabIDs: [documentTabID],
+            tabsByID: [documentTabID: RightAuxPanelTabState(
+                id: documentTabID,
+                identity: .localDocument(path: "/tmp/toastty/plan.md"),
+                panelID: documentPanelID,
+                panelState: .web(WebPanelState(
+                    definition: .localDocument,
+                    title: "plan.md",
+                    localDocument: LocalDocumentState(filePath: "/tmp/toastty/plan.md")
+                ))
+            )]
+        )
+
+        let assessment = WorkspaceTabCloseConfirmation.assess(
+            tab: tab,
+            shouldBypassConfirmation: false,
+            terminalAssessment: { _ in TerminalCloseConfirmationAssessment(requiresConfirmation: false) },
+            localDocumentCloseConfirmationState: { panelID in
+                panelID == documentPanelID
+                    ? LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "plan.md")
+                    : nil
+            }
+        )
+
+        XCTAssertTrue(assessment.requiresConfirmation)
+        XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
+        XCTAssertEqual(assessment.firstUnsavedLocalDocumentDisplayName, "plan.md")
+    }
+
     func testAssessmentRequiresWaitingForLocalDocumentSaveInProgress() {
         let (tab, panelIDs) = makeTab(panelStates: [
             .web(

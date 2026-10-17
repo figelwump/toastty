@@ -341,8 +341,8 @@ struct ToasttySpawnerChipLabel: View {
 }
 
 extension View {
-    /// The session row's swipe actions: Info always, and Flag while the Mac
-    /// takes the change. Neither is a full swipe, since a full swipe would
+    /// The session row's swipe actions: Info always, and Flag and Close while
+    /// the Mac takes them. None is a full swipe, since a full swipe would
     /// act on a row the user only meant to peek at.
     func toasttySessionSwipeActions(
         _ conversation: MobileConversation,
@@ -369,6 +369,42 @@ extension View {
                 .tint(ToasttySessionRow.laterFlagColor)
                 .accessibilityIdentifier("toastty-session-swipe-flag-\(conversation.id.uuidString)")
             }
+            if controller.canCloseConversations {
+                // Not a destructive role: that role removes the row before
+                // the Mac answers, and a working agent keeps its row.
+                Button {
+                    controller.closeConversation(conversation.id)
+                } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+                .tint(.red)
+                .accessibilityIdentifier("toastty-session-swipe-close-\(conversation.id.uuidString)")
+            }
+        }
+    }
+
+    /// Asks before a close stops an agent that is still working.
+    func toasttySessionCloseConfirmation(_ controller: HomeScreenController) -> some View {
+        confirmationDialog(
+            controller.closeConfirmation.map { "Close \u{201C}\($0.title)\u{201D}?" } ?? "",
+            isPresented: Binding(
+                get: { controller.closeConfirmation != nil },
+                set: { isPresented in
+                    if isPresented == false { controller.cancelConversationClose() }
+                }
+            ),
+            titleVisibility: .visible,
+            presenting: controller.closeConfirmation
+        ) { _ in
+            Button("Stop and Close", role: .destructive) {
+                controller.confirmConversationClose()
+            }
+            .accessibilityIdentifier("toastty-session-close-confirm")
+            Button("Cancel", role: .cancel) {
+                controller.cancelConversationClose()
+            }
+        } message: { _ in
+            Text("The agent is still running. Closing stops it and closes its pane on your Mac.")
         }
     }
 }

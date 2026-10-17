@@ -258,6 +258,7 @@ struct RemoteGatewayRequestHandlerTests {
         readAcknowledgementHandler: RemoteGatewayRequestHandler.ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: RemoteGatewayRequestHandler.WorkspaceDoneHandler? = nil,
         conversationFlagHandler: RemoteGatewayRequestHandler.ConversationFlagHandler? = nil,
+        conversationCloseHandler: RemoteGatewayRequestHandler.ConversationCloseHandler? = nil,
         queueUpdateHandler: RemoteGatewayRequestHandler.QueueUpdateHandler? = nil,
         interruptHandler: RemoteGatewayRequestHandler.InterruptHandler? = nil,
         localDraftReleaseHandler: RemoteGatewayRequestHandler.LocalDraftReleaseHandler? = nil,
@@ -284,6 +285,7 @@ struct RemoteGatewayRequestHandlerTests {
             readAcknowledgementHandler: readAcknowledgementHandler,
             workspaceDoneHandler: workspaceDoneHandler,
             conversationFlagHandler: conversationFlagHandler,
+            conversationCloseHandler: conversationCloseHandler,
             queueUpdateHandler: queueUpdateHandler,
             interruptHandler: interruptHandler,
             localDraftReleaseHandler: localDraftReleaseHandler,
@@ -404,6 +406,7 @@ struct RemoteGatewayRequestHandlerTests {
             .messageAttachments,
             .workspaceDone,
             .conversationFlag,
+            .conversationClose,
             .sessionStart,
             .conversationInputControl,
             .localDraftRelease,
@@ -1944,6 +1947,55 @@ extension RemoteGatewayRequestHandlerTests {
         #expect(try response([("cookie", Self.pairedDeviceCookie(store)), ("origin", Self.origin)], body: body).status == 401)
         #expect(try response(headers, body: Data("{}".utf8)).status == 400)
         var unsupported = flag
+        unsupported.protocolVersion = "99.0"
+        #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        #expect(try response(headers, body: body).status == 403)
+        #expect(requests.count == handled)
+    }
+
+    @Test func conversationCloseNeedsNativeSendAccessAndAuditsOnlyCloses() throws {
+        var requests: [RemoteConversationCloseRequest] = []
+        var nextResult = RemoteConversationCloseResult.confirmationRequired
+        let (handler, store, audit) = Self.makeHandler(conversationCloseHandler: { request, _ in
+            requests.append(request)
+            return nextResult
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        let close = RemoteConversationCloseRequest(conversationID: RemoteConversationID(), stopIfBusy: false)
+        let body = try ConversationEventCoding.makeEncoder().encode(close)
+        func response(_ headers: [(String, String)], body: Data) throws -> RemoteGatewayHTTPResponse {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.close", headerFields: headers, body: body), at: Self.now
+            ) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+        func result(_ response: RemoteGatewayHTTPResponse) throws -> RemoteConversationCloseResult {
+            try ConversationEventCoding.makeDecoder()
+                .decode(RemoteConversationCloseResponse.self, from: response.body).result
+        }
+
+        let auditCount = audit.entries.count
+        #expect(try result(try response(headers, body: body)) == .confirmationRequired)
+        nextResult = .lastPaneInWorkspace
+        #expect(try result(try response(headers, body: body)) == .lastPaneInWorkspace)
+        #expect(audit.entries.count == auditCount)
+
+        nextResult = .closed
+        var stopping = close
+        stopping.stopIfBusy = true
+        #expect(try result(try response(headers, body: ConversationEventCoding.makeEncoder().encode(stopping))) == .closed)
+        #expect(requests == [close, close, stopping])
+        #expect(audit.entries.last?.action == .conversationClosed)
+        #expect(audit.entries.last?.detail == "stopped_if_busy")
+
+        let handled = requests.count
+        #expect(try response([headers[0]], body: body).status == 401)
+        #expect(try response(headers, body: Data("{}".utf8)).status == 400)
+        var unsupported = close
         unsupported.protocolVersion = "99.0"
         #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
         #expect(try store.setScopes([.read], forDevice: native.device.id))

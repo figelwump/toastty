@@ -690,6 +690,34 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(flagged.label.hasSuffix("flagged for later"))
     }
 
+    func testSwipeCloseAsksForAWorkingSessionAndRemovesTheRow() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        // "Sparkle updater fix" is working in the fixture, so Close asks first.
+        let row = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+
+        row.swipeLeft()
+        let close = app.buttons["toastty-session-swipe-close-\(workingConversationID)"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-session-swipe-close", of: app)
+        close.tap()
+
+        // The dialog's buttons can appear twice in the accessibility tree.
+        let confirm = app.buttons.matching(identifier: "toastty-session-close-confirm").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.exists, "The row stays while the user decides")
+        attachScreenshot(named: "fixture-session-close-confirmation", of: app)
+        confirm.tap()
+
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(notice.label.hasPrefix("Closed "), notice.label)
+        XCTAssertFalse(app.buttons["toastty-subspace-done-undo"].exists)
+        attachScreenshot(named: "fixture-session-closed", of: app)
+    }
+
     func testNewSessionFromAWorkspaceStartsAndOpensTheConversation() {
         let app = launchFixtureApp()
         openWorkspace(toasttyWorkspaceID, in: app)

@@ -149,17 +149,22 @@ final class FocusedPanelCommandController {
         )
     }
 
+    /// Closes `panelID`. `preservesTabSelection` keeps the workspace's
+    /// selected tab when the panel is in another tab, for closes that do not
+    /// come from the visible tab, such as a session closed from iOS.
     @discardableResult
     func closePanel(
         panelID: UUID,
         source: AppActionSource = .command("close_panel"),
-        confirmationPolicy: CloseConfirmationPolicy
+        confirmationPolicy: CloseConfirmationPolicy,
+        preservesTabSelection: Bool = false
     ) -> CloseResult {
         closePanel(
             panelID: panelID,
             preferredWorkspaceID: nil,
             source: source,
-            confirmationPolicy: confirmationPolicy
+            confirmationPolicy: confirmationPolicy,
+            preservesTabSelection: preservesTabSelection
         )
     }
 
@@ -168,7 +173,8 @@ final class FocusedPanelCommandController {
         panelID: UUID,
         preferredWorkspaceID: UUID?,
         source: AppActionSource,
-        confirmationPolicy: CloseConfirmationPolicy
+        confirmationPolicy: CloseConfirmationPolicy,
+        preservesTabSelection: Bool = false
     ) -> CloseResult {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
@@ -256,7 +262,10 @@ final class FocusedPanelCommandController {
             break
         }
 
-        let didClosePanel = store.send(.closePanel(panelID: panelID), source: source)
+        let didClosePanel = store.send(
+            .closePanel(panelID: panelID, preservesTabSelection: preservesTabSelection),
+            source: source
+        )
         guard didClosePanel else {
             return didPromptForConfirmation ? .canceled : .notHandled
         }

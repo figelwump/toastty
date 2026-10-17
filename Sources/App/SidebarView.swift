@@ -553,6 +553,8 @@ struct SidebarView: View {
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
     /// Runs a subspace row's Close Without Merging menu item.
     let requestWorkspaceClose: @MainActor (UUID) -> Void
+    /// Closes a session's pane, given its panel ID and row title.
+    let requestSessionClose: @MainActor (UUID, String) -> Void
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -720,6 +722,7 @@ struct SidebarView: View {
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
+        requestSessionClose: @escaping @MainActor (UUID, String) -> Void = { _, _ in },
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -732,6 +735,7 @@ struct SidebarView: View {
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
+        self.requestSessionClose = requestSessionClose
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
         self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
@@ -1838,6 +1842,10 @@ struct SidebarView: View {
                         sessionID: workspaceSessionStatus.sessionID,
                         isFlagged: !isLaterFlagged
                     )
+                }
+                Divider()
+                Button("Close Session") {
+                    requestSessionClose(workspaceSessionStatus.panelID, rowTitle)
                 }
             }
         }

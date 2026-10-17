@@ -90,6 +90,9 @@ public protocol GatewayClientProtocol: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse
     func updateQueue(
         _ request: RemoteConversationQueueUpdateRequest
     ) async throws -> RemoteConversationQueueUpdateResponse
@@ -140,6 +143,12 @@ public extension GatewayClientProtocol {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse {
         throw GatewayFailure.invalidResponse
     }
 
@@ -368,6 +377,28 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try mapCompatibility {
             let decoded = try ConversationEventCoding.makeDecoder().decode(
                 RemoteConversationFlagResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(
+                    decoded.protocolVersion
+                )
+            }
+            return decoded
+        }
+    }
+
+    public func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse {
+        let response = try await perform(
+            method: "POST",
+            path: "/api/conversation.close",
+            body: try encode(request)
+        )
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationCloseResponse.self,
                 from: response.body
             )
             guard decoded.protocolVersion == RemoteGatewayProtocol.version else {

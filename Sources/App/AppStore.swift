@@ -101,6 +101,9 @@ final class AppStore: ObservableObject {
     /// Set by tab rename commands; the selected workspace view in the target
     /// window observes this to enter inline-rename mode for the target tab.
     @Published var pendingRenameWorkspaceTabRequest: PendingWorkspaceTabRenameRequest?
+    /// Set by the Close Tab command; the target window's workspace view runs
+    /// the same close, with its confirmation, as the tab's close button.
+    @Published var pendingCloseWorkspaceTabRequest: PendingWorkspaceTabCloseRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
     /// Set by exhausted navigation commands so the target sidebar can briefly
     /// pulse the currently selected session row, or the workspace row when no
@@ -1675,6 +1678,26 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    func canCloseSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func closeSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
+        let workspace = selection.workspace
+        guard let selectedTabID = workspace.resolvedSelectedTabID,
+              workspace.tab(id: selectedTabID) != nil else {
+            return false
+        }
+        pendingCloseWorkspaceTabRequest = PendingWorkspaceTabCloseRequest(
+            windowID: selection.windowID,
+            workspaceID: workspace.id,
+            tabID: selectedTabID
+        )
+        return true
+    }
+
     @discardableResult
     func requestWorkspaceClose(workspaceID: UUID) -> Bool {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID) else { return false }
@@ -1722,6 +1745,15 @@ final class AppStore: ObservableObject {
         guard let request = pendingRenameWorkspaceTabRequest,
               request.windowID == windowID else { return nil }
         pendingRenameWorkspaceTabRequest = nil
+        return request
+    }
+
+    func consumePendingWorkspaceTabCloseRequest(
+        windowID: UUID
+    ) -> PendingWorkspaceTabCloseRequest? {
+        guard let request = pendingCloseWorkspaceTabRequest,
+              request.windowID == windowID else { return nil }
+        pendingCloseWorkspaceTabRequest = nil
         return request
     }
 
@@ -1843,6 +1875,15 @@ final class AppStore: ObservableObject {
             pendingRenameWorkspaceTabRequest = nil
         }
 
+        if let request = pendingCloseWorkspaceTabRequest,
+           pendingWorkspaceTabRequestIsValid(
+               windowID: request.windowID,
+               workspaceID: request.workspaceID,
+               tabID: request.tabID
+           ) == false {
+            pendingCloseWorkspaceTabRequest = nil
+        }
+
         if let request = pendingCloseWorkspaceRequest,
            pendingWorkspaceCloseRequestIsValid(request) == false {
             pendingCloseWorkspaceRequest = nil
@@ -1869,11 +1910,19 @@ final class AppStore: ObservableObject {
     }
 
     private func pendingRenameWorkspaceTabRequestIsValid(_ request: PendingWorkspaceTabRenameRequest) -> Bool {
-        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
-              let workspace = state.workspacesByID[request.workspaceID] else {
+        pendingWorkspaceTabRequestIsValid(
+            windowID: request.windowID,
+            workspaceID: request.workspaceID,
+            tabID: request.tabID
+        )
+    }
+
+    private func pendingWorkspaceTabRequestIsValid(windowID: UUID, workspaceID: UUID, tabID: UUID) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: windowID, workspaceID: workspaceID),
+              let workspace = state.workspacesByID[workspaceID] else {
             return false
         }
-        return workspace.tab(id: request.tabID) != nil
+        return workspace.tab(id: tabID) != nil
     }
 
     private func pendingWorkspaceCloseRequestIsValid(_ request: PendingWorkspaceCloseRequest) -> Bool {

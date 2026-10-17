@@ -50,6 +50,9 @@ protocol LiveConnectionRuntime: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse?
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse?
     func updateQueue(
         _ request: RemoteConversationQueueUpdateRequest
     ) async throws -> RemoteConversationQueueUpdateResponse?
@@ -95,6 +98,12 @@ extension LiveConnectionRuntime {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse? {
+        nil
+    }
+
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse? {
         nil
     }
 
@@ -235,6 +244,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         try await coordinator.setConversationFlag(request)
     }
 
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse? {
+        try await coordinator.closeConversation(request)
+    }
+
     func updateQueue(
         _ request: RemoteConversationQueueUpdateRequest
     ) async throws -> RemoteConversationQueueUpdateResponse? {
@@ -354,6 +369,26 @@ final class LiveSessionsController {
                 case .updated?, .unchanged?: return .applied
                 case .conversationNotFound?: return .refused
                 case nil: return .failed
+                }
+            } catch {
+                return .failed
+            }
+        }
+        homeController.installConversationClose { [runtime] conversationID, stopIfBusy in
+            do {
+                let response = try await runtime.closeConversation(
+                    RemoteConversationCloseRequest(
+                        conversationID: RemoteConversationID(rawValue: conversationID), stopIfBusy: stopIfBusy
+                    )
+                )
+                switch response?.result {
+                case .closed?: return .closed
+                case .confirmationRequired?: return .confirmationRequired
+                case .lastPaneInWorkspace?: return .lastPaneInWorkspace
+                case .unsavedDocument?: return .unsavedDocument
+                case .sessionWritesDisabled?: return .sessionWritesDisabled
+                case .conversationNotFound?: return .notFound
+                case .failed?, nil: return .failed
                 }
             } catch {
                 return .failed
@@ -581,6 +616,7 @@ final class LiveSessionsController {
         deviceScopes = scopes
         homeController.setHostSupportsSubspaceDone(acceptsSubspaceDone)
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
+        homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
         await runtime.updateDeviceScopes(scopes)
     }
@@ -594,6 +630,10 @@ final class LiveSessionsController {
 
     private var acceptsConversationFlag: Bool {
         coordinatorState.capabilities.contains(.conversationFlag) && deviceScopes.contains(.send)
+    }
+
+    private var acceptsConversationClose: Bool {
+        coordinatorState.capabilities.contains(.conversationClose) && deviceScopes.contains(.send)
     }
 
     /// The Mac takes a done change only from a device allowed to send, so a
@@ -726,6 +766,7 @@ final class LiveSessionsController {
             hostSupportsSubspaceDone: acceptsSubspaceDone,
             hostSupportsConversationFlag: acceptsConversationFlag,
             hostSupportsSessionStart: acceptsSessionStart,
+            hostSupportsConversationClose: acceptsConversationClose,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)
