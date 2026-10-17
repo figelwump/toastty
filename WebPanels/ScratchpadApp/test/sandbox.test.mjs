@@ -99,3 +99,43 @@ test("blank scratchpad documents render onboarding guidance instead of an empty 
   assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*tar -xz/);
   assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*mkdir -p/);
 });
+
+// A srcdoc iframe inherits the shell page's CSP, and the browser enforces both
+// policies. Any source the generated policy allows must also pass the shell
+// policy, or the generated allowance has no effect.
+test("shell CSP allows every source the generated content CSP allows", () => {
+  const parsePolicy = (policy) =>
+    new Map(
+      policy
+        .split(";")
+        .map((directive) => directive.trim().split(/\s+/))
+        .filter(([name]) => name)
+        .map(([name, ...sources]) => [name, sources])
+    );
+  const generatedPolicy = parsePolicy(
+    [...sandboxSource.match(/generatedContentCSP = \[([\s\S]*?)\]/)[1].matchAll(/"([^"]+)"/g)]
+      .map((match) => match[1])
+      .join("; ")
+  );
+  const shellPolicy = parsePolicy(shellSource.match(/content="(default-src[^"]+)"/)[1]);
+  const effectiveShellSources = (directive) => {
+    const fallbacks = directive.startsWith("script-src-")
+      ? [directive, "script-src", "default-src"]
+      : [directive, "default-src"];
+    return shellPolicy.get(fallbacks.find((name) => shellPolicy.has(name)));
+  };
+
+  assert.ok(generatedPolicy.has("media-src"));
+  assert.ok(generatedPolicy.has("font-src"));
+  for (const [directive, sources] of generatedPolicy) {
+    if (sources.includes("'none'") || directive === "default-src") {
+      continue;
+    }
+    for (const source of sources) {
+      assert.ok(
+        effectiveShellSources(directive).includes(source),
+        `shell CSP blocks generated ${directive} source ${source}`
+      );
+    }
+  }
+});
