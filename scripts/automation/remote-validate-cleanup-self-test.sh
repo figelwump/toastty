@@ -44,6 +44,7 @@ cp "$ROOT_DIR/scripts/remote/validate.sh" "$FIXTURE_ROOT/scripts/remote/validate
 cat >"$FIXTURE_ROOT/scripts/dev/bootstrap-worktree.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "${TUIST_TOASTTY_DISABLE_PUSH:-}" == 1 ]]
 EOF
 chmod +x "$FIXTURE_ROOT/scripts/dev/bootstrap-worktree.sh"
 

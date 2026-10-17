@@ -34,6 +34,13 @@ bootstrap script or `tuist generate` after manifest or file-layout changes.
 Re-run `tuist install` whenever `Tuist/Package.swift` or
 `Tuist/Package.resolved` changes.
 
+Mac generation requires push relay settings so an Xcode build cannot silently
+lose iPhone alerts. Use `sv exec -- tuist generate --no-open` to load stored
+settings. For an intentional build without push, use
+`TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh`.
+See [generation flags](environment-and-build-flags.md#build-and-generate)
+for the settings and opt-out rules.
+
 ## Install sv
 
 [sv](https://github.com/figelwump/sv) is a lightweight macOS secret vault that stores API keys and credentials in the native Keychain and injects them into processes at runtime. Automation scripts in this repo use `sv exec --` to run commands that need secrets without exposing values in shell history or environment dumps.

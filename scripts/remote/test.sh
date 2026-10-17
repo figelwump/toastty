@@ -1201,7 +1201,7 @@ EOF
         fi
       fi
     else
-      if ! ./scripts/dev/bootstrap-worktree.sh >>"$xcodebuild_log" 2>&1; then
+      if ! TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh >>"$xcodebuild_log" 2>&1; then
         exit_code=$SETUP_ERROR_EXIT_CODE
         status="setup_error"
         failure_summary="macOS project generation failed; see xcodebuild.log"

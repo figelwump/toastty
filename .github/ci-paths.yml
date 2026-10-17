@@ -14,6 +14,7 @@ ios:
   - 'scripts/ci/**'
   - '.github/ios-xcode-version'
 macos:
+  - '.secrets'
   - '.github/workflows/mobile-ios.yml'
   - '.github/ci-paths.yml'
   - 'Tests/CI/**'

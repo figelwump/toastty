@@ -112,6 +112,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
       - name: Install pinned Tuist
         run: |
           brew install mise
@@ -121,8 +126,11 @@ jobs:
           echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
           test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
+      - name: Test Mac push build configuration
+        run: node --test Tests/BuildConfig/PushManifestTests.mjs
+
       - name: Generate macOS project
-        run: ./scripts/dev/bootstrap-worktree.sh
+        run: TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
 
       - name: Test macOS contract
         run: |

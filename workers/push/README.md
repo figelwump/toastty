@@ -89,7 +89,9 @@ This mutates only the current worktree's generated macOS project. Follow the
 [dev-run guide](../../.agents/skills/toastty-dev-run/SKILL.md) to build and run an
 isolated host. Enable Remote Access on that host and pair the development phone.
 The configuration is compiled into the app; setting variables only at launch is
-not sufficient. Bootstrap and other generation through `sv exec` restore the
+not sufficient. Mac generation fails when the relay URL is missing. Intentional
+no-push builds use the [explicit generation opt-out](../../docs/environment-and-build-flags.md#build-and-generate).
+Bootstrap and other generation through `sv exec` restore the
 stored relay, so run the development generation above again after each one,
 including the bootstrap in the dev-run guide, before building.
 
