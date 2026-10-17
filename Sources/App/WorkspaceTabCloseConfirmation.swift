@@ -111,9 +111,13 @@ enum WorkspaceTabCloseConfirmation {
         var localDocumentSaveInProgressCount = 0
         var firstLocalDocumentSaveInProgressDisplayName: String?
 
-        for slot in tab.layoutTree.allSlotInfos {
-            let panelID = slot.panelID
-            switch tab.panels[panelID] {
+        // Right-panel tabs close with their workspace tab, so their
+        // documents count too.
+        let closingPanels: [(UUID, PanelState?)] =
+            tab.layoutTree.allSlotInfos.map { ($0.panelID, tab.panels[$0.panelID]) }
+            + tab.rightAuxPanel.orderedTabs.map { ($0.panelID, $0.panelState) }
+        for (panelID, panelState) in closingPanels {
+            switch panelState {
             case .some(.terminal):
                 // Bulk tab close is destructive across multiple terminals, so fall
                 // back to confirmation when any individual runtime assessment is unavailable.

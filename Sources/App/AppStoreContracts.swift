@@ -43,6 +43,12 @@ struct PendingWorkspaceTabRenameRequest: Equatable {
     let tabID: UUID
 }
 
+struct PendingWorkspaceTabCloseRequest: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let tabID: UUID
+}
+
 struct PendingSidebarSessionFlashRequest: Equatable {
     let requestID: UUID
     let windowID: UUID

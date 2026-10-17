@@ -43,6 +43,8 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case workspaceDone = "workspace_done"
     /// A client may set or clear a session's "Flag for Later" mark.
     case conversationFlag = "conversation_flag"
+    /// A client may close a session's pane on the Mac.
+    case conversationClose = "conversation_close"
     /// A native client may start a new agent session in an existing
     /// workspace. Whether one device may do so is a per-device permission
     /// that the start options report.
@@ -79,6 +81,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .messageAttachments,
             .workspaceDone,
             .conversationFlag,
+            .conversationClose,
             .sessionStart,
             .conversationInputControl,
             .localDraftRelease,
@@ -427,6 +430,60 @@ public struct RemoteConversationFlagResponse: Codable, Equatable, Sendable {
     public var result: RemoteConversationFlagResult
 
     public init(result: RemoteConversationFlagResult) {
+        self.protocolVersion = RemoteGatewayProtocol.version
+        self.result = result
+    }
+}
+
+/// Closes a session's pane on the Mac, and its tab when that pane was the
+/// tab's last. Without `stopIfBusy`, the Mac refuses to stop a session that is
+/// still working, and without `confirmedWorkspaceCloseID`, it refuses to close
+/// a workspace's only tab, so the client can ask the user first.
+public struct RemoteConversationCloseRequest: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var conversationID: RemoteConversationID
+    public var stopIfBusy: Bool
+    /// The workspace the user agreed to close, when the session's tab is that
+    /// workspace's only one. The Mac closes a workspace only when this names
+    /// the session's current workspace, so a session that moved asks again.
+    public var confirmedWorkspaceCloseID: UUID?
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        conversationID: RemoteConversationID,
+        stopIfBusy: Bool,
+        confirmedWorkspaceCloseID: UUID? = nil
+    ) {
+        self.protocolVersion = protocolVersion
+        self.conversationID = conversationID
+        self.stopIfBusy = stopIfBusy
+        self.confirmedWorkspaceCloseID = confirmedWorkspaceCloseID
+    }
+}
+
+public enum RemoteConversationCloseResult: String, Codable, Equatable, Sendable {
+    case closed
+    /// The agent or another process still runs. Ask, then retry with
+    /// `stopIfBusy`.
+    case confirmationRequired = "confirmation_required"
+    /// The session's tab is its workspace's only tab, so closing it also
+    /// closes the workspace. Ask, then retry with `confirmedWorkspaceCloseID`
+    /// and `stopIfBusy`.
+    case workspaceConfirmationRequired = "workspace_confirmation_required"
+    /// Closing would also remove a document with unsaved changes from the
+    /// session's tab. The Mac refuses.
+    case unsavedDocument = "unsaved_document"
+    /// The device may not write to this session.
+    case sessionWritesDisabled = "session_writes_disabled"
+    case conversationNotFound = "conversation_not_found"
+    case failed
+}
+
+public struct RemoteConversationCloseResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var result: RemoteConversationCloseResult
+
+    public init(result: RemoteConversationCloseResult) {
         self.protocolVersion = RemoteGatewayProtocol.version
         self.result = result
     }

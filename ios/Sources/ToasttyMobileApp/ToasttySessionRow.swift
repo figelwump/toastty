@@ -341,8 +341,8 @@ struct ToasttySpawnerChipLabel: View {
 }
 
 extension View {
-    /// The session row's swipe actions: Info always, and Flag while the Mac
-    /// takes the change. Neither is a full swipe, since a full swipe would
+    /// The session row's swipe actions: Info always, and Flag and Close while
+    /// the Mac takes them. None is a full swipe, since a full swipe would
     /// act on a row the user only meant to peek at.
     func toasttySessionSwipeActions(
         _ conversation: MobileConversation,
@@ -368,6 +368,55 @@ extension View {
                 }
                 .tint(ToasttySessionRow.laterFlagColor)
                 .accessibilityIdentifier("toastty-session-swipe-flag-\(conversation.id.uuidString)")
+            }
+            if controller.canCloseConversations {
+                // Not a destructive role: that role removes the row before
+                // the Mac answers, and a working agent keeps its row.
+                Button {
+                    controller.closeConversation(conversation.id)
+                } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+                .tint(.red)
+                .accessibilityIdentifier("toastty-session-swipe-close-\(conversation.id.uuidString)")
+            }
+        }
+    }
+
+    /// Asks before a close stops an agent that is still working.
+    func toasttySessionCloseConfirmation(_ controller: HomeScreenController) -> some View {
+        confirmationDialog(
+            controller.closeConfirmation.map { confirmation in
+                switch confirmation.reason {
+                case .agentRunning: "Close \u{201C}\(confirmation.title)\u{201D}?"
+                case .closesWorkspace: "Close \u{201C}\(confirmation.title)\u{201D} and its workspace?"
+                }
+            } ?? "",
+            isPresented: Binding(
+                get: { controller.closeConfirmation != nil },
+                set: { isPresented in
+                    if isPresented == false { controller.cancelConversationClose() }
+                }
+            ),
+            titleVisibility: .visible,
+            presenting: controller.closeConfirmation
+        ) { confirmation in
+            Button(confirmation.closesWorkspace ? "Close Workspace" : "Stop and Close", role: .destructive) {
+                controller.confirmConversationClose()
+            }
+            .accessibilityIdentifier("toastty-session-close-confirm")
+            Button("Cancel", role: .cancel) {
+                controller.cancelConversationClose()
+            }
+        } message: { confirmation in
+            switch confirmation.reason {
+            case .agentRunning:
+                Text("The agent is still running. Closing stops it and closes its pane on your Mac.")
+            case .closesWorkspace(_, let workspaceTitle):
+                Text(
+                    "This is the only tab in \u{201C}\(workspaceTitle)\u{201D} on your Mac, so closing the session also "
+                        + "closes the workspace and stops the agent. Any associated git worktree is not cleaned up automatically."
+                )
             }
         }
     }

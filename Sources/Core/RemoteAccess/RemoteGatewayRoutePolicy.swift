@@ -14,6 +14,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case conversationReadAcknowledge
     case workspaceDone
     case conversationFlag
+    case conversationClose
     case conversationQueueUpdate
     case conversationInterrupt
     case conversationLocalDraftRelease
@@ -41,6 +42,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .workspaceDone: "/api/workspace.done.set"
         case .conversationFlag: "/api/conversation.flag.set"
+        case .conversationClose: "/api/conversation.close"
         case .conversationQueueUpdate: "/api/conversation.queue.update"
         case .conversationInterrupt: "/api/conversation.interrupt"
         case .conversationLocalDraftRelease: "/api/conversation.draft.release"
@@ -104,6 +106,7 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // even though it sends no text to an agent.
         .workspaceDone: .init(route: .workspaceDone, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .conversationFlag: .init(route: .conversationFlag, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .conversationClose: .init(route: .conversationClose, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         // Editing the Mac-side queue, stopping a turn, and releasing a Mac
         // draft change what the agent receives, so each needs send scope
         // like a message send.

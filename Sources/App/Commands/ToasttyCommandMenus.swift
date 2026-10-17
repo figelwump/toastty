@@ -730,6 +730,15 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
 
+            Button(ToasttyBuiltInCommand.closeTab.title) {
+                store.closeSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.closeTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.closeTab.requiredShortcut.modifiers
+            )
+            .disabled(store.canCloseSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
+
             Button(ToasttyBuiltInCommand.selectPreviousTab.title) {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,

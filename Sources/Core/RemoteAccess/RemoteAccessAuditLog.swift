@@ -29,6 +29,7 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         case sessionWritesChanged = "session_writes_changed"
         case workspaceDoneChanged = "workspace_done_changed"
         case conversationFlagChanged = "conversation_flag_changed"
+        case conversationClosed = "conversation_closed"
         case sessionStartAccepted = "session_start_accepted"
         case sessionStartRejected = "session_start_rejected"
     }

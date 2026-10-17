@@ -90,6 +90,31 @@ refused. It writes `remote-session-start.json` under the run's artifacts
 directory. This is state evidence from the automation socket and the gateway.
 It is not a screenshot, and it does not cover the iOS screens.
 
+### Remote session close
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/remote-session-close-check.py'
+```
+
+This checks session closes from a paired device end to end on the remote
+host, with the same kind of second instance, fake `claude` script, seeded
+device, and loopback gateway as the start check. It starts two sessions over
+HTTP. One stays quiet; the other reports a finished turn through the Toastty
+CLI. The check waits for that report rather than for the phone's list state,
+which follows the provider transcript that the fake agent does not write. It
+verifies that closing the quiet session first returns
+`confirmation_required` and changes nothing, that `stopIfBusy` then closes only
+that session's background tab, that the finished session closes without
+asking, that neither close changes the selected tab or focused panel, that
+both sessions leave the session list, and that a repeat finds nothing. A
+third session, left as its workspace's only tab, must return
+`workspace_confirmation_required` even with `stopIfBusy` or with another
+workspace's ID, then close the workspace once `confirmedWorkspaceCloseID`
+names it, while another workspace stays selected. It
+writes `remote-session-close.json` under the run's artifacts directory. It
+does not cover the Mac sidebar menu or the iOS screens.
+
 ### Remote input control
 
 Run the live input check against the provider whose input behavior changed:

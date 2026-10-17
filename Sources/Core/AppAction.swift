@@ -69,7 +69,10 @@ public enum AppAction: Equatable, Sendable {
     case movePanelToSlot(panelID: UUID, targetSlotID: UUID)
     case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetSlotID: UUID?)
     case detachPanelToNewWindow(panelID: UUID)
-    case closePanel(panelID: UUID)
+    /// Closes a panel, and its tab when the panel was the tab's last. The
+    /// close normally selects the panel's tab first; a background close
+    /// (`preservesTabSelection`) keeps the workspace's selected tab instead.
+    case closePanel(panelID: UUID, preservesTabSelection: Bool = false)
     case reopenLastClosedPanel(workspaceID: UUID)
     case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
     case createRightAuxWebPanel(
