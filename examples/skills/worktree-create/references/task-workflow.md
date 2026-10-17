@@ -42,15 +42,27 @@ without a PR workflow report the verified commit and evidence directly instead.
 After creating or updating a PR for this task, automatically open its exact
 URL in this task workspace's right panel. Use `panel.create.browser` with the
 verified task `workspaceID`, the PR URL, and `placement=rightPanel`, following
-the live descriptors and panel guidance in `toastty-capabilities`. Reuse an
-existing panel for the same PR URL instead of creating duplicates. Open draft
-PRs too, and open each distinct PR if the task creates more than one. Check the
-action result and verify each panel's URL and placement; report opening failures
+the live descriptors and panel guidance in `toastty-capabilities`. Reuse a known
+panel for the PR or one already showing it instead of creating duplicates. Open
+draft PRs too, and open each distinct PR if the task creates more than one. Check
+the action result and verify each panel's URL and placement; report opening failures
 without claiming success.
 
 Present verification together in one HTML report in the task workspace's right
 panel, built to the evidence-report rules in the global instructions. Produce it
 for every implementation task, even a small one.
+
+Provide concrete, reproducible proof of verification for the reviewed commit.
+Map every material PR change, affected user behavior, contract, and regression
+risk to its verifying check and inspectable output or artifacts, or to an
+explicit coverage gap. Record the exact command or user steps, checked commit,
+target/environment, expected
+and observed results, and artifact paths or links. State coverage gaps and what
+the evidence cannot establish; a passing summary or unsupported claim is not
+proof. Keep validation proportionate to the actual change. Do not promise
+absolute certainty or add unrelated exhaustive checks. After further changes,
+refresh the mapping and evidence for the new reviewed commit, rerunning affected
+checks and identifying any evidence retained from an earlier commit.
 
 Use the Toastty Scratchpad for a self-contained report that fits its constraints;
 use a Toastty browser panel for an HTML report with large or multiple media files.
@@ -66,8 +78,10 @@ Prepare verification evidence before PR publication when needed. For the final
 review handoff, open or reuse the PR panels first, then open or select the
 verification report last. Repeat this order after later updates, reusing the
 report's existing panel. Before reporting the task ready for review, verify that
-the report is the selected, visible tab in the task workspace's right panel. Do
-not open another artifact after this final display step.
+the report names the current task commit and matches the pushed PR head when
+applicable, with any retained earlier evidence identified. Verify that the report
+is the selected, visible tab in the task workspace's right panel. Do not open
+another artifact after this final display step.
 
 Also annotate this workspace with the PR: set the `github-pr` annotation to the
 PR number and its URL, following the workspace
