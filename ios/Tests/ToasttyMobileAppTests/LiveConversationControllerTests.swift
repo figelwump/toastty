@@ -1072,6 +1072,40 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(requests[0], requests[1])
     }
 
+    func testApprovalsDisabledRejectionStaysRetryableAfterTheMacSwitchIsTurnedOn() async throws {
+        let recorder = QuestionAnswerRecorder(results: [
+            .success(.rejected(reason: .approvalsDisabled)),
+            .success(.submitted),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            answerQuestion: { request in try await recorder.answer(request) }
+        )
+        subject.consumeConnectionState(ConnectionCoordinator.State(
+            connectionGeneration: 4,
+            phase: .live,
+            capabilities: [.questionAnswers]
+        ))
+        subject.consume(state(runID: runID(1), events: [questionPresentedEvent(1)], phase: .live))
+        subject.editInteractionAnswer(
+            interactionID: questionInteraction.id,
+            edit: .selectOnly(questionID: "0", optionID: "1")
+        )
+        await subject.submitInteractionAnswer(interactionID: questionInteraction.id)
+        guard case .failed(let message) = subject.interactionAnswerStates[questionInteraction.id]?.status else {
+            return XCTFail("A disabled device must be able to try again after the switch is turned on")
+        }
+        XCTAssertTrue(message.contains("Approve requests"))
+        XCTAssertEqual(subject.interactionAnswerStates[questionInteraction.id]?.canSubmit, true)
+
+        await subject.submitInteractionAnswer(interactionID: questionInteraction.id)
+        XCTAssertEqual(subject.interactionAnswerStates[questionInteraction.id]?.status, .awaitingClaude)
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertNotEqual(requests[0].clientRequestID, requests[1].clientRequestID)
+    }
+
     func testQuestionClosureRevokesFormAndCanonicalResolutionWins() async throws {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,

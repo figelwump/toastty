@@ -295,6 +295,37 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-question-answer-accepted", of: app)
     }
 
+    func testPermissionFixtureShowsPreviewAndSendsOneTapDecision() {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SCENARIO": "interaction-answer",
+            "TOASTTY_MOBILE_FIXTURE_PERMISSION": "1",
+        ])
+        openGatedSendConversation(in: app)
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        for _ in 0..<4 { transcript.swipeDown() }
+
+        let preview = app.descendants(matching: .any)[
+            "toastty-mobile-permission-preview-fixture-question-interaction"
+        ]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Run the permission broker tests"].exists)
+        let prefix = "toastty-mobile-permission-option-fixture-question-interaction-"
+        for option in ["allow", "always:0", "deny"] {
+            XCTAssertTrue(app.buttons["\(prefix)\(option)"].exists, option)
+        }
+        attachScreenshot(named: "fixture-permission-request", of: app)
+
+        let always = app.buttons["\(prefix)always:0"]
+        for _ in 0..<8 where always.isHittable == false { transcript.swipeUp() }
+        XCTAssertTrue(always.isHittable)
+        always.tap()
+
+        let sent = app.staticTexts["Sent from iPhone: Always allow Bash(xcodebuild -workspace:*)"]
+        XCTAssertTrue(sent.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["\(prefix)deny"].exists)
+        attachScreenshot(named: "fixture-permission-sent", of: app)
+    }
+
     func testFixtureCurrentBuildDeepLinksRouteWorkspaceAndConversation() throws {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"

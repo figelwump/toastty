@@ -2854,6 +2854,9 @@ final class RemoteAccessService: ObservableObject {
             .first(where: { $0.id == request.interactionID }) else { return .rejected(reason: .notPending) }
         guard interaction.inputEpoch == request.expectedInputEpoch else { return .rejected(reason: .epochMismatch) }
         guard interaction.responseID == request.responseID else { return .rejected(reason: .notPending) }
+        if interaction.kind == .permission, device.canApprovePermissions == false {
+            return .rejected(reason: .approvalsDisabled)
+        }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
     }
 
@@ -3792,6 +3795,25 @@ final class RemoteAccessService: ObservableObject {
             action: .deviceScopesChanged,
             deviceID: deviceID,
             detail: enabled ? "start_enabled" : "start_disabled"
+        ))
+        deviceManagementError = nil
+        refreshDevices()
+    }
+
+    func setDevicePermissionApproval(_ enabled: Bool, for deviceID: UUID) {
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
+        do {
+            guard try deviceStore.setPermissionApprovalEnabled(enabled, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
+        auditLog.record(RemoteAccessAuditEntry(
+            at: Date(),
+            action: .deviceScopesChanged,
+            deviceID: deviceID,
+            detail: enabled ? "approve_enabled" : "approve_disabled"
         ))
         deviceManagementError = nil
         refreshDevices()

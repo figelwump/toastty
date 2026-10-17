@@ -70,7 +70,7 @@ struct ToasttyMobileRootView: View {
             )
             _fixtureInteractionAnswerState = State(initialValue: ToasttyInteractionAnswerState(
                 key: key,
-                questions: ToasttyConversationFixture.questions
+                questions: ToasttyConversationFixture.answerQuestions
             ))
         } else {
             _fixtureInteractionAnswerState = State(initialValue: nil)
@@ -789,6 +789,14 @@ struct ToasttyMobileRootView: View {
                state.key.interactionID == interactionID,
                state.canSubmit,
                let answers = state.canonicalAnswers {
+                state.retryRequest = RemoteQuestionAnswerRequest(
+                    conversationID: RemoteConversationID(rawValue: conversationID),
+                    interactionID: interactionID,
+                    responseID: state.key.responseID,
+                    expectedInputEpoch: state.key.inputEpoch,
+                    clientRequestID: "fixture-answer",
+                    answers: answers
+                )
                 state.status = .submitting
                 fixtureInteractionAnswerState = state
                 Task { @MainActor in

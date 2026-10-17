@@ -5907,10 +5907,11 @@ extension SessionRuntimeStore {
         }
         let reply = claudeQuestionBroker.handle(request, identity: identity, at: now)
         if request.phase == .begin, reply.status == .pending {
-            updateStatus(sessionID: request.sessionID,
-                status: SessionStatus(kind: .needsApproval, summary: "Needs input",
-                    detail: "Claude Code is waiting for your answers"),
-                at: now)
+            let status = request.event?.permission.map {
+                SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: $0.summary)
+            } ?? SessionStatus(kind: .needsApproval, summary: "Needs input",
+                               detail: "Claude Code is waiting for your answers")
+            updateStatus(sessionID: request.sessionID, status: status, at: now)
         }
         publishClaudeQuestionChanges(at: now)
         if claudeQuestionWatchdog == nil, !claudeQuestionBroker.entries.isEmpty {
@@ -5935,6 +5936,14 @@ extension SessionRuntimeStore {
         let now = Date()
         claudeQuestionBroker.reconcile(observations, identity: identity, at: now)
         publishClaudeQuestionChanges(at: now)
+        // Claude records an interrupt (Esc, or "No" to a permission request,
+        // including a phone Deny) only in the transcript; no hook reports it.
+        if observations.contains(where: {
+            guard $0.mayAuthorizeCurrentRuntime, case .turnEnded(_, .aborted) = $0.payload else { return false }
+            return true
+        }) {
+            _ = handleLocalInterruptForPanelIfActive(panelID: panelID, kind: .escape, at: now)
+        }
     }
 
     func submitClaudeQuestion(_ request: RemoteQuestionAnswerRequest, sessionID: String, panelID: UUID,

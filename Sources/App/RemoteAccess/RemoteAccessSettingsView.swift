@@ -502,6 +502,16 @@ struct RemoteAccessSettingsView: View {
                             .controlSize(.small)
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device start new agent sessions in your workspaces.")
+                            // Approving sends a decision to the agent, so it
+                            // also needs send access. Off until turned on.
+                            Toggle("Approve requests", isOn: Binding(
+                                get: { device.permissionApprovalEnabled },
+                                set: { service.setDevicePermissionApproval($0, for: device.id) }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(device.scopes.contains(.send) == false)
+                            .help("Let this device allow or deny Claude Code permission requests, including saving Always Allow rules.")
                         }
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)

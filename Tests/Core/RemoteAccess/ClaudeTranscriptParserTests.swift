@@ -96,6 +96,28 @@ struct ClaudeTranscriptParserTests {
         ])
     }
 
+    @Test func interruptRecordsEndTheTurnInsteadOfAddingUserMessages() {
+        // Records Claude Code 2.1.302 wrote after "No" in a permission prompt
+        // and after Esc during a reply.
+        let contents = #"""
+        {"type":"assistant","uuid":"tool","timestamp":"2026-10-17T17:58:07.000Z","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git init -q denied-repo"}}]}}
+        {"type":"user","uuid":"refused","timestamp":"2026-10-17T17:58:07.100Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":"The user doesn't want to proceed with this tool use."}]}}
+        {"type":"user","uuid":"stop-tool","timestamp":"2026-10-17T17:58:07.200Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+        {"type":"user","uuid":"stop-reply","timestamp":"2026-10-17T17:59:07.200Z","message":{"content":"[Request interrupted by user]"}}
+        {"type":"user","uuid":"quoted","timestamp":"2026-10-17T18:00:07.200Z","message":{"content":"Why did it say [Request interrupted by user]?"}}
+        {"type":"user","uuid":"typed","timestamp":"2026-10-17T18:01:07.200Z","origin":{"kind":"human"},"promptSource":"user","message":{"content":"[Request interrupted by user]"}}
+        """#
+        let observations = ClaudeTranscriptParser.parseContents(contents).observations
+        #expect(observations.map(Self.describe) == [
+            "toolStarted:Bash:toolu_1",
+            "toolFinished:toolu_1:failed",
+            "turnEnded:nil:aborted",
+            "turnEnded:nil:aborted",
+            "user:Why did it say [Request interrupted by user]?",
+            "user:[Request interrupted by user]",
+        ])
+    }
+
     @Test func parsesBasicSessionInOrder() {
         let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession)
         #expect(result.malformedLineCount == 0)
