@@ -78,6 +78,9 @@ final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
     /// Set once at launch; runs what the Merge button asks for.
     var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Set once at launch; exits an agent after its turn on request, and
+    /// closes a phone-started session's pane after a clean agent exit.
+    var sessionExitController: SessionExitController?
 
     /// Receives accepted actionable transitions after deduplication and any
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
@@ -113,6 +116,8 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
+    /// When someone last typed into each panel, with or without a session.
+    private var lastLocalInputAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -451,8 +456,14 @@ final class SessionRuntimeStore: ObservableObject {
     /// baseline.
     func noteLocalInputForActiveSession(panelID: UUID) {
         acknowledgePresentedProgramStatusResults(panelID: panelID)
+        lastLocalInputAtByPanelID[panelID] = Date()
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+    }
+
+    /// When user- or automation-authored input last reached `panelID`.
+    func lastLocalInputAt(panelID: UUID) -> Date? {
+        lastLocalInputAtByPanelID[panelID]
     }
 
     /// A remote user released the Mac draft lock: they say the composer holds
@@ -863,6 +874,9 @@ final class SessionRuntimeStore: ObservableObject {
         )
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        if previousRecord?.turnStartedAt == nil, nextRegistry.sessionsByID[sessionID]?.turnStartedAt != nil {
+            sessionExitController?.handle(.turnStarted(sessionID: sessionID))
+        }
         clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
@@ -3017,6 +3031,7 @@ final class SessionRuntimeStore: ObservableObject {
             registry.stopSession(sessionID: record.sessionID, at: now)
         }
         completedHookLifecycleSessionIDs.remove(record.sessionID)
+        sessionExitController?.handle(.stopped(sessionID: record.sessionID, panelID: record.panelID, reason: reason))
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
@@ -3223,10 +3238,14 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
+        let livePanelIDs = Set(state.workspacesByID.values.flatMap { $0.allTerminalPanelIDs })
         programStatusRuntime.synchronize(
-            livePanelIDs: Set(state.workspacesByID.values.flatMap { $0.allTerminalPanelIDs }),
+            livePanelIDs: livePanelIDs,
             activeSessionIDs: Set(nextRegistry.sessionsByID.values.filter(\.isActive).map(\.sessionID))
         )
+        if lastLocalInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
+            lastLocalInputAtByPanelID = lastLocalInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+        }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         publish(nextRegistry, reason: "synchronize_app_state", at: now)
     }
@@ -3274,6 +3293,9 @@ final class SessionRuntimeStore: ObservableObject {
             // Non-emitting kinds still update transition state, and any
             // non-ready transition cancels a held ready event.
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+            if requestedKind == .idle, isRepeatedKind == false {
+                sessionExitController?.handle(.turnAbandoned(sessionID: sessionID))
+            }
 
         case .needsApproval:
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
@@ -3289,6 +3311,7 @@ final class SessionRuntimeStore: ObservableObject {
         case .error:
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
             guard isRepeatedKind == false else { return }
+            sessionExitController?.handle(.turnAbandoned(sessionID: sessionID))
             enqueueHookEvent(
                 kind: .sessionError,
                 record: record,
@@ -3388,6 +3411,7 @@ final class SessionRuntimeStore: ObservableObject {
         switch kind {
         case .turnComplete:
             actionableKind = .turnComplete
+            sessionExitController?.handle(.turnCompleted(sessionID: record.sessionID))
         case .needsApproval:
             actionableKind = .needsApproval
         case .sessionStart, .sessionError, .sessionStop:

@@ -243,6 +243,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `config.reload`
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
+- `session.exit-after-turn`
 
 Notable action-specific behavior:
 
@@ -324,6 +325,15 @@ Notable action-specific behavior:
     missing, ended, or replaced session returns `INVALID_PAYLOAD` before any
     terminal bytes or submission are sent; `allowUnavailable` cannot bypass
     this condition.
+- `session.exit-after-turn`
+  - requires `args.expectedSessionID`; the resolved panel must host that active
+    Claude Code or Codex session in a running turn, or the action returns
+    `INVALID_PAYLOAD`.
+  - when that turn completes, Toastty types the agent's native `/exit`. It
+    skips the exit if any input reached the panel during the turn, including
+    phone messages, if the turn ends without completing, or if a new turn
+    starts first.
+  - the result includes `sessionID`, `panelID`, `exitCommand`, and `armed`.
 - `agent.launch`
   - requires `args.profileID`.
   - optional `args.workspaceID` and `args.panelID` values must be UUID strings;
