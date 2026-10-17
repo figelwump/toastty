@@ -45,6 +45,7 @@ function releaseEnvironment(overrides = {}) {
     IOS_DISTRIBUTION_CERTIFICATE_BASE64: "certificate-fixture",
     IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: "password-fixture",
     IOS_APPSTORE_PROVISIONING_PROFILE_BASE64: "profile-fixture",
+    IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64: "share-profile-fixture",
     TUIST_TOASTTY_MOBILE_VERSION: "1.5.0",
     TUIST_TOASTTY_MOBILE_BUILD_NUMBER: "123.1",
     TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL: "https://push.example.com",
@@ -81,9 +82,9 @@ test("release script is safe-by-default and validates before explicit upload", (
   assert.match(script, /UPLOAD_REQUESTED="\$\{TOASTTY_IOS_UPLOAD:-0\}"/);
   assert.match(script, /DOCUMENTED_SKIP_UPLOAD="\$\{SKIP_UPLOAD-0\}"/);
   assert.match(script, /trap cleanup EXIT/);
-  assert.match(script, /profile_get_task_allow/);
-  assert.match(script, /profile_provisioned_devices/);
-  assert.match(script, /profile_provisions_all_devices/);
+  assert.match(script, /must set get-task-allow to false/);
+  assert.match(script, /must be App Store distribution, not development or Ad Hoc/);
+  assert.match(script, /must be App Store distribution, not Enterprise/);
   assert.match(script, /OTHER_CODE_SIGN_FLAGS = --keychain/);
   assert.match(script, /framework targets must not receive the app provisioning profile/);
   assert.match(script, /CFBundleIconName/);
@@ -132,6 +133,7 @@ printf 'tuist %s\\n' "$*" >>"$TOOL_LOG"
 if [ "$1" = version ]; then printf '4.202.6\\n'; fi
 if [ "$1" = generate ]; then
   printf 'tuist push %s %s %s\\n' "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT" >>"$TOOL_LOG"
+  printf 'tuist share-extension %s %s\\n' "\${TUIST_TOASTTY_MOBILE_SHARE_EXTENSION-unset}" "$TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER" >>"$TOOL_LOG"
 fi
 `);
   writeExecutable(binDirectory, "security", `#!/bin/sh
@@ -153,12 +155,35 @@ exit 0
 key=${"${2#Print :}"}
 file=$3
 case "$file:$key" in
+  *share-extension-profile.plist:UUID) printf '%s\\n' "\${STUB_SHARE_PROFILE_UUID-SHARE-PROFILE-UUID}" ;;
+  *share-extension-profile.plist:Name) printf '%s\\n' "\${STUB_SHARE_PROFILE_NAME-Toastty Share App Store}" ;;
+  *share-extension-profile.plist:TeamIdentifier:0) printf '%s\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM" ;;
+  *share-extension-profile.plist:Entitlements:application-identifier) printf '%s\\n' "\${STUB_SHARE_PROFILE_APP_ID-$TOASTTY_IOS_DEVELOPMENT_TEAM.com.giantthings.toastty.mobile.share}" ;;
+  *share-extension-profile.plist:Entitlements:get-task-allow) printf 'false\\n' ;;
+  *share-extension-profile.plist:Entitlements:com.apple.security.application-groups:0) printf '%s\\n' "\${STUB_SHARE_PROFILE_GROUP-group.com.giantthings.toastty.mobile}" ;;
+  *share-extension-profile.plist:*) exit 1 ;;
+  *share-extension-signed-entitlements.plist:application-identifier) printf '%s\\n' "\${STUB_SHARE_SIGNED_APP_ID-$TOASTTY_IOS_DEVELOPMENT_TEAM.com.giantthings.toastty.mobile.share}" ;;
+  *share-extension-signed-entitlements.plist:get-task-allow) printf 'false\\n' ;;
+  *share-extension-signed-entitlements.plist:com.apple.security.application-groups:0) printf '%s\\n' "\${STUB_SHARE_SIGNED_GROUP-group.com.giantthings.toastty.mobile}" ;;
+  *share-extension-signed-entitlements.plist:*) exit 1 ;;
+  *share-extension-embedded-profile.plist:TeamIdentifier:0) printf '%s\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM" ;;
+  *share-extension-embedded-profile.plist:Entitlements:application-identifier) printf '%s\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM.com.giantthings.toastty.mobile.share" ;;
+  *share-extension-embedded-profile.plist:Entitlements:get-task-allow) printf 'false\\n' ;;
+  *share-extension-embedded-profile.plist:Entitlements:com.apple.security.application-groups:0) printf 'group.com.giantthings.toastty.mobile\\n' ;;
+  *share-extension-embedded-profile.plist:ProvisionsAllDevices) if [ "$STUB_SHARE_EXPORTED_ENTERPRISE" = 1 ]; then printf 'true\\n'; else exit 1; fi ;;
+  *share-extension-embedded-profile.plist:*) exit 1 ;;
+  *ToasttyShare.appex/Info.plist:CFBundleIdentifier) printf '%s\\n' "\${STUB_SHARE_BUNDLE_ID-com.giantthings.toastty.mobile.share}" ;;
+  *ToasttyShare.appex/Info.plist:CFBundleShortVersionString) printf '%s\\n' "$TUIST_TOASTTY_MOBILE_VERSION" ;;
+  *ToasttyShare.appex/Info.plist:CFBundleVersion) printf '%s\\n' "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER" ;;
+  *ToasttyShare.appex/Info.plist:ToasttyMobileAppGroup) printf 'group.com.giantthings.toastty.mobile\\n' ;;
   *appstore-profile.plist:UUID) printf 'PROFILE-UUID\\n' ;;
   *appstore-profile.plist:Name) printf 'Toastty App Store\\n' ;;
   *appstore-profile.plist:TeamIdentifier:0) printf '%s\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM" ;;
   *appstore-profile.plist:Entitlements:application-identifier) printf '%s.com.giantthings.toastty.mobile\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM" ;;
   *appstore-profile.plist:Entitlements:get-task-allow) printf 'false\\n' ;;
   *appstore-profile.plist:Entitlements:aps-environment) printf '%s\\n' "\${STUB_INPUT_PROFILE_ENVIRONMENT-production}" ;;
+  *appstore-profile.plist:Entitlements:com.apple.security.application-groups:0) printf '%s\\n' "\${STUB_INPUT_PROFILE_GROUP-group.com.giantthings.toastty.mobile}" ;;
+  *appstore-profile.plist:Entitlements:com.apple.security.application-groups:1) if [ -n "$STUB_INPUT_PROFILE_GROUP_1" ]; then printf '%s\\n' "$STUB_INPUT_PROFILE_GROUP_1"; else exit 1; fi ;;
   *appstore-profile.plist:Entitlements:ProvisionedDevices|*appstore-profile.plist:Entitlements:ProvisionsAllDevices) exit 1 ;;
   *embedded-profile.plist:TeamIdentifier:0) printf '%s\\n' "\${STUB_EXPORTED_PROFILE_TEAM-$TOASTTY_IOS_DEVELOPMENT_TEAM}" ;;
   *embedded-profile.plist:Entitlements:application-identifier) printf '%s\\n' "\${STUB_EXPORTED_PROFILE_APP_ID-$TOASTTY_IOS_DEVELOPMENT_TEAM.com.giantthings.toastty.mobile}" ;;
@@ -170,10 +195,12 @@ case "$file:$key" in
   *signed-entitlements.plist:com.apple.developer.team-identifier) printf '%s\\n' "\${STUB_SIGNED_TEAM-$TOASTTY_IOS_DEVELOPMENT_TEAM}" ;;
   *signed-entitlements.plist:get-task-allow) printf '%s\\n' "\${STUB_SIGNED_GET_TASK_ALLOW-false}" ;;
   *signed-entitlements.plist:aps-environment) printf '%s\\n' "\${STUB_SIGNED_ENVIRONMENT-production}" ;;
+  *signed-entitlements.plist:com.apple.security.application-groups:0) printf '%s\\n' "\${STUB_SIGNED_GROUP-group.com.giantthings.toastty.mobile}" ;;
   *ExportOptions.plist:method) printf 'app-store-connect\\n' ;;
   *ExportOptions.plist:signingStyle) printf 'manual\\n' ;;
   *ExportOptions.plist:teamID) printf '%s\\n' "$TOASTTY_IOS_DEVELOPMENT_TEAM" ;;
   *ExportOptions.plist:provisioningProfiles:com.giantthings.toastty.mobile) printf 'Toastty App Store\\n' ;;
+  *ExportOptions.plist:provisioningProfiles:com.giantthings.toastty.mobile.share) printf 'Toastty Share App Store\\n' ;;
   *Payload/Toastty.app/Info.plist:CFBundleIdentifier) printf '%s\\n' "\${STUB_EXPORTED_BUNDLE_ID-com.giantthings.toastty.mobile}" ;;
   *Payload/Toastty.app/Info.plist:CFBundleShortVersionString) printf '%s\\n' "\${STUB_EXPORTED_VERSION-$TUIST_TOASTTY_MOBILE_VERSION}" ;;
   *Payload/Toastty.app/Info.plist:CFBundleVersion) printf '%s\\n' "\${STUB_EXPORTED_BUILD-$TUIST_TOASTTY_MOBILE_BUILD_NUMBER}" ;;
@@ -209,6 +236,13 @@ case " $* " in
   *" -version "*) printf 'Xcode 26.0\\nBuild version 17A123\\n' ;;
   *" -showBuildSettings "*)
     case " $* " in
+      *" -target ToasttyMobileShareExtension "*)
+        printf '    PRODUCT_BUNDLE_IDENTIFIER = com.giantthings.toastty.mobile.share\\n'
+        printf '    CODE_SIGN_IDENTITY = Apple Distribution\\n'
+        printf '    CODE_SIGN_STYLE = Manual\\n'
+        printf '    PROVISIONING_PROFILE_SPECIFIER = %s\\n' "\${STUB_SHARE_SETTINGS_PROFILE-Toastty Share App Store}"
+        printf '    OTHER_CODE_SIGN_FLAGS = %s\\n' "$TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS"
+        ;;
       *" -target ToasttyMobileApp "*)
         printf '    PRODUCT_BUNDLE_IDENTIFIER = com.giantthings.toastty.mobile\\n'
         printf '    CODE_SIGN_IDENTITY = Apple Distribution\\n'
@@ -224,6 +258,7 @@ case " $* " in
     mkdir -p "$app"
     : >"$app/Info.plist"
     printf 'assets' >"$app/Assets.car"
+    if [ "$STUB_OMIT_SHARE_EXTENSION" != 1 ]; then mkdir -p "$app/PlugIns/ToasttyShare.appex" && : >"$app/PlugIns/ToasttyShare.appex/Info.plist"; fi
     : >"$app/PrivacyInfo.xcprivacy"
     symbols="$TOASTTY_IOS_RELEASE_OUTPUT_DIR/Toastty.xcarchive/dSYMs/Toastty.app.dSYM/Contents/Resources/DWARF"
     mkdir -p "$symbols"
@@ -234,6 +269,7 @@ case " $* " in
     mkdir -p "$payload"
     cp -R "$TOASTTY_IOS_RELEASE_OUTPUT_DIR/Toastty.xcarchive/Products/Applications/Toastty.app" "$payload/Toastty.app"
     if [ "$STUB_OMIT_EMBEDDED_PROFILE" != 1 ]; then printf 'profile' >"$payload/Toastty.app/embedded.mobileprovision"; fi
+    if [ -d "$payload/Toastty.app/PlugIns/ToasttyShare.appex" ]; then printf 'profile' >"$payload/Toastty.app/PlugIns/ToasttyShare.appex/embedded.mobileprovision"; fi
     if [ "$STUB_EXTRA_APP" = 1 ]; then cp -R "$payload/Toastty.app" "$payload/Other.app"; fi
     if [ "$STUB_OMIT_EXPORTED_PLIST" = 1 ]; then rm "$payload/Toastty.app/Info.plist"; fi
     (cd "$TOASTTY_IOS_RELEASE_OUTPUT_DIR/export" && /usr/bin/zip -q -r Toastty.ipa Payload)
@@ -291,6 +327,8 @@ esac
     assert.match(documentedSkip.invocations, /tuist install/);
     assert.match(documentedSkip.invocations, /tuist generate --no-open/);
     assert.match(documentedSkip.invocations, /tuist push https:\/\/push\.example\.com toastty-push-production-v1 production/);
+    assert.match(documentedSkip.invocations, /tuist share-extension 1 Toastty Share App Store/);
+    assert.match(documentedSkip.invocations, /codesign --verify --strict .*ToasttyShare\.appex/);
     assert.match(documentedSkip.invocations, /xcodebuild .* -scheme ToasttyMobileApp-Release .* archive/);
     assert.ok(fs.existsSync(path.join(documentedSkip.outputDirectory, "export/Toastty.ipa")));
     assert.match(documentedSkip.output, /Upload request suppressed by validate-only skip input/);
@@ -317,6 +355,12 @@ esac
       .update(fs.readFileSync(path.join(documentedSkip.outputDirectory, "export/Toastty.ipa")))
       .digest("hex");
     assert.ok(documentedSkip.metadata.includes(`IPA_SHA256=${ipaHash}\n`));
+
+    const secondGroup = runStubbedRelease("app-group-listed-second", {
+      STUB_INPUT_PROFILE_GROUP: "group.com.giantthings.other",
+      STUB_INPUT_PROFILE_GROUP_1: "group.com.giantthings.toastty.mobile",
+    });
+    assert.match(secondGroup.metadata, /STATUS=validated/);
 
     const boundary = runStubbedRelease("valid-boundaries", {
       TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL: "https://push.example.com:443/",
@@ -418,6 +462,36 @@ esac
       });
     }
 
+    // Both App Store profiles must cover their exact bundle and the shared
+    // App Group before the Keychain or any build tool changes.
+    const invalidInputProfiles = [
+      ["app-profile-without-group", { STUB_INPUT_PROFILE_GROUP: "" }, /IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 must include the App Group/],
+      ["share-profile-wrong-app", { STUB_SHARE_PROFILE_APP_ID: "TEAM123.com.giantthings.toastty.mobile" }, /SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64 application identifier/],
+      ["share-profile-without-group", { STUB_SHARE_PROFILE_GROUP: "group.other" }, /SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64 must include the App Group/],
+      ["same-profile-names", { STUB_SHARE_PROFILE_NAME: "Toastty App Store" }, /different names/],
+      ["missing-share-uuid", { STUB_SHARE_PROFILE_UUID: "" }, /each have their own UUID/],
+      ["missing-share-profile", { IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64: "" }, /SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64 is required/],
+    ];
+    for (const [label, overrides, expectedError] of invalidInputProfiles) {
+      assert.throws(() => runStubbedRelease(label, overrides), (error) => {
+        assert.match(error.stderr.toString(), expectedError);
+        assert.doesNotMatch(fs.readFileSync(toolLog, "utf8"), /security create-keychain|xcodebuild .* archive|--validate-app|--upload-app/);
+        return true;
+      });
+    }
+
+    for (const [label, overrides, expectedError] of [
+      ["share-settings-profile", { STUB_SHARE_SETTINGS_PROFILE: "Toastty App Store" }, /share extension provisioning profile build setting/],
+      ["missing-share-extension", { STUB_OMIT_SHARE_EXTENSION: "1" }, /must embed exactly the ToasttyShare\.appex/],
+      ["wrong-share-bundle", { STUB_SHARE_BUNDLE_ID: "com.giantthings.toastty.mobile.other" }, /CFBundleIdentifier mismatch/],
+    ]) {
+      assert.throws(() => runStubbedRelease(label, overrides), (error) => {
+        assert.match(error.stderr.toString(), expectedError);
+        assert.doesNotMatch(fs.readFileSync(toolLog, "utf8"), /-exportArchive|--validate-app|--upload-app/);
+        return true;
+      });
+    }
+
     // The exported file is authoritative. Generation/archive success cannot
     // substitute for its effective settings, signature, or embedded profile.
     const invalidExports = [
@@ -445,6 +519,10 @@ esac
       ["missing-exported-plist", { STUB_OMIT_EXPORTED_PLIST: "1" }, /exactly one Toastty.app/],
       ["invalid-zip", { STUB_INVALID_IPA: "1" }, /valid ZIP archive/],
       ["invalid-signature", { STUB_INVALID_SIGNATURE: "1" }, /exported app signature is invalid/],
+      ["app-without-group", { STUB_SIGNED_GROUP: "" }, /exported app signature must include the App Group/],
+      ["share-without-group", { STUB_SHARE_SIGNED_GROUP: "group.other" }, /exported share extension signature must include the App Group/],
+      ["share-enterprise-profile", { STUB_SHARE_EXPORTED_ENTERPRISE: "1" }, /exported share extension profile must be App Store distribution, not Enterprise/],
+      ["share-wrong-signed-app", { STUB_SHARE_SIGNED_APP_ID: "TEAM123.com.giantthings.toastty.mobile" }, /application-identifier mismatch/],
       ["modified-during-verification", { STUB_MUTATE_VERIFY_IPA: "1" }, /IPA changed after verification/],
     ];
     for (const [label, overrides, expectedError] of invalidExports) {
@@ -602,6 +680,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
     "IOS_DISTRIBUTION_CERTIFICATE_BASE64",
     "IOS_DISTRIBUTION_CERTIFICATE_PASSWORD",
     "IOS_APPSTORE_PROVISIONING_PROFILE_BASE64",
+    "IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64",
   ];
 
   assert.match(workflow, /default: false/);

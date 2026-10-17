@@ -10,6 +10,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let firstToasttyConversationID = "B1000000-0000-0000-0000-000000000003"
     private let fourthToasttyConversationID = "B1000000-0000-0000-0000-000000000004"
     private let researchWorkspaceID = "A1000000-0000-0000-0000-000000000002"
+    /// Matches `ToasttySharedDraftFixture.draftID` in the app.
+    private let sharedDraftID = "5A4E0D2A-0000-4000-8000-000000000001"
     private let activeResearchConversationID = "B1000000-0000-0000-0000-000000000005"
     private let idleResearchConversationID = "B1000000-0000-0000-0000-000000000006"
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
@@ -933,6 +935,47 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 .firstMatch.waitForExistence(timeout: 5)
         )
         attachScreenshot(named: "fixture-new-session-home-listed", of: app)
+    }
+
+    func testSharedDraftLinkOpensThePrefilledNewSessionSheet() throws {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "link"])
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertFalse(start.exists, "A draft opened by its link waits for the link")
+
+        let link = try XCTUnwrap(URL(string: "toastty-mobile-dev://new-session/\(sharedDraftID)"))
+        app.open(link)
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertEqual(message.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-session-error"].exists,
+                      "The sheet says what the share left out")
+        let claude = app.buttons["toastty-mobile-new-session-agent-claude"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { start.isEnabled })
+        attachScreenshot(named: "fixture-shared-draft-sheet", of: app)
+        start.tap()
+
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        XCTAssertEqual(title.label, "New Claude session")
+    }
+
+    func testWaitingSharedDraftOpensWhenTheAppStarts() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "waiting"])
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertEqual(message.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        attachScreenshot(named: "fixture-shared-draft-waiting", of: app)
+
+        app.buttons["toastty-mobile-new-session-cancel"].tap()
+        XCTAssertTrue(start.waitForNonExistence(timeout: 5))
     }
 
     func testSwipeInfoOpensTheDetailSheet() {

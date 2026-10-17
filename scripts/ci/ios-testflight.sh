@@ -11,9 +11,15 @@ PROTOCOL_TARGET_NAME="RemoteProtocol"
 CONFIGURATION="Release"
 RELEASE_BUNDLE_ID="com.giantthings.toastty.mobile"
 APP_PRODUCT_NAME="Toastty"
+SHARE_EXTENSION_TARGET_NAME="ToasttyMobileShareExtension"
+SHARE_EXTENSION_BUNDLE_ID="$RELEASE_BUNDLE_ID.share"
+SHARE_EXTENSION_PRODUCT_NAME="ToasttyShare"
+APP_GROUP_ID="group.$RELEASE_BUNDLE_ID"
 SIGNING_PROFILE_NAME=""
-SIGNING_PROFILE_DESTINATION=""
-SIGNING_PROFILE_BACKUP=""
+SHARE_EXTENSION_PROFILE_NAME=""
+# Parallel lists: each installed profile path and its pre-existing backup, or "".
+INSTALLED_PROFILE_DESTINATIONS=()
+INSTALLED_PROFILE_BACKUPS=()
 SIGNING_KEYCHAIN_PATH=""
 SIGNING_ASSETS_DIR=""
 ASC_KEY_DIR=""
@@ -255,6 +261,20 @@ assert_plist_value() {
     || fail "$key_path mismatch in $plist_path: expected '$expected', found '$actual'"
 }
 
+# Succeeds when the plist array at key_path lists value at any index.
+plist_array_contains() {
+  local plist_path="$1"
+  local key_path="$2"
+  local value="$3"
+  local index=0
+  local entry
+  while entry="$("$PLIST_BUDDY" -c "Print :$key_path:$index" "$plist_path" 2>/dev/null)"; do
+    [[ "$entry" == "$value" ]] && return 0
+    index=$((index + 1))
+  done
+  return 1
+}
+
 assert_plist_key() {
   local plist_path="$1"
   local key_path="$2"
@@ -272,17 +292,52 @@ xml_escape() {
   printf '%s' "$value"
 }
 
+# Checks what both App Store profiles need: the team, the exact bundle ID,
+# App Store distribution, and the App Group the app and extension share.
+validate_app_store_profile() {
+  local profile_plist_path="$1"
+  local secret_name="$2"
+  local bundle_id="$3"
+
+  [[ "$(plist_value "$profile_plist_path" "TeamIdentifier:0")" == "$TOASTTY_IOS_DEVELOPMENT_TEAM" ]] \
+    || fail "$secret_name team does not match TOASTTY_IOS_DEVELOPMENT_TEAM"
+  [[ "$(plist_value "$profile_plist_path" "Entitlements:application-identifier")" == "$TOASTTY_IOS_DEVELOPMENT_TEAM.$bundle_id" ]] \
+    || fail "$secret_name application identifier does not match $bundle_id"
+  [[ "$(plist_value "$profile_plist_path" "Entitlements:get-task-allow")" == "false" ]] \
+    || fail "$secret_name must set get-task-allow to false"
+  [[ -z "$(plist_value_or_empty "$profile_plist_path" "ProvisionedDevices")" ]] \
+    || fail "$secret_name must be App Store distribution, not development or Ad Hoc"
+  [[ "$(plist_value_or_empty "$profile_plist_path" "ProvisionsAllDevices")" != "true" ]] \
+    || fail "$secret_name must be App Store distribution, not Enterprise"
+  plist_array_contains "$profile_plist_path" "Entitlements:com.apple.security.application-groups" "$APP_GROUP_ID" \
+    || fail "$secret_name must include the App Group $APP_GROUP_ID; enable App Groups on $bundle_id and regenerate its App Store distribution profile"
+}
+
+install_provisioning_profile() {
+  local profile_path="$1"
+  local profile_uuid="$2"
+  local destination="$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+  local backup=""
+
+  mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+  if [[ -e "$destination" ]]; then
+    backup="$SIGNING_ASSETS_DIR/existing-$profile_uuid.mobileprovision"
+    cp "$destination" "$backup"
+  fi
+  INSTALLED_PROFILE_DESTINATIONS+=("$destination")
+  INSTALLED_PROFILE_BACKUPS+=("$backup")
+  cp "$profile_path" "$destination"
+}
+
 setup_manual_signing_assets() {
   local cert_path="$SIGNING_ASSETS_DIR/distribution.p12"
   local profile_path="$SIGNING_ASSETS_DIR/appstore.mobileprovision"
   local profile_plist_path="$SIGNING_ASSETS_DIR/appstore-profile.plist"
-  local profile_uuid
-  local profile_team_identifier
-  local profile_app_identifier
-  local profile_get_task_allow
+  local extension_profile_path="$SIGNING_ASSETS_DIR/share-extension.mobileprovision"
+  local extension_profile_plist_path="$SIGNING_ASSETS_DIR/share-extension-profile.plist"
   local profile_push_environment
-  local profile_provisioned_devices
-  local profile_provisions_all_devices
+  local profile_uuid
+  local extension_profile_uuid
   local keychain
   local keychain_password
 
@@ -290,28 +345,25 @@ setup_manual_signing_assets() {
   decode_base64_to_file "$IOS_APPSTORE_PROVISIONING_PROFILE_BASE64" "$profile_path" "IOS_APPSTORE_PROVISIONING_PROFILE_BASE64"
   security cms -D -i "$profile_path" >"$profile_plist_path" \
     || fail "IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 must decode to a valid .mobileprovision file"
+  decode_base64_to_file "$IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64" "$extension_profile_path" \
+    "IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64"
+  security cms -D -i "$extension_profile_path" >"$extension_profile_plist_path" \
+    || fail "IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64 must decode to a valid .mobileprovision file"
 
-  profile_uuid="$(plist_value "$profile_plist_path" "UUID")"
   SIGNING_PROFILE_NAME="$(plist_value "$profile_plist_path" "Name")"
-  profile_team_identifier="$(plist_value "$profile_plist_path" "TeamIdentifier:0")"
-  profile_app_identifier="$(plist_value "$profile_plist_path" "Entitlements:application-identifier")"
-  profile_get_task_allow="$(plist_value "$profile_plist_path" "Entitlements:get-task-allow")"
+  validate_app_store_profile "$profile_plist_path" "IOS_APPSTORE_PROVISIONING_PROFILE_BASE64" "$RELEASE_BUNDLE_ID"
   profile_push_environment="$(plist_value_or_empty "$profile_plist_path" "Entitlements:aps-environment")"
-  profile_provisioned_devices="$(plist_value_or_empty "$profile_plist_path" "ProvisionedDevices")"
-  profile_provisions_all_devices="$(plist_value_or_empty "$profile_plist_path" "ProvisionsAllDevices")"
-
-  [[ "$profile_team_identifier" == "$TOASTTY_IOS_DEVELOPMENT_TEAM" ]] \
-    || fail "provisioning profile team does not match TOASTTY_IOS_DEVELOPMENT_TEAM"
-  [[ "$profile_app_identifier" == "$TOASTTY_IOS_DEVELOPMENT_TEAM.$RELEASE_BUNDLE_ID" ]] \
-    || fail "provisioning profile application identifier does not match the production app"
-  [[ "$profile_get_task_allow" == "false" ]] \
-    || fail "provisioning profile must set get-task-allow to false"
-  [[ -z "$profile_provisioned_devices" ]] \
-    || fail "provisioning profile must be App Store distribution, not development or Ad Hoc"
-  [[ "$profile_provisions_all_devices" != "true" ]] \
-    || fail "provisioning profile must be App Store distribution, not Enterprise"
   [[ "$profile_push_environment" == "production" ]] \
     || fail "provisioning profile must enable aps-environment=production; enable Push Notifications on $RELEASE_BUNDLE_ID and regenerate its App Store distribution profile"
+  SHARE_EXTENSION_PROFILE_NAME="$(plist_value "$extension_profile_plist_path" "Name")"
+  validate_app_store_profile "$extension_profile_plist_path" \
+    "IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64" "$SHARE_EXTENSION_BUNDLE_ID"
+  [[ "$SHARE_EXTENSION_PROFILE_NAME" != "$SIGNING_PROFILE_NAME" ]] \
+    || fail "the app and share extension profiles must have different names"
+  profile_uuid="$(plist_value_or_empty "$profile_plist_path" "UUID")"
+  extension_profile_uuid="$(plist_value_or_empty "$extension_profile_plist_path" "UUID")"
+  [[ -n "$profile_uuid" && -n "$extension_profile_uuid" && "$profile_uuid" != "$extension_profile_uuid" ]] \
+    || fail "the app and share extension profiles must each have their own UUID"
 
   SIGNING_KEYCHAIN_PATH="$SIGNING_ASSETS_DIR/toastty-signing.keychain-db"
   keychain_password="$(uuidgen)"
@@ -334,14 +386,9 @@ setup_manual_signing_assets() {
   security find-identity -v -p codesigning "$SIGNING_KEYCHAIN_PATH" | grep -Fq 'Apple Distribution' \
     || fail "temporary keychain has no Apple Distribution signing identity"
 
-  mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-  SIGNING_PROFILE_DESTINATION="$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
-  if [[ -e "$SIGNING_PROFILE_DESTINATION" ]]; then
-    SIGNING_PROFILE_BACKUP="$SIGNING_ASSETS_DIR/existing-$profile_uuid.mobileprovision"
-    cp "$SIGNING_PROFILE_DESTINATION" "$SIGNING_PROFILE_BACKUP"
-  fi
-  cp "$profile_path" "$SIGNING_PROFILE_DESTINATION"
-  log "Installed temporary App Store signing assets for $RELEASE_BUNDLE_ID."
+  install_provisioning_profile "$profile_path" "$profile_uuid"
+  install_provisioning_profile "$extension_profile_path" "$extension_profile_uuid"
+  log "Installed temporary App Store signing assets for $RELEASE_BUNDLE_ID and $SHARE_EXTENSION_BUNDLE_ID."
 }
 
 write_export_options_plist() {
@@ -351,6 +398,10 @@ write_export_options_plist() {
   escaped_team_id="$(xml_escape "$TOASTTY_IOS_DEVELOPMENT_TEAM")"
   escaped_bundle_id="$(xml_escape "$RELEASE_BUNDLE_ID")"
   escaped_profile_name="$(xml_escape "$SIGNING_PROFILE_NAME")"
+  local escaped_extension_bundle_id
+  local escaped_extension_profile_name
+  escaped_extension_bundle_id="$(xml_escape "$SHARE_EXTENSION_BUNDLE_ID")"
+  escaped_extension_profile_name="$(xml_escape "$SHARE_EXTENSION_PROFILE_NAME")"
 
   cat >"$EXPORT_OPTIONS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -361,7 +412,10 @@ write_export_options_plist() {
   <key>manageAppVersionAndBuildNumber</key><false/>
   <key>method</key><string>app-store-connect</string>
   <key>provisioningProfiles</key>
-  <dict><key>$escaped_bundle_id</key><string>$escaped_profile_name</string></dict>
+  <dict>
+    <key>$escaped_bundle_id</key><string>$escaped_profile_name</string>
+    <key>$escaped_extension_bundle_id</key><string>$escaped_extension_profile_name</string>
+  </dict>
   <key>signingStyle</key><string>manual</string>
   <key>signingCertificate</key><string>Apple Distribution</string>
   <key>stripSwiftSymbols</key><true/>
@@ -374,6 +428,7 @@ PLIST
   assert_plist_value "$EXPORT_OPTIONS_PLIST" "signingStyle" "manual"
   assert_plist_value "$EXPORT_OPTIONS_PLIST" "teamID" "$TOASTTY_IOS_DEVELOPMENT_TEAM"
   assert_plist_value "$EXPORT_OPTIONS_PLIST" "provisioningProfiles:$RELEASE_BUNDLE_ID" "$SIGNING_PROFILE_NAME"
+  assert_plist_value "$EXPORT_OPTIONS_PLIST" "provisioningProfiles:$SHARE_EXTENSION_BUNDLE_ID" "$SHARE_EXTENSION_PROFILE_NAME"
 }
 
 assert_release_build_setting() {
@@ -388,16 +443,23 @@ assert_ci_signing_build_settings() {
   local app_settings_path="$OUTPUT_DIR/app-build-settings.txt"
   local framework_settings_path="$OUTPUT_DIR/framework-build-settings.txt"
   local protocol_settings_path="$OUTPUT_DIR/protocol-build-settings.txt"
+  local extension_settings_path="$OUTPUT_DIR/share-extension-build-settings.txt"
 
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$APP_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$app_settings_path"
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$DOMAIN_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$framework_settings_path"
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$PROTOCOL_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$protocol_settings_path"
+  xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$SHARE_EXTENSION_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$extension_settings_path"
 
   assert_release_build_setting "$app_settings_path" "    PRODUCT_BUNDLE_IDENTIFIER = $RELEASE_BUNDLE_ID" "production bundle identifier"
   assert_release_build_setting "$app_settings_path" "    CODE_SIGN_IDENTITY = Apple Distribution" "app signing identity"
   assert_release_build_setting "$app_settings_path" "    CODE_SIGN_STYLE = Manual" "app manual signing"
   assert_release_build_setting "$app_settings_path" "    PROVISIONING_PROFILE_SPECIFIER = $SIGNING_PROFILE_NAME" "app provisioning profile"
   assert_release_build_setting "$app_settings_path" "    OTHER_CODE_SIGN_FLAGS = --keychain $SIGNING_KEYCHAIN_PATH" "temporary keychain"
+  assert_release_build_setting "$extension_settings_path" "    PRODUCT_BUNDLE_IDENTIFIER = $SHARE_EXTENSION_BUNDLE_ID" "share extension bundle identifier"
+  assert_release_build_setting "$extension_settings_path" "    CODE_SIGN_IDENTITY = Apple Distribution" "share extension signing identity"
+  assert_release_build_setting "$extension_settings_path" "    CODE_SIGN_STYLE = Manual" "share extension manual signing"
+  assert_release_build_setting "$extension_settings_path" "    PROVISIONING_PROFILE_SPECIFIER = $SHARE_EXTENSION_PROFILE_NAME" "share extension provisioning profile"
+  assert_release_build_setting "$extension_settings_path" "    OTHER_CODE_SIGN_FLAGS = --keychain $SIGNING_KEYCHAIN_PATH" "share extension temporary keychain"
 
   if grep -Fq "PROVISIONING_PROFILE_SPECIFIER =" "$framework_settings_path" "$protocol_settings_path"; then
     fail "framework targets must not receive the app provisioning profile"
@@ -417,6 +479,14 @@ verify_archive_configuration() {
   [[ -f "$privacy_manifest" ]] || fail "archived app is missing PrivacyInfo.xcprivacy"
   [[ -s "$ARCHIVE_PATH/dSYMs/$APP_PRODUCT_NAME.app.dSYM/Contents/Resources/DWARF/$APP_PRODUCT_NAME" ]] \
     || fail "archived app is missing its dSYM debug symbols"
+
+  local extension_plist="$app_path/PlugIns/$SHARE_EXTENSION_PRODUCT_NAME.appex/Info.plist"
+  [[ "$(find "$app_path/PlugIns" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')" == "1" && -f "$extension_plist" ]] \
+    || fail "archived app must embed exactly the $SHARE_EXTENSION_PRODUCT_NAME.appex share extension"
+  assert_plist_value "$extension_plist" "CFBundleIdentifier" "$SHARE_EXTENSION_BUNDLE_ID"
+  assert_plist_value "$extension_plist" "CFBundleShortVersionString" "$TUIST_TOASTTY_MOBILE_VERSION"
+  assert_plist_value "$extension_plist" "CFBundleVersion" "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
+  assert_plist_value "$extension_plist" "ToasttyMobileAppGroup" "$APP_GROUP_ID"
 
   assert_plist_value "$app_plist" "CFBundleIdentifier" "$RELEASE_BUNDLE_ID"
   assert_plist_value "$app_plist" "CFBundleShortVersionString" "$TUIST_TOASTTY_MOBILE_VERSION"
@@ -474,6 +544,8 @@ verify_exported_ipa() {
   assert_plist_value "$signed_entitlements" "application-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM.$RELEASE_BUNDLE_ID"
   assert_plist_value "$signed_entitlements" "com.apple.developer.team-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM"
   assert_plist_value "$signed_entitlements" "get-task-allow" "false"
+  plist_array_contains "$signed_entitlements" "com.apple.security.application-groups" "$APP_GROUP_ID" \
+    || fail "exported app signature must include the App Group $APP_GROUP_ID"
 
   [[ -f "$app_path/embedded.mobileprovision" ]] \
     || fail "exported app is missing embedded provisioning profile"
@@ -487,9 +559,33 @@ verify_exported_ipa() {
     || fail "exported app profile must be App Store distribution, not development or Ad Hoc"
   [[ "$(plist_value_or_empty "$embedded_profile" "ProvisionsAllDevices")" != "true" ]] \
     || fail "exported app profile must be App Store distribution, not Enterprise"
+  verify_exported_share_extension "$app_path/PlugIns/$SHARE_EXTENSION_PRODUCT_NAME.appex"
   rm -rf "$IPA_VERIFICATION_DIR"
   IPA_VERIFICATION_DIR=""
-  log "Verified exported IPA configuration, production push entitlement, team/application identifiers, and App Store profile."
+  log "Verified exported IPA configuration, production push entitlement, App Group, team/application identifiers, App Store profiles, and share extension."
+}
+
+verify_exported_share_extension() {
+  local extension_path="$1"
+  local signed_entitlements="$IPA_VERIFICATION_DIR/share-extension-signed-entitlements.plist"
+  local embedded_profile="$IPA_VERIFICATION_DIR/share-extension-embedded-profile.plist"
+
+  [[ -f "$extension_path/Info.plist" ]] \
+    || fail "exported app is missing the $SHARE_EXTENSION_PRODUCT_NAME.appex share extension"
+  assert_plist_value "$extension_path/Info.plist" "CFBundleIdentifier" "$SHARE_EXTENSION_BUNDLE_ID"
+  codesign --verify --strict "$extension_path" \
+    || fail "exported share extension signature is invalid"
+  codesign --display --entitlements - --xml "$extension_path" >"$signed_entitlements" \
+    || fail "cannot read exported share extension signed entitlements"
+  assert_plist_value "$signed_entitlements" "application-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM.$SHARE_EXTENSION_BUNDLE_ID"
+  assert_plist_value "$signed_entitlements" "get-task-allow" "false"
+  plist_array_contains "$signed_entitlements" "com.apple.security.application-groups" "$APP_GROUP_ID" \
+    || fail "exported share extension signature must include the App Group $APP_GROUP_ID"
+  [[ -f "$extension_path/embedded.mobileprovision" ]] \
+    || fail "exported share extension is missing embedded provisioning profile"
+  security cms -D -i "$extension_path/embedded.mobileprovision" >"$embedded_profile" \
+    || fail "cannot decode exported share extension embedded provisioning profile"
+  validate_app_store_profile "$embedded_profile" "exported share extension profile" "$SHARE_EXTENSION_BUNDLE_ID"
 }
 
 assert_verified_ipa() {
@@ -530,13 +626,14 @@ write_release_metadata() {
 }
 
 cleanup() {
-  if [[ -n "$SIGNING_PROFILE_DESTINATION" ]]; then
-    if [[ -n "$SIGNING_PROFILE_BACKUP" && -f "$SIGNING_PROFILE_BACKUP" ]]; then
-      cp "$SIGNING_PROFILE_BACKUP" "$SIGNING_PROFILE_DESTINATION" >/dev/null 2>&1 || true
+  local index
+  for index in "${!INSTALLED_PROFILE_DESTINATIONS[@]}"; do
+    if [[ -n "${INSTALLED_PROFILE_BACKUPS[$index]}" && -f "${INSTALLED_PROFILE_BACKUPS[$index]}" ]]; then
+      cp "${INSTALLED_PROFILE_BACKUPS[$index]}" "${INSTALLED_PROFILE_DESTINATIONS[$index]}" >/dev/null 2>&1 || true
     else
-      rm -f "$SIGNING_PROFILE_DESTINATION"
+      rm -f "${INSTALLED_PROFILE_DESTINATIONS[$index]}"
     fi
-  fi
+  done
   if [[ -n "$ORIGINAL_DEFAULT_KEYCHAIN" ]]; then
     security default-keychain -d user -s "$ORIGINAL_DEFAULT_KEYCHAIN" >/dev/null 2>&1 || true
   fi
@@ -582,6 +679,7 @@ require_env TOASTTY_IOS_DEVELOPMENT_TEAM
 require_env IOS_DISTRIBUTION_CERTIFICATE_BASE64
 require_env IOS_DISTRIBUTION_CERTIFICATE_PASSWORD
 require_env IOS_APPSTORE_PROVISIONING_PROFILE_BASE64
+require_env IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64
 if [[ -n "${APP_STORE_CONNECT_API_PRIVATE_KEY:-}" && -n "${APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64:-}" ]]; then
   fail "set exactly one of APP_STORE_CONNECT_API_PRIVATE_KEY or APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64, not both"
 fi
@@ -655,6 +753,8 @@ export TUIST_TOASTTY_MOBILE_RELEASE_CODE_SIGN_IDENTITY="Apple Distribution"
 export TUIST_TOASTTY_MOBILE_RELEASE_PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME"
 export TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH"
 export TUIST_TOASTTY_MOBILE_PROD_TEST=0
+export TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=1
+export TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER="$SHARE_EXTENSION_PROFILE_NAME"
 
 log "Generating the production iOS workspace."
 (

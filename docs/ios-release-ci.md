@@ -45,6 +45,30 @@ their syntax and the signed artifact. It does not deploy the relay, install APNs
 keys, or prove that the service can deliver a notification. Those prerequisites
 and a real-device delivery check remain separate release requirements.
 
+## Share extension
+
+The app embeds the **Share to Toastty** extension, `ToasttyShare.appex`, with
+bundle ID `com.giantthings.toastty.mobile.share`. The app and the extension
+share the App Group `group.com.giantthings.toastty.mobile`. Each has its own
+App Store distribution profile. Before the first build with the extension:
+
+1. In Certificates, Identifiers & Profiles, register the App Group
+   `group.com.giantthings.toastty.mobile`.
+2. Enable **App Groups** on the App ID `com.giantthings.toastty.mobile` and
+   assign that group. Regenerate the app's App Store distribution profile and
+   replace `IOS_APPSTORE_PROVISIONING_PROFILE_BASE64` with it. The profile must
+   still include push notifications.
+3. Register the explicit App ID `com.giantthings.toastty.mobile.share` with
+   **App Groups** enabled and the same group assigned.
+4. Create an App Store distribution profile for that App ID with the same
+   distribution certificate. Give it a different name from the app's profile.
+   Store it base64-encoded as `IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64`.
+
+The script stops before it changes the Keychain if either profile has the
+wrong bundle ID or lacks the App Group. Generation without a profile for the
+extension fails. To build a release without the extension, generate with
+`TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=0`.
+
 ## GitHub configuration
 
 Create a GitHub Actions Environment named `testflight` and store these
@@ -57,6 +81,7 @@ TOASTTY_IOS_DEVELOPMENT_TEAM
 IOS_DISTRIBUTION_CERTIFICATE_BASE64
 IOS_DISTRIBUTION_CERTIFICATE_PASSWORD
 IOS_APPSTORE_PROVISIONING_PROFILE_BASE64
+IOS_APPSTORE_SHARE_EXTENSION_PROVISIONING_PROFILE_BASE64
 ```
 
 Also add exactly one private-key secret. Prefer the base64 form because it is
@@ -141,22 +166,25 @@ record must state which macOS build is compatible with each TestFlight build.
 
 The release script fails before upload unless it can prove:
 
-- the provisioning profile belongs to the configured team and exact production
-  bundle ID;
-- the profile is App Store distribution rather than Development, Ad Hoc, or
-  Enterprise, and enables `aps-environment=production` before the script changes
-  the signing Keychain;
+- the app and share extension profiles belong to the configured team and their
+  exact bundle IDs, and both include the shared App Group;
+- both profiles are App Store distribution rather than Development, Ad Hoc, or
+  Enterprise, and the app profile enables `aps-environment=production`, before
+  the script changes the signing Keychain;
 - all three production push inputs are present and valid for both signed
   validation and upload;
-- only the app target receives the provisioning profile and temporary keychain
-  signing flags;
+- only the app and share extension targets receive provisioning profiles and
+  temporary keychain signing flags, each with its own profile;
 - the archive contains the expected bundle ID, version, build number, app icon,
-  `ITSAppUsesNonExemptEncryption=false`, and privacy manifest;
+  `ITSAppUsesNonExemptEncryption=false`, and privacy manifest, and embeds
+  exactly the share extension with the same version and build number;
 - the actual exported IPA contains the exact bundle ID, version, build number,
   and three production push settings supplied to generation;
 - the exported app has a valid code signature, signed
-  `aps-environment=production`, the expected app and team identifiers, and
-  `get-task-allow=false`;
+  `aps-environment=production`, the App Group, the expected app and team
+  identifiers, and `get-task-allow=false`;
+- the exported share extension has a valid signature, its own application
+  identifier, the App Group, and an App Store embedded profile;
 - the exported app's embedded profile has the expected app and team identifiers,
   enables production push, and remains App Store distribution;
 - the IPA's SHA-256 is unchanged before validation and upload;

@@ -1,22 +1,10 @@
-import CoreTransferable
 import Foundation
 import ImageIO
 import RemoteProtocol
 import UniformTypeIdentifiers
 
-struct ToasttyAttachmentPhoto: Transferable, Sendable {
-    let attachment: RemoteMessageAttachment
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(importedContentType: .image) { file in
-            let attachment = try await Task.detached(priority: .userInitiated) {
-                try ToasttyAttachmentLoader.photo(at: file.file)
-            }.value
-            return Self(attachment: attachment)
-        }
-    }
-}
-
+/// Turns picked or shared files into attachments the Mac accepts. The app and
+/// its share extension both compile this file.
 enum ToasttyAttachmentLoader {
     enum ImportError: LocalizedError {
         case unsupported, tooLarge, unreadable, invalidImage
@@ -31,15 +19,18 @@ enum ToasttyAttachmentLoader {
         }
     }
 
-    static func file(at url: URL) throws -> RemoteMessageAttachment {
-        if ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif"].contains(url.pathExtension.lowercased()) {
+    /// `filename` names a file whose URL does not, such as a shared item's
+    /// temporary copy; the URL's own name is used otherwise.
+    static func file(at url: URL, filename: String? = nil) throws -> RemoteMessageAttachment {
+        let filename = filename ?? url.lastPathComponent
+        if ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif"].contains((filename as NSString).pathExtension.lowercased()) {
             return try photo(at: url)
         }
-        guard RemoteAttachmentPolicy.supportedFilename(url.lastPathComponent) else {
+        guard RemoteAttachmentPolicy.supportedFilename(filename) else {
             throw ImportError.unsupported
         }
         let data = try readRegularFile(at: url, maximumBytes: RemoteAttachmentPolicy.maximumFileBytes)
-        return RemoteMessageAttachment(filename: url.lastPathComponent, data: data)
+        return RemoteMessageAttachment(filename: filename, data: data)
     }
 
     static func photo(at url: URL) throws -> RemoteMessageAttachment {

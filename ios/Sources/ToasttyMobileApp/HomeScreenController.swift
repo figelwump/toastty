@@ -61,6 +61,9 @@ final class HomeScreenController {
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
+    /// Whether a new-session sheet is on screen. Content shared from another
+    /// app waits for it to close instead of replacing its draft.
+    var isShowingNewSessionForm = false
     private var onConversationOpened: @MainActor (UUID) -> Void = { _ in }
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
     private var sendSubspaceDone: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
