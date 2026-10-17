@@ -115,7 +115,9 @@ Startup waits up to ten minutes. The message checks then run automatically.
 It checks one mid-turn attachment receipt, a following queued send, a direct
 send, and a late steer that is dequeued into an ordinary user turn. The direct
 send is long enough that Claude records it inside `<pasted_content>` tags, and
-the run fails if it was not recorded that way. The Codex
+the run fails if it was not recorded that way. A direct photo send must
+confirm with its file path still plain text, not a Claude `[Image #N]`
+attachment. The Codex
 check also covers Stop and a following send. Both record CLI versions and write
 `remote-queue-steer-<provider>.json` plus app logs under the run's artifacts
 directory. A run fails if the required provider transcript path is not observed.

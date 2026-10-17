@@ -211,7 +211,7 @@ struct RemoteSessionStarterTests {
             let storedURL = fixture.attachmentRoot
                 .appendingPathComponent(file.deletingLastPathComponent().lastPathComponent, isDirectory: true)
                 .appendingPathComponent(file.lastPathComponent)
-            return TerminalDropPayloadBuilder.shellEscapedPath(storedURL.path)
+            return "`" + storedURL.path + "`"
         }.joined(separator: "\n")
         let suffix = "Read the following files attached to this message on this Mac:\n" + paths
         let prompt = text.isEmpty ? suffix : text + "\n\n" + suffix

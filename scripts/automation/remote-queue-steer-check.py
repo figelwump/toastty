@@ -51,6 +51,24 @@ STOP_PROMPT = (
     'printing the iteration number after each. Do not stop early.'
 )
 AFTER_STOP_TEXT = 'Reply with exactly: AFTER-STOP-OK'
+# Claude Code turns a pasted bare or quoted image path into an image
+# attachment and drops a Return sent with it. Toastty delivers paths in
+# code spans, so a direct photo send must confirm on its own.
+PHOTO_TEXT = 'This photo is only a delivery check. Use no tools. Reply with exactly: PHOTO-OK'
+# A 16x16 JPEG.
+PHOTO_JPEG_BASE64 = (
+    '/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKAC'
+    'AAQAAAABAAAAEKADAAQAAAABAAAAEAAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZ'
+    'jwCyBOmACZjs+EJ+/8AAEQgAEAAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIB'
+    'AwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNE'
+    'RUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfI'
+    'ycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIB'
+    'AgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpD'
+    'REVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG'
+    'x8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgK'
+    'CgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ'
+    'EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8A87ooor+Xz+/D/9k='
+)
 # Claude Code records a long paste inside <pasted_content> tags. Remote sends
 # arrive as pastes, so this direct send must still confirm.
 DIRECT_TEXT = '\n\n'.join([
@@ -600,12 +618,16 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
         current = gateway.conversation(conversation_id)
         return current if current and current['inputAvailability'].get('kind') == 'open_prompt' else None
 
-    def send(request_id, text, mode='prompt', epoch=None):
+    def send(request_id, text, mode='prompt', epoch=None, attachments=None):
         if epoch is None:
             epoch = wait_for('an open Claude prompt', prompt, timeout=120)['inputAvailability']['epoch']
-        status, result = gateway.call('POST', '/api/conversation.message.send', dict(
-            conversationID=conversation_id, clientRequestID=request_id, deliveryMode=mode,
-            expectedInputEpoch=epoch, text=text))
+        body = dict(conversationID=conversation_id, clientRequestID=request_id, deliveryMode=mode,
+                    expectedInputEpoch=epoch, text=text)
+        path = '/api/conversation.message.send'
+        if attachments:
+            body['attachments'] = attachments
+            path = '/api/conversation.message.send-with-attachments'
+        status, result = gateway.call('POST', path, body)
         require(status == 200, f'Send failed: {status} {result}')
         require(result.get('status') == ('queued' if mode == 'queue' else 'accepted'),
                 f'Send rejected: {result}')
@@ -631,6 +653,10 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     send('direct-1', DIRECT_TEXT)
     receipt('direct-1', None)
     reply('DIRECT-OK')
+    send('photo-1', PHOTO_TEXT, attachments=[dict(
+        id=str(uuid.uuid4()).upper(), filename='check.jpg', data=PHOTO_JPEG_BASE64)])
+    receipt('photo-1', None)
+    reply('PHOTO-OK')
 
     # No tool follows this boundary. Claude must dequeue a steer into an
     # ordinary next user turn. Long final output gives the gateway a window.
@@ -678,11 +704,15 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     pasted = [text for text in ordinary if '<pasted_content id=' in text and DIRECT_TEXT in text]
     require(len(pasted) == 1, 'The long direct send was not recorded as a pasted_content block')
     evidence['pastedDirectSend'] = pasted[0]
+    photo = [text for text in ordinary if PHOTO_TEXT in text]
+    require(len(photo) == 1 and '[Image #' not in photo[0],
+            'The photo send was not recorded once with its path as plain text')
+    evidence['photoSend'] = photo[0]
     evidence['midTurnCommand'] = next(a for a in attachments if a.get('prompt') == STEER_TEXT)
     evidence['endOfTurnDequeue'] = next(r for r in records if r.get('type') == 'queue-operation'
                                      and r.get('operation') == 'dequeue' and r.get('content') == late_text)
     final_events = events()
-    for request_id in ('steer-1', 'queued-1', 'direct-1', 'late-busy', 'late-steer'):
+    for request_id in ('steer-1', 'queued-1', 'direct-1', 'photo-1', 'late-busy', 'late-steer'):
         require(sum(e['kind'] == 'user_message' and e['payload'].get('clientRequestID') == request_id
                     for e in final_events) == 1, f'Duplicate or missing receipt for {request_id}')
     require(not any(e['kind'] == 'send_delivery_unconfirmed' for e in final_events),
