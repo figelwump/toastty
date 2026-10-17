@@ -459,7 +459,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "When the running turn of the panel's managed Claude Code or Codex session completes, type the agent's native /exit. Skipped if anyone typed into the session or sent it a phone message during the turn, or if the turn ends without completing. Requires the session to be in a running turn.",
+                summary: "When the running turn of the panel's managed Claude Code or Codex session completes, type the agent's native /exit. Skipped if anyone typed into the session or sent it a phone message during the turn, or if the turn ends without completing. Requires the session to be in a running turn in a top-level workspace; sessions in task spaces are refused.",
                 selectors: [.windowID, .workspaceID, .panelID],
                 parameters: [.expectedSessionID(required: true)]
             )

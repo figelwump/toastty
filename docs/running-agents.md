@@ -1113,7 +1113,9 @@ when it holds an unsaved document. Toastty remembers these tabs until it quits.
 An agent can ask to exit when its current turn completes with the
 `session.exit-after-turn` action; the `worktree-create` skill uses it so the
 launching session exits after its handoff. Toastty then types the agent's native
-`/exit`. It supports Claude Code and Codex. It skips the exit when anyone typed
+`/exit`. It supports Claude Code and Codex, in top-level workspaces only: a
+task space is marked done when its work is finished, so its sessions do not exit
+on request. It skips the exit when anyone typed
 into the session or sent it a phone message during the turn, or when the turn
 ends without completing.
 

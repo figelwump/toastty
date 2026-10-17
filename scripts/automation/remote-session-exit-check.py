@@ -16,7 +16,8 @@ its log, and never selects a tab or moves focus.
   the socket, and the script then reports a finished turn and reads its
   terminal. Toastty must type `/exit`, the script exits 0, and the tab must
   close while the selected tab stays. Typing during the turn must skip the
-  exit, and a crashed agent must keep its tab.
+  exit, a crashed agent must keep its tab, and a session in a task space must
+  be refused, since a task space is marked done instead.
 - codex, claude: the real CLI gets one prompt: run the action as its last
   tool call, then reply. The agent must exit and its tab must close. Codex
   ends its turn with that reply, the case the action exists for. Subscription
@@ -325,6 +326,22 @@ class Check:
         time.sleep(2)
         require(len(self.tabs()['tabIDs']) == len(before['tabIDs']) + 1, 'A crashed agent lost its tab')
         self.step('crash kept the tab', tabs=self.tabs())
+
+        # 4. A session in a task space is refused: the task space is marked
+        #    done when its work is finished, instead of exiting the session.
+        created = self.action('workspace.create', title='Task space', activate=False, parent=self.workspace_id)
+        require(created.get('ok'), f'Creating the task space failed: {created}')
+        task_space = created['result']['workspaceID']
+        files = self.fake('in a task space')
+        status, body = self.gateway.call('POST', '/api/session.start', TOKEN, dict(
+            protocolVersion='1.0', clientRequestID=str(uuid.uuid4()), workspaceID=task_space,
+            profileID=self.profile_id, text='in a task space'))
+        require(status == 200 and body.get('status') == 'started', f'Task-space start failed: {status} {body}')
+        wait_for('the working report', lambda: files['state'].is_file() and 'working' in files['state'].read_text())
+        info = json.loads(files['info'].read_text())
+        refused = self.action('session.exit-after-turn', panelID=info['panelID'], expectedSessionID=info['sessionID'])
+        require(not refused.get('ok') and 'task space' in refused['error']['message'], f'Not refused: {refused}')
+        self.step('task space refused', error=refused['error']['message'])
 
     # MARK: real agent
 

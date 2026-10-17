@@ -327,8 +327,8 @@ Notable action-specific behavior:
     this condition.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
-    Claude Code or Codex session in a running turn, or the action returns
-    `INVALID_PAYLOAD`.
+    Claude Code or Codex session in a running turn, in a top-level workspace, or
+    the action returns `INVALID_PAYLOAD`. Sessions in task spaces are refused.
   - when that turn completes, Toastty types the agent's native `/exit`. It
     skips the exit if any input reached the panel during the turn, including
     phone messages, if the turn ends without completing, or if a new turn

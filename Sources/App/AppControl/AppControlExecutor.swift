@@ -732,6 +732,8 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("panel does not host the expected managed session")
             } catch SessionExitController.ArmError.unsupportedAgent(let agent) {
                 throw AutomationSocketError.invalidPayload("\(agent.displayName) has no verified native exit command")
+            } catch SessionExitController.ArmError.sessionInTaskSpace {
+                throw AutomationSocketError.invalidPayload("the session runs in a task space, which is marked done instead of exiting")
             } catch {
                 throw AutomationSocketError.invalidPayload("the session is not in a running turn")
             }

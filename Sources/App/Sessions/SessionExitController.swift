@@ -40,6 +40,9 @@ final class SessionExitController {
         case sessionNotInPanel
         case unsupportedAgent(AgentKind)
         case noRunningTurn
+        /// A task space is marked done when its work is finished, so its
+        /// sessions do not exit on request.
+        case sessionInTaskSpace
     }
 
     struct ArmedExit: Equatable {
@@ -114,6 +117,9 @@ final class SessionExitController {
         }
         guard let exitCommand = Self.nativeExitCommand(for: record.agent) else {
             throw ArmError.unsupportedAgent(record.agent)
+        }
+        guard store?.state.workspaceSelection(containingPanelID: panelID)?.workspace.parentWorkspaceID == nil else {
+            throw ArmError.sessionInTaskSpace
         }
         guard let turnStartedAt = record.turnStartedAt,
               [.working, .needsApproval].contains(record.status?.kind) else {

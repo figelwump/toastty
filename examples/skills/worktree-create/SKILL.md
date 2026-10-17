@@ -273,7 +273,12 @@ and cannot claim managed forks.
 ## Parent session lifetime
 
 Default to exiting the launching parent agent after a successful single-task
-handoff. Keep it running when the parent is creating multiple worktrees as part
+handoff, but only when the parent runs in a top-level workspace. A parent in a
+task space keeps running: its task space is marked done through `worktree-done`
+once its own work is finished, and `session.exit-after-turn` refuses sessions in
+task spaces. Check with `workspace.snapshot` for the parent's workspace; a
+non-null `parentWorkspaceID` means a task space. Also keep the parent running
+when it is creating multiple worktrees as part
 of the current request, has specific unfinished coordination work from that
 request, or the user explicitly asks to keep it. Decide from the actual assignment;
 do not ask for routine confirmation. Record whether the parent will exit or
@@ -300,7 +305,7 @@ environment. When the turn completes, Toastty types the provider's native
 `/exit`. It skips the exit, and the parent stays, when anyone typed into the
 parent or sent it a phone message during the turn, or when the turn ends without
 completing. Other providers have no verified native exit, and the action refuses
-them; retain the parent and report it.
+them, as it refuses sessions in task spaces; retain the parent and report it.
 
 Make the request as the last tool action, then give the handoff summary as the
 final message, including where to continue and that the parent will exit:

@@ -48,6 +48,19 @@ final class SessionExitControllerTests: XCTestCase {
             try fixture.controller.armExitAfterTurn(panelID: fixture.agentPanelID, expectedSessionID: "someone-else")
         ) { XCTAssertEqual($0 as? SessionExitController.ArmError, .sessionNotInPanel) }
 
+        // A task space is marked done instead of exiting its session.
+        let taskSpace = try makeFixture()
+        XCTAssertTrue(taskSpace.store.send(.createWorkspace(windowID: taskSpace.store.state.windows[0].id, title: "Parent", activate: false)))
+        let parentID = try XCTUnwrap(taskSpace.store.state.windows[0].workspaceIDs.last)
+        XCTAssertTrue(taskSpace.store.send(.setWorkspaceParent(
+            workspaceID: taskSpace.workspaceID, parentWorkspaceID: parentID, spawningSessionID: nil
+        )))
+        taskSpace.startAgent(.codex)
+        taskSpace.setStatus(.working)
+        XCTAssertThrowsError(
+            try taskSpace.controller.armExitAfterTurn(panelID: taskSpace.agentPanelID, expectedSessionID: taskSpace.sessionID)
+        ) { XCTAssertEqual($0 as? SessionExitController.ArmError, .sessionInTaskSpace) }
+
         let other = try makeFixture()
         other.startAgent(.cursor)
         other.setStatus(.working)
