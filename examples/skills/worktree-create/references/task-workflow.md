@@ -39,6 +39,15 @@ publication mechanics, draft and ready semantics, and description content.
 Planning-only tasks do not create implementation PRs. Local-only repositories
 without a PR workflow report the verified commit and evidence directly instead.
 
+After creating or updating a PR for this task, automatically open its exact
+URL in this task workspace's right panel. Use `panel.create.browser` with the
+verified task `workspaceID`, the PR URL, and `placement=rightPanel`, following
+the live descriptors and panel guidance in `toastty-capabilities`. Reuse an
+existing panel for the same PR URL instead of creating duplicates. Open draft
+PRs too, and open each distinct PR if the task creates more than one. Check the
+action result and verify each panel's URL and placement; report opening failures
+without claiming success.
+
 Present verification together in one HTML report in the task workspace's right
 panel, built to the evidence-report rules in the global instructions. Produce it
 for every implementation task, even a small one.
@@ -53,8 +62,15 @@ and reuse its existing panel so the user reviews current evidence. Preserve
 unrelated design/mock panels. Keep private reports and artifacts out of product
 commits, and omit secrets or sensitive unrelated output.
 
-After creating or updating the PR, annotate this workspace with it: set the
-`github-pr` annotation to the PR number and its URL, following the workspace
+Prepare verification evidence before PR publication when needed. For the final
+review handoff, open or reuse the PR panels first, then open or select the
+verification report last. Repeat this order after later updates, reusing the
+report's existing panel. Before reporting the task ready for review, verify that
+the report is the selected, visible tab in the task workspace's right panel. Do
+not open another artifact after this final display step.
+
+Also annotate this workspace with the PR: set the `github-pr` annotation to the
+PR number and its URL, following the workspace
 annotation rules in the toastty-capabilities skill. Agent session status already
 shows live activity, so do not add task or Git branch annotations.
 
