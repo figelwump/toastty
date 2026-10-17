@@ -1815,11 +1815,12 @@ final class RemoteAccessService: ObservableObject {
                 result = switch sessionCloseController.closeSession(
                     panelID: candidate.panelID,
                     stopIfBusy: request.stopIfBusy,
+                    confirmedWorkspaceCloseID: request.confirmedWorkspaceCloseID,
                     source: AppActionSource("remote_access", detail: "conversation_close")
                 ) {
                 case .closed: .closed
                 case .confirmationRequired: .confirmationRequired
-                case .lastPaneInWorkspace: .lastPaneInWorkspace
+                case .workspaceCloseConfirmationRequired: .workspaceConfirmationRequired
                 case .unsavedDocument: .unsavedDocument
                 case .notFound: .conversationNotFound
                 case .failed: .failed
@@ -1834,6 +1835,7 @@ final class RemoteAccessService: ObservableObject {
             metadata: [
                 "conversation_id": request.conversationID.rawValue.uuidString,
                 "stop_if_busy": String(request.stopIfBusy),
+                "confirmed_workspace_close_id": request.confirmedWorkspaceCloseID?.uuidString ?? "none",
                 "result": result.rawValue,
             ]
         )

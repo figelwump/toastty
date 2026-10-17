@@ -1980,15 +1980,21 @@ extension RemoteGatewayRequestHandlerTests {
 
         let auditCount = audit.entries.count
         #expect(try result(try response(headers, body: body)) == .confirmationRequired)
-        nextResult = .lastPaneInWorkspace
-        #expect(try result(try response(headers, body: body)) == .lastPaneInWorkspace)
+        nextResult = .workspaceConfirmationRequired
+        #expect(try result(try response(headers, body: body)) == .workspaceConfirmationRequired)
         #expect(audit.entries.count == auditCount)
+
+        // A client that sends no workspace consent omits the key.
+        let sentKeys = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any]).keys
+        #expect(sentKeys.contains("confirmedWorkspaceCloseID") == false)
+        _ = try response(headers, body: body)
 
         nextResult = .closed
         var stopping = close
         stopping.stopIfBusy = true
+        stopping.confirmedWorkspaceCloseID = UUID()
         #expect(try result(try response(headers, body: ConversationEventCoding.makeEncoder().encode(stopping))) == .closed)
-        #expect(requests == [close, close, stopping])
+        #expect(requests == [close, close, close, stopping])
         #expect(audit.entries.last?.action == .conversationClosed)
         #expect(audit.entries.last?.detail == "stopped_if_busy")
 

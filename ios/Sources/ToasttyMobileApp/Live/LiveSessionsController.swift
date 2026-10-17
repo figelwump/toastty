@@ -374,17 +374,19 @@ final class LiveSessionsController {
                 return .failed
             }
         }
-        homeController.installConversationClose { [runtime] conversationID, stopIfBusy in
+        homeController.installConversationClose { [runtime] conversationID, permissions in
             do {
                 let response = try await runtime.closeConversation(
                     RemoteConversationCloseRequest(
-                        conversationID: RemoteConversationID(rawValue: conversationID), stopIfBusy: stopIfBusy
+                        conversationID: RemoteConversationID(rawValue: conversationID),
+                        stopIfBusy: permissions.stopIfBusy,
+                        confirmedWorkspaceCloseID: permissions.confirmedWorkspaceCloseID
                     )
                 )
                 switch response?.result {
                 case .closed?: return .closed
                 case .confirmationRequired?: return .confirmationRequired
-                case .lastPaneInWorkspace?: return .lastPaneInWorkspace
+                case .workspaceConfirmationRequired?: return .workspaceConfirmationRequired
                 case .unsavedDocument?: return .unsavedDocument
                 case .sessionWritesDisabled?: return .sessionWritesDisabled
                 case .conversationNotFound?: return .notFound

@@ -1381,7 +1381,7 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test func remoteCloseAsksForABusyAgentRefusesTheLastPaneAndPublishesTheClose() throws {
+    @Test func remoteCloseAsksForABusyAgentAndForTheWorkspaceThenPublishesTheClose() throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, closesSessions: true)
         defer { fixture.removeRuntimeFiles() }
         let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
@@ -1392,8 +1392,10 @@ struct RemoteAccessServiceSafetyTests {
         }
         let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
 
-        // The agent's tab is the workspace's only tab.
-        #expect(close(stopIfBusy: true) == .lastPaneInWorkspace)
+        // The agent's tab is the workspace's only tab, so even permission to
+        // stop the agent does not close the workspace.
+        #expect(close(stopIfBusy: true) == .workspaceConfirmationRequired)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) != nil)
         #expect(fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
 
         #expect(close() == .confirmationRequired)
@@ -1412,6 +1414,33 @@ struct RemoteAccessServiceSafetyTests {
             $0.conversationID == fixture.conversationID
         } == false)
         #expect(close() == .conversationNotFound)
+    }
+
+    @MainActor
+    @Test func remoteCloseWithWorkspacePermissionClosesTheOnlyTabsWorkspace() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, closesSessions: true)
+        defer { fixture.removeRuntimeFiles() }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+        func close(stopIfBusy: Bool, confirming confirmedWorkspaceID: UUID? = nil) -> RemoteConversationCloseResult {
+            fixture.service.closeConversation(
+                .init(
+                    conversationID: fixture.conversationID, stopIfBusy: stopIfBusy,
+                    confirmedWorkspaceCloseID: confirmedWorkspaceID ?? workspaceID
+                ),
+                device: device
+            )
+        }
+
+        // Consent names a workspace, and permission to close it does not
+        // stop a working agent.
+        #expect(close(stopIfBusy: true, confirming: UUID()) == .workspaceConfirmationRequired)
+        #expect(close(stopIfBusy: false) == .confirmationRequired)
+        #expect(fixture.store.state.workspacesByID[workspaceID] != nil)
+
+        #expect(close(stopIfBusy: true) == .closed)
+        #expect(fixture.store.state.workspacesByID[workspaceID] == nil)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) == nil)
     }
 
     @Test func conversationSummaryCarriesTurnTimingAndOmitsAbsentMarks() throws {

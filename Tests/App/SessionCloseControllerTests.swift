@@ -7,9 +7,9 @@ import XCTest
 @MainActor
 final class SessionCloseControllerTests: XCTestCase {
     // Failure modes: a busy or just-launched agent closed silently, a finished
-    // agent still asking, a background close switching the visible tab, a
-    // workspace's last pane closed (which removes the workspace), and a
-    // missing terminal assessment treated as idle.
+    // agent still asking, a background close switching the visible tab or
+    // workspace, a workspace's only tab closed without asking (which removes
+    // the workspace), and a missing terminal assessment treated as idle.
 
     func testFinishedAgentClosesWithoutAskingAndKeepsTheSelectedTab() throws {
         let fixture = try makeFixture()
@@ -94,16 +94,54 @@ final class SessionCloseControllerTests: XCTestCase {
         )
     }
 
-    func testTheLastPaneInAWorkspaceIsRefusedEvenWhenStopping() throws {
+    func testClosingAWorkspacesOnlyTabAsksFirstEvenWhenStopping() throws {
         let fixture = try makeFixture(addsSecondTab: false)
         fixture.startAgent()
+        fixture.setStatus(.working)
         fixture.setStatus(.ready)
+        let id = fixture.workspaceID
+        let title = fixture.workspace.title
 
         XCTAssertEqual(
             fixture.controller.closeSession(panelID: fixture.agentPanelID, stopIfBusy: true, source: .command("test")),
-            .lastPaneInWorkspace
+            .workspaceCloseConfirmationRequired(.init(workspaceID: id, workspaceTitle: title, isRunning: false, runningDetail: nil))
+        )
+        fixture.setStatus(.working)
+        XCTAssertEqual(
+            fixture.controller.closeSession(panelID: fixture.agentPanelID, stopIfBusy: false, source: .command("test")),
+            .workspaceCloseConfirmationRequired(
+                .init(workspaceID: id, workspaceTitle: title, isRunning: true, runningDetail: "Claude Code")
+            )
+        )
+        // Consent to close another workspace does not cover this one.
+        XCTAssertEqual(
+            fixture.controller.closeSession(
+                panelID: fixture.agentPanelID, stopIfBusy: true, confirmedWorkspaceCloseID: UUID(), source: .command("test")
+            ),
+            .workspaceCloseConfirmationRequired(
+                .init(workspaceID: id, workspaceTitle: title, isRunning: true, runningDetail: "Claude Code")
+            )
         )
         XCTAssertNotNil(fixture.store.state.workspacesByID[fixture.workspaceID])
+    }
+
+    func testWorkspacePermissionClosesTheWorkspaceAndKeepsTheSelectedWorkspace() throws {
+        let fixture = try makeFixture(addsSecondTab: false, addsSecondWorkspace: true)
+        fixture.startAgent()
+        fixture.setStatus(.working)
+        fixture.setStatus(.ready)
+        let selectedWorkspaceBefore = fixture.store.state.windows[0].selectedWorkspaceID
+        XCTAssertNotEqual(selectedWorkspaceBefore, fixture.workspaceID)
+
+        XCTAssertEqual(
+            fixture.controller.closeSession(
+                panelID: fixture.agentPanelID, stopIfBusy: false, confirmedWorkspaceCloseID: fixture.workspaceID,
+                source: .command("test")
+            ),
+            .closed
+        )
+        XCTAssertNil(fixture.store.state.workspacesByID[fixture.workspaceID])
+        XCTAssertEqual(fixture.store.state.windows[0].selectedWorkspaceID, selectedWorkspaceBefore)
     }
 
     func testInteractiveCloseAsksAndHonorsCancel() throws {
@@ -126,13 +164,41 @@ final class SessionCloseControllerTests: XCTestCase {
         XCTAssertNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
     }
 
-    func testInteractiveCloseExplainsALastPaneRefusal() throws {
-        var refusedTitles: [String] = []
-        let fixture = try makeFixture(addsSecondTab: false, presentRefusal: { title, _ in refusedTitles.append(title) })
+    func testInteractiveWorkspaceCloseAsksOnceForAWorkingAgentAndHonorsCancel() throws {
+        var prompts: [SessionCloseController.WorkspaceClose] = []
+        var answer = false
+        let fixture = try makeFixture(addsSecondTab: false, confirmWorkspaceClose: { _, close in
+            prompts.append(close)
+            return answer
+        })
+        fixture.startAgent()
+        fixture.setStatus(.working)
 
         fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
+        XCTAssertEqual(prompts.map(\.isRunning), [true])
+        XCTAssertNotNil(fixture.store.state.workspacesByID[fixture.workspaceID])
 
-        XCTAssertEqual(refusedTitles, ["Fix login"])
+        // The fixture fails on a separate stop confirmation, so one prompt
+        // covers stopping the agent too.
+        answer = true
+        fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
+        XCTAssertEqual(prompts.count, 2)
+        XCTAssertNil(fixture.store.state.workspacesByID[fixture.workspaceID])
+    }
+
+    func testWorkspaceCloseMessageWarnsAboutTheWorktree() {
+        let message = SessionCloseController.workspaceCloseMessage(
+            .init(workspaceID: UUID(), workspaceTitle: "fix-login", isRunning: true, runningDetail: "Codex")
+        )
+        XCTAssertTrue(message.contains("\u{201C}fix-login\u{201D}"))
+        XCTAssertTrue(message.contains("Codex is still running"))
+        XCTAssertTrue(message.contains("git worktree is not cleaned up automatically"))
+        XCTAssertFalse(
+            SessionCloseController.workspaceCloseMessage(
+                .init(workspaceID: UUID(), workspaceTitle: "w", isRunning: false, runningDetail: nil)
+            )
+                .contains("still running")
+        )
     }
 
     func testAnUnsavedRightPanelDocumentInTheClosingTabIsRefusedEvenWhenStopping() throws {
@@ -148,6 +214,22 @@ final class SessionCloseControllerTests: XCTestCase {
             .unsavedDocument(displayName: "plan.md")
         )
         XCTAssertNotNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
+    }
+
+    func testBypassedPromptsStillRefuseToDiscardADocumentDraft() throws {
+        let fixture = try makeFixture(
+            addsSecondTab: false,
+            bypassesConfirmation: true,
+            rightPanelDocumentState: LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "plan.md")
+        )
+        fixture.startAgent()
+        fixture.setStatus(.working)
+
+        XCTAssertEqual(
+            fixture.controller.closeSession(panelID: fixture.agentPanelID, stopIfBusy: false, source: .command("test")),
+            .unsavedDocument(displayName: "plan.md")
+        )
+        XCTAssertNotNil(fixture.store.state.workspacesByID[fixture.workspaceID])
     }
 
     func testAResumingParentStillCountsAsBusy() throws {
@@ -231,11 +313,14 @@ final class SessionCloseControllerTests: XCTestCase {
     /// background as when a session started from iOS.
     private func makeFixture(
         addsSecondTab: Bool = true,
+        addsSecondWorkspace: Bool = false,
+        bypassesConfirmation: Bool = false,
         terminalAssessment: TerminalCloseConfirmationAssessment? = TerminalCloseConfirmationAssessment(
             requiresConfirmation: true, runningCommand: "claude"
         ),
         rightPanelDocumentState: LocalDocumentCloseConfirmationState? = nil,
         confirmStopAndClose: (@MainActor (String, String?) -> Bool)? = nil,
+        confirmWorkspaceClose: (@MainActor (String, SessionCloseController.WorkspaceClose) -> Bool)? = nil,
         presentRefusal: (@MainActor (String, String) -> Void)? = nil
     ) throws -> Fixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
@@ -258,6 +343,9 @@ final class SessionCloseControllerTests: XCTestCase {
             XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspace.id, seed: nil)))
             XCTAssertNotEqual(store.state.workspacesByID[workspace.id]?.resolvedSelectedTabID, agentTabID)
         }
+        if addsSecondWorkspace {
+            XCTAssertTrue(store.send(.createWorkspace(windowID: store.state.windows[0].id, title: "Other", activate: true)))
+        }
         let sessionRuntimeStore = SessionRuntimeStore()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
@@ -272,9 +360,13 @@ final class SessionCloseControllerTests: XCTestCase {
             focusedPanelCommandController: focusedPanelCommandController,
             terminalCloseAssessment: { _ in terminalAssessment },
             localDocumentCloseConfirmationState: { _ in rightPanelDocumentState },
-            shouldBypassConfirmation: false,
+            shouldBypassConfirmation: bypassesConfirmation,
             confirmStopAndClose: confirmStopAndClose ?? { _, _ in
                 XCTFail("Unexpected confirmation")
+                return false
+            },
+            confirmWorkspaceClose: confirmWorkspaceClose ?? { _, _ in
+                XCTFail("Unexpected workspace confirmation")
                 return false
             },
             presentRefusal: presentRefusal ?? { _, _ in }

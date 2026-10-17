@@ -1095,9 +1095,13 @@ waiting on approval, or waiting on sub-agents asks first, and **Stop and
 Close** stops the agent. A session that has not finished a turn since the
 agent started, or since Toastty relaunched, also asks.
 
-Toastty refuses to close a session that is the last pane in its workspace,
-because closing that pane would also remove the workspace. Close the workspace,
-or clean up the task space, instead.
+When the session's tab is the only tab in its workspace, closing it also
+closes the workspace, so Toastty always asks first. One **Close Workspace**
+confirmation covers stopping a running agent too. Closing the workspace does
+not clean up an associated git worktree; use `worktree-cleanup` for that.
+
+Toastty refuses to close a session whose tab holds a right-panel document with
+unsaved changes. Save or close the document first.
 
 ### Automatic program status
 

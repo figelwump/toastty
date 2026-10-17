@@ -9,9 +9,11 @@ of the wrapper's build, with a throwaway runtime home, a throwaway user home
 whose `agents.toml` names a fake `claude` command, one seeded paired device,
 and a loopback gateway port. It starts two sessions over HTTP as the phone
 would, then closes them: a session that has not finished a turn must ask
-first, and one that reports a finished turn closes at once. It reads the
-results through the app's automation socket and never selects a tab or moves
-focus. The check stops its own instance; the wrapper owns everything else.
+first, and one that reports a finished turn closes at once. A third session,
+left as its workspace's only tab, must ask before its workspace closes. It
+reads the results through the app's automation socket and never selects a tab
+or moves focus. The check stops its own instance; the wrapper owns everything
+else.
 """
 
 import importlib.util
@@ -19,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import tempfile
 import uuid
@@ -52,6 +55,24 @@ if [ "$message" = "%s" ]; then
 fi
 exec sleep 300
 ''' % FINISH_MESSAGE
+
+
+def run_action(socket_path, action_id, **args):
+    envelope = dict(protocolVersion='1.0', kind='request', requestID=str(uuid.uuid4()),
+                    command='app_control.run_action', payload=dict(id=action_id, args=args))
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(10)
+        connection.connect(socket_path)
+        connection.sendall(json.dumps(envelope).encode() + b'\n')
+        data = b''
+        while b'\n' not in data:
+            chunk = connection.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    response = json.loads(data)
+    require(response.get('ok'), f'{action_id} failed: {response}')
+    return response.get('result')
 
 
 def main():
@@ -148,9 +169,11 @@ def run(app, gateway, app_socket, runtime_home, fake_bin, evidence):
         wait_for(f'{text!r} in the session list', lambda: listed(conversation_id))
         return conversation_id
 
-    def close(conversation_id, stop_if_busy):
-        status, body = gateway.call('POST', '/api/conversation.close', TOKEN, dict(
-            protocolVersion='1.0', conversationID=conversation_id, stopIfBusy=stop_if_busy))
+    def close(conversation_id, stop_if_busy, confirmed_workspace_id=None):
+        request = dict(protocolVersion='1.0', conversationID=conversation_id, stopIfBusy=stop_if_busy)
+        if confirmed_workspace_id is not None:
+            request['confirmedWorkspaceCloseID'] = confirmed_workspace_id
+        status, body = gateway.call('POST', '/api/conversation.close', TOKEN, request)
         require(status == 200, f'Close failed: {status} {body}')
         return body['result']
 
@@ -193,10 +216,38 @@ def run(app, gateway, app_socket, runtime_home, fake_bin, evidence):
     evidence['repeatClose'] = close(finished, True)
     require(evidence['repeatClose'] == 'conversation_not_found', f'Unexpected: {evidence}')
 
+    # A session in its workspace's only tab asks before the workspace closes,
+    # even with permission to stop it. Another workspace stays selected.
+    def workspaces():
+        result = app_socket.query('workspace.list')
+        return {w['workspaceID']: w for w in result.get('workspaces', result)}
+
+    before_create = workspaces()
+    run_action(app_socket.path, 'workspace.create', title='Other', activate=True)
+    other_id = next(iter(set(workspaces()) - set(before_create)))
+    lone = start('stay quiet')
+    run_action(app_socket.path, 'workspace.tab.close', workspaceID=workspace_id, tabID=before['tabIDs'][0])
+    require(len(app_socket.selection(workspace_id)['tabIDs']) == 1, 'Expected only the lone session tab')
+    evidence['loneFirstClose'] = close(lone, True)
+    require(evidence['loneFirstClose'] == 'workspace_confirmation_required', f'Unexpected: {evidence}')
+    # Consent to close a different workspace does not count.
+    evidence['loneOtherWorkspaceClose'] = close(lone, True, confirmed_workspace_id=other_id)
+    require(evidence['loneOtherWorkspaceClose'] == 'workspace_confirmation_required', f'Unexpected: {evidence}')
+    require(workspace_id in workspaces(), 'A refused close removed the workspace')
+
+    evidence['loneConfirmedClose'] = close(lone, True, confirmed_workspace_id=workspace_id)
+    require(evidence['loneConfirmedClose'] == 'closed', f'Unexpected: {evidence}')
+    after_workspace_close = workspaces()
+    evidence['workspacesAfterClose'] = sorted(after_workspace_close)
+    require(workspace_id not in after_workspace_close, 'The workspace was not closed')
+    require(after_workspace_close[other_id]['isSelected'], 'The other workspace lost its selection')
+    wait_for('the lone session to leave the list', lambda: listed(lone) is None)
+
     audit = json.loads((runtime_home / 'remote-access/audit.json').read_text())
     actions = [(entry['action'], entry.get('detail')) for entry in audit if entry['action'] == 'conversation_closed']
     evidence['closeAuditActions'] = actions
-    require(actions == [('conversation_closed', 'stopped_if_busy'), ('conversation_closed', 'finished')],
+    require(actions == [('conversation_closed', 'stopped_if_busy'), ('conversation_closed', 'finished'),
+                        ('conversation_closed', 'stopped_if_busy')],
             f'Unexpected close audit entries: {actions}')
 
 

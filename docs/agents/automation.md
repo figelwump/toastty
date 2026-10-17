@@ -107,7 +107,11 @@ verifies that closing the quiet session first returns
 `confirmation_required` and changes nothing, that `stopIfBusy` then closes only
 that session's background tab, that the finished session closes without
 asking, that neither close changes the selected tab or focused panel, that
-both sessions leave the session list, and that a repeat finds nothing. It
+both sessions leave the session list, and that a repeat finds nothing. A
+third session, left as its workspace's only tab, must return
+`workspace_confirmation_required` even with `stopIfBusy` or with another
+workspace's ID, then close the workspace once `confirmedWorkspaceCloseID`
+names it, while another workspace stays selected. It
 writes `remote-session-close.json` under the run's artifacts directory. It
 does not cover the Mac sidebar menu or the iOS screens.
 

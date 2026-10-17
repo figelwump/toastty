@@ -444,11 +444,14 @@ hidden otherwise.
 **Close** closes the session's pane on the Mac, and its tab when the pane was
 the tab's last, the same as **Close Session** in the Mac's sidebar. The row
 leaves the list at once. When the agent is still running, the phone asks
-first, and **Stop and Close** stops it. The Mac decides, with the same rules
-as its sidebar. The Mac refuses to close a session
-that is its workspace's last pane, and a session whose remote writes are
-turned off. Close needs a Mac that advertises it and a device with send
-access, and is hidden otherwise.
+first, and **Stop and Close** stops it. When the session's tab is the only
+tab in its workspace, the phone asks whether to close the workspace too, and
+**Close Workspace** closes it and stops the agent. Its git worktree is not
+cleaned up, and if that workspace is showing on the Mac, the Mac switches to
+the next workspace. The Mac decides, with the same rules as its sidebar. The Mac
+refuses to close a session whose tab holds an unsaved document, and a session
+whose remote writes are turned off. Close needs a Mac that advertises it and a
+device with send access, and is hidden otherwise.
 
 While a session is working, its row shows the running turn's time, ticking,
 in place of its age. Touch and hold the row for the elapsed time and the

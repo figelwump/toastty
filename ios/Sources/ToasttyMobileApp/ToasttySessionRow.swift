@@ -386,7 +386,12 @@ extension View {
     /// Asks before a close stops an agent that is still working.
     func toasttySessionCloseConfirmation(_ controller: HomeScreenController) -> some View {
         confirmationDialog(
-            controller.closeConfirmation.map { "Close \u{201C}\($0.title)\u{201D}?" } ?? "",
+            controller.closeConfirmation.map { confirmation in
+                switch confirmation.reason {
+                case .agentRunning: "Close \u{201C}\(confirmation.title)\u{201D}?"
+                case .closesWorkspace: "Close \u{201C}\(confirmation.title)\u{201D} and its workspace?"
+                }
+            } ?? "",
             isPresented: Binding(
                 get: { controller.closeConfirmation != nil },
                 set: { isPresented in
@@ -395,16 +400,24 @@ extension View {
             ),
             titleVisibility: .visible,
             presenting: controller.closeConfirmation
-        ) { _ in
-            Button("Stop and Close", role: .destructive) {
+        ) { confirmation in
+            Button(confirmation.closesWorkspace ? "Close Workspace" : "Stop and Close", role: .destructive) {
                 controller.confirmConversationClose()
             }
             .accessibilityIdentifier("toastty-session-close-confirm")
             Button("Cancel", role: .cancel) {
                 controller.cancelConversationClose()
             }
-        } message: { _ in
-            Text("The agent is still running. Closing stops it and closes its pane on your Mac.")
+        } message: { confirmation in
+            switch confirmation.reason {
+            case .agentRunning:
+                Text("The agent is still running. Closing stops it and closes its pane on your Mac.")
+            case .closesWorkspace(_, let workspaceTitle):
+                Text(
+                    "This is the only tab in \u{201C}\(workspaceTitle)\u{201D} on your Mac, so closing the session also "
+                        + "closes the workspace and stops the agent. Any associated git worktree is not cleaned up automatically."
+                )
+            }
         }
     }
 }

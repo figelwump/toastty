@@ -437,20 +437,27 @@ public struct RemoteConversationFlagResponse: Codable, Equatable, Sendable {
 
 /// Closes a session's pane on the Mac, and its tab when that pane was the
 /// tab's last. Without `stopIfBusy`, the Mac refuses to stop a session that is
-/// still working, so the client can ask the user first.
+/// still working, and without `confirmedWorkspaceCloseID`, it refuses to close
+/// a workspace's only tab, so the client can ask the user first.
 public struct RemoteConversationCloseRequest: Codable, Equatable, Sendable {
     public var protocolVersion: String
     public var conversationID: RemoteConversationID
     public var stopIfBusy: Bool
+    /// The workspace the user agreed to close, when the session's tab is that
+    /// workspace's only one. The Mac closes a workspace only when this names
+    /// the session's current workspace, so a session that moved asks again.
+    public var confirmedWorkspaceCloseID: UUID?
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         conversationID: RemoteConversationID,
-        stopIfBusy: Bool
+        stopIfBusy: Bool,
+        confirmedWorkspaceCloseID: UUID? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.conversationID = conversationID
         self.stopIfBusy = stopIfBusy
+        self.confirmedWorkspaceCloseID = confirmedWorkspaceCloseID
     }
 }
 
@@ -459,9 +466,10 @@ public enum RemoteConversationCloseResult: String, Codable, Equatable, Sendable 
     /// The agent or another process still runs. Ask, then retry with
     /// `stopIfBusy`.
     case confirmationRequired = "confirmation_required"
-    /// The session is its workspace's only pane, so closing it would remove
-    /// the workspace. The Mac refuses.
-    case lastPaneInWorkspace = "last_pane_in_workspace"
+    /// The session's tab is its workspace's only tab, so closing it also
+    /// closes the workspace. Ask, then retry with `confirmedWorkspaceCloseID`
+    /// and `stopIfBusy`.
+    case workspaceConfirmationRequired = "workspace_confirmation_required"
     /// Closing would also remove a document with unsaved changes from the
     /// session's tab. The Mac refuses.
     case unsavedDocument = "unsaved_document"

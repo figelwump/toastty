@@ -61,8 +61,9 @@ extension SessionRuntimeStore {
 }
 
 /// Closes one agent session's pane, and its tab when that pane was the tab's
-/// last. The sidebar's Close Session item and the remote close endpoint share
-/// it, so both apply the same confirmation and last-tab rules.
+/// last, and its workspace when that tab was the workspace's only one. The
+/// sidebar's Close Session item and the remote close endpoint share it, so
+/// both apply the same confirmation rules.
 @MainActor
 final class SessionCloseController {
     enum CloseResult: Equatable {
@@ -70,14 +71,25 @@ final class SessionCloseController {
         /// Something is still running. The caller asks the user, then calls
         /// again with `stopIfBusy`.
         case confirmationRequired(detail: String?)
-        /// The pane is its workspace's only pane. Closing it would remove the
-        /// workspace, which is a task-space decision rather than a session one.
-        case lastPaneInWorkspace
+        /// The pane's tab is its workspace's only tab, so closing it also
+        /// closes the workspace. The caller asks the user, then calls again
+        /// with `confirmedWorkspaceCloseID` and `stopIfBusy`.
+        case workspaceCloseConfirmationRequired(WorkspaceClose)
         /// Closing would remove the pane's tab with a right-panel document
         /// that has unsaved changes or is saving.
         case unsavedDocument(displayName: String?)
         case notFound
         case failed
+    }
+
+    /// What closing a workspace's only tab would end, for the confirmation.
+    struct WorkspaceClose: Equatable {
+        var workspaceID: UUID
+        var workspaceTitle: String
+        /// Whether the agent or another process still runs in the tab.
+        var isRunning: Bool
+        /// The running agent's or command's name, when known.
+        var runningDetail: String?
     }
 
     private weak var store: AppStore?
@@ -87,6 +99,7 @@ final class SessionCloseController {
     private let localDocumentCloseConfirmationState: @MainActor (UUID) -> LocalDocumentCloseConfirmationState?
     private let shouldBypassConfirmation: Bool
     private let confirmStopAndClose: @MainActor (_ sessionTitle: String, _ detail: String?) -> Bool
+    private let confirmWorkspaceClose: @MainActor (_ sessionTitle: String, _ close: WorkspaceClose) -> Bool
     private let presentRefusal: @MainActor (_ sessionTitle: String, _ reason: String) -> Void
 
     init(
@@ -97,6 +110,7 @@ final class SessionCloseController {
         localDocumentCloseConfirmationState: @escaping @MainActor (UUID) -> LocalDocumentCloseConfirmationState?,
         shouldBypassConfirmation: Bool? = nil,
         confirmStopAndClose: (@MainActor (String, String?) -> Bool)? = nil,
+        confirmWorkspaceClose: (@MainActor (String, WorkspaceClose) -> Bool)? = nil,
         presentRefusal: (@MainActor (String, String) -> Void)? = nil
     ) {
         self.store = store
@@ -110,12 +124,18 @@ final class SessionCloseController {
             environment: processInfo.environment
         )
         self.confirmStopAndClose = confirmStopAndClose ?? Self.presentStopAndCloseConfirmation
+        self.confirmWorkspaceClose = confirmWorkspaceClose ?? Self.presentWorkspaceCloseConfirmation
         self.presentRefusal = presentRefusal ?? Self.presentRefusalAlert
     }
 
     /// Closes the session in `panelID` without UI. A remote client shows its
-    /// own confirmation when this returns `.confirmationRequired`.
-    func closeSession(panelID: UUID, stopIfBusy: Bool, source: AppActionSource) -> CloseResult {
+    /// own confirmation when this returns a confirmation result.
+    func closeSession(
+        panelID: UUID,
+        stopIfBusy: Bool,
+        confirmedWorkspaceCloseID: UUID? = nil,
+        source: AppActionSource
+    ) -> CloseResult {
         guard let store, let sessionRuntimeStore,
               let selection = store.state.workspaceSelection(containingPanelID: panelID),
               case .terminal = selection.workspace.panelState(for: panelID) else {
@@ -128,29 +148,41 @@ final class SessionCloseController {
             ? workspace.tabID(containingPanelID: panelID).flatMap { workspace.tab(id: $0) }
                 .flatMap { $0.panels.count <= 1 ? $0 : nil }
             : nil
-        if closingTab != nil, workspace.tabIDs.count <= 1 {
-            return .lastPaneInWorkspace
-        }
+        let closesWorkspace = closingTab != nil && workspace.tabIDs.count <= 1
 
         let agentAssessment: @MainActor (UUID) -> TerminalCloseConfirmationAssessment? = { [terminalCloseAssessment] id in
             sessionRuntimeStore.agentCloseReadiness(panelID: id).terminalCloseAssessment { terminalCloseAssessment(id) }
         }
-        if let closingTab, shouldBypassConfirmation == false {
-            let tabAssessment = WorkspaceTabCloseConfirmation.assess(
+        let tabAssessment = closingTab.map { closingTab in
+            WorkspaceTabCloseConfirmation.assess(
                 tab: closingTab,
                 shouldBypassConfirmation: false,
                 terminalAssessment: agentAssessment,
                 localDocumentCloseConfirmationState: localDocumentCloseConfirmationState
             )
-            // Stopping the agent is the user's call; discarding a document
-            // draft or a save in progress is not part of closing a session.
-            if tabAssessment.unsavedLocalDocumentDraftCount > 0 || tabAssessment.localDocumentSaveInProgressCount > 0 {
-                return .unsavedDocument(
-                    displayName: tabAssessment.firstUnsavedLocalDocumentDisplayName
-                        ?? tabAssessment.firstLocalDocumentSaveInProgressDisplayName
-                )
-            }
-            if stopIfBusy == false, tabAssessment.requiresConfirmation {
+        }
+        // Stopping the agent and closing the workspace are the user's call;
+        // discarding a document draft or a save in progress is not part of
+        // closing a session, even when prompts are bypassed.
+        if let tabAssessment,
+           tabAssessment.unsavedLocalDocumentDraftCount > 0 || tabAssessment.localDocumentSaveInProgressCount > 0 {
+            return .unsavedDocument(
+                displayName: tabAssessment.firstUnsavedLocalDocumentDisplayName
+                    ?? tabAssessment.firstLocalDocumentSaveInProgressDisplayName
+            )
+        }
+        // One confirmation covers both the workspace and a running agent. It
+        // names a workspace, so a session that moved since then asks again.
+        if closesWorkspace, confirmedWorkspaceCloseID != workspace.id, shouldBypassConfirmation == false {
+            return .workspaceCloseConfirmationRequired(WorkspaceClose(
+                workspaceID: workspace.id,
+                workspaceTitle: workspace.title,
+                isRunning: tabAssessment?.requiresConfirmation ?? false,
+                runningDetail: tabAssessment?.detectedRunningCommand
+            ))
+        }
+        if let tabAssessment {
+            if stopIfBusy == false, shouldBypassConfirmation == false, tabAssessment.requiresConfirmation {
                 return .confirmationRequired(detail: tabAssessment.detectedRunningCommand)
             }
         } else if stopIfBusy == false, shouldBypassConfirmation == false {
@@ -177,17 +209,18 @@ final class SessionCloseController {
         }
     }
 
-    /// The sidebar's Close Session item: asks before stopping a busy agent and
-    /// explains a refusal.
+    /// The sidebar's Close Session item: asks before stopping a busy agent or
+    /// closing the workspace, and explains a refusal.
     func closeSessionInteractively(panelID: UUID, sessionTitle: String) {
-        switch closeSession(panelID: panelID, stopIfBusy: false, source: .ui("sidebar_session_close")) {
+        let source = AppActionSource.ui("sidebar_session_close")
+        switch closeSession(panelID: panelID, stopIfBusy: false, source: source) {
         case .confirmationRequired(let detail):
             guard confirmStopAndClose(sessionTitle, detail) else { return }
-            _ = closeSession(panelID: panelID, stopIfBusy: true, source: .ui("sidebar_session_close"))
-        case .lastPaneInWorkspace:
-            presentRefusal(
-                sessionTitle,
-                "This session is the last pane in its workspace. Close the workspace, or clean up the task space, instead."
+            _ = closeSession(panelID: panelID, stopIfBusy: true, source: source)
+        case .workspaceCloseConfirmationRequired(let workspaceClose):
+            guard confirmWorkspaceClose(sessionTitle, workspaceClose) else { return }
+            _ = closeSession(
+                panelID: panelID, stopIfBusy: true, confirmedWorkspaceCloseID: workspaceClose.workspaceID, source: source
             )
         case .unsavedDocument(let displayName):
             presentRefusal(
@@ -211,6 +244,27 @@ final class SessionCloseController {
         alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         alert.addConfiguredButton(withTitle: "Stop and Close", behavior: .defaultAction)
         return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    private static func presentWorkspaceCloseConfirmation(sessionTitle: String, close: WorkspaceClose) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Close \u{201C}\(sessionTitle)\u{201D} and its workspace?"
+        alert.informativeText = workspaceCloseMessage(close)
+        alert.alertStyle = .warning
+        alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        alert.addConfiguredButton(withTitle: "Close Workspace", behavior: .defaultAction)
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    static func workspaceCloseMessage(_ close: WorkspaceClose) -> String {
+        var sentences = [
+            "This is the only tab in \u{201C}\(close.workspaceTitle)\u{201D}, so closing the session also closes the workspace."
+        ]
+        if close.isRunning {
+            sentences.append("\(close.runningDetail ?? "A process") is still running and will be stopped.")
+        }
+        sentences.append("Any associated git worktree is not cleaned up automatically.")
+        return sentences.joined(separator: " ")
     }
 
     private static func presentRefusalAlert(sessionTitle: String, reason: String) {

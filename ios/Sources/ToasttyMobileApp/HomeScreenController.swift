@@ -23,8 +23,10 @@ enum ConversationCloseOutcome: Equatable, Sendable {
     /// The agent still works. The user decides, then the close goes again
     /// with permission to stop it.
     case confirmationRequired
-    /// The session is its workspace's only pane, so the Mac refused.
-    case lastPaneInWorkspace
+    /// The session's tab is its workspace's only tab, so closing it also
+    /// closes the workspace. The user decides, then the close goes again
+    /// naming that workspace, with permission to stop the agent.
+    case workspaceConfirmationRequired
     /// The session's tab holds a document with unsaved changes.
     case unsavedDocument
     case sessionWritesDisabled
@@ -32,11 +34,40 @@ enum ConversationCloseOutcome: Equatable, Sendable {
     case failed
 }
 
-/// A close that waits for the user because the agent is still running.
+/// A close that waits for the user.
 struct ConversationCloseConfirmation: Identifiable, Equatable {
+    enum Reason: Equatable {
+        /// The agent is still running.
+        case agentRunning
+        /// Closing the session's tab also closes its workspace on the Mac.
+        case closesWorkspace(workspaceID: UUID, workspaceTitle: String)
+    }
+
     /// The conversation's ID.
     let id: UUID
     let title: String
+    let reason: Reason
+
+    var closesWorkspace: Bool {
+        if case .closesWorkspace = reason { true } else { false }
+    }
+
+    /// What the user agrees to by confirming.
+    var permissions: ConversationClosePermissions {
+        switch reason {
+        case .agentRunning: ConversationClosePermissions(stopIfBusy: true)
+        case .closesWorkspace(let workspaceID, _):
+            ConversationClosePermissions(stopIfBusy: true, confirmedWorkspaceCloseID: workspaceID)
+        }
+    }
+}
+
+/// What the user allowed a close to do beyond closing an idle pane.
+struct ConversationClosePermissions: Equatable, Sendable {
+    var stopIfBusy = false
+    /// The workspace the user agreed to close. The Mac closes it only while
+    /// the session is still that workspace's only tab.
+    var confirmedWorkspaceCloseID: UUID?
 }
 
 /// The message shown after a done or flag change, with Undo while it
@@ -91,7 +122,7 @@ final class HomeScreenController {
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
     private var sendSubspaceDone: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
     private var sendConversationFlag: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
-    private var sendConversationClose: (@MainActor (UUID, Bool) async -> ConversationCloseOutcome)?
+    private var sendConversationClose: (@MainActor (UUID, ConversationClosePermissions) async -> ConversationCloseOutcome)?
     /// Sessions hidden because their close is on its way to the Mac or the
     /// Mac accepted it. A row stays hidden until the Mac's snapshot omits it.
     /// After a refusal or a failure, the row is shown again only if the
@@ -348,25 +379,27 @@ final class HomeScreenController {
     }
 
     func installConversationClose(
-        _ send: @escaping @MainActor (UUID, Bool) async -> ConversationCloseOutcome
+        _ send: @escaping @MainActor (UUID, ConversationClosePermissions) async -> ConversationCloseOutcome
     ) {
         sendConversationClose = send
     }
 
-    /// Hides the row at once, then asks the Mac. Without `stopIfBusy`, a
-    /// working agent comes back as `closeConfirmation` for the user to decide.
-    func closeConversation(_ conversationID: UUID, stopIfBusy: Bool = false) {
+    /// Hides the row at once, then asks the Mac. Without permission, a working
+    /// agent or a workspace's only tab comes back as `closeConfirmation` for
+    /// the user to decide.
+    func closeConversation(_ conversationID: UUID, permissions: ConversationClosePermissions = .init()) {
         guard canCloseConversations,
               sendConversationClose != nil || runtimeMode == .fixture,
               closingConversationIDs.contains(conversationID) == false,
               let conversation = conversation(id: conversationID) else { return }
         closeConfirmation = nil
         let title = ToasttySessionRowPresentation.title(for: conversation)
+        let workspace = (id: conversation.workspaceID, title: conversation.workspaceTitle)
         guard let sendConversationClose else {
             // Fixtures have no Mac, so they ask as the Mac would for an agent
             // that is still working.
-            if stopIfBusy == false, [.working, .needsApproval].contains(conversation.state.bucket) {
-                closeConfirmation = ConversationCloseConfirmation(id: conversationID, title: title)
+            if permissions.stopIfBusy == false, [.working, .needsApproval].contains(conversation.state.bucket) {
+                closeConfirmation = ConversationCloseConfirmation(id: conversationID, title: title, reason: .agentRunning)
                 return
             }
             hostSnapshot = Self.removingConversations([conversationID], from: hostSnapshot)
@@ -377,14 +410,14 @@ final class HomeScreenController {
         closingConversationIDs.insert(conversationID)
         presentSnapshot()
         Task { @MainActor [weak self] in
-            let outcome = await sendConversationClose(conversationID, stopIfBusy)
-            self?.finishConversationClose(conversationID, title: title, outcome: outcome)
+            let outcome = await sendConversationClose(conversationID, permissions)
+            self?.finishConversationClose(conversationID, title: title, workspace: workspace, outcome: outcome)
         }
     }
 
     func confirmConversationClose() {
         guard let closeConfirmation else { return }
-        closeConversation(closeConfirmation.id, stopIfBusy: true)
+        closeConversation(closeConfirmation.id, permissions: closeConfirmation.permissions)
     }
 
     func cancelConversationClose() {
@@ -394,6 +427,7 @@ final class HomeScreenController {
     private func finishConversationClose(
         _ conversationID: UUID,
         title: String,
+        workspace: (id: UUID, title: String),
         outcome: ConversationCloseOutcome
     ) {
         defer { presentSnapshot() }
@@ -414,10 +448,14 @@ final class HomeScreenController {
             // A missing session is already gone; the next snapshot drops it.
             failureMessage = nil
         case .confirmationRequired:
-            closeConfirmation = ConversationCloseConfirmation(id: conversationID, title: title)
+            closeConfirmation = ConversationCloseConfirmation(id: conversationID, title: title, reason: .agentRunning)
             failureMessage = nil
-        case .lastPaneInWorkspace:
-            failureMessage = "\(title) is the last pane in its workspace. Clean up the task space on your Mac instead."
+        case .workspaceConfirmationRequired:
+            closeConfirmation = ConversationCloseConfirmation(
+                id: conversationID, title: title,
+                reason: .closesWorkspace(workspaceID: workspace.id, workspaceTitle: workspace.title)
+            )
+            failureMessage = nil
         case .unsavedDocument:
             failureMessage = "\(title)'s tab on your Mac has a document with unsaved changes. Save or close it there first."
         case .sessionWritesDisabled:

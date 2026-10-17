@@ -403,8 +403,8 @@ final class ConversationCloseControllerTests: XCTestCase {
     func testClosedRowStaysHiddenUntilTheMacDropsItEvenThroughAStaleSnapshot() async throws {
         let controller = liveController()
         var requests: [Bool] = []
-        controller.installConversationClose { _, stopIfBusy in
-            requests.append(stopIfBusy)
+        controller.installConversationClose { _, permissions in
+            requests.append(permissions.stopIfBusy)
             return .closed
         }
 
@@ -426,14 +426,15 @@ final class ConversationCloseControllerTests: XCTestCase {
     func testAWorkingAgentAsksFirstAndOnlyTheConfirmedCloseStopsIt() async throws {
         let controller = liveController()
         var requests: [Bool] = []
-        controller.installConversationClose { _, stopIfBusy in
-            requests.append(stopIfBusy)
-            return stopIfBusy ? .closed : .confirmationRequired
+        controller.installConversationClose { _, permissions in
+            requests.append(permissions.stopIfBusy)
+            return permissions.stopIfBusy ? .closed : .confirmationRequired
         }
 
         controller.closeConversation(conversationID)
         try await waitUntil { controller.closeConfirmation != nil }
         XCTAssertEqual(controller.closeConfirmation?.title, "Session")
+        XCTAssertEqual(controller.closeConfirmation?.reason, .agentRunning)
         XCTAssertTrue(isShown(controller), "The row comes back while the user decides")
 
         controller.cancelConversationClose()
@@ -465,9 +466,31 @@ final class ConversationCloseControllerTests: XCTestCase {
         XCTAssertNil(controller.subspaceDoneNotice)
     }
 
+    func testAWorkspacesOnlyTabAsksOnceThenClosesTheWorkspaceAndStopsTheAgent() async throws {
+        let controller = liveController()
+        var requests: [ConversationClosePermissions] = []
+        controller.installConversationClose { _, permissions in
+            requests.append(permissions)
+            return permissions.confirmedWorkspaceCloseID == nil ? .workspaceConfirmationRequired : .closed
+        }
+
+        controller.closeConversation(conversationID)
+        try await waitUntil { controller.closeConfirmation != nil }
+        XCTAssertEqual(
+            controller.closeConfirmation?.reason,
+            .closesWorkspace(workspaceID: workspaceID, workspaceTitle: "toastty")
+        )
+        XCTAssertTrue(isShown(controller))
+
+        controller.confirmConversationClose()
+        XCTAssertFalse(isShown(controller))
+        try await waitUntil { controller.subspaceDoneNotice?.kind == .sessionClosed }
+        XCTAssertEqual(requests, [.init(), .init(stopIfBusy: true, confirmedWorkspaceCloseID: workspaceID)])
+    }
+
     func testRefusalsShowTheRowAgainAndSaySo() async throws {
         let controller = liveController()
-        var outcome = ConversationCloseOutcome.lastPaneInWorkspace
+        var outcome = ConversationCloseOutcome.unsavedDocument
         controller.installConversationClose { _, _ in outcome }
 
         controller.closeConversation(conversationID)
@@ -475,7 +498,7 @@ final class ConversationCloseControllerTests: XCTestCase {
         XCTAssertTrue(isShown(controller))
         XCTAssertEqual(
             controller.subspaceDoneNotice?.message,
-            "Session is the last pane in its workspace. Clean up the task space on your Mac instead."
+            "Session's tab on your Mac has a document with unsaved changes. Save or close it there first."
         )
 
         outcome = .failed
