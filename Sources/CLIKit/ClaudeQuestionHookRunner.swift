@@ -7,8 +7,11 @@ import RemoteProtocol
 struct ParsedClaudeQuestionHook {
     var event: ClaudeQuestionHookEvent
     var originalToolInput: [String: AutomationJSONValue]?
+    /// Set for a permission request on any tool other than a question.
+    var permission: ClaudePermissionHook?
 
     func providerResponse(answers: [RemoteInteractionAnswer]) -> String? {
+        if let permission { return permission.providerResponse(answers: answers) }
         guard let questions = event.questions,
               let providerAnswers = ClaudeQuestionValidation.providerAnswers(answers, for: questions),
               var updatedInput = originalToolInput else { return nil }
@@ -44,7 +47,9 @@ enum ClaudeQuestionHookParser {
         var answers: [String: String]?
         switch eventName {
         case .preToolUse, .permissionRequest, .postToolUse, .postToolUseFailure:
-            guard object.string("tool_name") == "AskUserQuestion" else { return nil }
+            guard object.string("tool_name") == "AskUserQuestion" else {
+                return parseToolPermission(object, eventName: eventName, nativeSessionID: nativeSessionID, payload: payload)
+            }
             if let toolInput { questions = parseQuestions(toolInput["questions"]) }
             if eventName == .preToolUse || eventName == .permissionRequest {
                 guard questions != nil else { return nil }
@@ -75,6 +80,49 @@ enum ClaudeQuestionHookParser {
                 answers: answers
             ),
             originalToolInput: toolInput
+        )
+    }
+
+    /// Other tools take part only to answer their permission prompts:
+    /// PreToolUse registers the call ID the PermissionRequest payload lacks,
+    /// and the request itself carries the phone-facing presentation. Their
+    /// completion reaches the host through the transcript instead.
+    private static func parseToolPermission(
+        _ object: [String: AutomationJSONValue],
+        eventName: ClaudeQuestionHookEvent.EventName,
+        nativeSessionID: String,
+        payload: Data
+    ) -> ParsedClaudeQuestionHook? {
+        guard let toolName = object.string("tool_name"), ClaudePermissionHook.supportsTool(toolName),
+              let toolInput = object.object("tool_input"),
+              let digest = ClaudePermissionHook.inputDigest(toolInput) else { return nil }
+        var callID: String?
+        var permission: ClaudePermissionHook?
+        switch eventName {
+        case .preToolUse:
+            guard let id = object.string("tool_use_id"), !id.isEmpty else { return nil }
+            callID = id
+        case .permissionRequest:
+            guard let raw = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let summary = ClaudeHookEventParser.approvalDetail(from: raw),
+                  let parsed = ClaudePermissionHook(toolName: toolName, toolInput: toolInput,
+                      suggestions: object["permission_suggestions"], summary: summary) else { return nil }
+            permission = parsed
+        default:
+            return nil
+        }
+        return ParsedClaudeQuestionHook(
+            event: ClaudeQuestionHookEvent(
+                eventName: eventName,
+                nativeSessionID: nativeSessionID,
+                promptID: object.string("prompt_id"),
+                transcriptPath: object.string("transcript_path"),
+                providerCallID: callID,
+                toolName: toolName,
+                toolInputDigest: digest,
+                permission: permission?.presentation
+            ),
+            permission: permission
         )
     }
 
@@ -140,8 +188,8 @@ struct ClaudeQuestionHookRunner {
         guard initialReply.status == .pending || initialReply.status == .answer,
               initialReply.responseID == responseID else { return Result() }
 
-        // Once the host presents a structured question, generic permission
-        // telemetry would replace it. Keep it suppressed through fallback.
+        // Once the host presents a structured question or permission, generic
+        // permission telemetry would replace it. Keep it suppressed through fallback.
         var delivered = false
         var endReason: RemoteQuestionAnswerRejectionReason?
         defer {

@@ -422,9 +422,36 @@ return later during that window. The Mac must remain awake with Toastty and the
 Claude session running: a lost hook connection, including a long sleep or host
 restart, closes mobile input without answering Claude's question. If the
 connection ends, the window expires, or the provider's form is unsupported,
-continue on the Mac. Other tool permission requests remain read-only on the
-phone. Existing Claude sessions must be relaunched or resumed through the
-updated Toastty to install the hook with the longer answer window.
+continue on the Mac. Existing Claude sessions must be relaunched or resumed
+through the updated Toastty to install the hook with the longer answer window.
+
+### Permission requests
+
+The phone can also answer Claude Code permission requests from the main agent
+for the built-in Bash, Edit, MultiEdit, Write, NotebookEdit, Read, Glob, Grep,
+WebFetch, and WebSearch tools. The card shows Claude's reason and the full
+command, file change, or tool arguments, shortened only past 16 KB with a note
+that says so. Then choose one decision:
+
+- **Allow once** runs this request.
+- **Always allow …** applies one of Claude's own suggestions for this request,
+  such as a rule like `Bash(npm test:*)` saved to `.claude/settings.local.json`,
+  or accepting all edits for the rest of the session. The button names the
+  exact rule and where Claude saves it. At most two suggestions are shown, and
+  only rule additions and the session-only accept-edits switch are offered.
+- **Deny** refuses the request and stops Claude, like **No** on the desktop,
+  so you can send a message that says what to do instead.
+
+The desktop prompt stays open, and the first answer wins. Claude does not
+report which answer it took, so after a phone decision the card shows what the
+phone sent, not a confirmed result.
+
+Answering needs a native paired device with send access and its **Approve
+requests** switch on under **Paired Devices** in Remote Access settings. The
+switch is off by default, also for devices paired before this feature. Other
+tools, MCP tools, sub-agent requests, Codex sessions, and requests Toastty
+cannot match to a single tool call stay read-only on the phone. Older iPhone
+apps show the same decision as a list of options with the full request text.
 
 Session rows follow the desktop sidebar: a status mark, the session name, and
 its latest summary. Touch and hold a row to see its path, last update, model,
@@ -687,6 +714,13 @@ support conversations; update Toastty on the Mac to enable previews.
   answer text; the Mac applies them only to the exact pending question through
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
+- Answering a Claude permission request needs a native paired device with send
+  access and the **Approve requests** switch on, which is off by default. The
+  phone sends only the identifier of one decision the Mac offered. Claude's
+  suggested permission changes stay in the hook process on the Mac; **Always
+  allow** applies the chosen suggestion unchanged, which can save a rule in
+  Claude's settings files. Accepted and refused decisions are recorded in the
+  audit log with the device.
 - Marking a task space done or flagging a session needs a native paired device
   with send access. Each changes only that one mark, and each change is
   recorded in the audit log with the device that made it.

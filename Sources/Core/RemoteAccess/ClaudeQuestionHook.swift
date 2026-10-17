@@ -22,6 +22,13 @@ public struct ClaudeQuestionHookEvent: Codable, Equatable, Sendable {
     public var questions: [RemoteInteractionQuestion]?
     public var answers: [String: String]?
     public var subagentID: String?
+    /// Tool identity for permission correlation. PreToolUse carries the call
+    /// ID; PermissionRequest does not, so the host matches the two by tool
+    /// name and a digest of the tool input. The input itself stays local.
+    public var toolName: String?
+    public var toolInputDigest: String?
+    /// Present only on a PermissionRequest for a tool other than a question.
+    public var permission: ClaudePermissionHookPresentation?
     public var timestamp: Date
 
     public init(
@@ -33,6 +40,9 @@ public struct ClaudeQuestionHookEvent: Codable, Equatable, Sendable {
         questions: [RemoteInteractionQuestion]? = nil,
         answers: [String: String]? = nil,
         subagentID: String? = nil,
+        toolName: String? = nil,
+        toolInputDigest: String? = nil,
+        permission: ClaudePermissionHookPresentation? = nil,
         timestamp: Date = Date()
     ) {
         self.eventName = eventName
@@ -43,7 +53,26 @@ public struct ClaudeQuestionHookEvent: Codable, Equatable, Sendable {
         self.questions = questions
         self.answers = answers
         self.subagentID = subagentID
+        self.toolName = toolName
+        self.toolInputDigest = toolInputDigest
+        self.permission = permission
         self.timestamp = timestamp
+    }
+}
+
+/// The phone-facing form of a Claude tool permission request. The decision is
+/// one single-select question whose option IDs the hook maps back to Claude's
+/// decision; Claude's raw permission suggestions never leave the hook.
+public struct ClaudePermissionHookPresentation: Codable, Equatable, Sendable {
+    /// Claude-style one-line summary, such as "Approve Running ls".
+    public var summary: String
+    public var detail: RemotePermissionRequestDetail
+    public var decision: RemoteInteractionQuestion
+
+    public init(summary: String, detail: RemotePermissionRequestDetail, decision: RemoteInteractionQuestion) {
+        self.summary = summary
+        self.detail = detail
+        self.decision = decision
     }
 }
 
@@ -155,5 +184,53 @@ public enum ClaudeQuestionValidation {
             }
             return RemoteInteractionAnswer(questionID: question.id, text: text)
         }
+    }
+}
+
+/// The choices a phone can make on a Claude permission request, encoded as
+/// option IDs of the request's single decision question.
+public enum ClaudePermissionDecision: Equatable, Sendable {
+    case allowOnce
+    /// Allow and apply Claude's own suggestion at this index of the request's
+    /// `permission_suggestions` array.
+    case alwaysAllow(suggestionIndex: Int)
+    case deny
+
+    public static let questionID = "decision"
+    private static let alwaysPrefix = "always:"
+
+    public var optionID: String {
+        switch self {
+        case .allowOnce: "allow"
+        case .alwaysAllow(let index): "\(Self.alwaysPrefix)\(index)"
+        case .deny: "deny"
+        }
+    }
+
+    public init?(optionID: String) {
+        switch optionID {
+        case "allow": self = .allowOnce
+        case "deny": self = .deny
+        default:
+            guard optionID.hasPrefix(Self.alwaysPrefix),
+                  let index = Int(optionID.dropFirst(Self.alwaysPrefix.count)),
+                  index >= 0, Self.alwaysAllow(suggestionIndex: index).optionID == optionID else { return nil }
+            self = .alwaysAllow(suggestionIndex: index)
+        }
+    }
+
+    /// Accepts exactly one offered option and no custom text. A permission has
+    /// no free-form answer, so text is rejected rather than ignored.
+    public static func decision(
+        from answers: [RemoteInteractionAnswer],
+        for question: RemoteInteractionQuestion
+    ) -> ClaudePermissionDecision? {
+        guard question.id == questionID, question.multiSelect == false,
+              answers.count == 1, let answer = answers.first,
+              answer.questionID == questionID, answer.text == nil,
+              answer.selectedOptionIDs.count == 1,
+              let optionID = answer.selectedOptionIDs.first,
+              question.options.contains(where: { $0.id == optionID }) else { return nil }
+        return ClaudePermissionDecision(optionID: optionID)
     }
 }

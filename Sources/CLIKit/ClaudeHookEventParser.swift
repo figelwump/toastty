@@ -462,7 +462,7 @@ enum ClaudeHookEventParser {
         }
     }
 
-    private static func approvalDetail(from object: [String: Any]) -> String? {
+    static func approvalDetail(from object: [String: Any]) -> String? {
         if let message = normalizedSummaryText(object["message"]) {
             return message
         }

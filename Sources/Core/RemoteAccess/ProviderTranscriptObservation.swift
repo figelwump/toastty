@@ -64,6 +64,7 @@ public struct ProviderInteractionObservation: Codable, Equatable, Sendable {
     public var questions: [RemoteInteractionQuestion]?
     public var responseID: String?
     public var responseExpiresAt: Date?
+    public var permission: RemotePermissionRequestDetail?
 
     public init(
         kind: RemotePendingInteraction.Kind,
@@ -73,7 +74,8 @@ public struct ProviderInteractionObservation: Codable, Equatable, Sendable {
         options: [RemotePendingInteraction.Option] = [],
         questions: [RemoteInteractionQuestion]? = nil,
         responseID: String? = nil,
-        responseExpiresAt: Date? = nil
+        responseExpiresAt: Date? = nil,
+        permission: RemotePermissionRequestDetail? = nil
     ) {
         self.kind = kind
         self.providerCallID = providerCallID
@@ -83,6 +85,7 @@ public struct ProviderInteractionObservation: Codable, Equatable, Sendable {
         self.questions = questions
         self.responseID = responseID
         self.responseExpiresAt = responseExpiresAt
+        self.permission = permission
     }
 }
 

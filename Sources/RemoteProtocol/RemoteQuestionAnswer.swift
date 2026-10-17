@@ -142,6 +142,8 @@ public enum RemoteQuestionAnswerRejectionReason: String, Codable, Equatable, Sen
     case invalidAnswers = "invalid_answers"
     case alreadySubmitted = "already_submitted"
     case unsupported
+    /// The device has not been allowed to approve permission requests.
+    case approvalsDisabled = "approvals_disabled"
 }
 
 /// Submission acknowledges handoff to a live hook. Only a later provider
