@@ -73,6 +73,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case configReload = "config.reload"
     case terminalSendText = "terminal.send-text"
     case terminalDropImageFiles = "terminal.drop-image-files"
+    case sessionExitAfterTurn = "session.exit-after-turn"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -454,6 +455,14 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Send text to a terminal panel, optionally only when it still hosts an expected managed session.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.text(required: true), .submit(required: false), .expectedSessionID(required: false), .allowUnavailable(required: false)])
         case .terminalDropImageFiles:
             return .init(id: rawValue, kind: .action, summary: "Drop local files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
+        case .sessionExitAfterTurn:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "When the running turn of the panel's managed Claude Code or Codex session completes, type the agent's native /exit. Skipped if anyone typed into the session or sent it a phone message during the turn, or if the turn ends without completing. Requires the session to be in a running turn in a top-level workspace; sessions in task spaces are refused.",
+                selectors: [.windowID, .workspaceID, .panelID],
+                parameters: [.expectedSessionID(required: true)]
+            )
         }
     }
 

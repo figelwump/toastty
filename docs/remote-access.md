@@ -555,8 +555,10 @@ starts keep the same seven-day file retention and storage quota as replies.
 
 The Mac opens a new tab in that workspace with a plain terminal, starts the
 agent there with your message, and leaves the tab you are looking at and your
-keyboard focus where they were. The session then appears in the phone's list
-and opens. If it has not appeared after 10 seconds, the sheet closes with a
+keyboard focus where they were. When the agent later exits cleanly, the Mac
+closes that tab again, unless you are looking at it or it is its workspace's
+only tab; see Closing sessions in [Running agents](running-agents.md). The
+session then appears in the phone's list and opens. If it has not appeared after 10 seconds, the sheet closes with a
 notice, and you open the session from the list when it arrives.
 
 - **Workspace.** The menu lists every top-level workspace in Home order. From

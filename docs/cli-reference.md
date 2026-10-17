@@ -499,6 +499,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `agent.launch`
 - `config.reload`
 - `terminal.send-text`
+- `session.exit-after-turn`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 
 Explicit foreground navigation through workspace/tab selection and
@@ -621,6 +622,20 @@ select/focus the workspace or panel separately before sending text. Pass
 panel; Toastty rejects the request before delivery if that active session is
 missing, ended, or replaced. This check is independent of the selected
 workspace tab and is not bypassed by `allowUnavailable=true`.
+
+`session.exit-after-turn` asks Toastty to type the agent's native `/exit` when
+the running turn of the panel's managed Claude Code or Codex session completes.
+It requires `expectedSessionID`, and the session must be in a running turn in a
+top-level workspace; a session in a task space is refused, because a task space is
+marked done when its work is finished instead. The
+exit is skipped if anyone typed into the panel or sent it a phone message during
+the turn, if the turn ends without completing, or if a new turn starts first.
+An agent calls it as its last tool action and then gives its final answer:
+
+```bash
+toastty action run session.exit-after-turn --panel "$TOASTTY_PANEL_ID" \
+  "expectedSessionID=$TOASTTY_SESSION_ID"
+```
 
 Patch JSON uses exact text replacements:
 

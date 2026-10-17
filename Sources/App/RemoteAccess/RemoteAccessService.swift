@@ -495,6 +495,9 @@ final class RemoteAccessService: ObservableObject {
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
     private let conversationCloseBridge = RemoteAccessConversationCloseBridge()
     private let sessionCloseController: SessionCloseController?
+    /// When a phone message or stop last reached each panel. Remote delivery
+    /// bypasses local-input tracking, so an exit after the turn asks here.
+    private var lastRemoteInputAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -631,6 +634,7 @@ final class RemoteAccessService: ObservableObject {
         runtimePaths: ToasttyRuntimePaths,
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
         sessionCloseController: SessionCloseController? = nil,
+        sessionExitController: SessionExitController? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -728,6 +732,7 @@ final class RemoteAccessService: ObservableObject {
         interruptBridge.service = self
         localDraftReleaseBridge.service = self
         sessionStartBridge.service = self
+        sessionExitController?.remoteInputProbe = self
         sessionStarter = RemoteSessionStarter(
             store: store,
             launcher: sessionLauncher,
@@ -737,7 +742,10 @@ final class RemoteAccessService: ObservableObject {
                 return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
             },
             recentModels: { [weak self] provider in self?.recentModels(for: provider) ?? [] },
-            publishSessionList: { [weak self] in self?.syncConversations() }
+            publishSessionList: { [weak self] in self?.syncConversations() },
+            sessionStartedInNewTab: { [weak sessionExitController] sessionID in
+                sessionExitController?.markClosesPaneOnCleanExit(sessionID: sessionID)
+            }
         )
         handler.sessionStartOptionsHandler = { [sessionStartBridge] request, device in
             sessionStartBridge.options(request, device: device)
@@ -3091,6 +3099,7 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             return .rejected(reason: reason)
         case .accept(let turnEpoch):
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 deliveredText ?? request.text,
                 submit: true,
@@ -3182,6 +3191,7 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             result = .rejected(reason: reason)
         case .accept:
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3457,6 +3467,7 @@ final class RemoteAccessService: ObservableObject {
             // paste-oriented text plus a real Return key, which preserves
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 deliveredText ?? request.text,
                 submit: true,
@@ -4064,5 +4075,28 @@ final class RemoteAccessService: ObservableObject {
             )
         }
         return resources
+    }
+}
+
+extension RemoteAccessService: SessionRemoteInputProbe {
+    /// Phone input is rare, so each write also drops panels that are gone.
+    private func recordRemoteInput(panelID: UUID) {
+        lastRemoteInputAtByPanelID = lastRemoteInputAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        lastRemoteInputAtByPanelID[panelID] = Date()
+    }
+
+    func hasRemoteInput(panelID: UUID, since date: Date) -> Bool {
+        if let deliveredAt = lastRemoteInputAtByPanelID[panelID], deliveredAt > date {
+            return true
+        }
+        // A queued message waits for the next open prompt, and a delivered
+        // one may still sit in the prompt until it is confirmed.
+        return panelIDByConversationID.contains { conversationID, mappedPanelID in
+            mappedPanelID == panelID
+                && (sendQueue.entries(for: conversationID).isEmpty == false
+                    || pendingSendCorrelator.conversationIDs.contains(conversationID))
+        }
     }
 }

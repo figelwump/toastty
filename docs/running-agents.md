@@ -1103,6 +1103,22 @@ not clean up an associated git worktree; use `worktree-cleanup` for that.
 Toastty refuses to close a session whose tab holds a right-panel document with
 unsaved changes. Save or close the document first.
 
+A session started from the iOS app runs in a tab Toastty opened for it. When
+its agent exits cleanly (exit status 0), for example after `/exit`, Toastty
+closes that tab without asking and keeps the tab you are looking at. The tab
+stays when the agent crashed, when it is the tab you are looking at, when you
+typed into its terminal after the exit, when it is its workspace's only tab, or
+when it holds an unsaved document. Toastty remembers these tabs until it quits.
+
+An agent can ask to exit when its current turn completes with the
+`session.exit-after-turn` action; the `worktree-create` skill uses it so the
+launching session exits after its handoff. Toastty then types the agent's native
+`/exit`. It supports Claude Code and Codex, in top-level workspaces only: a
+task space is marked done when its work is finished, so its sessions do not exit
+on request. It skips the exit when anyone typed
+into the session or sent it a phone message during the turn, or when the turn
+ends without completing.
+
 ### Automatic program status
 
 Programs can report [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)

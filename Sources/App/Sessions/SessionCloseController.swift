@@ -128,6 +128,15 @@ final class SessionCloseController {
         self.presentRefusal = presentRefusal ?? Self.presentRefusalAlert
     }
 
+    /// Who asked for a close, which decides what it may end without asking.
+    private enum Requester {
+        /// A person, who answers confirmations or bypasses them.
+        case person(confirmedWorkspaceCloseID: UUID?)
+        /// Nobody: the agent exited on its own. Such a close never stops a
+        /// process or removes a workspace, even when prompts are bypassed.
+        case agentExit
+    }
+
     /// Closes the session in `panelID` without UI. A remote client shows its
     /// own confirmation when this returns a confirmation result.
     func closeSession(
@@ -136,6 +145,42 @@ final class SessionCloseController {
         confirmedWorkspaceCloseID: UUID? = nil,
         source: AppActionSource
     ) -> CloseResult {
+        close(
+            panelID: panelID,
+            stopIfBusy: stopIfBusy,
+            requester: .person(confirmedWorkspaceCloseID: confirmedWorkspaceCloseID),
+            source: source
+        )
+    }
+
+    /// Closes the pane of a session whose agent exited cleanly, and its tab
+    /// when it was the tab's last. Anything that would need a confirmation
+    /// leaves the pane open instead.
+    func closeExitedSessionPane(panelID: UUID) -> CloseResult {
+        close(
+            panelID: panelID,
+            stopIfBusy: false,
+            requester: .agentExit,
+            source: AppActionSource("session_exit", detail: "clean_agent_exit")
+        )
+    }
+
+    private func close(
+        panelID: UUID,
+        stopIfBusy: Bool,
+        requester: Requester,
+        source: AppActionSource
+    ) -> CloseResult {
+        let asks: Bool
+        let confirmedWorkspaceCloseID: UUID?
+        switch requester {
+        case .person(let confirmedID):
+            asks = shouldBypassConfirmation == false
+            confirmedWorkspaceCloseID = confirmedID
+        case .agentExit:
+            asks = true
+            confirmedWorkspaceCloseID = nil
+        }
         guard let store, let sessionRuntimeStore,
               let selection = store.state.workspaceSelection(containingPanelID: panelID),
               case .terminal = selection.workspace.panelState(for: panelID) else {
@@ -173,7 +218,7 @@ final class SessionCloseController {
         }
         // One confirmation covers both the workspace and a running agent. It
         // names a workspace, so a session that moved since then asks again.
-        if closesWorkspace, confirmedWorkspaceCloseID != workspace.id, shouldBypassConfirmation == false {
+        if closesWorkspace, confirmedWorkspaceCloseID != workspace.id, asks {
             return .workspaceCloseConfirmationRequired(WorkspaceClose(
                 workspaceID: workspace.id,
                 workspaceTitle: workspace.title,
@@ -182,10 +227,10 @@ final class SessionCloseController {
             ))
         }
         if let tabAssessment {
-            if stopIfBusy == false, shouldBypassConfirmation == false, tabAssessment.requiresConfirmation {
+            if stopIfBusy == false, asks, tabAssessment.requiresConfirmation {
                 return .confirmationRequired(detail: tabAssessment.detectedRunningCommand)
             }
-        } else if stopIfBusy == false, shouldBypassConfirmation == false {
+        } else if stopIfBusy == false, asks {
             // A missing assessment means the terminal state is unknown, so it
             // asks rather than risk ending a running process silently.
             guard let assessment = agentAssessment(panelID) else { return .confirmationRequired(detail: nil) }

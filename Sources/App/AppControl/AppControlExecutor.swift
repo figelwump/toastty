@@ -713,6 +713,41 @@ final class AppControlExecutor {
             }
             throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
 
+        case .sessionExitAfterTurn:
+            let resolved = try resolveTerminalTarget(payload: args)
+            guard let rawSessionID = args["expectedSessionID"] else {
+                throw AutomationSocketError.invalidPayload("expectedSessionID is required")
+            }
+            try enforceExpectedSessionIfPresent(rawSessionID, panelID: resolved.panelID)
+            guard let sessionExitController = sessionRuntimeStore.sessionExitController else {
+                throw AutomationSocketError.invalidPayload("session.exit-after-turn is unavailable in this launch context")
+            }
+            let armed: SessionExitController.ArmedExit
+            do {
+                armed = try sessionExitController.armExitAfterTurn(
+                    panelID: resolved.panelID,
+                    expectedSessionID: args.stringValue("expectedSessionID") ?? ""
+                )
+            } catch SessionExitController.ArmError.sessionNotInPanel {
+                throw AutomationSocketError.invalidPayload("panel does not host the expected managed session")
+            } catch SessionExitController.ArmError.unsupportedAgent(let agent) {
+                throw AutomationSocketError.invalidPayload("\(agent.displayName) has no verified native exit command")
+            } catch SessionExitController.ArmError.sessionInTaskSpace {
+                throw AutomationSocketError.invalidPayload("the session runs in a task space, which is marked done instead of exiting")
+            } catch {
+                throw AutomationSocketError.invalidPayload("the session is not in a running turn")
+            }
+            return .init(
+                didMutateState: false,
+                result: [
+                    "workspaceID": .string(resolved.workspaceID.uuidString),
+                    "panelID": .string(resolved.panelID.uuidString),
+                    "sessionID": .string(armed.sessionID),
+                    "exitCommand": .string(armed.exitCommand),
+                    "armed": .bool(true),
+                ]
+            )
+
         case .terminalDropImageFiles:
             let rawFiles = args.stringArrayValue("files")
             guard rawFiles.isEmpty == false else {

@@ -1226,6 +1226,20 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID)
             }
         )
+        let sessionExitController = SessionExitController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            sessionCloseController: remoteSessionCloseController,
+            sendText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendText(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? false
+            }
+        )
+        sessionRuntimeStore.sessionExitController = sessionExitController
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
@@ -1233,7 +1247,8 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
             sessionLauncher: remoteSessionLauncher,
-            sessionCloseController: remoteSessionCloseController
+            sessionCloseController: remoteSessionCloseController,
+            sessionExitController: sessionExitController
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
