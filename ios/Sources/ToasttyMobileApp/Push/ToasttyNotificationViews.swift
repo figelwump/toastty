@@ -72,7 +72,9 @@ struct ToasttyNotificationIntroduction: View {
             .tint(ToasttyDesignTokens.inkOnAmber)
             .disabled(requestingPermission)
             .accessibilityIdentifier("toastty-mobile-notifications-continue")
-            Button { controller.deferIntroduction(); dismiss() } label: {
+            Button {
+                Task { await controller.deferIntroduction(); dismiss() }
+            } label: {
                 Text("Not now")
                     .font(.subheadline)
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
@@ -150,7 +152,7 @@ struct ToasttyNotificationSettingsSection: View {
     var body: some View {
         Section("Notifications") {
             Toggle("Session alerts", isOn: Binding(get: {
-                controller.desired && controller.permission != .denied
+                controller.desired && controller.permission == .allowed
             }, set: { value in
                 Task { await controller.setDesired(value) }
             }))

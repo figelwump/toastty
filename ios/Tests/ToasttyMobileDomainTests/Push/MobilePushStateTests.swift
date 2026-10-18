@@ -20,11 +20,13 @@ final class MobilePushStateTests: XCTestCase {
         security.copyResult = .data(added.data)
         var restored = try XCTUnwrap(store.load())
         restored.queueCleanup()
+        restored.desired = false
         try store.save(restored)
         let saved = try JSONDecoder().decode(MobilePushState.self, from: XCTUnwrap(security.updatedItems.last).1)
         XCTAssertNil(saved.active)
         XCTAssertEqual(saved.cleanup.map(\.registrationID), [state.active!.registrationID])
         XCTAssertNil(saved.cleanup.first?.nonce)
+        XCTAssertFalse(saved.desired)
     }
 
     func testLockedStoreDoesNotLookLikeMissingAndInvalidCredentialIsRejected() throws {

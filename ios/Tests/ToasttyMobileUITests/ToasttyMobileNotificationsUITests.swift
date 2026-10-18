@@ -44,6 +44,7 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertFalse(intro.exists)
         app.buttons["toastty-mobile-settings-button"].tap()
         XCTAssertTrue(app.switches["toastty-mobile-notifications-toggle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.switches["toastty-mobile-notifications-toggle"].value as? String, "1")
         XCTAssertTrue(app.staticTexts["Enabling alerts. Keep Toastty open and connected to your Mac."].exists)
         capture(app, name: "Home after Allow and pending Settings")
     }

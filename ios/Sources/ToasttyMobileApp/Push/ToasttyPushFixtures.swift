@@ -18,7 +18,9 @@ enum ToasttyPushFixtures {
         var state = MobilePushState()
         let introducesNotifications = mode == .intro || mode == .systemIntro
         // Disabled alert settings can precede push opt-in on a badge-only install.
-        state.desired = !introducesNotifications && mode != .turningOff && mode != .denied && mode != .diagnostics
+        if !introducesNotifications {
+            state.desired = mode != .turningOff && mode != .denied && mode != .diagnostics
+        }
         state.introHandled = !introducesNotifications
         let registration = MobilePushRegistration(pairingID: credential.device.id, gatewayURL: credential.gatewayURL,
             relayURL: config.relayURL, relayID: config.relayID, deviceToken: String(repeating: "ab", count: 32),

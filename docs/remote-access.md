@@ -127,6 +127,8 @@ through Apple's permission prompt. After Allow, Toastty returns to Home and
 finishes setup automatically. Not now defers all three permissions. Not now and
 Don't Allow are remembered. You can change the choice in Settings.
 Existing iOS permission choices stay in effect. Use iOS Settings to change them.
+Session alerts default to on for new notification settings. They start after iOS
+allows alert delivery. Saved off choices stay off.
 
 Badge permission alone does not enable session alerts. If all alert delivery
 locations are off, Toastty links to iOS Settings. Delivery to Notification Center
