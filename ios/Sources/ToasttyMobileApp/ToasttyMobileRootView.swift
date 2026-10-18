@@ -145,8 +145,11 @@ struct ToasttyMobileRootView: View {
             ToasttyHapticFeedback.pairingCompleted(from: old, to: new)
         }
         .task {
+            sessionController.installDiagnosticRecordHandler { record in
+                ToasttyDiagnosticLogger.record(record.event, recordedAt: record.recordedAt,
+                    pushDetails: record.pushDetails, in: &diagnostics)
+            }
             if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }
-            sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
             observeSessionState(sessionController.state)
             await sessionController.restoreIfNeeded()

@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class ToasttyMobileNotificationsUITests: XCTestCase {
+    func testSettingsShowsRegistrationResponseAndCooldownDiagnostics() {
+        let app = launch(mode: "diagnostics")
+        XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 8))
+        app.buttons["toastty-mobile-settings-button"].tap()
+        let toggle = app.switches["toastty-mobile-notifications-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "0")
+        // SwiftUI exposes the full row as a switch. Tap the visible control,
+        // then verify the intent changed before looking for setup events.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1")
+        // Each diagnostic row combines its texts into one accessibility element.
+        let detail = app.descendants(matching: .any)
+            .matching(identifier: "toastty-mobile-diagnostic-push_rate_limited").firstMatch
+        for _ in 0..<8 where !detail.isHittable { app.swipeUp() }
+        capture(app, name: "Push verification diagnostics and cooldown")
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertTrue(detail.label.contains("Registration 1 this run"))
+        XCTAssertTrue(detail.label.contains("HTTP 429"))
+        XCTAssertTrue(detail.label.contains("Relay verification limit: device token"))
+        XCTAssertTrue(detail.label.contains("Retry delay: 120s"))
+    }
+
     func testContinueReturnsToHomeAndSettingsShowsPendingWithoutAnotherScreen() {
         let app = launch(mode: "intro")
         let intro = app.descendants(matching: .any)["toastty-mobile-notifications-introduction"].firstMatch

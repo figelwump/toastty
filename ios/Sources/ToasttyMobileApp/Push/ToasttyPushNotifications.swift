@@ -19,6 +19,15 @@ protocol ToasttyPushNotificationClient: AnyObject {
 /// Keep only bounded, typed events until the controller is installed.
 @MainActor
 final class ToasttyPushNotificationBridge {
+    var onDiagnosticRecord: (@MainActor (ToasttyDiagnosticRecord) -> Void)? {
+        didSet {
+            guard let onDiagnosticRecord else { return }
+            let queued = queuedDiagnostics
+            queuedDiagnostics.removeAll()
+            queued.forEach(onDiagnosticRecord)
+        }
+    }
+    private var queuedDiagnostics: [ToasttyDiagnosticRecord] = []
     var deviceToken: String?
     var onToken: (@MainActor (String) -> Void)?
     var onRegistrationFailure: (@MainActor () -> Void)?
@@ -41,6 +50,12 @@ final class ToasttyPushNotificationBridge {
     private var queuedTaps: [RemotePushPayload] = []
     private var queuedProofs: [RemotePushPayload] = []
 
+    func recordDiagnostic(_ event: ToasttyConnectionDiagnosticEvent) {
+        let record = ToasttyDiagnosticRecord(event: event)
+        if let onDiagnosticRecord { onDiagnosticRecord(record) }
+        else { queuedDiagnostics = Array((queuedDiagnostics + [record]).suffix(8)) }
+    }
+
     func registered(_ data: Data) {
         let value = data.map { String(format: "%02x", $0) }.joined()
         deviceToken = value
@@ -59,6 +74,7 @@ final class ToasttyPushNotificationBridge {
     func receivedForeground(_ payload: RemotePushPayload) async -> Bool {
         if let onForeground { return await onForeground(payload) }
         if payload.kind == .verification {
+            recordDiagnostic(.pushProofBuffered)
             queuedProofs = Array((queuedProofs.filter { $0.registrationID != payload.registrationID } + [payload]).suffix(8))
         }
         return true
@@ -126,22 +142,30 @@ final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, U
         pushBridge.registered(deviceToken)
     }
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        pushBridge.recordDiagnostic(.pushTokenRequestFailed)
         pushBridge.onRegistrationFailure?()
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        guard let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo) else { return [] }
+        guard let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo) else {
+            await recordInvalidPayload()
+            return []
+        }
         let suppress = await handleForeground(payload)
         return suppress ? [] : [.banner, .list, .sound]
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
-        let payload = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        let isDefaultAction = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        let payload = isDefaultAction
             ? ToasttyPushNotificationBridge.payload(response.notification.request.content.userInfo) : nil
         // UIKit updates its snapshot when this callback finishes. The async
         // delegate form can invoke its generated completion off the main thread.
         Task { @MainActor in
+            if isDefaultAction, payload == nil {
+                pushBridge.recordDiagnostic(.pushPayloadInvalid)
+            }
             if let payload { pushBridge.receivedTap(payload) }
             completionHandler()
         }
@@ -149,4 +173,6 @@ final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, U
     private func handleForeground(_ payload: RemotePushPayload) async -> Bool {
         await pushBridge.receivedForeground(payload)
     }
+
+    private func recordInvalidPayload() { pushBridge.recordDiagnostic(.pushPayloadInvalid) }
 }

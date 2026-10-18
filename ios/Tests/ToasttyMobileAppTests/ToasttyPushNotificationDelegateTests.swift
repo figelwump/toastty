@@ -6,6 +6,23 @@ import XCTest
 
 @MainActor
 final class ToasttyPushNotificationDelegateTests: XCTestCase {
+    func testEarlyVerificationDiagnosticsRetainSourceTimeWithoutPayloadIdentifiers() async {
+        let bridge = ToasttyPushNotificationBridge()
+        let payload = RemotePushPayload(kind: .verification, registrationID: UUID(), pairingID: UUID(),
+            nonce: String(repeating: "A", count: 43))
+        let before = Date()
+        _ = await bridge.receivedForeground(payload)
+        let beforeAttachment = Date()
+        var records: [ToasttyDiagnosticRecord] = []
+        bridge.onDiagnosticRecord = { records.append($0) }
+        XCTAssertEqual(records.map(\.event), [.pushProofBuffered])
+        XCTAssertGreaterThanOrEqual(records[0].recordedAt, before)
+        XCTAssertLessThanOrEqual(records[0].recordedAt, beforeAttachment)
+        XCTAssertNil(records[0].pushDetails)
+        XCTAssertFalse(String(describing: records).contains(payload.registrationID.uuidString))
+        XCTAssertFalse(String(describing: records).contains(String(repeating: "A", count: 43)))
+    }
+
     // Exercise the system delegate boundary: completion must run once on the
     // main thread after routing, including ignored actions and invalid payloads.
     func testBackgroundCallbackRoutesBeforeCompletingOnMainThread() async {

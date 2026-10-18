@@ -158,8 +158,14 @@ Interrupted setup retries automatically while the app is open and connected.
 Transient failures wait 30 seconds, then increase the wait up to 10 minutes.
 A service cooldown takes priority over setup retries. A failure shows a small
 Retry message; Retry does not bypass a service cooldown. The Gateway diagnostic
-log records fixed notification setup reasons and failed operations, without
-tokens, credentials, addresses, or notification content.
+log records notification setup steps, fixed Apple/relay result categories,
+HTTP status, the applied cooldown delay, and registration numbers local to this
+app run. These numbers do not identify the phone or count quota usage. Tokens,
+credentials, addresses, and notification content are not recorded. The bounded
+128-entry log is kept in memory. Enable Gateway system logging before a setup
+reproduction if the events must survive an app restart. Apple accepting a
+verification push does not establish that the iPhone received it or completed
+setup. Older relay versions provide fewer result details.
 
 Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;
