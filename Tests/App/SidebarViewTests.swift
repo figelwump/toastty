@@ -2000,7 +2000,10 @@ final class SidebarViewTests: XCTestCase {
     /// A parent card with two spawning sessions and four subspaces in one
     /// group, plus a second top-level card, so the test can see sorting,
     /// the spawner tags, and that subspaces do not render as cards.
-    private func makeSubspacesHarness(sidebarWidth: CGFloat = ToastyTheme.sidebarWidth) throws -> (SidebarHarness, SubspacesHarnessIDs) {
+    private func makeSubspacesHarness(
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        additionalSubspaceCount: Int = 0
+    ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
         let parentRightPanelID = UUID()
@@ -2053,9 +2056,12 @@ final class SidebarViewTests: XCTestCase {
         let working = subspace("qa-update-visitor-fixture", spawner: "spawner")
         let readyUnread = subspace("launch-checklist", spawner: "assessor", unread: true)
         let sibling = makeSinglePanelWorkspace(id: UUID(), title: "ios-tab-footer")
+        let additionalSubspaces = (0..<additionalSubspaceCount).map {
+            subspace("Task space \($0 + 1)", spawner: "spawner")
+        }
 
         let windowID = UUID()
-        let workspaces = [parent, approval, annotatedIdle, working, readyUnread, sibling]
+        let workspaces = [parent, approval, annotatedIdle, working, readyUnread] + additionalSubspaces + [sibling]
         let state = AppState(
             windows: [
                 WindowState(
@@ -2097,6 +2103,10 @@ final class SidebarViewTests: XCTestCase {
               status: SessionStatus(kind: .working, summary: "Working", detail: "Rebasing onto main"))
         start("ready-agent", title: "Checklist", in: readyUnread,
               status: SessionStatus(kind: .ready, summary: "Ready", detail: "Checklist covers auth and billing"))
+        for (index, workspace) in additionalSubspaces.enumerated() {
+            start("extra-\(index)", title: "Review task \(index + 1)", in: workspace,
+                  status: SessionStatus(kind: .idle, summary: "Idle", detail: "Review the **implementation** and its checks"))
+        }
         // Rows animate into their sorted positions (0.28s); let that settle
         // before reading frames or text.
         pumpMainRunLoop(duration: 0.6)
@@ -2202,6 +2212,108 @@ final class SidebarViewTests: XCTestCase {
 
         settle(height: 600)
         XCTAssertNil(hiddenBelowLabel())
+    }
+
+    func testLongSidebarScrollKeepsHiddenStatusAndLiveUpdates() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 26)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+        harness.window.setContentSize(NSSize(width: ToastyTheme.sidebarWidth, height: 300))
+        pumpMainRunLoop(duration: 0.6)
+        let root = harness.hostingView
+        let region = try sessionPointerInteractionView(in: root, sessionID: "spawner")
+        let scrollView = try XCTUnwrap(region.enclosingScrollView)
+        let document = try XCTUnwrap(scrollView.documentView)
+        let maximumY = document.bounds.height - scrollView.contentView.bounds.height
+        XCTAssertGreaterThan(maximumY, 600, "The fixture must exercise a long, off-screen subspace group")
+
+        func scroll(to y: CGFloat) {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            pumpMainRunLoop(duration: 0.01)
+            root.layoutSubtreeIfNeeded()
+        }
+        func pill(_ direction: String) -> String? {
+            renderedTextValues(in: root).first { $0.contains("hidden \(direction)") }
+        }
+        func attachSidebar(_ name: String) throws {
+            let bitmap = try renderedBitmap(for: root)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        scroll(to: 0)
+        XCTAssertNotNil(pill("below"))
+        let initialAbove = pill("above")
+        try attachSidebar("sidebar-long-top")
+
+        // Exercise the real clip view in both directions. The timings are
+        // diagnostic evidence, not a hardware-dependent pass/fail threshold.
+        var stepDurations: [TimeInterval] = []
+        for _ in 0..<3 {
+            for step in Array(0...40) + Array((0..<40).reversed()) {
+                let start = ProcessInfo.processInfo.systemUptime
+                scroll(to: maximumY * CGFloat(step) / 40)
+                stepDurations.append(ProcessInfo.processInfo.systemUptime - start)
+            }
+        }
+        let sorted = stepDurations.sorted()
+        print("SIDEBAR_SCROLL_STEPS count=\(sorted.count) median_ms=\(sorted[sorted.count / 2] * 1000) p95_ms=\(sorted[Int(Double(sorted.count) * 0.95)] * 1000)")
+
+        scroll(to: maximumY)
+        pumpMainRunLoop(duration: 0.2)
+        let above = try XCTUnwrap(pill("above"))
+        XCTAssertTrue(above.contains("unread"), above)
+        XCTAssertTrue(above.contains("working"), above)
+        XCTAssertNil(pill("below"))
+        try attachSidebar("sidebar-long-bottom")
+
+        // The overlay must leave its buttons clickable in both directions.
+        let selectionBeforePillClick = harness.store.selectedWorkspaceID(in: harness.windowID)
+        try clickSemanticText(prefix: above, in: root)
+        pumpMainRunLoop(duration: 0.3)
+        let topAfterPillClick = scrollView.contentView.bounds.minY
+        XCTAssertLessThan(topAfterPillClick, maximumY - 100)
+        let below = try XCTUnwrap(pill("below"))
+        try clickSemanticText(prefix: below, in: root)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertGreaterThan(scrollView.contentView.bounds.minY, topAfterPillClick + 100)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), selectionBeforePillClick)
+        scroll(to: maximumY)
+
+        // Semantic changes must refresh pills even when scroll geometry is
+        // unchanged. The off-screen row's done mark removes its unread signal.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        let afterDone = try XCTUnwrap(pill("above"))
+        XCTAssertFalse(afterDone.contains("unread"), afterDone)
+        XCTAssertTrue(afterDone.contains("working"), afterDone)
+        scroll(to: 0)
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(pill("above"), initialAbove)
+        XCTAssertNotNil(pill("below"))
+
+        // Drag must use the latest measured frames after scrolling back.
+        let source = try sessionPointerInteractionView(in: root, sessionID: "spawner")
+        let target = try sessionPointerInteractionView(in: root, sessionID: "assessor")
+        let sourceSession = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "spawner"))
+        let targetSession = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "assessor"))
+        let beforeDrag = harness.store.state
+        try drag(
+            view: source,
+            from: NSPoint(x: source.bounds.midX, y: source.bounds.midY),
+            to: source.convert(NSPoint(x: target.bounds.midX, y: target.bounds.maxY - 1), from: target)
+        )
+        pumpMainRunLoop(duration: 0.2)
+        var expected = beforeDrag
+        expected.workspacesByID[ids.parentID]?.sidebarSessionPanelOrder = [targetSession.panelID, sourceSession.panelID]
+        XCTAssertEqual(harness.store.state, expected)
     }
 
     func testSubspaceWaitingPillFollowsBackgroundShellStateAndFitsWithAnnotation() throws {
