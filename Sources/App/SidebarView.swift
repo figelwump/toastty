@@ -565,8 +565,6 @@ struct SidebarView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
-    @State private var hoveredPanelID: UUID?
-    @State private var hoveredWorkspaceID: UUID?
     @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
     @State private var flashingSessionOverlayOpacity = 0.0
@@ -576,12 +574,11 @@ struct SidebarView: View {
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
     @State private var activeSessionDrag: SessionDragState?
     @State private var sessionPointerRowID: SidebarSessionPresentation.SidebarSessionRowID?
-    @State private var measuredSessionGroupFrames: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
-    @State private var measuredSessionRowFramesByID: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
-    @State private var measuredSubspaceFrames: [SidebarSubspaceFrameID: CGRect] = [:]
-    @State private var sidebarWorkspaceListViewportHeight: CGFloat = 0
+    @State private var hoverState = SidebarHoverState()
+    // The sidebar owns this reference; only the pill overlay observes it.
+    @State private var scrollGeometry = SidebarScrollGeometry()
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var expandedSessionChildrenBySessionID: [String: Bool] = [:]
     @State private var collapsedSubspaceGroupParentIDs: Set<UUID> = []
@@ -593,8 +590,6 @@ struct SidebarView: View {
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
-    @State private var hoveredSubspaceID: UUID?
-    @State private var hoveredSubspaceDoneToggleID: UUID?
     @State private var optionKeyPressed = false
 
     private static let sessionStatusesTopSpacing: CGFloat = 0
@@ -789,7 +784,7 @@ struct SidebarView: View {
                         // a zero height on macOS; read the enclosing NSScrollView
                         // clip view from inside this scroll content instead.
                         SidebarScrollViewportHeightReporter { height in
-                            sidebarWorkspaceListViewportHeight = height
+                            scrollGeometry.viewportHeight = height
                             workspaceViewportHeightObserver?(height)
                         }
                     }
@@ -798,13 +793,13 @@ struct SidebarView: View {
                         workspaceRowFrameObserver?(framesByID)
                     }
                     .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
-                        measuredSessionRowFramesByID = framesByID
+                        scrollGeometry.sessionRowFrames = framesByID
                     }
                     .onPreferenceChange(SidebarSubspaceFramePreferenceKey.self) { frames in
-                        measuredSubspaceFrames = frames
+                        scrollGeometry.subspaceFrames = frames
                     }
                     .onPreferenceChange(SidebarSessionGroupFramePreferenceKey.self) { frames in
-                        measuredSessionGroupFrames = frames
+                        scrollGeometry.sessionGroupFrames = frames
                     }
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
@@ -832,11 +827,10 @@ struct SidebarView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     sidebarTitlebarCover
                 }
-                .overlay(alignment: .top) {
-                    hiddenSessionPill(sidebarHiddenSessionPillState.above, using: proxy)
-                }
-                .overlay(alignment: .bottom) {
-                    hiddenSessionPill(sidebarHiddenSessionPillState.below, using: proxy)
+                .overlay {
+                    SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent) { pill in
+                        hiddenSessionPill(pill, using: proxy)
+                    }
                 }
                 .onAppear {
                     scrollToSelectedWorkspace(using: proxy, animated: false)
@@ -950,37 +944,41 @@ struct SidebarView: View {
             .allowsHitTesting(false)
     }
 
-    private var sidebarHiddenSessionPillState: SidebarSessionPresentation.HiddenSessionPillState {
-        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return .empty }
+    private var sidebarHiddenSessionContent: SidebarScrollGeometry.Content {
+        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
+            return SidebarScrollGeometry.Content(isDragging: true)
+        }
 
-        let subspacesByParent = store.state.topLevelWorkspaceIDs(in: windowID).map { parentID in
+        var content = SidebarScrollGeometry.Content()
+        // Derive IDs and attention from the same status pass for both pills.
+        for workspaceID in store.window(id: windowID)?.workspaceIDs ?? [] {
+            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+            for status in sidebarSessionStatuses(for: workspaceID) {
+                let rowID = SidebarSessionPresentation.SidebarSessionRowID(
+                    workspaceID: workspaceID, sessionID: status.sessionID, panelID: status.panelID
+                )
+                content.orderedSessionRowIDs.append(rowID)
+                if showsUnreadSessionAccent(for: status.panelID, in: workspace) {
+                    content.unreadSessionRowIDs.insert(rowID)
+                }
+                if status.status.kind == .working {
+                    content.workingSessionRowIDs.insert(rowID)
+                }
+            }
+        }
+        for parentID in store.state.topLevelWorkspaceIDs(in: windowID) {
             let rows = subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
             let isCollapsed = collapsedSubspaceGroupParentIDs.contains(parentID)
             let displayedRows = isCollapsed ? rows : SidebarSubspacePresentation.filteredRows(
                 rows, spawningSessionID: subspaceFilterSessionIDByParentID[parentID]
             )
-            return (parentID, displayedRows)
-        }
-        var subspaceFrames: [UUID: CGRect] = [:]
-        for (parentID, rows) in subspacesByParent {
-            for row in rows {
+            content.subspaceRows.append(contentsOf: displayedRows)
+            for row in displayedRows {
                 // A collapsed group represents its rows at the header's position.
-                subspaceFrames[row.id] = collapsedSubspaceGroupParentIDs.contains(parentID)
-                    ? measuredSubspaceFrames[.group(parentID)]
-                    : measuredSubspaceFrames[.row(row.id)]
+                content.subspaceFrameIDs[row.id] = isCollapsed ? .group(parentID) : .row(row.id)
             }
         }
-
-        return SidebarSessionPresentation.hiddenSessionPillState(
-            orderedSessionRowIDs: currentSidebarSessionRowIDs(),
-            measuredSessionRowFramesByID: measuredSessionRowFramesByID,
-            unreadSessionRowIDs: currentUnreadSidebarSessionRowIDs(),
-            workingSessionRowIDs: currentWorkingSidebarSessionRowIDs(),
-            subspaceRows: subspacesByParent.flatMap { $0.1 },
-            measuredSubspaceRowFramesByID: subspaceFrames,
-            viewportHeight: sidebarWorkspaceListViewportHeight,
-            visibleTop: ToastyTheme.sidebarTopPadding
-        )
+        return content
     }
 
     @ViewBuilder
@@ -1361,10 +1359,12 @@ struct SidebarView: View {
         isFlashing: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        content()
+        let rowContent = content()
+        return SidebarHoverRegion(id: workspaceID, selection: hoverState.workspace) { isHovered in
+            rowContent
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground
-                : activeWorkspaceDrag == nil && hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
+                : activeWorkspaceDrag == nil && isHovered ? ToastyTheme.elevatedBackground
                 : Color.clear)
             .background(workspaceRowFrameMeasurement(workspaceID: workspaceID))
             .overlay {
@@ -1380,11 +1380,12 @@ struct SidebarView: View {
             .onHover { isHovering in
                 guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
                 if isHovering {
-                    hoveredWorkspaceID = workspaceID
-                } else if hoveredWorkspaceID == workspaceID {
-                    hoveredWorkspaceID = nil
+                    hoverState.workspace.value = workspaceID
+                } else if hoverState.workspace.value == workspaceID {
+                    hoverState.workspace.value = nil
                 }
             }
+        }
     }
 
     private func workspaceHeaderContent<Content: View>(
@@ -1491,30 +1492,32 @@ struct SidebarView: View {
     }
 
     private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState) -> some View {
-        Button {
-            focusSessionPanel(workspaceID: workspace.id, panelID: row.panelID)
-        } label: {
-            sessionStatusLabel(
-                status: row.status, projection: .none, turnStartedAt: nil,
-                marker: row.isAgent ? nil : .program,
-                badgeLabel: row.badge, progress: row.presentation.record.progress,
-                title: row.title, summary: row.summary, isLaterFlagged: false,
-                showsUnreadSessionAccent: row.presentation.record.state == .done,
-                isActivePanel: workspace.focusedPanelID == row.panelID,
-                isHovered: hoveredPanelID == row.panelID, isFlashing: false,
-                childCount: 0, childRowsExpanded: false, collapsedChildNeedsAttention: false,
-                parentSessionName: nil, onToggleChildRows: {}
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hoveredPanelID = $0 ? row.panelID : nil }
-        .help("Terminal: \(row.terminalLabel)")
-        .accessibilityLabel(row.accessibilityLabel)
-        .accessibilityIdentifier("sidebar.programStatus.\(row.panelID.uuidString)")
-        .background {
-            SidebarSemanticTextBridge(text: row.accessibilityLabel)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+        SidebarHoverRegion(id: row.panelID, selection: hoverState.panel) { isHovered in
+            Button {
+                focusSessionPanel(workspaceID: workspace.id, panelID: row.panelID)
+            } label: {
+                sessionStatusLabel(
+                    status: row.status, projection: .none, turnStartedAt: nil,
+                    marker: row.isAgent ? nil : .program,
+                    badgeLabel: row.badge, progress: row.presentation.record.progress,
+                    title: row.title, summary: row.summary, isLaterFlagged: false,
+                    showsUnreadSessionAccent: row.presentation.record.state == .done,
+                    isActivePanel: workspace.focusedPanelID == row.panelID,
+                    isHovered: isHovered, isFlashing: false,
+                    childCount: 0, childRowsExpanded: false, collapsedChildNeedsAttention: false,
+                    parentSessionName: nil, onToggleChildRows: {}
+                )
+            }
+            .buttonStyle(.plain)
+            .onHover { hoverState.panel.value = $0 ? row.panelID : nil }
+            .help("Terminal: \(row.terminalLabel)")
+            .accessibilityLabel(row.accessibilityLabel)
+            .accessibilityIdentifier("sidebar.programStatus.\(row.panelID.uuidString)")
+            .background {
+                SidebarSemanticTextBridge(text: row.accessibilityLabel)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
@@ -1545,20 +1548,22 @@ struct SidebarView: View {
                     let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
                     let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
                         .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
-                    sessionStatusContent(
-                        hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
-                        workspace: workspace,
-                        isHovered: hoveredPanelID == workspaceSessionStatus.panelID,
-                        spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
-                            SidebarSubspacePresentation.spawnerChip(
-                                sessionID: sessionID,
-                                rows: spawn.spawnedRows,
-                                activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
-                                targetWorkspaceTitle: spawn.parentWorkspaceTitle
-                            )
-                        },
-                        spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
-                    )
+                    SidebarHoverRegion(id: workspaceSessionStatus.panelID, selection: hoverState.panel) { isHovered in
+                        sessionStatusContent(
+                            hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
+                            workspace: workspace,
+                            isHovered: isHovered,
+                            spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
+                                SidebarSubspacePresentation.spawnerChip(
+                                    sessionID: sessionID,
+                                    rows: spawn.spawnedRows,
+                                    activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
+                                    targetWorkspaceTitle: spawn.parentWorkspaceTitle
+                                )
+                            },
+                            spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
+                        )
+                    }
                 }
             }
         }
@@ -2303,9 +2308,9 @@ struct SidebarView: View {
         let panelID = rowID.panelID
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
         if isHovering {
-            hoveredPanelID = panelID
-        } else if hoveredPanelID == panelID {
-            hoveredPanelID = nil
+            hoverState.panel.value = panelID
+        } else if hoverState.panel.value == panelID {
+            hoverState.panel.value = nil
         }
     }
 
@@ -2313,14 +2318,14 @@ struct SidebarView: View {
         rowID: SidebarSessionPresentation.SidebarSessionRowID,
         value: PointerInteractionValue
     ) -> SidebarSessionPresentation.SessionDropTarget? {
-        guard let parentFrame = measuredSessionRowFramesByID[rowID] else { return nil }
+        guard let parentFrame = scrollGeometry.sessionRowFrames[rowID] else { return nil }
         let rows = currentSidebarSessionRowIDs().filter { $0.workspaceID == rowID.workspaceID }
         return SidebarSessionPresentation.sessionDropTarget(
             orderedRowIDs: rows,
-            frames: measuredSessionGroupFrames,
+            frames: scrollGeometry.sessionGroupFrames,
             source: rowID,
             pointer: CGPoint(x: parentFrame.minX + value.location.x, y: parentFrame.minY + value.location.y),
-            viewportHeight: sidebarWorkspaceListViewportHeight
+            viewportHeight: scrollGeometry.viewportHeight
         )
     }
 
@@ -2336,7 +2341,7 @@ struct SidebarView: View {
         guard activeSessionDrag != nil || Self.workspaceDragActivationExceeded(translation: value.translation) else {
             return
         }
-        hoveredPanelID = nil
+        hoverState.panel.value = nil
         activeSessionDrag = SessionDragState(rowID: rowID, target: sessionDropTarget(rowID: rowID, value: value))
     }
 
@@ -2379,7 +2384,7 @@ struct SidebarView: View {
 
     private func pruneSessionDrag() {
         let currentRows = Set(currentSidebarSessionRowIDs())
-        measuredSessionGroupFrames = measuredSessionGroupFrames.filter { currentRows.contains($0.key) }
+        scrollGeometry.sessionGroupFrames = scrollGeometry.sessionGroupFrames.filter { currentRows.contains($0.key) }
         if let rowID = sessionPointerRowID, currentRows.contains(rowID) == false {
             cancelSessionInteraction()
         }
@@ -2455,8 +2460,8 @@ struct SidebarView: View {
             return
         }
 
-        hoveredWorkspaceID = nil
-        hoveredPanelID = nil
+        hoverState.workspace.value = nil
+        hoverState.panel.value = nil
 
         var dragState = activeWorkspaceDrag
         if dragState?.workspaceID != workspaceID {
@@ -3681,8 +3686,18 @@ struct SidebarView: View {
         parentWorkspaceID: UUID,
         showsSpawnerTag: Bool
     ) -> some View {
+        SidebarHoverRegion(id: row.id, selection: hoverState.subspace) { isHovered in
+            subspaceRowContent(row, parentWorkspaceID: parentWorkspaceID, showsSpawnerTag: showsSpawnerTag, isHovered: isHovered)
+        }
+    }
+
+    private func subspaceRowContent(
+        _ row: SidebarSubspacePresentation.Row,
+        parentWorkspaceID: UUID,
+        showsSpawnerTag: Bool,
+        isHovered: Bool
+    ) -> some View {
         let isSelected = selectedWorkspaceID == row.id
-        let isHovered = hoveredSubspaceID == row.id
         let isSpawnerHighlighted = hoveredSpawnerSessionID != nil
             && hoveredSpawnerSessionID == row.spawningSessionID
         let attentionKind = Self.subspaceAttentionKind(row.status)
@@ -3805,9 +3820,9 @@ struct SidebarView: View {
         .onHover { isHovering in
             guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
             if isHovering {
-                hoveredSubspaceID = row.id
-            } else if hoveredSubspaceID == row.id {
-                hoveredSubspaceID = nil
+                hoverState.subspace.value = row.id
+            } else if hoverState.subspace.value == row.id {
+                hoverState.subspace.value = nil
             }
         }
         .hoverTip(
@@ -3868,33 +3883,34 @@ struct SidebarView: View {
     @ViewBuilder
     private func subspaceRailMark(_ row: SidebarSubspacePresentation.Row) -> some View {
         if SidebarSubspacePresentation.showsDoneToggle(row) {
-            let isPreviewed = hoveredSubspaceDoneToggleID == row.id
-            Button {
-                toggleSubspaceDone(row)
-            } label: {
-                // The glyph stays in the rail, but the click target reaches
-                // into the row's padding and the gap beside the rail, so a
-                // near miss does not fall through and open the workspace.
-                SubspaceRailStatusIcon(status: row.status, isDoneTogglePreviewed: isPreviewed)
-                    .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
-                    .padding(Self.subspaceDoneToggleHitOutset)
-                    .contentShape(Rectangle())
-                    .padding(-Self.subspaceDoneToggleHitOutset)
-            }
-            .buttonStyle(.plain)
-            .onHover { isHovering in
-                if isHovering {
-                    hoveredSubspaceDoneToggleID = row.id
-                } else if hoveredSubspaceDoneToggleID == row.id {
-                    hoveredSubspaceDoneToggleID = nil
+            SidebarHoverRegion(id: row.id, selection: hoverState.doneToggle) { isPreviewed in
+                Button {
+                    toggleSubspaceDone(row)
+                } label: {
+                    // The glyph stays in the rail, but the click target reaches
+                    // into the row's padding and the gap beside the rail, so a
+                    // near miss does not fall through and open the workspace.
+                    SubspaceRailStatusIcon(status: row.status, isDoneTogglePreviewed: isPreviewed)
+                        .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+                        .padding(Self.subspaceDoneToggleHitOutset)
+                        .contentShape(Rectangle())
+                        .padding(-Self.subspaceDoneToggleHitOutset)
                 }
+                .buttonStyle(.plain)
+                .onHover { isHovering in
+                    if isHovering {
+                        hoverState.doneToggle.value = row.id
+                    } else if hoverState.doneToggle.value == row.id {
+                        hoverState.doneToggle.value = nil
+                    }
+                }
+                .background {
+                    SidebarTooltipBridge(text: SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))
+                        .allowsHitTesting(false)
+                }
+                .accessibilityHidden(true)
+                .accessibilityIdentifier("sidebar.workspace.subspace.doneToggle.\(row.id.uuidString)")
             }
-            .background {
-                SidebarTooltipBridge(text: SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))
-                    .allowsHitTesting(false)
-            }
-            .accessibilityHidden(true)
-            .accessibilityIdentifier("sidebar.workspace.subspace.doneToggle.\(row.id.uuidString)")
         } else {
             SubspaceRailStatusIcon(status: row.status)
                 .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
@@ -3902,8 +3918,8 @@ struct SidebarView: View {
                 .onAppear {
                     // The box can turn into a spinner under the pointer; do
                     // not let the preview come back when it turns into a box.
-                    if hoveredSubspaceDoneToggleID == row.id {
-                        hoveredSubspaceDoneToggleID = nil
+                    if hoverState.doneToggle.value == row.id {
+                        hoverState.doneToggle.value = nil
                     }
                 }
         }
@@ -4107,8 +4123,8 @@ struct SidebarView: View {
         // Keep state only for cards that still have a group, so a later
         // group under the same card starts fresh.
         let parentIDs = Set(store.state.workspacesByID.keys.filter { store.state.subspaceWorkspaceIDs(of: $0).isEmpty == false })
-        if let hoveredSubspaceID, store.state.workspacesByID[hoveredSubspaceID]?.parentWorkspaceID == nil {
-            self.hoveredSubspaceID = nil
+        if let hoveredID = hoverState.subspace.value, store.state.workspacesByID[hoveredID]?.parentWorkspaceID == nil {
+            hoverState.subspace.value = nil
         }
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
@@ -4298,52 +4314,6 @@ struct SidebarView: View {
         }
     }
 
-    private func currentUnreadSidebarSessionRowIDs() -> Set<SidebarSessionPresentation.SidebarSessionRowID> {
-        guard let window = store.window(id: windowID) else { return [] }
-
-        return Set(
-            window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionPresentation.SidebarSessionRowID] in
-                guard let workspace = store.state.workspacesByID[workspaceID] else { return [] }
-
-                return sidebarSessionStatuses(for: workspaceID)
-                    .compactMap { status in
-                        guard showsUnreadSessionAccent(for: status.panelID, in: workspace) else {
-                            return nil
-                        }
-
-                        return SidebarSessionPresentation.SidebarSessionRowID(
-                            workspaceID: workspaceID,
-                            sessionID: status.sessionID,
-                            panelID: status.panelID
-                        )
-                    }
-            }
-        )
-    }
-
-    private func currentWorkingSidebarSessionRowIDs() -> Set<SidebarSessionPresentation.SidebarSessionRowID> {
-        guard let window = store.window(id: windowID) else { return [] }
-
-        return Set(
-            window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionPresentation.SidebarSessionRowID] in
-                guard store.state.workspacesByID[workspaceID] != nil else { return [] }
-
-                return sidebarSessionStatuses(for: workspaceID)
-                    .compactMap { workspaceSessionStatus in
-                        guard workspaceSessionStatus.status.kind == .working else {
-                            return nil
-                        }
-
-                        return SidebarSessionPresentation.SidebarSessionRowID(
-                            workspaceID: workspaceID,
-                            sessionID: workspaceSessionStatus.sessionID,
-                            panelID: workspaceSessionStatus.panelID
-                        )
-                    }
-            }
-        )
-    }
-
     private func pruneTransientSidebarState() {
         if let renamingWorkspaceID,
            store.state.workspacesByID[renamingWorkspaceID] == nil {
@@ -4371,17 +4341,17 @@ struct SidebarView: View {
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
             measuredWorkspaceRowFramesByID = [:]
-            measuredSessionRowFramesByID = [:]
-            measuredSubspaceFrames = [:]
+            scrollGeometry.sessionRowFrames = [:]
+            scrollGeometry.subspaceFrames = [:]
             cancelWorkspaceDrag()
             return
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
         measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
-        measuredSubspaceFrames = measuredSubspaceFrames.filter { workspaceIDs.contains($0.key.workspaceID) }
+        scrollGeometry.subspaceFrames = scrollGeometry.subspaceFrames.filter { workspaceIDs.contains($0.key.workspaceID) }
         let currentSessionRowIDs = Set(currentSidebarSessionRowIDs())
-        measuredSessionRowFramesByID = measuredSessionRowFramesByID.filter { currentSessionRowIDs.contains($0.key) }
+        scrollGeometry.sessionRowFrames = scrollGeometry.sessionRowFrames.filter { currentSessionRowIDs.contains($0.key) }
         if let activeWorkspaceDrag,
            workspaceIDs.contains(activeWorkspaceDrag.workspaceID) == false {
             cancelWorkspaceDrag()
@@ -4514,17 +4484,6 @@ private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
-}
-
-private enum SidebarSubspaceFrameID: Hashable {
-    case row(UUID)
-    case group(UUID)
-
-    var workspaceID: UUID {
-        switch self {
-        case .row(let id), .group(let id): return id
-        }
     }
 }
 
