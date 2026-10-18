@@ -132,7 +132,9 @@ The examples use `SKILL_DIR` for the loaded skill directory and `TASK` for the s
   --slug "$TASK" --branch-prefix "$PREFIX" --base-ref "$BASE_SHA" --json
 ```
 
-Parse the returned branch, worktree, and handoff paths.
+Parse the returned branch, worktree, and handoff paths. The `handoff_path` is the
+destination for a file you must create; the helper does not write a handoff or
+template.
 
 Run the required setup. Keep any failure and the created resources visible; do
 not launch an agent into a half-configured task or delete resources to hide an
