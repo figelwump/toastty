@@ -15,6 +15,7 @@ struct ToasttyConversationScreen: View {
     /// The draft epoch shown when Release was tapped; confirming releases
     /// exactly that draft.
     @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
+    @State private var isShowingDetails = false
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -300,13 +301,21 @@ struct ToasttyConversationScreen: View {
 
     private func navigationBarHeader(_ conversation: MobileConversation) -> some View {
         VStack(spacing: 2) {
-            Text(conversation.title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("toastty-mobile-conversation-title")
+            HStack(spacing: 3) {
+                Text(conversation.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHint("Shows session details")
+                    .accessibilityAction { isShowingDetails = true }
+                    .accessibilityIdentifier("toastty-mobile-conversation-title")
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .accessibilityHidden(true)
+            }
             // The trailing Panels and Next buttons narrow the title area;
             // the agent name goes first when the full line no longer fits.
             ViewThatFits(in: .horizontal) {
@@ -317,6 +326,20 @@ struct ToasttyConversationScreen: View {
         // The inline navigation bar cannot grow with accessibility type
         // sizes, so cap the header scale to keep both lines legible.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        // A tap, not a Button, so the title and status keep their own
+        // accessibility elements; the title carries the action instead.
+        .contentShape(Rectangle())
+        .onTapGesture { isShowingDetails = true }
+        .popover(isPresented: $isShowingDetails, arrowEdge: .top) {
+            if let conversation = controller.conversation(id: conversationID) {
+                ToasttyConversationDetailsView(
+                    conversation: conversation,
+                    parentWorkspaceTitle: controller.snapshot.parent(of: conversation.workspaceID)?.title,
+                    freshness: controller.freshness
+                )
+                .presentationCompactAdaptation(.popover)
+            }
+        }
     }
 
     private func headerStatusLine(_ conversation: MobileConversation, metadata: String) -> some View {
