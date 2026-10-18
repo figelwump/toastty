@@ -181,6 +181,77 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
     }
 
+    func testConversationHeaderTapShowsFullDetails() {
+        let app = launchFixtureConversation()
+        app.staticTexts["toastty-mobile-conversation-title"].tap()
+
+        let details = app.descendants(matching: .any)["toastty-conversation-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        func value(_ field: String) -> String {
+            app.descendants(matching: .any)["toastty-conversation-details-\(field)"].label
+        }
+        XCTAssertEqual(value("title"), "Mobile gateway design")
+        // The header drops these; the popover shows each in full.
+        XCTAssertEqual(value("path"), "~/GiantThings/repos/toastty")
+        XCTAssertEqual(
+            value("workspace"),
+            "toastty › Release preparation — changelog, signing, and TestFlight verification"
+        )
+        XCTAssertEqual(
+            value("agent"),
+            "claude · claude-opus-long-provider-model-identifier-for-accessibility-layout · high reasoning"
+        )
+        XCTAssertTrue(app.buttons["toastty-conversation-details-copy-path"].exists)
+        attachScreenshot(named: "conversation-header-details", of: app)
+
+        // A task space's session names its parent workspace first.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+        XCTAssertTrue(details.waitForNonExistence(timeout: 5))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        let subspace = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(subspace, in: app))
+        subspace.tap()
+        let session = app.buttons["toastty-mobile-workspace-session-\(subspaceSessionID)"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(waitForLabel(title, "Implement compact rows"))
+        title.tap()
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(value("workspace"), "toastty › compact-session-rows")
+        XCTAssertEqual(value("path"), "~/GiantThings/repos/toastty-compact-session-rows")
+        attachScreenshot(named: "conversation-header-details-task-space", of: app)
+    }
+
+    func testConversationDetailsFitAtAccessibilityTextSize() {
+        let app = launchFixtureApp(
+            launchArguments: [
+                "-UIPreferredContentSizeCategoryName",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            ]
+        )
+        openFixtureConversation(in: app)
+        app.staticTexts["toastty-mobile-conversation-title"].tap()
+
+        let title = app.descendants(matching: .any)["toastty-conversation-details-title"]
+        let agent = app.descendants(matching: .any)["toastty-conversation-details-agent"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        // Too tall for the screen, the card opens at its top and scrolls to
+        // its last row.
+        XCTAssertTrue(title.isHittable)
+        attachScreenshot(named: "conversation-header-details-accessibility-xxxl", of: app)
+        // The card's frame runs past the screen, so drag within the part of
+        // the card that is on screen.
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.8))
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35))
+        for _ in 0..<8 where !agent.isHittable {
+            lower.press(forDuration: 0.05, thenDragTo: upper)
+        }
+        XCTAssertTrue(agent.isHittable)
+        attachScreenshot(named: "conversation-header-details-accessibility-xxxl-scrolled", of: app)
+    }
+
     func testWorkingConversationExposesIndeterminateComposerStatus() {
         let app = launchFixtureApp()
         openWorkspace(toasttyWorkspaceID, in: app)
