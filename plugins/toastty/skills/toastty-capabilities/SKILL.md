@@ -59,6 +59,37 @@ skill output. For every JSON response, check `.ok == true` before reading
 `.result`; if `.ok` is false, branch on `.error.code` and preserve the message
 in your report.
 
+### JSON Shape And Bounded Discovery
+
+Check the command exit status and require `.ok == true` before reading any
+`.result`. Stop on a failed discovery response or a missing descriptor needed
+for the task. Report the limitation; do not guess arguments or broaden scope.
+
+Both `action list` and `query list` return an envelope:
+`{"ok":true,"result":{"commands":[{"id":"...","parameters":[],"selectors":[]}]}}`.
+The descriptors are in `.result.commands`, not `.result.actions` or
+`.result.queries`. `annotation.keys` returns
+`{"ok":true,"result":{"keys":["github-pr","linear"]}}`; these keys are strings.
+
+Save each catalog once for the current operation, and refresh it if the owning
+instance or its capabilities change. Select descriptors by exact `.id` and
+retain each whole descriptor, including its parameters and selectors. Do not
+print the whole catalog merely to locate command IDs. For example, after
+checking exit status and `.ok`, select `workspace.set-annotation` from the
+action catalog, and `workspace.snapshot` and `annotation.keys` from the query
+catalog.
+
+For a task that explicitly targets the current workspace, resolve its ID from
+`query run terminal.state --panel "$TOASTTY_PANEL_ID"`, check success, and
+retain `.result.workspaceID`. For another explicitly authorized workspace, use
+the verified destination ID supplied by the user or returned by the action
+that created it; never replace that destination with the current workspace.
+Pass the resolved target explicitly as `--workspace` on workspace queries and
+actions, including `workspace.snapshot` and `workspace.set-annotation`.
+The UI-selected workspace can be outside the caller's scope. On `scope_denied`,
+preserve the error and stop; do not select another workspace, substitute the
+current workspace, or widen scope.
+
 ## Workspace, Panel, And Session Model
 
 Toastty has windows, workspaces, workspace tabs, and panels. A terminal panel can host a managed agent session. App-control selectors target `windowID`, `workspaceID`, and `panelID`; many commands can infer a target, but robust workflows should pass explicit IDs from `terminal.state`, `workspace.snapshot`, or action results.
