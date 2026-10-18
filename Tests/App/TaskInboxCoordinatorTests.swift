@@ -43,6 +43,7 @@ struct TaskInboxCoordinatorTests {
         let projectDirectory: String
         let createScript: String
         let launcher: AgentLaunchService
+        let catalog: TestAgentCatalogProvider
         let workspaceID: UUID
         let inbox: TaskInboxStore
         let configStore: TasksConfigStore
@@ -59,7 +60,8 @@ struct TaskInboxCoordinatorTests {
                 )
             },
             items: [TaskInboxItem] = [],
-            readinessTimeout: Duration = .seconds(3)
+            readinessTimeout: Duration = .seconds(3),
+            tasksFile: URL? = nil
         ) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-task-inbox-\(UUID().uuidString)", isDirectory: true)
@@ -84,14 +86,15 @@ struct TaskInboxCoordinatorTests {
             _ = store.send(.renameWorkspace(workspaceID: workspaceID, title: "toastty"))
             _ = store.send(.updateTerminalPanelMetadata(panelID: workspace.focusedPanelID!, title: nil, cwd: projectDirectory))
 
+            catalog = TestAgentCatalogProvider(profiles: [
+                AgentProfile(id: "claude", displayName: "Claude Code", argv: [executables["claude"]!]),
+                AgentProfile(id: "codex", displayName: "Codex", argv: [executables["codex"]!]),
+            ])
             launcher = AgentLaunchService(
                 store: store,
                 terminalCommandRouter: router,
                 sessionRuntimeStore: sessionRuntimeStore,
-                agentCatalogProvider: TestAgentCatalogProvider(profiles: [
-                    AgentProfile(id: "claude", displayName: "Claude Code", argv: [executables["claude"]!]),
-                    AgentProfile(id: "codex", displayName: "Codex", argv: [executables["codex"]!]),
-                ]),
+                agentCatalogProvider: catalog,
                 cliExecutablePathProvider: { "/bin/sh" },
                 socketPathProvider: { "/tmp/toastty-tests.sock" }
             )
@@ -99,7 +102,9 @@ struct TaskInboxCoordinatorTests {
                 "TOASTTY_RUNTIME_HOME": root.appendingPathComponent("runtime-home").path,
             ])
             inbox = TaskInboxStore.inMemory(items)
-            configStore = TasksConfigStore(config: config(createScript))
+            configStore = tasksFile.map {
+                TasksConfigStore(environment: [TasksConfigFile.environmentOverrideKey: $0.path])
+            } ?? TasksConfigStore(config: config(createScript))
             runner = ScriptedTaskCommandRunner { _ in
                 TaskCommandResult(termination: .exited(1), stdout: Data(), stderr: Data("unscripted\n".utf8))
             }
@@ -147,6 +152,9 @@ struct TaskInboxCoordinatorTests {
 
         var taskSpaceIDs: [UUID] { store.state.subspaceWorkspaceIDs(of: workspaceID) }
 
+        /// Every task left in the Inbox is a started row.
+        var allStarted: Bool { inbox.items.isEmpty == false && inbox.items.allSatisfy { $0.phase == .started } }
+
         func createCalls() -> [TaskCommand] { runner.commands.filter { $0.executablePath == createScript } }
         func triageCalls() -> [TaskCommand] { runner.commands.filter { $0.executablePath.hasSuffix("/claude") } }
 
@@ -181,7 +189,7 @@ struct TaskInboxCoordinatorTests {
         fixture.scriptHappyPath()
 
         let item = try await fixture.coordinator.add(text: "The unread dot stays on.", source: .cli)
-        await fixture.waitUntil("the task leaves the Inbox") { fixture.inbox.items.isEmpty }
+        await fixture.waitUntil("the task starts") { fixture.allStarted }
 
         // Triage ran headless with the task on stdin and no session saved.
         let triage = try #require(fixture.triageCalls().first)
@@ -218,6 +226,37 @@ struct TaskInboxCoordinatorTests {
         #expect(session.workspaceID == taskSpaceID)
         #expect(fixture.sessionRuntimeStore.effectiveWorkspaceScope(sessionID: session.sessionID) == [taskSpaceID])
         #expect(fixture.router.focusPolicyByPanelID[panelID] == .preserveFirstResponder)
+
+        // The Inbox keeps a started row that links to the task space until
+        // the user opens it.
+        let started = try #require(fixture.inbox.item(id: item.id))
+        #expect(started.taskSpace?.workspaceID == taskSpaceID)
+        #expect(started.startedAt != nil)
+        #expect(throws: TaskInboxError.notAllowed("This task already started.")) {
+            try fixture.coordinator.retry(taskID: item.id)
+        }
+        fixture.coordinator.openTaskSpace(taskID: item.id)
+        #expect(fixture.store.selectedWorkspace?.id == taskSpaceID)
+        #expect(fixture.inbox.items.isEmpty)
+    }
+
+    @MainActor
+    @Test func startedRowClearsWhenItsTaskSpaceIsSelectedOrClosed() async throws {
+        let fixture = try Fixture()
+        fixture.scriptHappyPath()
+        let first = try await fixture.coordinator.add(text: "one", source: .cli)
+        await fixture.waitUntil("the first task starts") { fixture.inbox.item(id: first.id)?.phase == .started }
+        let second = try await fixture.coordinator.add(text: "two", source: .cli)
+        await fixture.waitUntil("both start") { fixture.inbox.items.count == 2 && fixture.allStarted }
+
+        let firstSpace = try #require(fixture.inbox.item(id: first.id)?.taskSpace?.workspaceID)
+        let secondSpace = try #require(fixture.inbox.item(id: second.id)?.taskSpace?.workspaceID)
+        let windowID = try #require(fixture.store.state.workspaceSelection(containingWorkspaceID: firstSpace)?.windowID)
+        _ = fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: firstSpace))
+        #expect(fixture.inbox.item(id: first.id) == nil)
+
+        _ = fixture.store.send(.closeWorkspace(workspaceID: secondSpace))
+        #expect(fixture.inbox.items.isEmpty)
     }
 
     @MainActor
@@ -233,7 +272,7 @@ struct TaskInboxCoordinatorTests {
         #expect(fixture.createCalls().isEmpty)
 
         try fixture.coordinator.place(taskID: item.id, workspaceID: fixture.workspaceID)
-        await fixture.waitUntil("the task starts") { fixture.inbox.items.isEmpty }
+        await fixture.waitUntil("the task starts") { fixture.allStarted }
         #expect(fixture.taskSpaceIDs.count == 1)
     }
 
@@ -260,7 +299,7 @@ struct TaskInboxCoordinatorTests {
         // Retry skips the script and keeps the slug.
         fixture.router.sendSucceeds = true
         try fixture.coordinator.retry(taskID: item.id)
-        await fixture.waitUntil("the task starts") { fixture.inbox.items.isEmpty }
+        await fixture.waitUntil("the task starts") { fixture.allStarted }
         #expect(fixture.createCalls().count == 2)
         #expect(fixture.taskSpaceIDs.compactMap { fixture.store.state.workspacesByID[$0]?.title } == ["ios-unread-dot"])
     }
@@ -280,7 +319,7 @@ struct TaskInboxCoordinatorTests {
         #expect(fixture.taskSpaceIDs == [taskSpace.workspaceID])
 
         try fixture.coordinator.retry(taskID: item.id)
-        await fixture.waitUntil("the task starts") { fixture.inbox.items.isEmpty }
+        await fixture.waitUntil("the task starts") { fixture.allStarted }
         #expect(fixture.taskSpaceIDs == [taskSpace.workspaceID])
         #expect(fixture.router.sentTextByPanelID[taskSpace.panelID] != nil)
     }
@@ -317,11 +356,12 @@ struct TaskInboxCoordinatorTests {
         let fixture = try Fixture(config: { _ in TasksConfig() })
         let unpinned = try await fixture.coordinator.add(text: "No workspace yet", source: .cli)
         #expect(fixture.inbox.item(id: unpinned.id)?.phase == .needsWorkspace)
+        #expect(fixture.inbox.item(id: unpinned.id)?.problemConfigFile == .tasks)
 
         _ = try await fixture.coordinator.add(
             text: "Fix the dot", pins: .init(workspaceID: fixture.workspaceID, profileID: "claude"), source: .cli
         )
-        await fixture.waitUntil("the pinned task starts") { fixture.inbox.items.count == 1 }
+        await fixture.waitUntil("the pinned task starts") { fixture.inbox.items.contains { $0.phase == .started } }
         // No create script: the task space opens in the workspace's directory,
         // and the prompt is the task alone.
         let taskSpaceID = try #require(fixture.taskSpaceIDs.first)
@@ -395,5 +435,44 @@ struct TaskInboxCoordinatorTests {
             try await fixture.coordinator.add(text: "x", pins: .init(profileID: "codex", effort: "max"), source: .cli)
         }
         #expect(fixture.inbox.items.isEmpty)
+    }
+
+    @MainActor
+    @Test func turningTriageOnRoutesTasksThatWaitedForIt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-tasks-file-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tasksFile = directory.appendingPathComponent("tasks.toml")
+        try "[triage\n".write(to: tasksFile, atomically: true, encoding: .utf8)
+
+        let fixture = try Fixture(tasksFile: tasksFile)
+        fixture.scriptHappyPath(confident: false)
+        let item = try await fixture.coordinator.add(text: "Fix the dot", source: .cli)
+        let waiting = try #require(fixture.inbox.item(id: item.id))
+        #expect(waiting.problemConfigFile == .tasks)
+        #expect(waiting.problem?.hasPrefix("tasks.toml has an error") == true)
+
+        try "[triage]\nprofile = \"claude\"\n".write(to: tasksFile, atomically: true, encoding: .utf8)
+        _ = fixture.configStore.reload()
+        await fixture.waitUntil("triage runs") { fixture.triageCalls().count == 1 }
+        await fixture.waitUntil("triage answers") { fixture.inbox.item(id: item.id)?.phase == .needsWorkspace }
+        #expect(fixture.inbox.item(id: item.id)?.problemConfigFile == nil)
+    }
+
+    @MainActor
+    @Test func startingByHandWithoutAnAgentOffersAgentsToml() async throws {
+        let fixture = try Fixture(config: { _ in TasksConfig() })
+        let item = try await fixture.coordinator.add(text: "Fix the dot", source: .cli)
+        #expect(fixture.inbox.item(id: item.id)?.problemConfigFile == .tasks)
+
+        fixture.catalog.catalog = TestAgentCatalogProvider(profiles: []).catalog
+        #expect(throws: TaskInboxError.placement(.noAvailableAgent)) {
+            try fixture.coordinator.place(taskID: item.id, workspaceID: fixture.workspaceID)
+        }
+        let waiting = try #require(fixture.inbox.item(id: item.id))
+        #expect(waiting.phase == .needsWorkspace)
+        #expect(waiting.problemConfigFile == .agents)
+        #expect(waiting.plan == nil)
     }
 }

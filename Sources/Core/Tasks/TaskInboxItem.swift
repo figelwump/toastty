@@ -1,8 +1,9 @@
 import Foundation
 
 /// One quick task in the Inbox: the user's request, what it is pinned to,
-/// and how far placement and setup got. An item leaves the Inbox when its
-/// agent starts.
+/// and how far placement and setup got. Once its agent starts, the item
+/// stays as a `started` row that links to its task space until the user
+/// opens that task space or clears the row.
 public struct TaskInboxItem: Codable, Equatable, Identifiable, Sendable {
     public enum Phase: String, Codable, Equatable, Sendable {
         /// Waiting for, or in, the triage call.
@@ -13,6 +14,17 @@ public struct TaskInboxItem: Codable, Equatable, Identifiable, Sendable {
         case settingUp
         /// The create script or the start failed; the user can retry.
         case setupFailed
+        /// The agent started in `taskSpace`. Kept only so the user can see
+        /// where the task went.
+        case started
+    }
+
+    /// A config file the user can open to fix `problem`.
+    public enum ConfigFile: String, Codable, Equatable, Sendable {
+        /// `tasks.toml`
+        case tasks
+        /// `agents.toml`
+        case agents
     }
 
     public enum Source: String, Codable, Equatable, Sendable {
@@ -153,6 +165,9 @@ public struct TaskInboxItem: Codable, Equatable, Identifiable, Sendable {
     public var plan: Plan?
     /// Why the task needs the user, for `needsWorkspace` and `setupFailed`.
     public var problem: String?
+    /// The file that fixes `problem`, when the fix is a config change.
+    public var problemConfigFile: ConfigFile?
+    public var startedAt: Date?
     public var createdDirectory: CreatedDirectory?
     public var taskSpace: TaskSpace?
 
@@ -167,6 +182,8 @@ public struct TaskInboxItem: Codable, Equatable, Identifiable, Sendable {
         suggestion: Suggestion? = nil,
         plan: Plan? = nil,
         problem: String? = nil,
+        problemConfigFile: ConfigFile? = nil,
+        startedAt: Date? = nil,
         createdDirectory: CreatedDirectory? = nil,
         taskSpace: TaskSpace? = nil
     ) {
@@ -180,6 +197,8 @@ public struct TaskInboxItem: Codable, Equatable, Identifiable, Sendable {
         self.suggestion = suggestion
         self.plan = plan
         self.problem = problem
+        self.problemConfigFile = problemConfigFile
+        self.startedAt = startedAt
         self.createdDirectory = createdDirectory
         self.taskSpace = taskSpace
     }

@@ -174,6 +174,12 @@ public enum TasksConfigFile {
         # Every section is optional. After saving, use Toastty > Reload
         # Configuration.
         #
+        # Quick start: remove the leading "# " from the [triage] lines below
+        # and set profile to a claude or codex profile from agents.toml.
+        # Tasks that wait for triage then route on their own.
+        #
+        # Full guide: https://github.com/figelwump/toastty/blob/main/docs/quick-tasks.md
+        #
         # [triage] — a model that picks the workspace, agent, model and effort.
         # Without it, each task needs a workspace from you.
         #   profile          — "claude" or "codex", from agents.toml. Triage runs
@@ -198,7 +204,8 @@ public enum TasksConfigFile {
         # worktree. Without it, the task space opens in the workspace's own
         # directory. The script runs in the workspace's directory with
         # TOASTTY_TASK_ID, TOASTTY_TASK_SLUG, TOASTTY_TASK_BRANCH_PREFIX and
-        # TOASTTY_TASK_TITLE set. Its last line on stdout must be JSON:
+        # TOASTTY_TASK_TITLE set, plus TOASTTY_TASK_STATE_DIR, a private
+        # folder where it can remember what it made. Its last line on stdout must be JSON:
         #   {"directory": "/absolute/path", "branch": "...", "baseRef": "..."}
         # Only "directory" is required. Exit 0 for success; on failure, the
         # last line on stderr is shown.

@@ -15,6 +15,8 @@ struct TasksConfigReloadError: LocalizedError, Equatable {
 @MainActor
 final class TasksConfigStore: ObservableObject {
     @Published private(set) var config: TasksConfig
+    /// Why the file last failed to load, until a load succeeds.
+    @Published private(set) var loadError: String?
 
     private let fileManager: FileManager
     private let homeDirectoryPath: String
@@ -36,6 +38,7 @@ final class TasksConfigStore: ObservableObject {
             )
         } catch {
             config = .empty
+            loadError = error.localizedDescription
             ToasttyLog.warning(
                 "Failed to load tasks config at startup",
                 category: .bootstrap,
@@ -68,9 +71,11 @@ final class TasksConfigStore: ObservableObject {
                 homeDirectoryPath: homeDirectoryPath,
                 environment: environment
             )
+            loadError = nil
             config = next
             return .success(next)
         } catch {
+            loadError = error.localizedDescription
             ToasttyLog.warning(
                 "Failed to reload tasks config",
                 category: .bootstrap,

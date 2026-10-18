@@ -100,6 +100,14 @@ public enum TaskPlacementProblem: Error, Equatable, Sendable {
             "\(agent) does not take effort \"\(effort)\"."
         }
     }
+
+    /// The config file the user edits to fix this, if any.
+    public var configFile: TaskInboxItem.ConfigFile? {
+        switch self {
+        case .noAvailableAgent, .agentUnavailable: .agents
+        default: nil
+        }
+    }
 }
 
 public enum TaskPlacement {

@@ -15,7 +15,8 @@ The flow has four steps:
    worktree, and prints its path.
 4. **Start.** Toastty creates a task space under the workspace, with a terminal
    in that directory. It launches the agent there with a first prompt and
-   limits the session's scope to the task space. The Inbox row then goes away.
+   limits the session's scope to the task space. The Inbox row changes to
+   `started` and links to the task space.
 
 Tasks start only agent profiles that are configured in `~/.toastty/agents.toml`
 and installed. These are the same profiles that Toastty Mobile can start. See
@@ -59,8 +60,20 @@ yet.
 | `setting up` | The create script is running, or the agent is starting. | Delete |
 | `⚠ pick a workspace` | Triage could not place the task. The row says why. | Pick a workspace and Start, Retry Triage, Delete |
 | `⚠ setup failed` | The script failed, the agent did not start, or Toastty quit during setup. | Retry, pick another workspace, Delete |
+| `started` | The agent runs in its task space. The row shows the task space and its workspace. | Click to open the task space, Clear |
 
-Click a row to see the whole task, its files and the reason. Right-click a row
+A `started` row goes away when you open its task space, when the task space
+closes, or when you clear it. Clearing it does not affect the agent or its
+files.
+
+When the fix is a config change, the task's popover and its right-click menu
+have an **Open tasks.toml** or **Open agents.toml** button. Toastty creates the
+commented template when the file does not exist. For example, a task added
+while triage is off waits with `⚠ pick a workspace`. After you set up
+`[triage]` and use **Reload Configuration**, those tasks go to triage on their
+own.
+
+Click a waiting row to see the whole task, its files and the reason. Right-click a row
 for the same actions. You can also use the CLI:
 
 ```bash

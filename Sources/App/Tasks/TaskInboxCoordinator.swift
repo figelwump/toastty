@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import Foundation
 import RemoteProtocol
@@ -53,9 +54,12 @@ extension AgentLaunchService: TaskAgentLaunching {
 
 struct TaskSetupProblem: Error, Equatable {
     let message: String
+    /// Set when the fix is a change to that file.
+    let configFile: TaskInboxItem.ConfigFile?
 
-    init(_ message: String) {
+    init(_ message: String, configFile: TaskInboxItem.ConfigFile? = nil) {
         self.message = message
+        self.configFile = configFile
     }
 }
 
@@ -80,6 +84,11 @@ enum TaskInboxError: LocalizedError, Equatable {
         case .notAllowed(let detail): detail
         case .placement(let problem): problem.message
         }
+    }
+
+    var configFile: TaskInboxItem.ConfigFile? {
+        if case .placement(let problem) = self { return problem.configFile }
+        return nil
     }
 }
 
@@ -110,6 +119,11 @@ final class TaskInboxCoordinator {
     /// second Retry can never let an older attempt start an agent.
     private var setupAttempts: [UUID: UUID] = [:]
     nonisolated(unsafe) private var terminationObserver: NSObjectProtocol?
+    private var observations: Set<AnyCancellable> = []
+
+    /// Opens `tasks.toml` or `agents.toml` for the user, creating the
+    /// commented template when the file is missing. Set by the app.
+    var openConfigFile: (@MainActor (TaskInboxItem.ConfigFile) -> Void)?
 
     init(
         store: AppStore,
@@ -147,6 +161,17 @@ final class TaskInboxCoordinator {
         ) { _ in
             TaskLiveCommandRunner.stopAllRunningCommands()
         }
+        store.$state
+            .sink { [weak self] state in
+                MainActor.assumeIsolated { self?.clearStartedTasks(seenIn: state) }
+            }
+            .store(in: &observations)
+        configStore.$config
+            .dropFirst()
+            .sink { [weak self] config in
+                MainActor.assumeIsolated { self?.configChanged(config) }
+            }
+            .store(in: &observations)
     }
 
     deinit {
@@ -167,10 +192,11 @@ final class TaskInboxCoordinator {
                     $0.phase = .setupFailed
                     $0.problem = "Toastty quit during setup. Retry to continue."
                 }
-            case .needsWorkspace, .setupFailed:
+            case .needsWorkspace, .setupFailed, .started:
                 break
             }
         }
+        clearStartedTasks(seenIn: store.state)
         let protected = protectedAttachmentDirectoryNames()
         Task { [attachmentStore] in try? await attachmentStore.cleanup(protecting: protected) }
         pumpTriage()
@@ -223,13 +249,14 @@ final class TaskInboxCoordinator {
             pumpTriage()
         } else {
             item.phase = .needsWorkspace
-            item.problem = TaskPlacementProblem.noWorkspace.message
+            item.problem = triageOffMessage
+            item.problemConfigFile = .tasks
             inbox.add(item)
             if pins.workspaceID != nil {
                 do {
                     try beginSetup(taskID: item.id, chosenWorkspaceID: nil, replanning: true)
                 } catch {
-                    needsWorkspace(taskID: item.id, problem: error.localizedDescription)
+                    needsWorkspace(taskID: item.id, problem: error.localizedDescription, configFile: (error as? TaskInboxError)?.configFile)
                 }
             }
         }
@@ -269,8 +296,19 @@ final class TaskInboxCoordinator {
             candidate.createdDirectory = nil
             candidate.taskSpace = nil
         }
-        // Nothing is saved unless the new placement is valid.
-        try beginSetup(taskID: taskID, from: candidate, chosenWorkspaceID: workspaceID, replanning: true)
+        // Nothing is saved unless the new placement is valid, except a
+        // problem that a config change fixes, so the row offers that file.
+        do {
+            try beginSetup(taskID: taskID, from: candidate, chosenWorkspaceID: workspaceID, replanning: true)
+        } catch let error as TaskInboxError {
+            if let file = error.configFile {
+                inbox.update(id: taskID) {
+                    $0.problem = error.localizedDescription
+                    $0.problemConfigFile = file
+                }
+            }
+            throw error
+        }
     }
 
     /// Runs triage again for a task that waits for a workspace, or setup
@@ -282,25 +320,46 @@ final class TaskInboxCoordinator {
             guard configStore.config.triage != nil else {
                 throw TaskInboxError.notAllowed("Triage is not set up in tasks.toml. Pick a workspace instead.")
             }
-            inbox.update(id: taskID) {
-                $0.phase = .routing
-                $0.problem = nil
-            }
-            triageQueue.append(taskID)
-            pumpTriage()
+            requeueForTriage(taskID)
         case .setupFailed:
             // The plan, its slug and any directory or task space made so far
             // are kept, so the create script and the start see the same task.
             try beginSetup(taskID: taskID, chosenWorkspaceID: item.plan?.workspaceID)
         case .routing, .settingUp:
             throw TaskInboxError.notAllowed("This task is already being placed or set up.")
+        case .started:
+            throw TaskInboxError.notAllowed("This task already started.")
         }
+    }
+
+    /// Selects the task space a started task went to, which also clears
+    /// its row. A task space that closed just clears the row.
+    func openTaskSpace(taskID: UUID) {
+        guard let item = inbox.item(id: taskID), item.phase == .started, let taskSpace = item.taskSpace else { return }
+        guard let selection = store.state.workspaceSelection(containingWorkspaceID: taskSpace.workspaceID) else {
+            _ = inbox.remove(id: taskID)
+            return
+        }
+        // Focusing the agent's panel also brings its window forward when the
+        // task space is in another window.
+        if store.state.workspaceSelection(containingPanelID: taskSpace.panelID)?.workspaceID != taskSpace.workspaceID
+            || store.focusPanel(containing: taskSpace.panelID) == false {
+            _ = store.selectWorkspace(
+                windowID: selection.windowID,
+                workspaceID: taskSpace.workspaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        }
+        clearStartedTasks(seenIn: store.state)
     }
 
     /// Removes a task and stops its triage or setup. A directory or task
     /// space that setup already made stays.
     func delete(taskID: UUID) {
         guard let removed = inbox.remove(id: taskID) else { return }
+        // A started task's files belong to its agent now; they age out on
+        // the normal schedule.
+        guard removed.phase != .started else { return }
         triageQueue.removeAll { $0 == taskID }
         if triageInFlight?.taskID == taskID {
             triageInFlight?.task.cancel()
@@ -315,6 +374,10 @@ final class TaskInboxCoordinator {
     }
 
     // MARK: - Context
+
+    func workspaceTitle(_ workspaceID: UUID) -> String? {
+        store.state.workspacesByID[workspaceID]?.title
+    }
 
     func placementContext(excluding taskID: UUID? = nil) -> TaskPlacementContext {
         let state = store.state
@@ -336,7 +399,7 @@ final class TaskInboxCoordinator {
             }
         }
         var reserved: [UUID: Set<String>] = [:]
-        for item in inbox.items where item.id != taskID {
+        for item in inbox.items where item.id != taskID && item.phase != .started {
             if let plan = item.plan { reserved[plan.workspaceID, default: []].insert(plan.slug) }
         }
         return TaskPlacementContext(workspaces: workspaces, profiles: offeredProfiles(), reservedSlugs: reserved)
@@ -390,7 +453,7 @@ final class TaskInboxCoordinator {
     }
 
     private func protectedAttachmentDirectoryNames() -> Set<String> {
-        Set(inbox.items.flatMap { item in
+        Set(inbox.items.filter { $0.phase != .started }.flatMap { item in
             item.attachments.map { URL(filePath: $0.path).deletingLastPathComponent().lastPathComponent }
         })
     }
@@ -420,13 +483,14 @@ final class TaskInboxCoordinator {
     private func runTriage(taskID: UUID) async {
         guard let item = inbox.item(id: taskID) else { return }
         guard let triage = configStore.config.triage else {
-            finishTriage(taskID: taskID, outcome: .failure(.failed("triage is no longer set up in tasks.toml")))
+            needsWorkspace(taskID: taskID, problem: triageOffMessage, configFile: .tasks)
             return
         }
         guard let executable = triageExecutable(for: triage) else {
             needsWorkspace(
                 taskID: taskID,
-                problem: "Triage needs a claude or codex profile in agents.toml that runs the plain CLI. Check [triage] profile in tasks.toml, then retry."
+                problem: "Triage needs a claude or codex profile in agents.toml that runs the plain CLI. Check [triage] profile in tasks.toml, then retry.",
+                configFile: .tasks
             )
             return
         }
@@ -481,15 +545,58 @@ final class TaskInboxCoordinator {
             do {
                 try beginSetup(taskID: taskID, chosenWorkspaceID: nil, replanning: true)
             } catch {
-                needsWorkspace(taskID: taskID, problem: error.localizedDescription)
+                needsWorkspace(taskID: taskID, problem: error.localizedDescription, configFile: (error as? TaskInboxError)?.configFile)
             }
         }
     }
 
-    private func needsWorkspace(taskID: UUID, problem: String) {
+    private func needsWorkspace(taskID: UUID, problem: String, configFile: TaskInboxItem.ConfigFile? = nil) {
         inbox.update(id: taskID) {
             $0.phase = .needsWorkspace
             $0.problem = problem.trimmingCharacters(in: .whitespaces)
+            $0.problemConfigFile = configFile
+        }
+    }
+
+    private var triageOffMessage: String {
+        if let loadError = configStore.loadError {
+            return "tasks.toml has an error, so triage is off: \(loadError) Fix it, then use Reload Configuration."
+        }
+        return "Triage is off, so pick a workspace. To route tasks on their own, set up [triage] in tasks.toml."
+    }
+
+    private func requeueForTriage(_ taskID: UUID) {
+        inbox.update(id: taskID) {
+            $0.phase = .routing
+            $0.problem = nil
+            $0.problemConfigFile = nil
+        }
+        triageQueue.append(taskID)
+        pumpTriage()
+    }
+
+    /// After Reload Configuration turns triage on, tasks that waited only
+    /// because it was off go to triage.
+    private func configChanged(_ config: TasksConfig) {
+        guard config.triage != nil else { return }
+        for item in inbox.items where item.phase == .needsWorkspace && item.problemConfigFile == .tasks {
+            requeueForTriage(item.id)
+        }
+    }
+
+    /// Removes started rows whose task space the user is looking at, or
+    /// that no longer exists.
+    private func clearStartedTasks(seenIn state: AppState) {
+        let started = inbox.items.filter { $0.phase == .started }
+        guard started.isEmpty == false else { return }
+        let selectedWorkspaceID = state.selectedWorkspaceSelection()?.workspaceID
+        for item in started {
+            guard let workspaceID = item.taskSpace?.workspaceID,
+                  state.workspacesByID[workspaceID] != nil,
+                  workspaceID != selectedWorkspaceID else {
+                _ = inbox.remove(id: item.id)
+                continue
+            }
         }
     }
 
@@ -534,6 +641,7 @@ final class TaskInboxCoordinator {
             $0.phase = .settingUp
             $0.plan = plan
             $0.problem = nil
+            $0.problemConfigFile = nil
         }
         setupTasks[taskID]?.cancel()
         setupTasks[taskID] = Task { [weak self] in
@@ -547,13 +655,14 @@ final class TaskInboxCoordinator {
             && Task.isCancelled == false
     }
 
-    private func setupFailed(taskID: UUID, attempt: UUID, problem: String) {
+    private func setupFailed(taskID: UUID, attempt: UUID, problem: String, configFile: TaskInboxItem.ConfigFile? = nil) {
         guard setupAttempts[taskID] == attempt else { return }
         setupAttempts[taskID] = nil
         setupTasks[taskID] = nil
         inbox.update(id: taskID) {
             $0.phase = .setupFailed
             $0.problem = problem
+            $0.problemConfigFile = configFile
         }
         ToasttyLog.info("Quick task setup failed", category: .tasks, metadata: [
             "task_id": taskID.uuidString, "reason": problem,
@@ -583,7 +692,7 @@ final class TaskInboxCoordinator {
                 directory = created.directory
                 inbox.update(id: taskID) { $0.createdDirectory = created }
             case .failure(let problem):
-                setupFailed(taskID: taskID, attempt: attempt, problem: problem.message)
+                setupFailed(taskID: taskID, attempt: attempt, problem: problem.message, configFile: problem.configFile)
                 return
             }
         } else {
@@ -685,7 +794,14 @@ final class TaskInboxCoordinator {
         for directory in Set(item.attachments.map({ URL(filePath: $0.path).deletingLastPathComponent() })) {
             await attachmentStore.renew(directory: directory)
         }
-        guard let removed = inbox.remove(id: taskID) else { return }
+        guard let removed = inbox.update(id: taskID, {
+            $0.phase = .started
+            $0.problem = nil
+            $0.problemConfigFile = nil
+            $0.startedAt = now()
+        }) else { return }
+        // Clears at once when the user already looks at the task space.
+        clearStartedTasks(seenIn: store.state)
         ToasttyLog.info("Started a quick task", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
             "workspace_id": workspaceID.uuidString,
@@ -728,7 +844,7 @@ final class TaskInboxCoordinator {
     ) async -> Result<TaskInboxItem.CreatedDirectory, TaskSetupProblem> {
         let scriptPath = TaskCreateScriptOutput.expandingTilde(create.script, homeDirectoryPath: NSHomeDirectory())
         guard scriptPath.hasPrefix("/"), fileManager.isExecutableFile(atPath: scriptPath) else {
-            return .failure(TaskSetupProblem("The create script \(create.script) is missing or not executable. Check tasks.toml."))
+            return .failure(TaskSetupProblem("The create script \(create.script) is missing or not executable. Check tasks.toml.", configFile: .tasks))
         }
         // A folder the script may use to remember what it made for this
         // task, so running it again after a failure returns the same result.

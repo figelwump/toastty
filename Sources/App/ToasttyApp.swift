@@ -176,6 +176,31 @@ enum ToasttyMenuActions {
         )
     }
 
+    static func openTasksConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, ToasttyMenuActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try TasksConfigFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
+            },
+            fileURL: TasksConfigFile.fileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
     static func openToasttyConfigResult(
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
@@ -1058,6 +1083,13 @@ struct ToasttyApp: App {
             },
             commandPath: { codexProcessPathStore.currentPath() }
         )
+        taskInboxCoordinator.openConfigFile = { [store] file in
+            let windowID = currentToasttyWorkspaceCommandWindowID(in: store)
+            switch file {
+            case .tasks: Self.openTasksConfiguration(store: store, preferredWindowID: windowID)
+            case .agents: Self.openAgentProfilesConfiguration(store: store, preferredWindowID: windowID)
+            }
+        }
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1919,6 +1951,30 @@ struct ToasttyApp: App {
             alert.addButton(withTitle: "OK")
             alert.runModal()
             return false
+        }
+    }
+
+    @MainActor
+    private static func openTasksConfiguration(store: AppStore, preferredWindowID: UUID?) {
+        switch ToasttyMenuActions.openTasksConfigurationResult(
+            openManagedLocalDocument: { fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: preferredWindowID
+                )
+            }
+        ) {
+        case .success:
+            return
+        case .failure(let error):
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open tasks.toml"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 

@@ -521,7 +521,8 @@ workspace-scoped callers. `task.create` accepts `text`, repeatable `files`
 (relative paths need `cwd`), and optional `workspace`, `profileID`, `model`,
 and `reasoningEffort` that fix those choices; it returns `taskID`, `phase`, and
 `title`. `task.place` requires `taskID` and `workspace`; `task.retry` and
-`task.delete` require `taskID`. `task.list` returns `tasks`, each with
+`task.delete` require `taskID`; on a `started` task, `task.delete` only clears
+its Inbox row. `task.list` returns `tasks`, each with
 `taskID`, `phase`, `title`, `text`, `source`, `createdAt`, `files`, `problem`,
 and, when known, `suggestion`, `plan`, and `taskSpaceID`.
 

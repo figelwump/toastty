@@ -43,6 +43,28 @@ struct SidebarInboxRowPresentation: Equatable {
                 tag: "⚠ setup failed",
                 needsUser: true
             )
+        case .started:
+            return .init(
+                title: item.displayTitle,
+                detail: startedLabel(item, workspaceTitle: workspaceTitle),
+                tag: "started",
+                needsUser: false
+            )
+        }
+    }
+
+    /// "→ task space · parent workspace", from the live titles when the
+    /// workspaces still exist.
+    static func startedLabel(_ item: TaskInboxItem, workspaceTitle: (UUID) -> String?) -> String {
+        let taskSpace = item.taskSpace.flatMap { workspaceTitle($0.workspaceID) } ?? item.plan?.slug ?? item.displayTitle
+        guard let parent = item.plan.flatMap({ workspaceTitle($0.workspaceID) }) else { return "→ " + taskSpace }
+        return "→ \(taskSpace) · \(parent)"
+    }
+
+    static func configFileName(_ file: TaskInboxItem.ConfigFile) -> String {
+        switch file {
+        case .tasks: "tasks.toml"
+        case .agents: "agents.toml"
         }
     }
 
@@ -156,11 +178,19 @@ struct SidebarInboxSection: View {
             set: { if $0 { presentedTaskID = item.id } else if presentedTaskID == item.id { presentedTaskID = nil } }
         )
         return HStack(alignment: .top, spacing: Self.railGap) {
-            RoundedRectangle(cornerRadius: 2)
-                .strokeBorder(ToastyTheme.sidebarChildContextText, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
-                .frame(width: 10, height: 10)
-                .frame(width: Self.railWidth, height: Self.lineMinHeight)
-                .accessibilityHidden(true)
+            Group {
+                if item.phase == .started {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                } else {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(ToastyTheme.sidebarChildContextText, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
+                        .frame(width: 10, height: 10)
+                }
+            }
+            .frame(width: Self.railWidth, height: Self.lineMinHeight)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
                 SidebarView.styledSessionNameText(presentation.title, isEmphasized: false)
@@ -194,7 +224,7 @@ struct SidebarInboxSection: View {
                 .stroke(isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear, lineWidth: 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 5))
-        .onTapGesture { presentedTaskID = item.id }
+        .onTapGesture { activate(item) }
         .onHover { isHovering in
             if isHovering {
                 hoveredTaskID = item.id
@@ -211,15 +241,27 @@ struct SidebarInboxSection: View {
         }
         .contextMenu {
             if let coordinator {
+                if item.phase == .started {
+                    Button("Open Task Space") { coordinator.openTaskSpace(taskID: item.id) }
+                }
                 Button("Show Task…") { presentedTaskID = item.id }
+                if let file = item.problemConfigFile {
+                    Button("Open \(SidebarInboxRowPresentation.configFileName(file))") {
+                        coordinator.openConfigFile?(file)
+                    }
+                }
                 if item.phase == .needsWorkspace || item.phase == .setupFailed {
                     Button(item.phase == .setupFailed ? "Retry Setup" : "Retry Triage") {
                         try? coordinator.retry(taskID: item.id)
                     }
                 }
                 Divider()
-                Button("Delete Task", role: .destructive) {
-                    coordinator.delete(taskID: item.id)
+                if item.phase == .started {
+                    Button("Clear") { coordinator.delete(taskID: item.id) }
+                } else {
+                    Button("Delete Task", role: .destructive) {
+                        coordinator.delete(taskID: item.id)
+                    }
                 }
             }
         }
@@ -231,8 +273,17 @@ struct SidebarInboxSection: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.accessibilityLabel)
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction(.default) { presentedTaskID = item.id }
+        .accessibilityAction(.default) { activate(item) }
         .accessibilityIdentifier("sidebar.inbox.task.\(item.id.uuidString)")
+    }
+
+    /// A started row goes to its task space; any other row shows the task.
+    private func activate(_ item: TaskInboxItem) {
+        if item.phase == .started, let coordinator {
+            coordinator.openTaskSpace(taskID: item.id)
+        } else {
+            presentedTaskID = item.id
+        }
     }
 }
 
@@ -295,14 +346,24 @@ struct TaskInboxPopover: View {
                 }
             }
 
-            if let note = item.problem ?? item.suggestion?.reason {
-                Text(note)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ToastyTheme.sidebarWorkspaceTagBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+            if let note = popoverNote(item) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let file = item.problemConfigFile {
+                        Button("Open \(SidebarInboxRowPresentation.configFileName(file))") {
+                            coordinator.openConfigFile?(file)
+                            dismiss()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
             }
 
             if canPlace {
@@ -338,11 +399,24 @@ struct TaskInboxPopover: View {
             }
 
             HStack(spacing: 6) {
-                Button("Delete", role: .destructive) {
-                    coordinator.delete(taskID: item.id)
-                    dismiss()
+                if item.phase == .started {
+                    Button("Clear") {
+                        coordinator.delete(taskID: item.id)
+                        dismiss()
+                    }
+                    Spacer(minLength: 0)
+                    Button("Open Task Space") {
+                        coordinator.openTaskSpace(taskID: item.id)
+                        dismiss()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Delete", role: .destructive) {
+                        coordinator.delete(taskID: item.id)
+                        dismiss()
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
                 if canPlace {
                     Button(item.phase == .setupFailed ? "Retry" : "Retry Triage") {
                         perform { try coordinator.retry(taskID: item.id) }
@@ -407,6 +481,18 @@ struct TaskInboxPopover: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(workspace.title)\(isSuggested ? ", suggested" : "")")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func popoverNote(_ item: TaskInboxItem) -> String? {
+        if item.phase == .started {
+            guard let taskSpaceID = item.taskSpace?.workspaceID,
+                  let taskSpace = coordinator.workspaceTitle(taskSpaceID) else {
+                return "The agent started. Its task space is closed."
+            }
+            let parent = item.plan.flatMap { coordinator.workspaceTitle($0.workspaceID) }
+            return "The agent started in task space \(taskSpace)" + (parent.map { ", under \($0)." } ?? ".")
+        }
+        return item.problem ?? item.suggestion?.reason
     }
 
     private func defaultWorkspaceID(for item: TaskInboxItem) -> UUID? {

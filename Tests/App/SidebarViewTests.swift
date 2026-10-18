@@ -2141,10 +2141,23 @@ final class SidebarViewTests: XCTestCase {
                 problem: "The create script failed (exit 1): fatal: branch exists"
             ),
         ])
-        let (harness, _) = try makeSubspacesHarness(taskInboxStore: inbox)
+        let (harness, ids) = try makeSubspacesHarness(taskInboxStore: inbox)
+        let workingTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.workingID]?.title)
+        inbox.add(TaskInboxItem(
+            text: "Keep composer drafts", source: .cli, createdAt: now, phase: .started,
+            plan: .init(
+                workspaceID: parentPlanWorkspaceID, title: "Keep composer drafts", slug: "composer-drafts",
+                branchPrefix: "feat", profileID: "codex", model: nil, effort: nil
+            ),
+            startedAt: now,
+            taskSpace: .init(workspaceID: ids.workingID, panelID: UUID())
+        ))
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
         let textValues = renderedTextValues(in: harness.hostingView)
 
-        XCTAssertTrue(textValues.contains("Inbox, 4 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Inbox, 5 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Keep composer drafts, Inbox task, started, → \(workingTitle)"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Make the iOS composer keep drafts, Inbox task, routing…, Mac · just now"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test, Inbox task, setting up, → workspace · codex · gpt-6.1-sol") }, "\(textValues)")
         XCTAssertTrue(textValues.contains("Pricing table says per user, Inbox task, pick a workspace, Triage did not answer in 60 s."), "\(textValues)")
