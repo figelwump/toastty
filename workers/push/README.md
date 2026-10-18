@@ -69,6 +69,47 @@ terminals or worktrees. Observability and Logpush are disabled. Do not log bodie
 headers, device tokens, nonces, or session titles. Deployment history can retain
 prior encrypted secret versions.
 
+### Verification diagnostics
+
+The relay adds an optional `x-toastty-push-diagnostic` response header. Its values
+are fixed categories for Apple's verification result or a verification quota.
+A second fixed header, `x-toastty-push-provider-refresh: attempted`, records
+whether an expired Apple provider token triggered refresh. The result category
+distinguishes device throttling from excessive provider-token updates.
+HTTP status, JSON bodies, authentication, and retry policy stay compatible with
+older clients. Missing or unknown diagnostic headers do not block new clients.
+
+A pending registration retains the last fixed Apple result so an idempotent
+retry can recover it after a lost HTTP response. HTTP 202 still means that an
+existing pending registration was reused; no new verification was sent. A
+missing original result is reported as unknown, including when the first Apple
+request is still in flight. The category is cleared on activation or revocation
+and removed with expiry cleanup. The added columns are created automatically in
+existing databases and can coexist with the previous relay code. After a
+rollback, older code can retain those fixed values until the registration is
+cleaned up; it does not read or update them. No raw Apple
+reason, body, token, or credential is added to diagnostics. Invocation logging
+and Logpush remain disabled.
+
+To capture one setup attempt after separately authorized activation:
+
+1. Deploy the reviewed relay version, then distribute the reviewed iOS build.
+   Both updates are needed for all diagnostic categories. Deployment and
+   TestFlight publication remain separate release actions.
+2. On the phone, open Settings, then Diagnostics. Enable Gateway system logging
+   before reproduction if logs must survive a restart. Keep the app open and
+   connected while the service cooldown expires and setup resumes.
+3. Read the verification request/response, proof receipt or rejection, proof
+   completion, and Mac handoff events. Match the registration number within
+   this app run. It counts registrations, not HTTP requests or quota usage.
+4. For HTTP 429, a relay envelope identifies a relay cooldown. A fixed header
+   can identify the token, network-address, or service quota. Without a relay
+   envelope the source remains unidentified; do not label it an edge failure.
+   The displayed retry delay is the bounded delay applied by the phone.
+5. Preserve the log before restarting. Apple acceptance does not prove phone
+   receipt. A missing proof event after acceptance and a rejected/mismatched
+   proof event require different investigations.
+
 Bootstrap a fresh Mac worktree first. Then configure its graph before building:
 
 ```sh

@@ -1,9 +1,11 @@
-import { policy, RelayError } from "./relay-protocol";
+import { policy, RelayError, type RelayDiagnostic, type VerificationOutcome } from "./relay-protocol";
 
 export type RegistrationRow = {
   ordinal: number; id: string; token: string; token_hash: string; pairing_id: string;
   management_hash: string; send_hash: string; nonce_hash: string | null;
   status: "pending" | "active" | "revoked"; activated: number; expires_at: number; last_used: number;
+  verification_outcome: VerificationOutcome | null;
+  verification_refresh: number;
 };
 type LimitRow = { count: number; expires_at: number };
 export type EventRow = { outcome: "pending" | "accepted" | "unknown" | "rejected"; expires_at: number };
@@ -24,6 +26,16 @@ export class RelayStore {
         send_hash TEXT NOT NULL, nonce_hash TEXT, status TEXT NOT NULL,
         activated INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL, last_used INTEGER NOT NULL
       )`);
+      // Additive and rollback-compatible. Only pending registrations retain this
+      // fixed category; never retain Apple's response body or a provider reason.
+      if (!this.sql.exec<{ name: string }>("PRAGMA table_info(registrations)").toArray()
+        .some(column => column.name === "verification_outcome")) {
+        this.sql.exec("ALTER TABLE registrations ADD COLUMN verification_outcome TEXT");
+      }
+      if (!this.sql.exec<{ name: string }>("PRAGMA table_info(registrations)").toArray()
+        .some(column => column.name === "verification_refresh")) {
+        this.sql.exec("ALTER TABLE registrations ADD COLUMN verification_refresh INTEGER NOT NULL DEFAULT 0");
+      }
       this.sql.exec("CREATE INDEX IF NOT EXISTS registrations_token ON registrations(token_hash, ordinal)");
       this.sql.exec("CREATE INDEX IF NOT EXISTS registrations_expiry ON registrations(expires_at)");
       this.sql.exec("CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
@@ -43,17 +55,22 @@ export class RelayStore {
     return this.sql.exec<RegistrationRow>("SELECT * FROM registrations WHERE id = ?", id).toArray()[0];
   }
 
-  insert(value: Omit<RegistrationRow, "ordinal" | "activated">): void {
+  insert(value: Omit<RegistrationRow, "ordinal" | "activated" | "verification_outcome" | "verification_refresh">): void {
     this.sql.exec(`INSERT INTO registrations
       (id, token, token_hash, pairing_id, management_hash, send_hash, nonce_hash, status, expires_at, last_used)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.id, value.token, value.token_hash, value.pairing_id,
       value.management_hash, value.send_hash, value.nonce_hash, value.status, value.expires_at, value.last_used);
   }
 
-  consumeLimit(key: string, maximum: number, seconds: number, now: number): void {
+  recordVerificationOutcome(id: string, outcome: VerificationOutcome, providerRefreshAttempted = false): void {
+    this.sql.exec("UPDATE registrations SET verification_outcome = ?, verification_refresh = ? WHERE id = ? AND status = 'pending'",
+      outcome, providerRefreshAttempted ? 1 : 0, id);
+  }
+
+  consumeLimit(key: string, maximum: number, seconds: number, now: number, diagnostic?: RelayDiagnostic): void {
     const row = this.sql.exec<LimitRow>("SELECT count, expires_at FROM limits WHERE key = ?", key).toArray()[0];
     if (row && row.expires_at > now) {
-      if (row.count >= maximum) throw new RelayError(429, "rate_limited", row.expires_at - now);
+      if (row.count >= maximum) throw new RelayError(429, "rate_limited", row.expires_at - now, diagnostic);
       this.sql.exec("UPDATE limits SET count = count + 1 WHERE key = ?", key);
     } else {
       this.sql.exec("INSERT OR REPLACE INTO limits (key, count, expires_at) VALUES (?, 1, ?)", key, now + seconds);
@@ -69,14 +86,14 @@ export class RelayStore {
     const newer = this.sql.exec("SELECT id FROM registrations WHERE token_hash = ? AND ordinal > ? AND activated = 1 LIMIT 1",
       row.token_hash, row.ordinal).toArray().length > 0;
     if (newer) throw new RelayError(409, "registration_superseded");
-    this.sql.exec(`UPDATE registrations SET status = 'revoked', nonce_hash = NULL, token = '', expires_at = ?
+    this.sql.exec(`UPDATE registrations SET status = 'revoked', nonce_hash = NULL, token = '', verification_outcome = NULL, verification_refresh = 0, expires_at = ?
       WHERE token_hash = ? AND id <> ? AND status = 'active'`, now + policy.eventSeconds, row.token_hash, row.id);
-    this.sql.exec("UPDATE registrations SET status = 'active', activated = 1, nonce_hash = NULL, expires_at = ?, last_used = ? WHERE id = ? AND status = 'pending'",
+    this.sql.exec("UPDATE registrations SET status = 'active', activated = 1, nonce_hash = NULL, verification_outcome = NULL, verification_refresh = 0, expires_at = ?, last_used = ? WHERE id = ? AND status = 'pending'",
       now + policy.activeSeconds, now, row.id);
   }
 
   revoke(id: string, now: number): void {
-    this.sql.exec("UPDATE registrations SET status = 'revoked', nonce_hash = NULL, token = '', expires_at = ? WHERE id = ? AND status <> 'revoked'",
+    this.sql.exec("UPDATE registrations SET status = 'revoked', nonce_hash = NULL, token = '', verification_outcome = NULL, verification_refresh = 0, expires_at = ? WHERE id = ? AND status <> 'revoked'",
       now + policy.eventSeconds, id);
   }
 

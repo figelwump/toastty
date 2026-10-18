@@ -390,7 +390,11 @@ relay. Alerts suppressed during active Mac use are discarded, not queued.
 The relay retains the APNs device token and its hash, registration and pairing
 IDs, hashes of the management and send credentials and verification nonce,
 enrollment state with expiry and last-use times, and bounded event IDs, delivery
-outcomes, and expiry times. It also retains the APNs signing key as a Cloudflare
+outcomes, and expiry times. A pending registration can also retain one fixed
+verification outcome category and whether provider-token refresh was attempted.
+These values are cleared on activation or
+revocation and removed with expired registration cleanup. It contains no raw
+Apple reason or response body. It also retains the APNs signing key as a Cloudflare
 secret and caches an Apple provider token. Session titles are forwarded for
 delivery, not stored in the relay database.
 
@@ -399,6 +403,12 @@ and pending cleanup records in a non-synchronizing Keychain item. The Mac keeps
 its relay send authority in the protected device file described above. Turning
 notifications off or unpairing retains pending revocation records until the
 service accepts cleanup. Alerts already sent can still arrive.
+
+The iPhone's bounded diagnostic log records fixed setup events and result
+categories, HTTP status, a bounded retry delay, and registration numbers local
+to the current app run. It contains no registration UUIDs or pairing IDs. These
+records stay in memory unless the user enables Gateway system logging, which
+mirrors the same fixed categories and numeric details to the device system log.
 
 See [iPhone notifications](remote-access.md#iphone-notifications) for permission
 and revocation behavior, and the [push relay runbook](../workers/push/README.md)

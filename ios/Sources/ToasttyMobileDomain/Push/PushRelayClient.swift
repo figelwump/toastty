@@ -30,9 +30,18 @@ public enum PushRelayFailure: Error, Equatable, Sendable, CustomStringConvertibl
 
 public protocol PushRelayClientProtocol: Sendable {
     func begin(_ registration: MobilePushRegistration) async throws -> PushRelayBeginResponse
+    func begin(_ registration: MobilePushRegistration,
+               onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse
     func complete(_ registration: MobilePushRegistration, nonce: String) async throws -> PushRelayStatus
     func status(_ registration: MobilePushRegistration) async throws -> PushRelayStatus
     func revoke(_ registration: MobilePushRegistration) async throws
+}
+
+extension PushRelayClientProtocol {
+    public func begin(_ registration: MobilePushRegistration,
+                      onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse {
+        try await begin(registration)
+    }
 }
 
 public struct PushRelayClient: PushRelayClientProtocol {
@@ -50,10 +59,21 @@ public struct PushRelayClient: PushRelayClientProtocol {
     }
 
     public func begin(_ registration: MobilePushRegistration) async throws -> PushRelayBeginResponse {
+        try await beginRequest(registration, onDiagnostic: { _ in })
+    }
+
+    public func begin(_ registration: MobilePushRegistration,
+                      onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse {
+        try await beginRequest(registration, onDiagnostic: onDiagnostic)
+    }
+
+    private func beginRequest(_ registration: MobilePushRegistration,
+                              onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse {
         let body = Begin(registrationID: registration.registrationID.uuidString.lowercased(), deviceToken: registration.deviceToken,
                          pairingID: registration.pairingID.uuidString.lowercased(), managementToken: registration.managementToken,
                          sendToken: registration.sendToken)
-        let response = try await send(method: "POST", path: "/v1/registrations", token: nil, body: body)
+        let response = try await send(method: "POST", path: "/v1/registrations", token: nil, body: body,
+                                      onDiagnostic: onDiagnostic)
         let value: PushRelayBeginResponse = try decode(response.body)
         guard value.registrationID == registration.registrationID,
               value.state == "pending" || value.state == "active",
@@ -95,7 +115,8 @@ public struct PushRelayClient: PushRelayClientProtocol {
         "/v1/registrations/" + value.registrationID.uuidString.lowercased()
     }
 
-    private func send<Body: Encodable>(method: String, path: String, token: String?, body: Body?) async throws -> HTTPTransportResponse {
+    private func send<Body: Encodable>(method: String, path: String, token: String?, body: Body?,
+        onDiagnostic: (@Sendable (PushRelayDiagnostic) -> Void)? = nil) async throws -> HTTPTransportResponse {
         guard Self.isValidOrigin(baseURL), var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw PushRelayFailure.invalidResponse
         }
@@ -116,9 +137,23 @@ public struct PushRelayClient: PushRelayClientProtocol {
         do { response = try await transport.send(request) }
         catch is CancellationError { throw CancellationError() }
         catch { throw PushRelayFailure.network }
-        guard (200..<300).contains(response.statusCode) else {
-            let object = response.body.count <= 4096 ? (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] : nil
-            let code = object?["error"] as? String
+        let success = (200..<300).contains(response.statusCode)
+        let object = !success && response.body.count <= 4096
+            ? (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] : nil
+        let code = object?["error"] as? String
+        let rawDiagnostic = response.header("x-toastty-push-diagnostic")
+        let diagnostic = rawDiagnostic.flatMap { value -> PushRelayDiagnosticCode? in
+            guard value.utf8.count <= 64, let diagnostic = PushRelayDiagnosticCode(rawValue: value) else { return nil }
+            return diagnostic.isCompatible(status: response.statusCode, error: code) ? diagnostic : nil
+        }
+        // The observer is synchronous. It cannot add an actor suspension or
+        // alter the existing error and retry semantics.
+        onDiagnostic?(PushRelayDiagnostic(statusCode: response.statusCode, code: diagnostic,
+            rateLimitSource: response.statusCode == 429
+                ? (code == "rate_limited" ? .relay : .unidentified) : nil,
+            providerRefreshAttempted: diagnostic != nil && [201, 202, 422, 503].contains(response.statusCode)
+                && response.header("x-toastty-push-provider-refresh") == "attempted"))
+        guard success else {
             if response.statusCode == 429 {
                 let parsed = TimeInterval(response.header("retry-after") ?? "")
                 let seconds = parsed.flatMap { $0.isFinite ? $0 : nil } ?? 60
