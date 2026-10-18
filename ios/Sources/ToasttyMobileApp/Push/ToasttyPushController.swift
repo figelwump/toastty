@@ -75,6 +75,7 @@ final class ToasttyPushController {
         guard configuration != nil, storedState != nil else { return .unavailable }
         guard desired else { return storedState?.cleanup.isEmpty == false || storedState?.needsMacClear == true ? .turningOff : .off }
         guard permission != .denied else { return .permissionDenied }
+        guard permission == .allowed else { return .off }
         if storedState?.pending != nil || storedState?.active?.stage != .enabled { return .pending }
         return .enabled
     }
@@ -210,9 +211,8 @@ final class ToasttyPushController {
         scheduleReconcile()
     }
 
-    func deferIntroduction() {
-        do { try persist { $0.introHandled = true } }
-        catch { errorMessage = "Couldn’t save notification settings. Try again." }
+    func deferIntroduction() async {
+        await setDesired(false)
     }
 
     func setDesired(_ value: Bool) async {
@@ -234,7 +234,14 @@ final class ToasttyPushController {
                 catch { errorMessage = "Couldn’t request notification permission. Try again."; return }
             }
         } else {
-            do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = true } }
+            do {
+                try persist {
+                    $0.introHandled = true
+                    $0.desired = false
+                    $0.needsMacClear = $0.needsMacClear || $0.active != nil || $0.pending != nil || !$0.cleanup.isEmpty
+                    $0.queueCleanup()
+                }
+            }
             catch { errorMessage = "Couldn’t save notification settings. Try again."; return }
             revision &+= 1
         }
@@ -317,6 +324,7 @@ final class ToasttyPushController {
         await restore()
         guard storedState != nil else { return }
         await cleanupRegistrations()
+        permission = await notifications.permission()
         guard isForeground, let configuration, let context, context.connected, context.supported else { return }
         if automaticallyReconciles, transientRetryAt.map({ now() < $0 }) == true { return }
         transientRetryAt = nil
@@ -344,14 +352,12 @@ final class ToasttyPushController {
                     guard await isCurrent(operationRevision, generation: generation) else { return }
                     try persist { $0.needsMacClear = false }
                 }
-                permission = await notifications.permission()
                 return
             }
             guard configurationMatches else {
                 if desired { errorMessage = "Notification settings on this iPhone and Mac do not match." }
                 return
             }
-            permission = await notifications.permission()
             guard await isCurrent(operationRevision, generation: generation) else { return }
             guard permission == .allowed else { return }
             if !requestedToken { requestedToken = true; emit(.pushTokenRequested); notifications.register() }

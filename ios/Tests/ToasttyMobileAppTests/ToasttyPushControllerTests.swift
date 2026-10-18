@@ -114,6 +114,66 @@ final class ToasttyPushControllerTests: XCTestCase {
         }
     }
 
+    func testFreshInstallationDefaultsToAlertsWithoutRequestingPermissionAutomatically() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        await h.controller.reconcile()
+        XCTAssertTrue(h.controller.desired)
+        XCTAssertTrue(h.controller.canIntroduce)
+        XCTAssertEqual(h.controller.presentation, .off)
+        XCTAssertEqual(h.notifications.permissionRequests, 0)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+
+        h.notifications.currentPermission = .allowed
+        await h.controller.reconcile()
+        XCTAssertEqual(h.notifications.registrationRequests, 1)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        XCTAssertNotNil(h.controller.storedState?.pending)
+        await assertBeginCount(1, h.relay)
+        XCTAssertTrue(try XCTUnwrap(h.store.load()).desired)
+
+        // Permission may already be granted when the introduction appears.
+        await h.controller.deferIntroduction()
+        XCTAssertFalse(h.controller.desired)
+        XCTAssertNil(h.controller.storedState?.pending)
+        XCTAssertEqual(h.controller.storedState?.cleanup.count, 1)
+        await h.controller.reconcile()
+        XCTAssertTrue(try XCTUnwrap(h.store.load()).cleanup.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(h.store.load()).needsMacClear)
+    }
+
+    func testSavedOptOutSurvivesRestoreWithNotificationPermission() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        await h.controller.setDesired(false)
+        h.notifications.currentPermission = .allowed
+        let restored = h.makeController()
+        await restored.restore()
+        restored.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: true, supported: true)
+        await restored.reconcile()
+        XCTAssertFalse(restored.desired)
+        XCTAssertFalse(restored.canIntroduce)
+        XCTAssertEqual(restored.storedState?.installationID, h.controller.storedState?.installationID)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+        await assertBeginCount(0, h.relay)
+    }
+
+    func testNotificationPermissionRefreshesWithoutAConnectedMac() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        h.controller.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: false, supported: true)
+        h.notifications.currentPermission = .allowed
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.permission, .allowed)
+        XCTAssertTrue(h.controller.desired)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+
+        h.notifications.currentPermission = .denied
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.presentation, .permissionDenied)
+        XCTAssertEqual(h.notifications.permissionRequests, 0)
+    }
+
     func testAllowPersistsIntentAndStartsProofWithoutBlockingHomeWithASuccessScreen() async throws {
         let h = try await Harness.make()
         await h.controller.reconcile()
@@ -140,9 +200,9 @@ final class ToasttyPushControllerTests: XCTestCase {
     }
 
     func testDeclineAndNotNowAreRememberedWithoutAutomaticPermissionRequests() async throws {
-        let h = try await Harness.make()
+        let h = try await Harness.make(freshInstallation: true)
         await h.controller.reconcile()
-        h.controller.deferIntroduction()
+        await h.controller.deferIntroduction()
         await h.controller.reconcile()
         XCTAssertFalse(h.controller.canIntroduce)
         XCTAssertFalse(h.controller.desired)
@@ -815,13 +875,14 @@ final class ToasttyPushControllerTests: XCTestCase {
         static let config = ToasttyPushConfiguration(relayURL: URL(string: "https://push.example.com")!,
             relayID: "toastty-push-dev-v1", apnsEnvironment: .development)
 
-        static func make(desired: Bool = false) async throws -> Harness {
+        static func make(desired: Bool = false, freshInstallation: Bool = false) async throws -> Harness {
             let credential = try credential()
             let vault = TestAppCredentialVault(initialCredential: credential)
             _ = await vault.restore()
-            let state = MobilePushState()
-            let marker = PushInstallationSpy(state.installationID)
-            let store = PushMemoryStore(state)
+            var state = MobilePushState()
+            state.desired = false
+            let marker = PushInstallationSpy(freshInstallation ? nil : state.installationID)
+            let store = PushMemoryStore(freshInstallation ? nil : state)
             let notifications = PushNotificationsSpy()
             let relay = PushRelaySpy()
             let native = PushNativeSpy()

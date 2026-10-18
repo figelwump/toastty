@@ -42,7 +42,7 @@ public struct MobilePushRegistration: Codable, Equatable, Sendable, CustomString
 public struct MobilePushState: Codable, Equatable, Sendable, CustomStringConvertible {
     public var schemaVersion = 1
     public var installationID: UUID
-    public var desired = false
+    public var desired = true
     public var introHandled = false
     public var active: MobilePushRegistration?
     public var pending: MobilePushRegistration?
