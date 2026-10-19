@@ -3332,7 +3332,7 @@ struct SidebarView: View {
                     ),
                     isDone: workspace.doneAt != nil
                 ),
-                isDone: workspace.doneAt != nil,
+                doneAt: workspace.doneAt,
                 annotations: workspace.annotations,
                 primaryAnnotationKey: workspace.primaryAnnotationKey,
                 summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),

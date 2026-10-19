@@ -313,9 +313,13 @@ spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
 Task spaces do not appear as their own sidebar cards; they render as compact rows
 in a Task Spaces group inside the parent card, sorted ready, needs approval,
-error, working, idle, then done. Within each status, task spaces sort by the
-latest status update from any of their sessions, newest first. Equal times use
-workspace order; task spaces with no update time follow those with an update time.
+error, working, idle, then done. Working task spaces keep workspace order as
+progress reports arrive. Idle task spaces sort by their latest session status
+update, newest first. Done task spaces use the later of their latest session
+status update and the time they were marked done. Ready, needs approval, and
+error task spaces sort by the latest update from a session that sets that row's
+status; updates from sessions in other states do not move the row. Equal or
+missing times use workspace order; rows with no time follow rows with a time.
 Hovering over the list holds its order, and the selected row keeps its slot
 until selection changes. The spawning session's row shows a ⑂ chip that filters
 the group to its task spaces. Nesting stays one level deep, so a parent that is

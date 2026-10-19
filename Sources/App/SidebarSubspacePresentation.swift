@@ -58,7 +58,9 @@ enum SidebarSubspacePresentation {
         let status: RowStatus
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
-        var isDone = false
+        var isDone: Bool { doneAt != nil }
+        /// When the workspace was marked done, including quiet spaces with no sessions.
+        var doneAt: Date? = nil
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -72,8 +74,8 @@ enum SidebarSubspacePresentation {
         /// elsewhere can nest a subspace under it.
         var spawnerWorkspaceID: UUID? = nil
         let sessions: [SessionLine]
-        /// Position in the window's workspace order, used when status and
-        /// activity time are equal or no session has reported a status yet.
+        /// Position in the window's workspace order. Working rows keep this
+        /// order; other groups use it when their recency times are equal.
         let creationIndex: Int
         /// Absolute path of where the subspace lives; see
         /// `path(sessionCWDs:workspace:)`.
@@ -83,6 +85,26 @@ enum SidebarSubspacePresentation {
         /// Metadata changes do not update these times.
         var latestActivityAt: Date? {
             sessions.lazy.compactMap(\.statusUpdatedAt).max()
+        }
+
+        /// Progress changes the working row's text, not its position. Rows
+        /// that need the user follow the session that sets their status, so
+        /// another session's background progress cannot move them.
+        fileprivate var sortActivityAt: Date? {
+            switch status {
+            case .working:
+                return nil
+            case .done:
+                return [doneAt, latestActivityAt].compactMap { $0 }.max()
+            case .idle:
+                return latestActivityAt
+            case .ready, .needsApproval, .error:
+                return sessions.lazy.filter {
+                    SidebarSubspacePresentation.rowStatus(
+                        kind: $0.statusKind, showsUnreadSessionAccent: $0.showsUnreadSessionAccent
+                    ) == status
+                }.compactMap(\.statusUpdatedAt).max()
+            }
         }
 
         /// A subspace is waiting only when none of its working sessions is
@@ -182,7 +204,7 @@ enum SidebarSubspacePresentation {
             .summary
     }
 
-    private static func rowStatus(kind: SessionStatusKind, showsUnreadSessionAccent: Bool) -> RowStatus {
+    nonisolated private static func rowStatus(kind: SessionStatusKind, showsUnreadSessionAccent: Bool) -> RowStatus {
         switch kind {
         case .needsApproval: return .needsApproval
         case .error: return .error
@@ -197,8 +219,8 @@ enum SidebarSubspacePresentation {
             if lhs.status != rhs.status {
                 return lhs.status < rhs.status
             }
-            let lhsActivityAt = lhs.latestActivityAt ?? .distantPast
-            let rhsActivityAt = rhs.latestActivityAt ?? .distantPast
+            let lhsActivityAt = lhs.sortActivityAt ?? .distantPast
+            let rhsActivityAt = rhs.sortActivityAt ?? .distantPast
             if lhsActivityAt != rhsActivityAt {
                 return lhsActivityAt > rhsActivityAt
             }

@@ -2426,6 +2426,48 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
+    func testWorkingTaskSpacesKeepTheirVisibleOrderAcrossProgressReports() throws {
+        let (harness, _) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let now = Date()
+        for (index, sessionID) in ["approval-agent", "working-agent", "approval-agent", "working-agent"].enumerated() {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: "Progress \(index)"),
+                at: now.addingTimeInterval(Double(index))
+            )
+            pumpMainRunLoop(duration: 0.4)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
+                "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification",
+            ])
+        }
+    }
+
+    func testDoneTaskSpacesFollowDoneMarksIncludingASpaceWithoutSessions() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let now = Date()
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "working-agent", status: SessionStatus(kind: .idle, summary: "Finished"), at: now
+        )
+        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: now.addingTimeInterval(1))))
+        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.annotatedIdleID, doneAt: now.addingTimeInterval(2))))
+        pumpMainRunLoop(duration: 0.4)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
+            "launch-checklist", "qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture",
+        ])
+
+        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: nil)))
+        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: now.addingTimeInterval(3))))
+        pumpMainRunLoop(duration: 0.4)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
+            "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification",
+        ])
+    }
+
     func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
