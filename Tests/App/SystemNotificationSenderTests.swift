@@ -145,15 +145,21 @@ final class SystemNotificationSenderTests: XCTestCase {
     func testConcurrentSendCallsSharePermissionRequestAndBothDeliverAfterGrant() async {
         var requestAuthorizationCallCount = 0
         var deliveredRequests: [UNNotificationRequest] = []
-        var permissionContinuation: CheckedContinuation<Bool, Never>?
+        var permissionContinuations: [CheckedContinuation<Bool, Never>] = []
+        var permissionGranted = false
+        let permissionRequested = expectation(description: "Permission request is pending")
+        // A duplicate request is reported by the call-count assertion below.
+        permissionRequested.assertForOverFulfill = false
 
         SystemNotificationSender.resetForTesting(
             dependencies: .init(
                 notificationAuthorizationStatus: { .notDetermined },
                 requestAuthorization: {
                     requestAuthorizationCallCount += 1
+                    if permissionGranted { return true }
                     return await withCheckedContinuation { continuation in
-                        permissionContinuation = continuation
+                        permissionContinuations.append(continuation)
+                        permissionRequested.fulfill()
                     }
                 },
                 addRequest: { request in
@@ -178,10 +184,14 @@ final class SystemNotificationSenderTests: XCTestCase {
             panelID: nil
         )
 
-        while permissionContinuation == nil {
-            await Task.yield()
-        }
-        permissionContinuation?.resume(returning: true)
+        // Wait with a deadline. An unbounded Task.yield() loop here once spun
+        // until GitHub cancelled the macOS job after 35 minutes. Then grant
+        // every pending request, and any that starts late, so both sends
+        // finish and the assertions report a failure instead of hanging.
+        await fulfillment(of: [permissionRequested], timeout: 5)
+        permissionGranted = true
+        permissionContinuations.forEach { $0.resume(returning: true) }
+        permissionContinuations.removeAll()
 
         _ = await (firstSend, secondSend)
 
