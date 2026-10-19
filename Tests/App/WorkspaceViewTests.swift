@@ -2361,9 +2361,19 @@ final class WorkspaceViewTests: XCTestCase {
             sampledFrames += 1
         } while pulsePixelCount == 0 && ContinuousClock.now < pulseDeadline
 
-        pumpMainRunLoop(duration: 0.5)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+        // The pulse clears through delayed main-queue work and an animation,
+        // which slow CI runners can stretch well past the nominal duration.
+        let settleDeadline = ContinuousClock.now + .seconds(5)
+        var settledBitmap: NSBitmapImageRep
+        repeat {
+            pumpMainRunLoop(duration: 0.05)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            settledBitmap = try renderedBitmap(for: harness.hostingView)
+        } while try differingPixelCount(
+            in: sampledRegion,
+            between: baselineBitmap,
+            and: settledBitmap
+        ) != 0 && ContinuousClock.now < settleDeadline
 
         XCTAssertNil(harness.store.pendingPanelFlashRequest)
         XCTAssertGreaterThan(

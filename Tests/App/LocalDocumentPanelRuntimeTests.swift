@@ -86,7 +86,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.apply(webState: webState)
         runtime.apply(webState: webState)
 
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertEqual(metadataCallCount, 1)
@@ -205,7 +205,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.enterEditMode()
 
@@ -242,7 +242,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertTrue(runtime.canEnterEditFromCommand())
         XCTAssertTrue(runtime.enterEditFromCommand())
@@ -280,7 +280,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
 
@@ -320,7 +320,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
 
@@ -380,7 +380,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
 
         runtime.requestReveal(lineNumber: 7)
@@ -465,7 +465,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(evaluator.scripts.count, 0)
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
@@ -513,7 +513,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         runtime.apply(webState: webState)
         runtime.requestReveal(lineNumber: 12)
-        await fulfillment(of: [loaderExpectation], timeout: 1)
+        await fulfillment(of: [loaderExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
         XCTAssertNil(runtime.automationState().currentBootstrap)
@@ -529,7 +529,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 diskRevision: nil
             )
         )
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
         XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
@@ -581,7 +581,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(1.25)
         runtime.simulateBridgeReadyForTesting()
@@ -628,7 +628,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.simulateBridgeReadyForTesting()
         XCTAssertTrue(runtime.automationState().hasPendingBootstrapScript)
@@ -676,7 +676,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.requestReveal(lineNumber: 12)
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
@@ -817,7 +817,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -901,7 +901,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -943,7 +943,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -1003,7 +1003,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertTrue(runtime.startSearch())
 
         runtime.updateSearchQuery("toast")
@@ -1067,7 +1067,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertTrue(runtime.startSearch())
         XCTAssertEqual(resetSpy.callCount, 1)
@@ -1109,7 +1109,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertFalse(runtime.findNext())
         XCTAssertFalse(runtime.findPrevious())
 
@@ -1155,7 +1155,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
         searchSpy.removeAllCalls()
@@ -1194,7 +1194,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
@@ -1236,7 +1236,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
@@ -1339,10 +1339,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.openInDefaultApp()
-        await fulfillment(of: [openExpectation], timeout: 1)
+        await fulfillment(of: [openExpectation], timeout: 5)
 
         let openedURL = await capturedURL.snapshot()
         XCTAssertEqual(openedURL, URL(filePath: filePath))
@@ -1387,10 +1387,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.copyFullPath()
-        await fulfillment(of: [copyExpectation], timeout: 1)
+        await fulfillment(of: [copyExpectation], timeout: 5)
 
         let copiedPath = await capturedPath.snapshot()
         XCTAssertEqual(copiedPath, filePath)
@@ -1427,7 +1427,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.copyFullPath()
         await fulfillment(of: [copyExpectation], timeout: 0.1)
@@ -1465,7 +1465,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.openInDefaultApp()
         await fulfillment(of: [openExpectation], timeout: 0.1)
@@ -1626,7 +1626,15 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         runtime.save(baseContentRevision: baseRevision)
         runtime.save(baseContentRevision: baseRevision)
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Wait until the first save is parked in the saver, so resume() below
+        // releases it instead of running before the save starts.
+        let saveParkedDeadline = ContinuousClock.now + .seconds(5)
+        while await saver.isWaiting() == false {
+            guard ContinuousClock.now < saveParkedDeadline else {
+                throw WaitUntilTimedOutError(description: "The first save never reached the saver")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         let savingBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         let saveCallCountWhileSaving = await saver.snapshot()
@@ -1634,7 +1642,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(saveCallCountWhileSaving, 1)
 
         await saver.resume()
-        try await Task.sleep(nanoseconds: 250_000_000)
+        try await waitUntil { runtime.automationState().currentBootstrap?.isSaving == false }
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         let finalSaveCallCount = await saver.snapshot()
@@ -2318,7 +2326,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         runtime.apply(webState: webState)
 
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
         XCTAssertEqual(bootstrapCallCount, 1)
@@ -2353,7 +2361,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -2390,7 +2398,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(1.2)
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -2426,7 +2434,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.applyTextScale(1.3)
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -2462,7 +2470,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(0)
         let minimumScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
@@ -2816,6 +2824,10 @@ private actor ControlledDocumentSaver {
         callCount
     }
 
+    func isWaiting() -> Bool {
+        continuation != nil
+    }
+
     func resume() {
         continuation?.resume()
         continuation = nil
@@ -2886,7 +2898,7 @@ private func waitForSaveToFinish(_ runtime: LocalDocumentPanelRuntime) async thr
 
 @MainActor
 private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    timeoutNanoseconds: UInt64 = 5_000_000_000,
     pollIntervalNanoseconds: UInt64 = 10_000_000,
     condition: @MainActor () -> Bool
 ) async throws {
