@@ -1110,7 +1110,7 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
 
-        case .recordDesktopNotification(let workspaceID, let panelID):
+        case .recordDesktopNotification(let workspaceID, let panelID, _):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             if let panelID {
                 let tabID = workspace.tabID(containingPanelID: panelID)

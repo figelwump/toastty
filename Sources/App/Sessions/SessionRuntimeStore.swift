@@ -91,6 +91,13 @@ final class SessionRuntimeStore: ObservableObject {
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    private struct SessionUnreadNotice: Equatable {
+        let sessionID: String
+        let workspaceID: UUID
+        let stateReplacementGeneration: UInt64
+        var retiredFromNavigation = false
+    }
+    private var exclusiveSessionUnreadByPanelID: [UUID: SessionUnreadNotice] = [:]
     private let agentHookDispatcher: AgentHookDispatcher?
     private var lastAcceptedHookStatusKindBySessionID: [String: SessionStatusKind] = [:]
     private var pendingHookReadyBySessionID: [String: PendingHookReady] = [:]
@@ -286,6 +293,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         guard storeActionObserverToken == nil else { return }
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            self?.trackSessionUnreadNotice(action: action, previousState: previousState, nextState: nextState)
             self?.acknowledgeProgramStatusAfterRead(action: action, previousState: previousState, state: nextState)
             self?.collapseReadyStatusAfterReadIfNeeded(
                 action: action,
@@ -302,6 +310,7 @@ final class SessionRuntimeStore: ObservableObject {
             store.removeActionAppliedObserver(storeActionObserverToken)
         }
         storeActionObserverToken = nil
+        exclusiveSessionUnreadByPanelID.removeAll()
         store = nil
         resumeGraceRepublishTask?.cancel()
         resumeGraceRepublishTask = nil
@@ -309,6 +318,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func reset() {
+        exclusiveSessionUnreadByPanelID.removeAll()
         programStatusPublicationTask?.cancel()
         programStatusPublicationTask = nil
         programStatusRuntime = .init()
@@ -675,6 +685,7 @@ final class SessionRuntimeStore: ObservableObject {
         launchReason: AgentHookLaunchReason = .managed,
         at now: Date
     ) {
+        exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
         var nextRegistry = sessionRegistry
         // A start that displaces this panel's active session (or restarts an
         // active session ID) ends the old lifecycle: tear it down through the
@@ -875,6 +886,10 @@ final class SessionRuntimeStore: ObservableObject {
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
         if previousRecord?.turnStartedAt == nil, nextRegistry.sessionsByID[sessionID]?.turnStartedAt != nil {
+            // Unread from an earlier turn must not be retired by this turn's exit.
+            if let panelID = previousRecord?.panelID {
+                exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
+            }
             sessionExitController?.handle(.turnStarted(sessionID: sessionID))
         }
         clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
@@ -5176,7 +5191,8 @@ final class SessionRuntimeStore: ObservableObject {
         _ = store.send(
             .recordDesktopNotification(
                 workspaceID: currentRecord.workspaceID,
-                panelID: currentRecord.panelID
+                panelID: currentRecord.panelID,
+                sessionID: sessionID
             )
         )
 
@@ -5198,6 +5214,55 @@ final class SessionRuntimeStore: ObservableObject {
                 notificationContext
             )
         }
+    }
+
+    /// Keep provenance only while every unread notice belongs to one session.
+    /// Unknown/restored or mixed unread is deliberately ineligible for retirement.
+    private func trackSessionUnreadNotice(action: AppAction, previousState: AppState, nextState: AppState) {
+        guard let store else { return }
+        exclusiveSessionUnreadByPanelID = exclusiveSessionUnreadByPanelID.filter { panelID, notice in
+            notice.stateReplacementGeneration == store.stateReplacementGeneration
+                && panelIsUnread(panelID: panelID, in: previousState.workspacesByID[notice.workspaceID])
+                && panelIsUnread(panelID: panelID, in: nextState.workspacesByID[notice.workspaceID])
+        }
+        guard case .recordDesktopNotification(let workspaceID, let panelID?, let sessionID) = action else { return }
+        let previousNotice = exclusiveSessionUnreadByPanelID[panelID]
+        guard let sessionID,
+              panelIsUnread(panelID: panelID, in: nextState.workspacesByID[workspaceID]),
+              !panelIsUnread(panelID: panelID, in: previousState.workspacesByID[workspaceID])
+                || (previousNotice?.sessionID == sessionID && previousNotice?.workspaceID == workspaceID) else {
+            exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
+            return
+        }
+        exclusiveSessionUnreadByPanelID[panelID] = SessionUnreadNotice(
+            sessionID: sessionID,
+            workspaceID: workspaceID,
+            stateReplacementGeneration: store.stateReplacementGeneration
+        )
+    }
+
+    /// Called during synchronous teardown only after a delivered self-exit
+    /// has a confirmed exit code of zero. Keep unread state and badges intact.
+    func retireUnreadFromNavigationAfterSelfExit(sessionID: String, panelID: UUID) {
+        guard let notice = exclusiveSessionUnreadByPanelID[panelID], notice.sessionID == sessionID,
+              sessionRegistry.sessionsByID[sessionID]?.status?.kind == .ready else { return }
+        exclusiveSessionUnreadByPanelID[panelID]?.retiredFromNavigation = true
+        ToasttyLog.info(
+            "Retired completion from navigation after self-exit",
+            category: .terminal,
+            metadata: ["session_id": sessionID, "panel_id": panelID.uuidString]
+        )
+    }
+
+    func skipsUnreadForNextActive(panelID: UUID, workspaceID: UUID) -> Bool {
+        guard let store, let notice = exclusiveSessionUnreadByPanelID[panelID],
+              notice.retiredFromNavigation, notice.workspaceID == workspaceID,
+              notice.stateReplacementGeneration == store.stateReplacementGeneration,
+              let record = sessionRegistry.sessionsByID[notice.sessionID],
+              !record.isActive, record.status?.kind == .ready,
+              record.panelID == panelID, record.workspaceID == workspaceID,
+              sessionRegistry.activeSession(for: panelID) == nil else { return false }
+        return true
     }
 
     private func collapseReadyStatusAfterReadIfNeeded(

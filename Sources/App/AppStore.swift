@@ -214,8 +214,12 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    /// Invalidates runtime provenance when unread state is restored or replaced.
+    private(set) var stateReplacementGeneration: UInt64 = 0
+
     func replaceState(_ state: AppState, source: AppActionSource = .unknown) {
         let previousState = self.state
+        stateReplacementGeneration &+= 1
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
@@ -2103,6 +2107,9 @@ final class AppStore: ObservableObject {
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
             }
+            guard sessionRuntimeStore?.skipsUnreadForNextActive(
+                panelID: target.panelID, workspaceID: target.workspaceID
+            ) != true else { return false }
             return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
         }) {
             if updatingCycleState {

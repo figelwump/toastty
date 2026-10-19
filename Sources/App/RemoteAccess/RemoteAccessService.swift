@@ -1069,7 +1069,7 @@ final class RemoteAccessService: ObservableObject {
                 self.syncConversations()
             case .focusPanel(let workspaceID, let panelID),
                  .markPanelNotificationsRead(let workspaceID, let panelID),
-                 .recordDesktopNotification(let workspaceID, let panelID?):
+                 .recordDesktopNotification(let workspaceID, let panelID?, _):
                 guard Self.panelIsUnread(
                     workspaceID: workspaceID,
                     panelID: panelID,

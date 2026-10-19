@@ -161,6 +161,238 @@ final class SessionExitControllerTests: XCTestCase {
         XCTAssertTrue(fixture.sent.isEmpty)
     }
 
+    // Failure modes for unread retirement: arming without delivery, failed or
+    // superseded exits, generic notices sharing the bit, and a replacement
+    // session acquiring that panel after the exit.
+    func testDeliveredCleanSelfExitSkipsCompletionPreservesUnreadAndStillFindsChild() async throws {
+        let fixture = try makeFixture()
+        try fixture.completeArmedTurn()
+        try await waitUntil { fixture.sent.count == 1 }
+        XCTAssertTrue(fixture.isUnread)
+        fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+        XCTAssertTrue(fixture.isUnread)
+        XCTAssertNotNil(fixture.workspace.tab(id: fixture.agentTabID))
+        XCTAssertNil(fixture.nextTarget)
+
+        XCTAssertTrue(fixture.store.send(.createWorkspaceTab(workspaceID: fixture.workspaceID, seed: nil, activate: false)))
+        let childTab = try XCTUnwrap(fixture.workspace.orderedTabs.last)
+        let childPanel = try XCTUnwrap(childTab.focusedPanelID)
+        fixture.startSession("child", panelID: childPanel)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "child", status: SessionStatus(kind: .working, summary: "Child working"), at: Date()
+        )
+        XCTAssertEqual(fixture.nextTarget?.panelID, childPanel)
+        fixture.genericNotice()
+        XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+    }
+
+    func testArmingOrOrdinaryCompletionDoesNotRetireUnreadOnManualExit() async throws {
+        for armed in [false, true] {
+            let fixture = try makeFixture()
+            fixture.startAgent(.codex)
+            fixture.setStatus(.working)
+            if armed {
+                try fixture.controller.armExitAfterTurn(panelID: fixture.agentPanelID, expectedSessionID: fixture.sessionID)
+            }
+            fixture.setStatus(.ready)
+            XCTAssertTrue(fixture.isUnread)
+            // Stop before the scheduled delivery gets a chance to run.
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            try await settle()
+            XCTAssertTrue(fixture.sent.isEmpty)
+            XCTAssertTrue(fixture.isUnread)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testSkippedOrFailedDeliveryPreservesCompletion() async throws {
+        for skip in ["local", "remote", "delivery"] {
+            let fixture = try makeFixture()
+            let probe = RemoteInputProbe(hasInput: skip == "remote")
+            fixture.controller.remoteInputProbe = probe
+            fixture.deliverySucceeds = skip != "delivery"
+            fixture.startAgent(.codex)
+            fixture.setStatus(.working, at: fixture.turnStart)
+            try fixture.controller.armExitAfterTurn(panelID: fixture.agentPanelID, expectedSessionID: fixture.sessionID)
+            if skip == "local" {
+                fixture.sessionRuntimeStore.noteLocalInputForActiveSession(panelID: fixture.agentPanelID)
+            }
+            fixture.setStatus(.ready)
+            try await waitUntil { fixture.controller.armedExitsBySessionID.isEmpty }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            try await settle()
+            XCTAssertTrue(fixture.isUnread, skip)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testOnlyConfirmedCleanStopRetiresDeliveredExit() async throws {
+        for reason: ManagedSessionStopReason in [.explicit, .idleAtPrompt, .ghosttyCommandFinished(exitCode: nil), .ghosttyCommandFinished(exitCode: 1)] {
+            let fixture = try makeFixture()
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            fixture.sessionRuntimeStore.stopSessionForPanel(panelID: fixture.agentPanelID, reason: reason, at: Date())
+            try await settle()
+            XCTAssertTrue(fixture.isUnread, reason.code)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testGenericUnreadBeforeCompletionBeforeExitOrAfterExitStaysReachable() async throws {
+        for timing in ["before", "after", "stopped"] {
+            let fixture = try makeFixture()
+            fixture.startAgent(.codex)
+            fixture.setStatus(.working)
+            try fixture.controller.armExitAfterTurn(panelID: fixture.agentPanelID, expectedSessionID: fixture.sessionID)
+            if timing == "before" { fixture.genericNotice() }
+            fixture.setStatus(.ready)
+            try await waitUntil { fixture.sent.count == 1 }
+            if timing == "after" { fixture.genericNotice() }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            if timing == "stopped" { fixture.genericNotice() }
+            try await settle()
+            XCTAssertTrue(fixture.isUnread, timing)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testReadCompletionCannotClearANewerGenericNotice() async throws {
+        for newNotice in [false, true] {
+            let fixture = try makeFixture()
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            XCTAssertTrue(fixture.store.send(.markPanelNotificationsRead(workspaceID: fixture.workspaceID, panelID: fixture.agentPanelID)))
+            if newNotice { fixture.genericNotice() }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            try await settle()
+            XCTAssertEqual(fixture.isUnread, newNotice)
+            XCTAssertEqual(fixture.nextTarget?.panelID, newNotice ? fixture.agentPanelID : nil)
+        }
+    }
+
+    func testUnreadFromBeforeBindingIsPreservedAndReadingAllowsLaterRetirement() async throws {
+        let fixture = try makeFixture()
+        fixture.sessionRuntimeStore.unbind()
+        fixture.genericNotice()
+        fixture.sessionRuntimeStore.bind(store: fixture.store)
+        try fixture.completeArmedTurn()
+        try await waitUntil { fixture.sent.count == 1 }
+        fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+        try await settle()
+        XCTAssertTrue(fixture.isUnread)
+
+        XCTAssertTrue(fixture.store.send(.markPanelNotificationsRead(workspaceID: fixture.workspaceID, panelID: fixture.agentPanelID)))
+        try fixture.completeArmedTurn()
+        try await waitUntil { fixture.sent.count == 2 }
+        fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+        XCTAssertTrue(fixture.isUnread)
+        XCTAssertNil(fixture.nextTarget)
+    }
+
+    func testInputAfterExitDeliveryPreservesUnreadOnLaterCleanExit() async throws {
+        for remote in [false, true] {
+            let fixture = try makeFixture()
+            let probe = RemoteInputProbe(hasInput: false)
+            fixture.controller.remoteInputProbe = probe
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            if remote {
+                probe.hasInput = true
+            } else {
+                fixture.sessionRuntimeStore.noteLocalInputForActiveSession(panelID: fixture.agentPanelID)
+            }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            try await settle()
+            XCTAssertTrue(fixture.isUnread)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testStateReplacementOrAnotherSessionNoticePreventsRetirement() async throws {
+        for replacement in [false, true] {
+            let fixture = try makeFixture()
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            if replacement {
+                fixture.store.replaceState(fixture.store.state)
+            } else {
+                XCTAssertTrue(fixture.store.send(.recordDesktopNotification(
+                    workspaceID: fixture.workspaceID, panelID: fixture.agentPanelID, sessionID: "another-session"
+                )))
+            }
+            try await settle()
+            XCTAssertTrue(fixture.isUnread)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testUnreadFromAnEarlierTurnRemainsANavigationTarget() async throws {
+        let fixture = try makeFixture()
+        fixture.startAgent(.codex)
+        fixture.setStatus(.working)
+        fixture.setStatus(.error)
+        XCTAssertTrue(fixture.isUnread)
+        fixture.setStatus(.working)
+        try fixture.controller.armExitAfterTurn(panelID: fixture.agentPanelID, expectedSessionID: fixture.sessionID)
+        fixture.setStatus(.ready)
+        try await waitUntil { fixture.sent.count == 1 }
+        fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+        XCTAssertTrue(fixture.isUnread)
+        XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+    }
+
+    func testMovingARetiredPanelRestoresNavigationEligibility() async throws {
+        let fixture = try makeFixture(addsSecondTab: false, addsSecondWorkspace: true)
+        try fixture.completeArmedTurn()
+        try await waitUntil { fixture.sent.count == 1 }
+        fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+        XCTAssertNil(fixture.nextTarget)
+        let destination = try XCTUnwrap(fixture.store.selectedWorkspace)
+        XCTAssertNotEqual(destination.id, fixture.workspaceID)
+        XCTAssertTrue(fixture.store.send(.movePanelToWorkspace(
+            panelID: fixture.agentPanelID, targetWorkspaceID: destination.id, targetSlotID: nil
+        )))
+        // Moving focuses the moved panel. Navigate from the existing pane.
+        XCTAssertTrue(fixture.store.send(.focusPanel(
+            workspaceID: destination.id, panelID: try XCTUnwrap(destination.focusedPanelID)
+        )))
+        XCTAssertTrue(fixture.store.state.workspacesByID[destination.id]?.unreadPanelIDs.contains(fixture.agentPanelID) == true)
+        XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+    }
+
+    func testNewTurnOrErrorAfterDeliveryKeepsUnread() async throws {
+        for nextKind: SessionStatusKind in [.working, .error] {
+            let fixture = try makeFixture()
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            fixture.setStatus(nextKind)
+            if nextKind == .working { fixture.setStatus(.ready) }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            try await settle()
+            XCTAssertTrue(fixture.isUnread)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
+    func testReplacementSessionKeepsItsUnreadEvenIfItAlsoStops() async throws {
+        for replacementStops in [false, true] {
+            let fixture = try makeFixture()
+            try fixture.completeArmedTurn()
+            try await waitUntil { fixture.sent.count == 1 }
+            fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            fixture.startSession("replacement", panelID: fixture.agentPanelID)
+            fixture.sessionRuntimeStore.updateStatus(sessionID: "replacement", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+            fixture.sessionRuntimeStore.updateStatus(sessionID: "replacement", status: SessionStatus(kind: .ready, summary: "Replacement reply"), at: Date())
+            if replacementStops {
+                fixture.sessionRuntimeStore.finishCommand(panelID: fixture.agentPanelID, exitCode: 0)
+            }
+            try await settle()
+            XCTAssertTrue(fixture.isUnread)
+            XCTAssertEqual(fixture.nextTarget?.panelID, fixture.agentPanelID)
+        }
+    }
+
     // MARK: - Clean exit closes the pane
 
     func testACleanExitClosesThePhoneStartedBackgroundTab() async throws {
@@ -244,7 +476,7 @@ final class SessionExitControllerTests: XCTestCase {
     // MARK: - Fixture
 
     private final class RemoteInputProbe: SessionRemoteInputProbe {
-        let hasInput: Bool
+        var hasInput: Bool
         var askedSince: [Date] = []
 
         init(hasInput: Bool) {
@@ -268,6 +500,7 @@ final class SessionExitControllerTests: XCTestCase {
         let sessionID = "exit-test-session"
         let turnStart = Date().addingTimeInterval(-30)
         var sent: [(text: String, panelID: UUID)] = []
+        var deliverySucceeds = true
 
         init(store: AppStore, sessionRuntimeStore: SessionRuntimeStore, workspaceID: UUID, agentTabID: UUID, agentPanelID: UUID) {
             self.store = store
@@ -280,10 +513,36 @@ final class SessionExitControllerTests: XCTestCase {
         var workspace: WorkspaceState { store.state.workspacesByID[workspaceID]! }
         var selectedTabID: UUID? { workspace.resolvedSelectedTabID }
 
+        var isUnread: Bool { workspace.tab(id: agentTabID)?.unreadPanelIDs.contains(agentPanelID) == true }
+        var nextTarget: PanelNavigationTarget? {
+            store.nextUnreadOrActivePanelTargetFromCommand(preferredWindowID: store.state.windows[0].id, sessionRuntimeStore: sessionRuntimeStore)
+        }
+
+        func genericNotice() {
+            XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: agentPanelID)))
+        }
+
+        func completeArmedTurn() throws {
+            startAgent(.codex)
+            setStatus(.working)
+            try controller.armExitAfterTurn(panelID: agentPanelID, expectedSessionID: sessionID)
+            setStatus(.ready)
+        }
+
+        func startSession(_ id: String, panelID: UUID) {
+            sessionRuntimeStore.startSession(
+                sessionID: id, agent: .codex, panelID: panelID,
+                windowID: store.state.windows[0].id, workspaceID: workspaceID,
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: Date()
+            )
+        }
+
         func startAgent(_ agent: AgentKind) {
             sessionRuntimeStore.startSession(
                 sessionID: sessionID, agent: agent, panelID: agentPanelID,
                 windowID: store.state.windows[0].id, workspaceID: workspaceID,
+                usesSessionStatusNotifications: true,
                 codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: Date()
             )
         }
@@ -315,7 +574,11 @@ final class SessionExitControllerTests: XCTestCase {
         if addsSecondWorkspace {
             XCTAssertTrue(store.send(.createWorkspace(windowID: store.state.windows[0].id, title: "Other", activate: true)))
         }
-        let sessionRuntimeStore = SessionRuntimeStore()
+        let sessionRuntimeStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            isApplicationActive: { false }
+        )
+        sessionRuntimeStore.bind(store: store)
         let idle = TerminalCloseConfirmationAssessment(requiresConfirmation: false)
         let closeController = SessionCloseController(
             store: store,
@@ -346,8 +609,10 @@ final class SessionExitControllerTests: XCTestCase {
             sessionRuntimeStore: sessionRuntimeStore,
             sessionCloseController: closeController,
             sendText: { [weak fixture] text, panelID in
+                // TerminalRuntimeRegistry.sendText records this synchronously.
+                fixture?.sessionRuntimeStore.noteLocalInputForActiveSession(panelID: panelID)
                 fixture?.sent.append((text, panelID))
-                return true
+                return fixture?.deliverySucceeds == true
             },
             promptSettleDelay: .zero
         )
