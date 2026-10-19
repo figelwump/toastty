@@ -76,6 +76,12 @@ final class SessionExitController {
     private let now: () -> Date
     weak var remoteInputProbe: SessionRemoteInputProbe?
 
+    private struct DeliveredExit {
+        let panelID: UUID
+        let deliveredAt: Date
+        let localInputAtDelivery: Date?
+    }
+    private var deliveredExitsBySessionID: [String: DeliveredExit] = [:]
     private(set) var armedExitsBySessionID: [String: ArmedExit] = [:]
     private(set) var closesPaneOnCleanExitSessionIDs: Set<String> = []
 
@@ -158,6 +164,7 @@ final class SessionExitController {
     func handle(_ event: ManagedSessionLifecycleEvent) {
         switch event {
         case .turnStarted(let sessionID):
+            deliveredExitsBySessionID.removeValue(forKey: sessionID)
             // Arming needs a running turn, so any turn that starts later is
             // another one; the request covered only its own.
             guard let armed = armedExitsBySessionID.removeValue(forKey: sessionID) else { return }
@@ -174,6 +181,7 @@ final class SessionExitController {
             }
 
         case .turnAbandoned(let sessionID):
+            deliveredExitsBySessionID.removeValue(forKey: sessionID)
             // Also while delivery waits: an error or interruption after the
             // completion means the session is not where the agent left it.
             guard let armed = armedExitsBySessionID.removeValue(forKey: sessionID) else { return }
@@ -181,6 +189,13 @@ final class SessionExitController {
 
         case .stopped(let sessionID, let panelID, let reason):
             armedExitsBySessionID.removeValue(forKey: sessionID)
+            if let delivered = deliveredExitsBySessionID.removeValue(forKey: sessionID),
+               delivered.panelID == panelID,
+               reason == .ghosttyCommandFinished(exitCode: 0),
+               sessionRuntimeStore?.lastLocalInputAt(panelID: panelID) == delivered.localInputAtDelivery,
+               remoteInputProbe?.hasRemoteInput(panelID: panelID, since: delivered.deliveredAt) != true {
+                sessionRuntimeStore?.retireUnreadFromNavigationAfterSelfExit(sessionID: sessionID, panelID: panelID)
+            }
             guard closesPaneOnCleanExitSessionIDs.remove(sessionID) != nil,
                   reason == .ghosttyCommandFinished(exitCode: 0) else { return }
             let stoppedAt = now()
@@ -206,6 +221,11 @@ final class SessionExitController {
             logSkippedExit(armed, reason: ExitSkipReason.deliveryFailed.rawValue)
             return .deliveryFailed
         }
+        deliveredExitsBySessionID[sessionID] = DeliveredExit(
+            panelID: armed.panelID,
+            deliveredAt: now(),
+            localInputAtDelivery: sessionRuntimeStore?.lastLocalInputAt(panelID: armed.panelID)
+        )
         ToasttyLog.info(
             "Sent the native exit after the turn",
             category: .automation,

@@ -139,7 +139,8 @@ public enum AppAction: Equatable, Sendable {
     case setTerminalPanelAgentReadPolicy(panelID: UUID, policy: TerminalAgentReadPolicy?)
     case updateWebPanelMetadata(panelID: UUID, title: String?, url: String?)
     case updateScratchpadPanelState(panelID: UUID, scratchpad: ScratchpadState, title: String?)
-    case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
+    // Session provenance is transient; saved unread state remains panel-scoped.
+    case recordDesktopNotification(workspaceID: UUID, panelID: UUID?, sessionID: String? = nil)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
     case setSidebarWidth(windowID: UUID, width: Double, defaultWidth: Double)

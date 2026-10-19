@@ -634,6 +634,10 @@ top-level workspace; a session in a task space is refused, because a task space 
 marked done when its work is finished instead. The
 exit is skipped if anyone typed into the panel or sent it a phone message during
 the turn, if the turn ends without completing, or if a new turn starts first.
+After Toastty delivers the exit and confirms exit status 0, Jump to Next Active
+skips that session's completion notice unless the panel has another unread
+notice. The unread badge and final terminal output stay available. Failed or
+skipped exits keep the completion eligible for navigation.
 An agent calls it as its last tool action and then gives its final answer:
 
 ```bash

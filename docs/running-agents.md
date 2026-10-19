@@ -1117,7 +1117,10 @@ launching session exits after its handoff. Toastty then types the agent's native
 task space is marked done when its work is finished, so its sessions do not exit
 on request. It skips the exit when anyone typed
 into the session or sent it a phone message during the turn, or when the turn
-ends without completing.
+ends without completing. After the requested exit is delivered and confirmed
+with exit status 0, Jump to Next Active skips the session's completion notice.
+The unread badge and final terminal output stay available. Other unread terminal
+notifications still make the panel a navigation target.
 
 ### Automatic program status
 
