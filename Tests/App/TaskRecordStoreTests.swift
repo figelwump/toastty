@@ -38,6 +38,21 @@ struct TaskRecordStoreTests {
         #expect(TaskRecordStore(fileURL: fileURL).records.isEmpty)
     }
 
+    @Test func aDelayedChangeReachesTheDisk() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("task-records.json")
+        let store = TaskRecordStore(fileURL: fileURL, persistDebounceInterval: 0.05)
+        let first = record("first")
+        try store.insert(first)
+        store.update(id: first.id) { $0.title = "renamed later" }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while TaskRecordStore(fileURL: fileURL).record(id: first.id)?.title != "renamed later", ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(TaskRecordStore(fileURL: fileURL).record(id: first.id)?.title == "renamed later")
+    }
+
     @Test func aRefusedSaveLeavesMemoryAsTheDiskHasIt() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

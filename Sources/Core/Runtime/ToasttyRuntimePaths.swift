@@ -30,6 +30,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
     private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
+    private static let recentWorkspacesFileName = "recent-workspaces.json"
     private static let taskRecordsFileName = "task-records.json"
     private static let taskAttachmentsDirectoryName = "task-attachments"
     private static let logFileName = "toastty.log"
@@ -89,6 +90,11 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var recentRightPanelItemsFileURL: URL {
         configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
+    }
+
+    /// The last closed top-level workspaces, for reopening one for a task.
+    public var recentWorkspacesFileURL: URL {
+        configDirectoryURL.appending(path: Self.recentWorkspacesFileName, directoryHint: .notDirectory)
     }
 
     /// Every task record. Runtime-isolated dev and test runs get their own

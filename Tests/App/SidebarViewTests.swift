@@ -2148,6 +2148,8 @@ final class SidebarViewTests: XCTestCase {
         let (harness, ids) = try makeSubspacesHarness(taskRecords: [
             record("Flaky scratchpad unread test", setup: .settingUp),
             record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
+            record("Billing page shows the old plan", setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")),
+            record("Composer keeps a blank line", setup: .routing),
             started,
         ])
         defer { harness.window.orderOut(nil) }
@@ -2159,7 +2161,9 @@ final class SidebarViewTests: XCTestCase {
         let textValues = renderedTextValues(in: harness.hostingView)
 
         // Started tasks leave the Inbox; the others show their state.
-        XCTAssertTrue(textValues.contains("Inbox, 3 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Inbox, 5 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, Inbox task, pick a workspace, None of the open workspaces has a billing page."), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Inbox task, routing…, choosing a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Inbox task, setting up, → closed workspace · codex"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Composer drafts, Inbox task, setting up, → \(parentTitle) · codex"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The agent did not start: profile missing"), "\(textValues)")

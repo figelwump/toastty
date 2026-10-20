@@ -109,6 +109,26 @@ public struct AppReducer {
             }
             return true
 
+        case .reopenWorkspace(let windowID, let workspaceID, let panelID, let title, let rootDirectory):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  let root = normalizedMetadataValue(rootDirectory),
+                  root.hasPrefix("/") else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: normalizedWorkspaceTitle(title)
+                    ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state),
+                initialTerminalCWD: root,
+                initialTerminalProfileBinding: state.defaultTerminalProfileBinding,
+                hasBeenVisited: false
+            )
+            workspace.rootDirectory = root
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
         case .createWorkspaceTab(let workspaceID, let seed, let activate):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let tab = WorkspaceTabState.bootstrap(

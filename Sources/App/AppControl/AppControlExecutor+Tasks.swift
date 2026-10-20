@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace: true
         default: false
         }
     }
@@ -13,7 +13,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isTaskQuery: Bool {
         switch self {
-        case .taskGet, .taskList: true
+        case .taskGet, .taskList, .taskWorkspaceChoices: true
         default: false
         }
     }
@@ -33,6 +33,13 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.delete(taskID: record.id) }
             return .init(didMutateState: true, result: ["taskID": .string(record.id.uuidString), "deleted": .bool(true)])
+        case .taskSetWorkspace:
+            // The choice is checked first: a scoped caller learns it may not
+            // reopen a workspace before anything about the task.
+            let choice = try taskWorkspaceChoice(args: args)
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }
@@ -63,6 +70,8 @@ extension AppControlExecutor {
         case .taskList:
             let tasks = coordinator.records.records.filter(callerMaySee).map { AutomationJSONValue.object(Self.taskSnapshot($0)) }
             return ["tasks": .array(tasks)]
+        case .taskWorkspaceChoices:
+            return workspaceChoicesSnapshot(coordinator.workspaceChoices())
         default:
             throw AutomationSocketError.invalidPayload("unsupported task query: \(query.rawValue)")
         }
@@ -124,6 +133,50 @@ extension AppControlExecutor {
         )
     }
 
+    /// A scoped session may place a task only in a workspace in its scope,
+    /// and may not reopen a closed one: that makes a new top-level
+    /// workspace, which no scope covers.
+    private func taskWorkspaceChoice(args: [String: AutomationJSONValue]) throws -> TaskWorkspaceChoice {
+        let workspace = args.taskString("workspace")
+        let recent = args.taskString("recentWorkspace")
+        switch (workspace, recent) {
+        case (let raw?, nil):
+            guard let workspaceID = UUID(uuidString: raw.trimmingCharacters(in: .whitespaces)) else {
+                throw AutomationSocketError.invalidPayload("workspace must be a workspace ID")
+            }
+            let parentIDs = try requiredStore().state.subspaceParentIDsByWorkspaceID()
+            try enforceWorkspaceAutomationAccess(workspaceID)
+            try enforceWorkspaceAutomationAccess(parentIDs[workspaceID] ?? workspaceID)
+            return .open(workspaceID)
+        case (nil, let raw?):
+            guard let recentID = UUID(uuidString: raw.trimmingCharacters(in: .whitespaces)) else {
+                throw AutomationSocketError.invalidPayload("recentWorkspace must be an ID from task.workspace-choices")
+            }
+            if let callerSessionID = requestContext().callerSessionID, callerIsWorkspaceScoped(sessionID: callerSessionID) {
+                throw AutomationSocketError.invalidPayload("a workspace-scoped session cannot reopen a closed workspace")
+            }
+            return .recent(recentID)
+        default:
+            throw AutomationSocketError.invalidPayload("pass either workspace or recentWorkspace")
+        }
+    }
+
+    private func workspaceChoicesSnapshot(_ choices: TaskWorkspaceChoices) -> [String: AutomationJSONValue] {
+        let isScoped = requestContext().callerSessionID.map(callerIsWorkspaceScoped(sessionID:)) ?? false
+        let open = choices.open.filter { callerMayAutomateWorkspace($0.id) }.map { workspace -> AutomationJSONValue in
+            .object(["workspaceID": .string(workspace.id.uuidString), "title": .string(workspace.title)])
+        }
+        let recent = isScoped ? [] : choices.recent.map { item -> AutomationJSONValue in
+            .object([
+                "recentWorkspace": .string(item.id.uuidString),
+                "title": .string(item.title),
+                "rootDirectory": .string(item.rootDirectory),
+                "closedAt": .string(ISO8601DateFormatter().string(from: item.closedAt)),
+            ])
+        }
+        return ["open": .array(open), "recent": .array(recent)]
+    }
+
     private func visibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
         guard let raw = args.taskString("taskID"), let taskID = UUID(uuidString: raw) else {
             throw AutomationSocketError.invalidPayload("taskID must be a task ID")
@@ -172,6 +225,10 @@ extension AppControlExecutor {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         var setup: [String: AutomationJSONValue]
         switch record.setup {
+        case .routing:
+            setup = ["state": .string("routing")]
+        case .needsWorkspace(let reason):
+            setup = ["state": .string("needsWorkspace"), "reason": .string(reason)]
         case .settingUp:
             setup = ["state": .string("settingUp")]
         case .setupFailed(let reason):
@@ -200,6 +257,8 @@ extension AppControlExecutor {
             "agent": optional(record.resolved?.agent),
             "model": optional(record.resolved?.model),
             "effort": optional(record.resolved?.effort),
+            "prompt": optional(record.resolved?.prompt),
+            "triageNote": optional(record.triageNote),
             "files": .array(record.attachments.map { .string($0.path) }),
             "setup": .object(setup),
         ]

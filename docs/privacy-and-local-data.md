@@ -65,6 +65,15 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/task-attachments/<task-id>/`
   - Toastty's copies of files attached to a task. They are removed when the
     task is deleted.
+- `~/.toastty/recent-workspaces.json`
+  - The title, root directory and close time of up to 20 recently closed
+    top-level workspaces, for the task workspace picker.
+- Task triage
+  - When you set `[triage] command` in `~/.toastty/tasks.toml`, Toastty sends
+    each task's text and file names, the titles, root directories and
+    guidelines of your open workspaces, and your agent profile names to that
+    command on stdin. Where the command sends them, such as a model provider,
+    depends on the command you chose.
 - `~/.toastty/remote-access/devices.json`
   - Paired-device IDs, names, browser/native kind, scopes, timestamps,
     revocation state, and SHA-256 hashes of device credentials. Native records
@@ -167,6 +176,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/recent-right-panel-items.json`
   - `<runtime-home>/task-records.json`
   - `<runtime-home>/task-attachments/`
+  - `<runtime-home>/recent-workspaces.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`

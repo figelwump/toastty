@@ -1039,6 +1039,8 @@ struct ToasttyApp: App {
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
+        let recentWorkspaces = RecentWorkspacesStore(runtimePaths: runtimePaths)
+        recentWorkspaces.observe(store)
         let taskCoordinator = TaskCoordinator(
             records: TaskRecordStore(runtimePaths: runtimePaths),
             store: store,
@@ -1054,7 +1056,9 @@ struct ToasttyApp: App {
             grantScope: { [weak sessionRuntimeStore] sessionID, workspaceID in
                 guard let sessionRuntimeStore, sessionRuntimeStore.isWorkspaceScoped(sessionID: sessionID) else { return }
                 _ = sessionRuntimeStore.addScope(sessionID: sessionID, workspaceIDs: [workspaceID])
-            }
+            },
+            triageRunner: TaskLiveTriageRunner(),
+            recentWorkspaces: recentWorkspaces
         )
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator

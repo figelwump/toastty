@@ -13,6 +13,11 @@ struct SidebarInboxRowPresentation: Equatable {
         let workspace = record.workspaceID.flatMap(workspaceTitle) ?? "closed workspace"
         let agent = record.resolved?.agent.map { " · \($0)" } ?? ""
         switch record.setup {
+        case .routing:
+            let detail = record.workspaceID.flatMap(workspaceTitle).map { "→ \($0)\(agent)" } ?? "choosing a workspace"
+            return .init(title: record.title, detail: detail, tag: "routing…", needsUser: false)
+        case .needsWorkspace(let reason):
+            return .init(title: record.title, detail: reason, tag: "⚠ pick a workspace", needsUser: true)
         case .settingUp:
             return .init(title: record.title, detail: "→ \(workspace)\(agent)", tag: "setting up", needsUser: false)
         case .setupFailed(let reason):
@@ -174,8 +179,13 @@ struct SidebarInboxSection: View {
         }
         .contextMenu {
             Button("Show Task…") { presentedTaskID = record.id }
-            if case .setupFailed = record.setup {
+            switch record.setup {
+            case .setupFailed:
                 Button("Retry Setup") { try? coordinator.retry(taskID: record.id) }
+            case .needsWorkspace:
+                Button("Retry Triage") { try? coordinator.retry(taskID: record.id) }
+            default:
+                EmptyView()
             }
             Divider()
             Button("Delete Task", role: .destructive) { try? coordinator.delete(taskID: record.id) }
@@ -202,6 +212,8 @@ struct TaskInboxPopover: View {
     let dismiss: () -> Void
 
     @State private var errorMessage: String?
+    @State private var choices: TaskWorkspaceChoices?
+    @State private var chosen: TaskWorkspaceChoice?
 
     var body: some View {
         Group {
@@ -242,6 +254,10 @@ struct TaskInboxPopover: View {
                     .lineLimit(2)
             }
 
+            if case .needsWorkspace(let reason) = record.setup {
+                workspacePicker(reason: reason)
+            }
+
             if case .setupFailed(let reason) = record.setup {
                 Text(reason)
                     .font(.system(size: 11))
@@ -264,16 +280,86 @@ struct TaskInboxPopover: View {
                     perform { try coordinator.delete(taskID: record.id) }
                 }
                 Spacer(minLength: 0)
-                if case .setupFailed = record.setup {
+                switch record.setup {
+                case .setupFailed:
                     Button("Retry") {
                         perform { try coordinator.retry(taskID: record.id) }
                     }
                     .keyboardShortcut(.defaultAction)
+                case .needsWorkspace:
+                    Button("Retry Triage") {
+                        perform { try coordinator.retry(taskID: record.id) }
+                    }
+                    Button(chosenTitle.map { "Start in \($0)" } ?? "Start") {
+                        guard let chosen else { return }
+                        perform { try coordinator.setWorkspace(taskID: record.id, choice: chosen) }
+                    }
+                    .disabled(chosen == nil)
+                    .keyboardShortcut(.defaultAction)
+                default:
+                    EmptyView()
                 }
             }
             .controlSize(.small)
         }
         .padding(12)
+    }
+
+    /// Why triage could not place the task, and a menu of the open
+    /// workspaces, then the recently closed ones.
+    private func workspacePicker(reason: String) -> some View {
+        let choices = choices ?? TaskWorkspaceChoices(open: [], recent: [])
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(reason)
+                .font(.system(size: 11))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+
+            HStack(spacing: 8) {
+                Text("Workspace")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                Menu(chosenTitle ?? "Choose…") {
+                    Section("Open") {
+                        ForEach(choices.open) { workspace in
+                            Button(workspace.title) { chosen = .open(workspace.id) }
+                        }
+                    }
+                    if choices.recent.isEmpty == false {
+                        Section("Recent") {
+                            ForEach(choices.recent) { item in
+                                Button("\(item.title) — closed \(item.closedAt.formatted(.relative(presentation: .named)))") {
+                                    chosen = .recent(item.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityIdentifier("sidebar.inbox.workspacePicker")
+            }
+        }
+        .onAppear {
+            if self.choices == nil {
+                self.choices = coordinator.workspaceChoices()
+            }
+        }
+    }
+
+    private var chosenTitle: String? {
+        switch chosen {
+        case .open(let id)?:
+            choices?.open.first { $0.id == id }?.title
+        case .recent(let id)?:
+            choices?.recent.first { $0.id == id }?.title
+        case nil:
+            nil
+        }
     }
 
     private func perform(_ action: () throws -> Void) {

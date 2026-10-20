@@ -247,6 +247,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.create`
 - `task.retry`
 - `task.delete`
+- `task.set-workspace`
 
 Notable action-specific behavior:
 
@@ -339,10 +340,22 @@ Notable action-specific behavior:
   - `workspace` defaults to the calling managed session's workspace; a subspace
     resolves to its parent. A workspace-scoped session may always add tasks to
     its own project; any other workspace must be in its scope.
+  - when `[triage]` in `~/.toastty/tasks.toml` has a command and the request
+    leaves out the workspace, agent, prompt, or a model or effort the agent
+    takes, setup starts in the `routing` state while triage chooses them. A
+    task with no workspace afterwards is in `needsWorkspace`.
   - invalid requests return `INVALID_PAYLOAD` and save nothing.
 - `task.retry`, `task.delete`
   - require `args.taskID`. A workspace-scoped session reaches only the tasks it
-    created or whose workspace or task space is in its scope.
+    created or whose workspace or task space is in its scope. `task.retry`
+    runs triage again for a task without a workspace or agent.
+- `task.set-workspace`
+  - requires `args.taskID` and one of `workspace` (an open workspace ID) or
+    `recentWorkspace` (an ID from `task.workspace-choices`, which Toastty opens
+    again). The task must not have started or have a task space. Triage runs
+    again with the workspace fixed, then setup starts.
+  - a workspace-scoped session may choose only workspaces in its scope, and
+    cannot reopen a closed workspace.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -542,13 +555,18 @@ Common query IDs include:
 - `panel.scratchpad.state`
 - `task.get`
 - `task.list`
+- `task.workspace-choices`
 
 `task.get` requires `args.taskID` and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
-`agent`, `model`, `effort`, `files`, and `setup` with `state` (`settingUp`,
-`setupFailed` with `reason`, or `started`), `taskSpaceWorkspaceID` and
-`sessionID`. `task.list` returns `tasks`, oldest first, with the same scope
-rule as `task.retry`.
+`agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, and `setup` with
+`state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
+with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`.
+`task.list` returns `tasks`, oldest first, with the same scope rule as
+`task.retry`. `task.workspace-choices` returns `open` (`workspaceID`, `title`)
+and `recent` (`recentWorkspace`, `title`, `rootDirectory`, `closedAt`) for
+`task.set-workspace`; a workspace-scoped session sees only open workspaces in
+its scope.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

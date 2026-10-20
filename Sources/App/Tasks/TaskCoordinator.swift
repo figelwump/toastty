@@ -120,6 +120,11 @@ final class TaskCoordinator {
     private let fileManager: FileManager
     private let now: () -> Date
     private let terminalReadinessTimeout: Duration
+    /// Runs `[triage] command`; `nil` turns triage off.
+    private let triageRunner: (any TaskTriageRunning)?
+    /// The closed workspaces a task can reopen.
+    let recentWorkspaces: RecentWorkspacesStore?
+    private let homeDirectoryPath: String
 
     /// One per running setup; a newer attempt or a delete makes an older
     /// one stop at its next check.
@@ -141,7 +146,10 @@ final class TaskCoordinator {
         grantScope: @escaping (String, UUID) -> Void,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        terminalReadinessTimeout: Duration = .seconds(10)
+        terminalReadinessTimeout: Duration = .seconds(10),
+        triageRunner: (any TaskTriageRunning)? = nil,
+        recentWorkspaces: RecentWorkspacesStore? = nil,
+        homeDirectoryPath: String = NSHomeDirectory()
     ) {
         self.records = records
         self.store = store
@@ -153,6 +161,9 @@ final class TaskCoordinator {
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
+        self.triageRunner = triageRunner
+        self.recentWorkspaces = recentWorkspaces
+        self.homeDirectoryPath = homeDirectoryPath
     }
 
     // MARK: - Create
@@ -187,23 +198,50 @@ final class TaskCoordinator {
         let sources = try request.files.map(attachableFile)
 
         let workspaceID = try resolvedWorkspaceID(request.workspaceID, caller: caller)
-        let projectRoot = try resolvedProjectRoot(workspaceID: workspaceID)
+        let projectRoot = try workspaceID.map(resolvedProjectRoot)
         let config: TasksConfig
         do {
             config = try configLoader()
         } catch {
             throw TaskError(error.localizedDescription)
         }
+        let pinnedTitle = request.title.flatMap(nonEmpty)
+        let pinnedSlug = request.slug.flatMap(nonEmpty)
         let pinned = TaskFields(
             workspaceID: request.workspaceID,
             agent: request.agent.flatMap(nonEmpty),
             model: request.model.flatMap(nonEmpty),
             effort: request.effort.flatMap(nonEmpty),
-            prompt: prompt
+            prompt: prompt,
+            title: pinnedTitle,
+            slug: pinnedSlug
         )
-        let resolved = try resolvedFields(pinned: pinned, workspaceID: workspaceID, defaults: config.defaults)
+        // A value the caller set that cannot work fails the request now,
+        // whether or not triage runs.
+        let pinnedProfile = try checkedPinnedFields(pinned)
 
-        let pinnedTitle = request.title.flatMap(nonEmpty)
+        // Triage runs only for what the caller left out. Without triage,
+        // `[defaults]` fills the agent, and a task with no workspace waits
+        // for the user to pick one.
+        let setup: TaskSetupState
+        var resolved: TaskFields?
+        let missing = TaskTriage.missingFields(
+            pinned: pinned,
+            workspaceID: workspaceID,
+            pinnedAgent: pinnedProfile.map(Self.triageAgent)
+        )
+        if missing.isEmpty == false, isTriageEnabled(config) {
+            setup = .routing
+        } else if let workspaceID {
+            resolved = try resolvedFields(pinned: pinned, workspaceID: workspaceID, defaults: config.defaults)
+            setup = .settingUp
+        } else {
+            // The agent and its settings are known now, so they are checked
+            // now rather than after the user picks a workspace.
+            _ = try resolvedFields(pinned: pinned, workspaceID: nil, defaults: config.defaults)
+            setup = .needsWorkspace(reason: "No workspace was named, and triage is off. Pick a workspace for this task.")
+        }
+
         let title: String
         if let pinnedTitle {
             guard let cleaned = TaskRecord.defaultTitle(for: pinnedTitle), cleaned == pinnedTitle else {
@@ -217,7 +255,7 @@ final class TaskCoordinator {
         }
         let takenSlugs = Set(records.records.map(\.slug))
         let slug: String
-        if let pinnedSlug = request.slug.flatMap(nonEmpty) {
+        if let pinnedSlug {
             guard TaskRecord.sanitizedSlug(pinnedSlug) == pinnedSlug else {
                 throw TaskError("A slug must be lowercase letters, digits and single hyphens, at most \(TaskRecord.maximumSlugLength) characters.")
             }
@@ -265,10 +303,15 @@ final class TaskCoordinator {
             pinned: pinned,
             resolved: resolved,
             workspaceID: workspaceID,
-            projectRoot: projectRoot.path,
-            setup: .settingUp
+            projectRoot: projectRoot?.path,
+            setup: setup
         )
-        return TaskCreatePreparation(record: record, copies: copies, saveRootDirectory: projectRoot.isNew, existing: nil)
+        return TaskCreatePreparation(
+            record: record,
+            copies: copies,
+            saveRootDirectory: projectRoot?.isNew == true,
+            existing: nil
+        )
     }
 
     /// Copies the files off the main thread, then saves the record and
@@ -300,7 +343,7 @@ final class TaskCoordinator {
             try? fileManager.removeItem(at: directoryURL)
             return existing
         }
-        guard let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] != nil else {
+        if let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] == nil {
             try? fileManager.removeItem(at: directoryURL)
             throw TaskError("The task's workspace closed before the task was saved.")
         }
@@ -311,41 +354,145 @@ final class TaskCoordinator {
             try? fileManager.removeItem(at: directoryURL)
             throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
         }
-        if preparation.saveRootDirectory, let projectRoot = record.projectRoot {
+        if preparation.saveRootDirectory, let workspaceID = record.workspaceID, let projectRoot = record.projectRoot {
             _ = store.send(.setWorkspaceRootDirectory(workspaceID: workspaceID, rootDirectory: projectRoot))
         }
         ToasttyLog.info("Created a task", category: .tasks, metadata: [
             "task_id": record.id.uuidString,
-            "workspace_id": workspaceID.uuidString,
+            "workspace_id": record.workspaceID?.uuidString ?? "",
             "agent": record.resolved?.agent ?? "",
             "attachments": String(record.attachments.count),
+            "routing": String(record.setup == .routing),
         ])
-        startSetup(taskID: record.id)
+        switch record.setup {
+        case .routing:
+            startRouting(taskID: record.id)
+        case .settingUp:
+            startSetup(taskID: record.id)
+        case .needsWorkspace, .setupFailed, .started:
+            break
+        }
         return record
     }
 
     // MARK: - Retry, delete
 
     /// Runs setup again for a task whose setup failed, from the last step
-    /// it finished.
+    /// it finished. A task that has no workspace or agent yet goes through
+    /// triage again.
     func retry(taskID: UUID) throws {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
         switch record.setup {
-        case .setupFailed:
+        case .setupFailed, .needsWorkspace:
+            break
+        case .routing, .settingUp:
+            throw TaskError("This task is still setting up.")
+        case .started:
+            throw TaskError("This task has already started.")
+        }
+        let needsRouting = record.resolved == nil || record.workspaceID == nil
+        do {
+            try records.save(id: taskID) { $0.setup = needsRouting ? .routing : .settingUp }
+        } catch {
+            throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+        }
+        if needsRouting {
+            startRouting(taskID: taskID)
+        } else {
+            startSetup(taskID: taskID)
+        }
+    }
+
+    /// Places a task that has not started in a workspace the user chose:
+    /// an open one, or a recently closed one, which Toastty opens again.
+    /// Triage then runs for anything else still missing, with the
+    /// workspace fixed.
+    func setWorkspace(taskID: UUID, choice: TaskWorkspaceChoice) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        switch record.setup {
+        case .routing, .needsWorkspace, .setupFailed:
             break
         case .settingUp:
             throw TaskError("This task is still setting up.")
         case .started:
             throw TaskError("This task has already started.")
         }
+        guard record.operation.taskSpace == nil else {
+            throw TaskError("This task already has a task space. Retry it, or delete it and create it again.")
+        }
+        let workspaceID: UUID
+        switch choice {
+        case .open(let requestedID):
+            guard store.state.workspacesByID[requestedID] != nil else {
+                throw TaskError("No open workspace has ID \(requestedID.uuidString).")
+            }
+            workspaceID = store.state.subspaceParentIDsByWorkspaceID()[requestedID] ?? requestedID
+        case .recent(let recentID):
+            workspaceID = try reopenRecentWorkspace(recentID)
+        }
         do {
-            try records.save(id: taskID) { $0.setup = .settingUp }
+            try records.save(id: taskID) {
+                $0.pinned.workspaceID = workspaceID
+                $0.workspaceID = workspaceID
+                $0.projectRoot = nil
+                $0.resolved = nil
+                $0.setup = .routing
+            }
         } catch {
             throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
         }
-        startSetup(taskID: taskID)
+        ToasttyLog.info("Placed a task in a chosen workspace", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+        ])
+        startRouting(taskID: taskID)
+    }
+
+    /// The workspaces a task can be placed in, for the picker: the open
+    /// top-level ones, then recently closed ones whose project is not open.
+    func workspaceChoices() -> TaskWorkspaceChoices {
+        let recent = (recentWorkspaces?.items ?? []).filter { openWorkspace(onRoot: $0.rootDirectory) == nil }
+        return TaskWorkspaceChoices(
+            open: topLevelWorkspaces().map { TaskWorkspaceChoices.Open(id: $0.id, title: $0.title) },
+            recent: recent
+        )
+    }
+
+    /// Opens a recently closed project again, or finds it open already,
+    /// and returns its workspace.
+    private func reopenRecentWorkspace(_ recentID: UUID) throws -> UUID {
+        guard let recent = recentWorkspaces?.item(id: recentID) else {
+            throw TaskError("No recently closed workspace has ID \(recentID.uuidString).")
+        }
+        if let open = openWorkspace(onRoot: recent.rootDirectory) {
+            return open.id
+        }
+        guard isDirectory(recent.rootDirectory) else {
+            throw TaskError("The directory \(recent.rootDirectory) no longer exists.")
+        }
+        guard let windowID = store.state.windows.first?.id else {
+            throw TaskError("Open a Toastty window, then try again.")
+        }
+        let workspaceID = UUID()
+        guard store.send(.reopenWorkspace(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: UUID(),
+            title: recent.title,
+            rootDirectory: recent.rootDirectory
+        )) else {
+            throw TaskError("Toastty could not open \(recent.title) again.")
+        }
+        flushLayout()
+        ToasttyLog.info("Reopened a recent workspace for a task", category: .tasks, metadata: [
+            "workspace_id": workspaceID.uuidString,
+            "recent_id": recentID.uuidString,
+        ])
+        return workspaceID
     }
 
     /// Removes a task and its attachments, and stops its setup. A task
@@ -382,6 +529,11 @@ final class TaskCoordinator {
     /// had already started, and a task space whose record is missing gets
     /// one rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
+        // Triage changes nothing outside the record, so a triage the last
+        // run did not finish simply runs again.
+        for record in records.records where record.setup == .routing && setupAttempts[record.id] == nil {
+            startRouting(taskID: record.id)
+        }
         for record in records.records where record.setup == .settingUp && setupAttempts[record.id] == nil {
             if record.operation.agentLaunch != nil {
                 saveOrDefer(taskID: record.id) { $0.setup = .started }
@@ -603,6 +755,323 @@ final class TaskCoordinator {
         ])
     }
 
+    // MARK: - Routing
+
+    /// Triage needs a command to run.
+    private func isTriageEnabled(_ config: TasksConfig) -> Bool {
+        triageRunner != nil && config.triage?.command != nil
+    }
+
+    private func startRouting(taskID: UUID) {
+        let attempt = UUID()
+        setupAttempts[taskID] = attempt
+        setupTasks.removeValue(forKey: taskID)?.cancel()
+        setupTasks[taskID] = Task { [weak self] in
+            await self?.route(taskID: taskID, attempt: attempt)
+        }
+    }
+
+    private func isRouting(taskID: UUID, attempt: UUID) -> Bool {
+        setupAttempts[taskID] == attempt
+            && records.record(id: taskID)?.setup == .routing
+            && Task.isCancelled == false
+    }
+
+    /// Fills what the caller left out, with triage when it is on and
+    /// `[defaults]` after it, then starts setup. Without a workspace, the
+    /// task waits for the user to pick one.
+    private func route(taskID: UUID, attempt: UUID) async {
+        guard isRouting(taskID: taskID, attempt: attempt), let record = records.record(id: taskID) else { return }
+        let config: TasksConfig
+        do {
+            config = try configLoader()
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .setupFailed(reason: "\(error.localizedDescription) Fix the file, then retry.")
+            }
+            return
+        }
+
+        // A workspace the caller or the user chose that has closed sends the
+        // task back to the user; triage never moves it somewhere else.
+        if let chosenID = record.workspaceID, store.state.workspacesByID[chosenID] == nil {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .needsWorkspace(reason: "The task's workspace closed. Pick a workspace.")
+            }
+            return
+        }
+        let fixedID = record.workspaceID
+        // Triage may choose only agents that take the model and effort the
+        // caller set.
+        let agents = triageAgents().filter {
+            (record.pinned.model == nil || $0.acceptsModel) && (record.pinned.effort == nil || $0.acceptsEffort)
+        }
+        var workspaces = await openWorkspaces(config: config)
+        guard isRouting(taskID: taskID, attempt: attempt) else { return }
+        let pinnedAgent = record.pinned.agent.flatMap { id in agents.first { $0.id == id } }
+        let missing = TaskTriage.missingFields(pinned: record.pinned, workspaceID: fixedID, pinnedAgent: pinnedAgent)
+
+        var answer: TaskTriage.Answer?
+        var triageFailure: String?
+        if missing.isEmpty == false, isTriageEnabled(config), let triage = config.triage, let triageRunner {
+            do {
+                let input = TaskTriage.Input(
+                    text: record.text,
+                    fileNames: record.attachments.map(\.displayName),
+                    fixed: record.pinned,
+                    fixedWorkspace: fixedID.flatMap { id in workspaces.first { $0.id == id } },
+                    workspaces: workspaces,
+                    agents: agents,
+                    guidelines: try triageGuidelines(triage)
+                )
+                ToasttyLog.info("Running triage", category: .tasks, metadata: [
+                    "task_id": taskID.uuidString,
+                    "missing": missing.map(\.rawValue).joined(separator: ","),
+                ])
+                switch await triageRunner.run(prompt: TaskTriage.prompt(for: input), triage: triage) {
+                case .success(let triageAnswer):
+                    answer = triageAnswer
+                case .failure(.cancelled):
+                    return
+                case .failure(let failure):
+                    triageFailure = failure.message
+                }
+            } catch {
+                triageFailure = "Triage failed: \(error.localizedDescription)"
+            }
+            guard isRouting(taskID: taskID, attempt: attempt) else { return }
+            // A workspace may have closed while triage ran.
+            workspaces = await openWorkspaces(config: config)
+            guard isRouting(taskID: taskID, attempt: attempt) else { return }
+        }
+        guard let current = records.record(id: taskID) else { return }
+        let stillFixedID = fixedID.flatMap { store.state.workspacesByID[$0] == nil ? nil : $0 }
+        let resolution = TaskTriage.resolve(
+            pinned: current.pinned,
+            workspaceID: stillFixedID,
+            answer: answer,
+            workspaces: workspaces,
+            agents: agents,
+            homeDirectoryPath: homeDirectoryPath
+        )
+        var notes = triageFailure.map { [$0] } ?? []
+        if resolution.rejected.isEmpty == false {
+            notes.append("Toastty ignored triage's " + resolution.rejected.joined(separator: "; ") + ".")
+        }
+        let triageNote = notes.isEmpty ? nil : notes.joined(separator: " ")
+        if let triageNote {
+            ToasttyLog.info("Triage did not answer in full", category: .tasks, metadata: [
+                "task_id": taskID.uuidString,
+                "note": triageNote,
+            ])
+        }
+        let title = current.titleSetByUser ? current.title : resolution.title ?? current.title
+        var slug = current.slug
+        if current.pinned.slug == nil, let triageSlug = resolution.slug, triageSlug != current.slug {
+            let taken = Set(records.records.lazy.filter { $0.id != taskID }.map(\.slug))
+            slug = TaskRecord.uniqueSlug(triageSlug, taken: taken)
+        }
+
+        let fixedClosed = fixedID != nil && stillFixedID == nil
+        guard fixedClosed == false, let workspaceID = resolution.workspaceID, store.state.workspacesByID[workspaceID] != nil else {
+            let reason: String
+            if fixedClosed {
+                reason = "The task's workspace closed. Pick a workspace."
+            } else if let triageFailure {
+                reason = "\(triageFailure) Pick a workspace."
+            } else if isTriageEnabled(config) {
+                reason = resolution.workspaceReason ?? "Triage did not choose an open workspace."
+            } else {
+                reason = "No workspace was named, and triage is off. Pick a workspace for this task."
+            }
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = triageNote
+                $0.setup = .needsWorkspace(reason: reason)
+            }
+            return
+        }
+
+        let projectRoot: (path: String, isNew: Bool)
+        var resolved: TaskFields
+        var finalNote = triageNote
+        do {
+            projectRoot = try resolvedProjectRoot(workspaceID: workspaceID)
+            guard resolution.agent ?? config.defaults.agent != nil else {
+                throw TaskError("Triage did not choose an agent, and [defaults] in ~/.toastty/tasks.toml names none. Set agent there, then retry.")
+            }
+            resolved = try resolvedFields(
+                pinned: TaskFields(
+                    workspaceID: current.pinned.workspaceID,
+                    agent: resolution.agent,
+                    model: resolution.model,
+                    effort: resolution.effort,
+                    prompt: resolution.prompt
+                ),
+                workspaceID: workspaceID,
+                defaults: config.defaults
+            )
+            let firstMessage = TaskPrompt.compose(
+                firstPrompt: resolved.prompt,
+                text: current.text,
+                attachmentPaths: current.attachments.map(\.path)
+            )
+            // The caller's own message was checked when the task was made, so
+            // only triage's prompt can push it over; the task starts without it.
+            if firstMessage.utf8.count > AgentLaunchService.maximumInitialPromptUTF8Count, current.pinned.prompt == nil {
+                resolved.prompt = nil
+                let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
+                finalNote = [triageNote, dropped].compactMap { $0 }.joined(separator: " ")
+            }
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = triageNote
+                $0.setup = .setupFailed(reason: error.localizedDescription)
+            }
+            return
+        }
+
+        do {
+            // Saved at once: setup reads these fields, and a crash after
+            // this point must not run triage a second time.
+            try records.save(id: taskID) {
+                $0.workspaceID = workspaceID
+                $0.projectRoot = projectRoot.path
+                $0.resolved = resolved
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = finalNote
+                $0.setup = .settingUp
+            }
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .setupFailed(reason: "Toastty could not save the task: \(error.localizedDescription)")
+            }
+            return
+        }
+        if projectRoot.isNew {
+            _ = store.send(.setWorkspaceRootDirectory(workspaceID: workspaceID, rootDirectory: projectRoot.path))
+        }
+        ToasttyLog.info("Routed a task", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+            "agent": resolved.agent ?? "",
+            "triage": String(answer != nil),
+        ])
+        startSetup(taskID: taskID)
+    }
+
+    private func routingEnded(taskID: UUID, attempt: UUID, _ body: (inout TaskRecord) -> Void) {
+        guard setupAttempts[taskID] == attempt else { return }
+        setupAttempts[taskID] = nil
+        setupTasks[taskID] = nil
+        saveOrDefer(taskID: taskID, body)
+    }
+
+    /// The installed agents that can take a task as their first message.
+    private func triageAgents() -> [TaskTriage.Agent] {
+        (launcher?.launchProfileSummaries() ?? [])
+            .filter { $0.isInstalled && $0.acceptsInitialPrompt }
+            .map(Self.triageAgent)
+    }
+
+    private static func triageAgent(_ profile: AgentLaunchProfileSummary) -> TaskTriage.Agent {
+        TaskTriage.Agent(
+            id: profile.profileID,
+            name: profile.displayName,
+            acceptsModel: profile.supportsModel,
+            acceptsEffort: profile.supportsReasoningEffort
+        )
+    }
+
+    /// The open top-level workspaces with a known directory, in window
+    /// order, each with the guidelines from its tasks.toml section. A root
+    /// that is not saved is looked up off the main actor; a workspace that
+    /// closed meanwhile is left out.
+    private func openWorkspaces(config: TasksConfig) async -> [TaskTriage.Workspace] {
+        let candidates = topLevelWorkspaces().map { workspace in
+            (
+                id: workspace.id,
+                title: workspace.title,
+                savedRoot: workspace.rootDirectory,
+                terminalDirectory: workspace.rootDirectory == nil
+                    ? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager)
+                    : nil
+            )
+        }
+        let roots = await Task.detached(priority: .userInitiated) {
+            candidates.map { candidate -> String? in
+                if let saved = candidate.savedRoot { return saved }
+                guard let directory = candidate.terminalDirectory else { return nil }
+                return RepositoryRootLocator.inferRepoRoot(from: directory) ?? directory
+            }
+        }.value
+        return zip(candidates, roots).compactMap { candidate, root in
+            guard let root, store.state.workspacesByID[candidate.id] != nil else { return nil }
+            return TaskTriage.Workspace(
+                id: candidate.id,
+                title: candidate.title,
+                rootDirectory: root,
+                guidelines: config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.guidelines
+            )
+        }
+    }
+
+    /// Whether an open top-level workspace is on `root`: its saved root, or
+    /// a first terminal at or inside it. No git lookup, so it is cheap
+    /// enough for the picker on the main actor.
+    private func openWorkspace(onRoot root: String) -> WorkspaceState? {
+        let target = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+        return topLevelWorkspaces().first { workspace in
+            guard let directory = workspace.rootDirectory ?? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) else {
+                return false
+            }
+            let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)
+            if workspace.rootDirectory != nil { return normalized == target }
+            return normalized == target || normalized.hasPrefix(target + "/")
+        }
+    }
+
+    private func topLevelWorkspaces() -> [WorkspaceState] {
+        store.state.windows
+            .flatMap(\.workspaceIDs)
+            .compactMap { store.state.workspacesByID[$0] }
+            .filter { $0.parentWorkspaceID == nil }
+    }
+
+    /// A workspace's saved root, else its first terminal's git root, else
+    /// that terminal's directory.
+    static func rootDirectory(of workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
+        if let root = workspace.rootDirectory { return root }
+        guard let directory = firstTerminalDirectory(in: workspace, fileManager: fileManager) else { return nil }
+        return RepositoryRootLocator.inferRepoRootBestEffort(from: directory).repoRoot ?? directory
+    }
+
+    /// `[triage] guidelines`, or the file `guidelines_file` names: an
+    /// absolute path, one under `~`, or one relative to `~/.toastty`.
+    private func triageGuidelines(_ triage: TasksConfig.Triage) throws -> String? {
+        if let guidelines = triage.guidelines { return guidelines }
+        guard let file = triage.guidelinesFile else { return nil }
+        var path = file
+        if path == "~" || path.hasPrefix("~/") {
+            path = homeDirectoryPath + path.dropFirst()
+        } else if path.hasPrefix("/") == false {
+            path = TasksConfigFile.fileURL(homeDirectoryPath: homeDirectoryPath)
+                .deletingLastPathComponent()
+                .appending(path: path)
+                .path(percentEncoded: false)
+        }
+        do {
+            let text = try String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        } catch {
+            throw TaskError("could not read guidelines_file \(path)")
+        }
+    }
+
     // MARK: - Resolution
 
     private func validatedClientRequestID(_ raw: String?) throws -> String? {
@@ -615,10 +1084,11 @@ final class TaskCoordinator {
     }
 
     /// The top-level workspace a task belongs to: the one asked for, or the
-    /// calling agent's own. A subspace resolves to its parent.
-    private func resolvedWorkspaceID(_ requested: UUID?, caller: TaskCaller) throws -> UUID {
+    /// calling agent's own. A subspace resolves to its parent. `nil` when
+    /// neither is known; triage or the user chooses it later.
+    private func resolvedWorkspaceID(_ requested: UUID?, caller: TaskCaller) throws -> UUID? {
         guard let candidate = requested ?? caller.workspaceID else {
-            throw TaskError("Name a workspace for the task with --workspace <id>, or create it from an agent session in that workspace.")
+            return nil
         }
         guard let workspace = store.state.workspacesByID[candidate] else {
             throw TaskError("No open workspace has ID \(candidate.uuidString).")
@@ -652,11 +1122,38 @@ final class TaskCoordinator {
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
     /// chosen agent is left out.
-    private func resolvedFields(pinned: TaskFields, workspaceID: UUID, defaults: TasksConfig.Defaults) throws -> TaskFields {
-        let profiles = launcher?.launchProfileSummaries() ?? []
+    private func resolvedFields(pinned: TaskFields, workspaceID: UUID?, defaults: TasksConfig.Defaults) throws -> TaskFields {
         guard let agent = pinned.agent ?? defaults.agent else {
             throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
         }
+        let profile = try checkedProfile(agent)
+        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt)
+        if let model = pinned.model {
+            try checkModel(model, profile: profile)
+            fields.model = model
+        } else if profile.supportsModel, pinned.agent == nil || pinned.agent == defaults.agent {
+            fields.model = defaults.model
+        }
+        if let effort = pinned.effort {
+            try checkEffort(effort, profile: profile)
+            fields.effort = effort
+        } else if profile.supportsReasoningEffort, pinned.agent == nil || pinned.agent == defaults.agent {
+            fields.effort = defaults.effort
+        }
+        return fields
+    }
+
+    /// Checks the agent, model and effort a caller set, before triage or
+    /// `[defaults]` add anything, and returns the agent's profile.
+    private func checkedPinnedFields(_ pinned: TaskFields) throws -> AgentLaunchProfileSummary? {
+        let profile = try pinned.agent.map(checkedProfile)
+        if let model = pinned.model { try checkModel(model, profile: profile) }
+        if let effort = pinned.effort { try checkEffort(effort, profile: profile) }
+        return profile
+    }
+
+    private func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
+        let profiles = launcher?.launchProfileSummaries() ?? []
         guard let profile = profiles.first(where: { $0.profileID == agent }) else {
             let available = profiles.map(\.profileID).joined(separator: ", ")
             throw TaskError("Agent \(agent) is not a profile in agents.toml\(available.isEmpty ? "" : " (available: \(available))").")
@@ -664,26 +1161,27 @@ final class TaskCoordinator {
         guard profile.acceptsInitialPrompt else {
             throw TaskError("Agent \(agent) cannot take the task as its first message.")
         }
-        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt)
-        if let model = pinned.model {
-            guard profile.supportsModel else { throw TaskError("Agent \(agent) does not accept a model.") }
-            guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
-                throw TaskError("A model must be one word with no spaces that does not start with a dash.")
-            }
-            fields.model = model
-        } else if profile.supportsModel, pinned.agent == nil || pinned.agent == defaults.agent {
-            fields.model = defaults.model
+        return profile
+    }
+
+    /// `profile` is `nil` when triage will choose the agent; then only the
+    /// value's form is checked.
+    private func checkModel(_ model: String, profile: AgentLaunchProfileSummary?) throws {
+        if let profile, profile.supportsModel == false {
+            throw TaskError("Agent \(profile.profileID) does not accept a model.")
         }
-        if let effort = pinned.effort {
-            guard profile.supportsReasoningEffort else { throw TaskError("Agent \(agent) does not accept an effort.") }
-            guard RemoteSessionStartPolicy.isValidSelectionValue(effort, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength) else {
-                throw TaskError("An effort must be one word with no spaces that does not start with a dash.")
-            }
-            fields.effort = effort
-        } else if profile.supportsReasoningEffort, pinned.agent == nil || pinned.agent == defaults.agent {
-            fields.effort = defaults.effort
+        guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
+            throw TaskError("A model must be one word with no spaces that does not start with a dash.")
         }
-        return fields
+    }
+
+    private func checkEffort(_ effort: String, profile: AgentLaunchProfileSummary?) throws {
+        if let profile, profile.supportsReasoningEffort == false {
+            throw TaskError("Agent \(profile.profileID) does not accept an effort.")
+        }
+        guard RemoteSessionStartPolicy.isValidSelectionValue(effort, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength) else {
+            throw TaskError("An effort must be one word with no spaces that does not start with a dash.")
+        }
     }
 
     // MARK: - Attachments

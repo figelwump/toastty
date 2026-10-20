@@ -97,4 +97,34 @@ struct ToasttyCLITaskTests {
             #expect(args == entry.args)
         }
     }
+
+    @Test
+    func taskSetWorkspaceTakesAnOpenOrARecentWorkspace() throws {
+        let taskID = UUID().uuidString
+        let workspaceID = UUID().uuidString
+        let open = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--workspace", workspaceID], environment: [:])
+        #expect(open.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "workspace": .string(workspaceID)]
+        ))
+        let recent = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--recent", workspaceID], environment: [:])
+        #expect(recent.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "recentWorkspace": .string(workspaceID)]
+        ))
+        let choices = try ToasttyCLI.parse(arguments: ["task", "workspace-choices"], environment: [:])
+        #expect(choices.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
+
+        for arguments in [
+            ["task", "set-workspace", taskID],
+            ["task", "set-workspace", taskID, "--workspace", workspaceID, "--recent", workspaceID],
+            ["task", "set-workspace", taskID, "--workspace", "toastty"],
+        ] {
+            #expect(throws: ToasttyCLIError.self) {
+                _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+            }
+        }
+    }
 }
