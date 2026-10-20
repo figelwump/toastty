@@ -62,6 +62,34 @@ final class ToasttyPreviewTests: XCTestCase {
         XCTAssertTrue(task.callbacks.isEmpty)
     }
 
+    func testStoppedFetchHoldsItsSlotUntilItEnds() async throws {
+        let mac = HeldFetches()
+        let loader = ToasttyHTMLResourceLoader(
+            document: .init(title: "Page", sourcePath: "/project/index.html", html: "", revision: "1"),
+            target: .panel(workspaceID: UUID(), panelID: UUID()), resource: { request in
+                await mac.hold(request.relativePath)
+                return .init(mimeType: "image/png", data: Data())
+            })
+        let webView = WKWebView()
+        let limit = ToasttyHTMLPreviewPolicy.maximumConcurrentResourceFetches
+        let tasks = (0...limit).map { index in
+            PreviewSchemeTask(request: URLRequest(url: loader.entryURL.deletingLastPathComponent()
+                .appendingPathComponent("shot-\(index).png")))
+        }
+        defer { loader.cancelAll() }
+        for task in tasks { loader.webView(webView, start: task) }
+        try await mac.waitForStarts(limit)
+        // The stopped fetch still occupies the Mac, so the queued one waits.
+        loader.webView(webView, stop: tasks[0])
+        try await Task.sleep(for: .milliseconds(200))
+        let startedWhileStopping = await mac.started
+        XCTAssertEqual(Set(startedWhileStopping), Set((0..<limit).map { "shot-\($0).png" }))
+        await mac.release("shot-0.png")
+        try await mac.waitForStarts(limit + 1)
+        XCTAssertTrue(tasks[0].callbacks.isEmpty)
+        await mac.releaseAll()
+    }
+
     func testUnsupportedFileAndOlderHostHaveDifferentRecoveryGuidance() {
         XCTAssertFalse(ToasttyPreviewPage.message(for: RemotePreviewError.unsupported).contains("Update"))
         XCTAssertTrue(ToasttyPreviewPage.message(for: GatewayFailure.operationCompatibility(
@@ -267,6 +295,46 @@ final class ToasttyPreviewTests: XCTestCase {
                 default: throw RemotePreviewError.denied
                 }
             })
+        try await withLoadedHTMLPreview(loader) { webView in
+            try await assertPolicy(in: webView)
+        }
+    }
+
+    func testHTMLPreviewLoadsEveryImageWhenTheMacAdmitsOnlyAFewRequests() async throws {
+        // A verification report: more images than both the Mac's admission
+        // limit and the loader's pending-request limit.
+        let imageCount = 40
+        let images = (0..<imageCount).map { "<img src=\"shots/shot-\($0).png\" width=\"20\" height=\"20\">" }
+        let document = RemotePreviewHTML(title: "Report", sourcePath: "/project/report/index.html",
+            html: "<!doctype html><html><body>\(images.joined())</body></html>", revision: "1")
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }.pngData())
+        let mac = PreviewAdmissionModel(slots: 8)
+        let loader = ToasttyHTMLResourceLoader(document: document,
+            target: .panel(workspaceID: UUID(), panelID: UUID()), resource: { request in
+                guard request.relativePath.hasPrefix("shots/") else { throw RemotePreviewError.missing }
+                // The Mac holds its slot while it reads and encodes the file.
+                try await mac.serve(for: .milliseconds(40))
+                return .init(mimeType: "image/png", data: png)
+            })
+        try await withLoadedHTMLPreview(loader) { webView in
+            // `didFinish` follows the load event, so every image has loaded or failed.
+            let loaded = try await webView.callAsyncJavaScript(
+                "return [...document.images].filter(image => image.complete && image.naturalWidth > 0).length",
+                arguments: [:], in: nil, contentWorld: .page) as? Int
+            let refused = await mac.refused
+            XCTAssertEqual(loaded, imageCount, "Mac refused \(refused) image requests as busy")
+            XCTAssertEqual(refused, 0)
+        }
+    }
+
+    /// Loads the loader's page in a visible window and runs `body` once the
+    /// page and its subresources finish loading.
+    private func withLoadedHTMLPreview(
+        _ loader: ToasttyHTMLResourceLoader, _ body: (WKWebView) async throws -> Void
+    ) async throws {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.setURLSchemeHandler(loader, forURLScheme: ToasttyHTMLPreviewPolicy.scheme)
@@ -298,16 +366,20 @@ final class ToasttyPreviewTests: XCTestCase {
         webView.load(URLRequest(url: loader.entryURL))
         // A cold simulator can spend more than 15 seconds starting WebContent
         // before delivering any navigation callbacks. This includes process startup;
-        // the policy probes below retain their own shorter deadlines.
+        // the probes in `body` retain their own shorter deadlines.
         let loadResult = await XCTWaiter.fulfillment(of: [loaded], timeout: 60)
         guard loadResult == .completed else {
             XCTFail("Local HTML load wait ended with \(loadResult): \(probe.diagnostics(for: webView))")
             return
         }
         // A terminal navigation error has already recorded its failure. Do not
-        // turn an unavailable document into a cascade of policy assertion errors.
+        // turn an unavailable document into a cascade of assertion errors.
         guard probe.didFinishLoading else { return }
         print("HTML preview loaded: \(probe.diagnostics(for: webView))")
+        try await body(webView)
+    }
+
+    private func assertPolicy(in webView: WKWebView) async throws {
         // Navigation completion does not wait for fetch rejection or queued
         // CSP events. Bound the wait, then inspect even a partial result so a
         // missing policy violation remains a specific assertion failure.
@@ -439,6 +511,52 @@ private final class PreviewSchemeTask: NSObject, @MainActor WKURLSchemeTask {
     func didReceive(_ data: Data) { callbacks.append("data") }
     func didFinish() { callbacks.append("finish") }
     func didFailWithError(_ error: any Error) { callbacks.append("error") }
+}
+
+/// The Mac gateway's preview admission: it serves a fixed number of preview
+/// requests at once and refuses the rest as busy.
+private actor PreviewAdmissionModel {
+    let slots: Int
+    private var active = 0
+    private(set) var refused = 0
+    init(slots: Int) { self.slots = slots }
+
+    func serve(for duration: Duration) async throws {
+        guard active < slots else {
+            refused += 1
+            throw RemotePreviewError.busy
+        }
+        active += 1
+        defer { active -= 1 }
+        try await Task.sleep(for: duration)
+    }
+}
+
+/// Fetches that run until the test releases them, ignoring cancellation, as a
+/// request already sent to the Mac does.
+private actor HeldFetches {
+    private(set) var started: [String] = []
+    private var held: [String: CheckedContinuation<Void, Never>] = [:]
+
+    func hold(_ path: String) async {
+        started.append(path)
+        await withCheckedContinuation { held[path] = $0 }
+    }
+    func release(_ path: String) { held.removeValue(forKey: path)?.resume() }
+    func releaseAll() {
+        for fetch in held.values { fetch.resume() }
+        held.removeAll()
+    }
+    func waitForStarts(_ count: Int) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while started.count < count {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("Expected \(count) fetches; started \(started)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }
 
 private actor PreviewLoadCounter {
