@@ -94,6 +94,7 @@ def main():
     git('-c', 'user.name=Check', '-c', 'user.email=check@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'upstream', cwd=seed)
     git('push', '-q', 'origin', 'main', cwd=seed)
     remote_tip = git('rev-parse', 'HEAD', cwd=seed)
+    project_head = git('rev-parse', 'HEAD', cwd=repository)
     (repository / '.git/info/exclude').write_text('.toastty/\n.codex\n.claude\n')
     toastty_dir = repository / '.toastty'
     toastty_dir.mkdir()
@@ -214,7 +215,13 @@ def main():
         require(path.parent == parent and git('rev-parse', 'HEAD', cwd=path) == remote_tip, f'Worktree is not at the tip: {path}')
         require(git('rev-parse', '--abbrev-ref', 'HEAD', cwd=path) == worktree['branch'], 'Worktree is on the wrong branch')
         require((path / 'hook-ran').is_file(), 'create_hook did not run in the worktree')
-        require(git('status', '--porcelain', cwd=repository) == '', 'The project checkout changed')
+        # The move must leave the project checkout where it was: same branch,
+        # same commit, no tracked changes. Untracked files are recorded.
+        evidence['projectUntracked'] = git('status', '--porcelain', '--untracked-files=all', cwd=repository)
+        require(git('rev-parse', '--abbrev-ref', 'HEAD', cwd=repository) == 'main', 'The project checkout left main')
+        require(git('rev-parse', 'HEAD', cwd=repository) == project_head, 'The project checkout moved')
+        require(git('status', '--porcelain', '--untracked-files=no', cwd=repository) == '',
+                f"The project checkout has changes: {git('status', '--porcelain', cwd=repository)}")
 
         snapshot = instance.query('workspace.snapshot', workspaceID=task_space)
         panels = panel_ids(snapshot)
