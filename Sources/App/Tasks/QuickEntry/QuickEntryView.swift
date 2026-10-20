@@ -25,6 +25,7 @@ struct QuickEntryView: View {
             QuickEntryTextEditor(
                 text: $model.text,
                 placeholder: "What needs doing?",
+                isEditable: model.isEditable,
                 focusRequestID: model.focusRequestID,
                 onSubmit: model.submit,
                 onCancel: model.cancel,
@@ -71,6 +72,7 @@ struct QuickEntryView: View {
                     AttachmentChip(attachment: attachment) {
                         model.removeAttachment(id: attachment.id)
                     }
+                    .disabled(model.isEditable == false)
                 }
                 if model.pendingAttachmentCount > 0 {
                     ProgressView()
@@ -89,7 +91,7 @@ struct QuickEntryView: View {
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(FooterButtonStyle())
-            .disabled(model.canAttachMore == false)
+            .disabled(model.canAttachMore == false || model.isEditable == false)
             .help("Attach files. You can also paste an image with ⌘V or drop files on the panel.")
 
             Menu {
@@ -106,6 +108,7 @@ struct QuickEntryView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .disabled(model.isEditable == false)
             .accessibilityIdentifier("quick-entry.workspace")
 
             Menu {
@@ -122,6 +125,7 @@ struct QuickEntryView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .disabled(model.isEditable == false)
             .accessibilityIdentifier("quick-entry.agent")
 
             Spacer(minLength: 8)

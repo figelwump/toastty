@@ -103,8 +103,23 @@ def main():
     instance = Instance(binary, environment, socket_path, runtime_home, artifacts / 'remote-quick-entry-check-app.log')
     pid = instance.process.pid
 
+    def listed_windows():
+        """The app's windows, or None when Accessibility could not list them."""
+        result = subprocess.run([str(driver), 'windows', str(pid)], capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            step('windows unreadable', error=result.stderr.strip())
+            return None
+        return json.loads(result.stdout)
+
     def panel_windows():
-        return [w for w in json.loads(drive('windows', pid)) if w['identifier'] == PANEL]
+        listed = listed_windows()
+        return [w for w in listed or [] if w['identifier'] == PANEL]
+
+    def panel_closed():
+        # Only a successful listing that still shows the main window proves
+        # the panel is gone; an empty or failed read proves nothing.
+        listed = listed_windows()
+        return listed is not None and len(listed) > 0 and all(w['identifier'] != PANEL for w in listed)
 
     def open_panel_from_finder():
         drive('activate', FINDER)
@@ -138,7 +153,7 @@ def main():
         drive('key', KEY_RETURN, 'cmd')
 
         task = wait_for('the created task', lambda: next(iter(run_cli('task', 'list')['tasks']), None), timeout=20)
-        wait_for('the panel to close', lambda: not panel_windows(), timeout=10)
+        wait_for('the panel to close', panel_closed, timeout=10)
         front = drive('frontmost')
         require(front == FINDER, f'Focus did not go back to Finder: {front!r}')
         task = wait_for('setup to end', lambda: (lambda t: t if t['setup']['state'] != 'settingUp' else None)(
@@ -160,7 +175,7 @@ def main():
         drive('type', 'Never mind')
         wait_for('the typed text', lambda: drive('value', pid, 'quick-entry.text') == 'Never mind', timeout=10)
         drive('key', KEY_ESCAPE)
-        wait_for('the panel to close', lambda: not panel_windows(), timeout=10)
+        wait_for('the panel to close', panel_closed, timeout=10)
         tasks = run_cli('task', 'list')['tasks']
         require(len(tasks) == 1, f'Esc created a task: {tasks}')
         require(drive('frontmost') == FINDER, 'Focus did not go back to Finder after Esc')

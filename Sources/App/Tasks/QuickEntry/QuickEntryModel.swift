@@ -78,8 +78,18 @@ final class QuickEntryModel: ObservableObject {
         apply(prefill)
     }
 
+    /// True once the panel has closed. Copies still running then throw
+    /// their file away, and the last one removes the staging folder.
+    private(set) var isClosed = false
+
+    /// False while a task is being created from this draft, so what the
+    /// user sees is what gets saved.
+    var isEditable: Bool {
+        isSubmitting == false && isClosed == false
+    }
+
     var canSubmit: Bool {
-        isSubmitting == false
+        isEditable
             && pendingAttachmentCount == 0
             && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
@@ -102,6 +112,7 @@ final class QuickEntryModel: ObservableObject {
 
     /// Adds what a later opener asks for while the panel is already open.
     func apply(_ prefill: QuickEntryPrefill) {
+        guard isEditable else { return }
         if let workspaceID = prefill.workspaceID {
             self.workspaceID = workspaceID
         }
@@ -116,9 +127,24 @@ final class QuickEntryModel: ObservableObject {
         onCancel()
     }
 
+    /// Ends the draft when the panel closes. The staging folder goes once no
+    /// copy is still writing into it; after a create, `task.create` has
+    /// already made its own copies.
+    func close() {
+        isClosed = true
+        removeStagingDirectoryIfIdle()
+    }
+
+    /// For app termination: removes the staging folder at once.
+    func removeStagingDirectoryNow() {
+        isClosed = true
+        try? FileManager.default.removeItem(at: stagingDirectoryURL)
+    }
+
     func removeAttachment(id: Attachment.ID) {
-        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
+        guard isEditable, let index = attachments.firstIndex(where: { $0.id == id }) else { return }
         let removed = attachments.remove(at: index)
+        usedFileNames.remove(removed.url.lastPathComponent)
         try? FileManager.default.removeItem(at: removed.url)
     }
 
@@ -153,12 +179,12 @@ final class QuickEntryModel: ObservableObject {
     /// skipped with a message; `task.create` checks size and type again.
     func attachFiles(_ urls: [URL]) {
         for url in urls {
-            guard reserveAttachmentSlot() else { return }
+            guard beginAttachment() else { return }
             let name = reserveFileName(url.lastPathComponent)
             let destination = stagingDirectoryURL.appending(path: name, directoryHint: .notDirectory)
             let directory = stagingDirectoryURL
             Task { @MainActor in
-                let result: Result<Void, any Error> = await Task.detached(priority: .userInitiated) {
+                let result: Result<URL, any Error> = await Task.detached(priority: .userInitiated) {
                     Result {
                         var isDirectory: ObjCBool = false
                         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false), isDirectory: &isDirectory),
@@ -167,19 +193,20 @@ final class QuickEntryModel: ObservableObject {
                         }
                         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                         try FileManager.default.copyItem(at: url, to: destination)
+                        return destination
                     }
                 }.value
-                finishAttachment(result, url: destination, displayName: url.lastPathComponent)
+                finishAttachment(result, displayName: url.lastPathComponent, reservedName: name)
             }
         }
     }
 
     /// Image data from the pasteboard or a drag, saved as a PNG.
     func attachImageData(_ data: Data, named name: String = "Pasted image.png") {
-        guard reserveAttachmentSlot() else { return }
+        guard beginAttachment() else { return }
         let fileName = reserveFileName(name)
         let destination = stagingDirectoryURL.appending(path: fileName, directoryHint: .notDirectory)
-        let result = Result {
+        let result = Result { () -> URL in
             guard let image = NSImage(data: data),
                   let tiff = image.tiffRepresentation,
                   let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
@@ -187,19 +214,21 @@ final class QuickEntryModel: ObservableObject {
             }
             try FileManager.default.createDirectory(at: stagingDirectoryURL, withIntermediateDirectories: true)
             try png.write(to: destination)
+            return destination
         }
-        finishAttachment(result, url: destination, displayName: fileName)
+        finishAttachment(result, displayName: fileName, reservedName: fileName)
     }
 
     func attachText(_ text: String, named name: String) {
-        guard reserveAttachmentSlot() else { return }
+        guard beginAttachment() else { return }
         let fileName = reserveFileName(name)
         let destination = stagingDirectoryURL.appending(path: fileName, directoryHint: .notDirectory)
-        let result = Result {
+        let result = Result { () -> URL in
             try FileManager.default.createDirectory(at: stagingDirectoryURL, withIntermediateDirectories: true)
             try Data(text.utf8).write(to: destination)
+            return destination
         }
-        finishAttachment(result, url: destination, displayName: fileName)
+        finishAttachment(result, displayName: fileName, reservedName: fileName)
     }
 
     /// The pasteboard types a drop onto the panel can use.
@@ -210,6 +239,7 @@ final class QuickEntryModel: ObservableObject {
     /// holds neither, or holds text, so a normal paste can run instead.
     @discardableResult
     func pasteAttachments(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable else { return false }
         if attachFileURLs(from: pasteboard) {
             return true
         }
@@ -222,6 +252,7 @@ final class QuickEntryModel: ObservableObject {
     /// Handles a drop: files, promised files and images are attached, and a
     /// web link is added to the text. Returns false when nothing was used.
     func handleDrop(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable else { return false }
         if attachFileURLs(from: pasteboard) {
             return true
         }
@@ -244,6 +275,25 @@ final class QuickEntryModel: ObservableObject {
         return false
     }
 
+    /// A promised file. It holds an attachment slot from the drop until the
+    /// sender has written it, so Create Task waits for it.
+    struct PromisedAttachment {
+        /// Where the sender writes; a folder of its own inside staging.
+        let directoryURL: URL
+    }
+
+    func beginPromisedAttachment() -> PromisedAttachment? {
+        guard beginAttachment() else { return nil }
+        return PromisedAttachment(
+            directoryURL: stagingDirectoryURL.appending(path: "promised-\(UUID().uuidString)", directoryHint: .isDirectory)
+        )
+    }
+
+    func finishPromisedAttachment(_ result: Result<URL, any Error>) {
+        let displayName = (try? result.get().lastPathComponent) ?? "file"
+        finishAttachment(result, displayName: displayName, reservedName: nil)
+    }
+
     private func attachFileURLs(from pasteboard: NSPasteboard) -> Bool {
         let fileURLs = pasteboard.readObjects(
             forClasses: [NSURL.self],
@@ -264,30 +314,61 @@ final class QuickEntryModel: ObservableObject {
     }
 
     private func receivePromisedFiles(_ receivers: [NSFilePromiseReceiver]) {
-        // The sender writes into a folder of its own inside staging; the
-        // file is then copied up like any other attachment.
-        let promisesDirectory = stagingDirectoryURL.appending(path: "promised-\(UUID().uuidString)", directoryHint: .isDirectory)
-        do {
-            try FileManager.default.createDirectory(at: promisesDirectory, withIntermediateDirectories: true)
-        } catch {
-            errorMessage = error.localizedDescription
-            return
-        }
         for receiver in receivers {
+            // One slot per promised file. A promise that names no files yet
+            // holds one slot, and any extra file it delivers is taken only
+            // while there is room.
+            var promises: [PromisedAttachment] = []
+            for _ in 0..<max(1, receiver.fileNames.count) {
+                guard let promise = beginPromisedAttachment() else { break }
+                promises.append(promise)
+            }
+            guard let directoryURL = promises.first?.directoryURL else { return }
+            do {
+                try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            } catch {
+                for _ in promises {
+                    finishPromisedAttachment(.failure(error))
+                }
+                continue
+            }
+            let tracker = PromiseDeliveryTracker(reservedSlots: promises.count)
             receiver.receivePromisedFiles(
-                atDestination: promisesDirectory,
+                atDestination: directoryURL,
                 options: [:],
                 operationQueue: Self.promiseQueue
-            ) { [weak self] url, error in
+            ) { url, error in
                 Task { @MainActor in
-                    guard let self else { return }
-                    if let error {
-                        self.errorMessage = error.localizedDescription
-                    } else {
-                        self.attachFiles([url])
+                    let result: Result<URL, any Error> = error.map { .failure($0) } ?? .success(url)
+                    if tracker.takeReservedSlot() {
+                        self.finishPromisedAttachment(result)
+                    } else if case .success(let url) = result {
+                        // An extra file beyond the slots held: attach it only
+                        // if there is still room.
+                        if self.beginAttachment() {
+                            self.finishPromisedAttachment(.success(url))
+                        } else {
+                            try? FileManager.default.removeItem(at: url)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// Counts the deliveries of one promise against the slots it holds.
+    @MainActor
+    private final class PromiseDeliveryTracker {
+        private var remaining: Int
+
+        init(reservedSlots: Int) {
+            remaining = reservedSlots
+        }
+
+        func takeReservedSlot() -> Bool {
+            guard remaining > 0 else { return false }
+            remaining -= 1
+            return true
         }
     }
 
@@ -305,7 +386,9 @@ final class QuickEntryModel: ObservableObject {
         }
     }
 
-    private func reserveAttachmentSlot() -> Bool {
+    /// Holds an attachment slot until ``finishAttachment`` releases it.
+    private func beginAttachment() -> Bool {
+        guard isEditable else { return false }
         guard canAttachMore else {
             errorMessage = "Attach at most \(TaskRecord.maximumAttachmentCount) files."
             return false
@@ -314,16 +397,28 @@ final class QuickEntryModel: ObservableObject {
         return true
     }
 
-    private func finishAttachment(_ result: Result<Void, any Error>, url: URL, displayName: String) {
+    private func finishAttachment(_ result: Result<URL, any Error>, displayName: String, reservedName: String?) {
         pendingAttachmentCount -= 1
+        guard isClosed == false else {
+            // The draft is gone; the folder removal below takes this file.
+            removeStagingDirectoryIfIdle()
+            return
+        }
         switch result {
-        case .success:
+        case .success(let url):
             let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
             attachments.append(Attachment(url: url, displayName: displayName, isImage: isImage))
         case .failure(let error):
-            usedFileNames.remove(url.lastPathComponent)
+            if let reservedName {
+                usedFileNames.remove(reservedName)
+            }
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func removeStagingDirectoryIfIdle() {
+        guard isClosed, pendingAttachmentCount == 0 else { return }
+        try? FileManager.default.removeItem(at: stagingDirectoryURL)
     }
 
     /// Staged names must differ, since two files named `Screenshot.png`

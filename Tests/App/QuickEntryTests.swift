@@ -16,7 +16,7 @@ struct QuickEntryTests {
         let stagingRoot: URL
         let controller: QuickEntryController
 
-        init() throws {
+        init(create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil) throws {
             let fixture = try TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
             let stagingRoot = fixture.root.appendingPathComponent("quick-entry-staging", isDirectory: true)
@@ -25,7 +25,7 @@ struct QuickEntryTests {
             controller = QuickEntryController(
                 store: fixture.store,
                 agentCatalogProvider: TestAgentCatalogProvider(),
-                create: { request in
+                create: create ?? { request in
                     try await fixture.coordinator.create(request, caller: .quickEntry)
                 },
                 configLoader: { [unowned fixture] in
@@ -75,6 +75,12 @@ struct QuickEntryTests {
         var stagedDirectories: [URL] {
             (try? FileManager.default.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil)) ?? []
         }
+    }
+
+    /// A create held open by the test.
+    @MainActor
+    final class PendingCreate {
+        var continuation: CheckedContinuation<TaskRecord, any Error>?
     }
 
     static func pngData() throws -> Data {
@@ -238,7 +244,115 @@ struct QuickEntryTests {
         harness.controller.dismiss()
     }
 
-    @Test func reloadReadsTheShortcutAndKeepsTheDefaultWhenTheFileIsBroken() throws {
+    @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        let model = try #require(harness.controller.model)
+        try harness.type("With a screenshot")
+
+        let promise = try #require(model.beginPromisedAttachment())
+        #expect(model.canSubmit == false)
+        try harness.pressCommandReturn()
+        #expect(harness.controller.isPresented)
+        #expect(fixture.coordinator.records.records.isEmpty)
+
+        try FileManager.default.createDirectory(at: promise.directoryURL, withIntermediateDirectories: true)
+        let delivered = promise.directoryURL.appendingPathComponent("Screenshot.png")
+        try Self.pngData().write(to: delivered)
+        model.finishPromisedAttachment(.success(delivered))
+        #expect(model.attachments.map(\.displayName) == ["Screenshot.png"])
+        #expect(model.canSubmit)
+
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        #expect(fixture.coordinator.records.records.first?.attachments.map(\.displayName) == ["Screenshot.png"])
+    }
+
+    @Test func promisesCountAgainstTheAttachmentLimit() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        for index in 0..<(TaskRecord.maximumAttachmentCount - 1) {
+            model.attachText("\(index)", named: "note.txt")
+        }
+        #expect(model.beginPromisedAttachment() != nil)
+        #expect(model.beginPromisedAttachment() == nil)
+        #expect(model.errorMessage == "Attach at most \(TaskRecord.maximumAttachmentCount) files.")
+        harness.controller.dismiss()
+    }
+
+    @Test func aCopyThatFinishesAfterEscIsThrownAwayWithTheStagingFolder() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        model.attachText("kept until the copy ends", named: "notes.txt")
+        let promise = try #require(model.beginPromisedAttachment())
+        try FileManager.default.createDirectory(at: promise.directoryURL, withIntermediateDirectories: true)
+
+        try harness.textView().cancelOperation(nil)
+        #expect(harness.controller.isPresented == false)
+        // A copy is still writing, so the folder stays until it ends.
+        #expect(harness.stagedDirectories.count == 1)
+
+        let late = promise.directoryURL.appendingPathComponent("late.png")
+        try Self.pngData().write(to: late)
+        model.finishPromisedAttachment(.success(late))
+        #expect(model.attachments.map(\.displayName) == ["notes.txt"])
+        #expect(harness.stagedDirectories.isEmpty)
+        #expect(harness.fixture.coordinator.records.records.isEmpty)
+    }
+
+    @Test func theDraftIsLockedWhileTheTaskIsBeingCreated() async throws {
+        let pending = PendingCreate()
+        let harness = try Harness(create: { _ in
+            try await withCheckedThrowingContinuation { pending.continuation = $0 }
+        })
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        try harness.type("Locked while saving")
+        model.attachText("first", named: "a.txt")
+        let attachment = try #require(model.attachments.first)
+
+        try harness.pressCommandReturn()
+        await harness.fixture.waitUntil("the create starts") { pending.continuation != nil }
+        #expect(model.isSubmitting)
+        #expect(try harness.textView().isEditable == false)
+        model.attachText("second", named: "b.txt")
+        model.removeAttachment(id: attachment.id)
+        try harness.textView().cancelOperation(nil)
+        #expect(model.attachments.map(\.displayName) == ["a.txt"])
+        #expect(FileManager.default.fileExists(atPath: attachment.url.path(percentEncoded: false)))
+        #expect(harness.controller.isPresented)
+
+        pending.continuation?.resume(throwing: TaskError("Toastty could not save the task."))
+        await harness.fixture.waitUntil("the create ends") { model.isSubmitting == false }
+        #expect(model.isEditable)
+        #expect(try harness.textView().isEditable)
+        #expect(model.errorMessage == "Toastty could not save the task.")
+        harness.controller.dismiss()
+    }
+
+    @Test func quittingWithThePanelOpenRemovesTheStagedFiles() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        harness.controller.model?.attachText("draft", named: "notes.txt")
+        #expect(harness.stagedDirectories.count == 1)
+
+        harness.controller.handleTermination()
+        #expect(harness.stagedDirectories.isEmpty)
+        harness.controller.dismiss()
+    }
+
+    @Test func aBrokenFileAtLaunchUsesTheDefaultShortcut() throws {
+        let harness = try Harness()
+        harness.fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
+        let message = try #require(harness.controller.reloadShortcut())
+        #expect(message.contains("⌥⇧T until the file is fixed"))
+        #expect(harness.controller.shortcut == .default)
+    }
+
+    @Test func aBrokenFileOnReloadKeepsTheShortcutInUse() throws {
         let harness = try Harness()
         let fixture = harness.fixture
         fixture.config.quickEntry = .init(shortcut: try QuickEntryShortcut.parse("ctrl+opt+space"))
@@ -249,10 +363,11 @@ struct QuickEntryTests {
         #expect(harness.controller.reloadShortcut() == nil)
         #expect(harness.controller.shortcut == nil)
 
-        fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
+        // A typo elsewhere in the file must not turn the shortcut back on.
+        fixture.configError = TasksConfigParseError(line: 9, message: "[defaults] agent is empty")
         let message = try #require(harness.controller.reloadShortcut())
-        #expect(message.contains("⌥⇧T until the file is fixed"))
-        #expect(harness.controller.shortcut == .default)
+        #expect(message.contains("stays off until the file is fixed"))
+        #expect(harness.controller.shortcut == nil)
     }
 }
 

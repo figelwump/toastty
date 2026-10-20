@@ -30,6 +30,18 @@ func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
 }
 
+/// Like `attribute`, but an Accessibility failure ends the run instead of
+/// reading as "no value", so a failed read cannot pass for a closed panel.
+func checkedAttribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+    var value: AnyObject?
+    let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+    switch error {
+    case .success: return value
+    case .noValue, .attributeUnsupported: return nil
+    default: fail("Accessibility could not read \(name): error \(error.rawValue)")
+    }
+}
+
 func children(_ element: AXUIElement) -> [AXUIElement] {
     (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
 }
@@ -131,9 +143,10 @@ case "type":
 case "windows":
     guard arguments.count == 2 else { fail("windows <pid>") }
     let app = application(arguments[1])
-    let listed = windows(of: app).map { window -> [String: String] in
+    let windowList = (checkedAttribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+    let listed = windowList.map { window -> [String: String] in
         [
-            "identifier": identifier(window) ?? "",
+            "identifier": checkedAttribute(window, "AXIdentifier") as? String ?? "",
             "title": attribute(window, kAXTitleAttribute) as? String ?? "",
             "subrole": attribute(window, kAXSubroleAttribute) as? String ?? "",
             "focused": (attribute(window, kAXFocusedAttribute) as? Bool) == true ? "1" : "0",

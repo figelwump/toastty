@@ -7,6 +7,7 @@ import SwiftUI
 struct QuickEntryTextEditor: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
+    let isEditable: Bool
     let focusRequestID: Int
     let onSubmit: () -> Void
     let onCancel: () -> Void
@@ -68,6 +69,7 @@ struct QuickEntryTextEditor: NSViewRepresentable {
 
     private func configure(_ textView: QuickEntryNSTextView) {
         textView.placeholder = placeholder
+        textView.isEditable = isEditable
         textView.onSubmit = onSubmit
         textView.onCancel = onCancel
         textView.onPasteAttachments = onPasteAttachments
@@ -103,6 +105,12 @@ final class QuickEntryNSTextView: NSTextView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if Self.isReturn(event), modifiers.contains(.command), hasMarkedText() == false {
             onSubmit()
+            return
+        }
+        // Handled here as well as in cancelOperation(_:), because a key
+        // binding can turn Esc into word completion instead.
+        if event.keyCode == 53, modifiers.isEmpty, hasMarkedText() == false {
+            onCancel()
             return
         }
         super.keyDown(with: event)

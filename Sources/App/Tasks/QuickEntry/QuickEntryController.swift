@@ -21,7 +21,10 @@ final class QuickEntryController: ObservableObject {
 
     private(set) var panel: QuickEntryPanel?
     private(set) var model: QuickEntryModel?
-    private var stagingDirectoryURL: URL?
+    /// Whether `tasks.toml` has been read without error since launch.
+    private var hasLoadedShortcut = false
+    // Removed in deinit, which is not main-actor isolated.
+    nonisolated(unsafe) private var terminationObserver: (any NSObjectProtocol)?
     /// The app in front when the panel opened, if not Toastty.
     private var previousApplication: NSRunningApplication?
     private weak var previousKeyWindow: NSWindow?
@@ -50,6 +53,26 @@ final class QuickEntryController: ObservableObject {
         self.stagingRootURL = stagingRootURL
         self.registersGlobalHotKey = registersGlobalHotKey
         self.toastDuration = toastDuration
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleTermination()
+            }
+        }
+    }
+
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
+    }
+
+    /// Quitting with the panel open discards the draft's staged files.
+    func handleTermination() {
+        model?.removeStagingDirectoryNow()
     }
 
     // MARK: - Shortcut
@@ -62,11 +85,24 @@ final class QuickEntryController: ObservableObject {
         var message: String?
         do {
             configured = try configLoader().quickEntry.shortcut
+            hasLoadedShortcut = true
         } catch {
-            // Keep the default rather than leave the user with no way in.
-            configured = .default
-            message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(QuickEntryShortcut.default.symbolLabel) until the file is fixed."
+            guard hasLoadedShortcut else {
+                // At launch there is no earlier setting: use the default
+                // rather than leave the user with no way in.
+                configured = .default
+                message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(QuickEntryShortcut.default.symbolLabel) until the file is fixed."
+                return applyShortcut(configured, message: message)
+            }
+            // A typo must not change the shortcut: keep the one in use,
+            // including no shortcut at all.
+            return "tasks.toml: \(error.localizedDescription). The quick entry shortcut stays \(shortcut?.symbolLabel ?? "off") until the file is fixed."
         }
+        return applyShortcut(configured, message: message)
+    }
+
+    private func applyShortcut(_ configured: QuickEntryShortcut?, message: String?) -> String? {
+        var message = message
         shortcut = configured
         guard registersGlobalHotKey else { return message }
 
@@ -116,7 +152,6 @@ final class QuickEntryController: ObservableObject {
         previousFirstResponder = previousKeyWindow?.firstResponder
 
         let stagingDirectoryURL = stagingRootURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        self.stagingDirectoryURL = stagingDirectoryURL
         let model = QuickEntryModel(
             prefill: prefill,
             workspaceOptions: workspaceOptions(),
@@ -161,15 +196,12 @@ final class QuickEntryController: ObservableObject {
     /// Closes the panel without creating a task.
     func dismiss() {
         close()
-        removeStagingDirectory()
         restoreFocus()
     }
 
     private func finish(created record: TaskRecord) {
         let frame = panel?.frame
         close()
-        // `task.create` copied the files into the task's own folder.
-        removeStagingDirectory()
         restoreFocus()
         showToast(near: frame)
         ToasttyLog.info("Created a task from quick entry", category: .tasks, metadata: [
@@ -177,20 +209,17 @@ final class QuickEntryController: ObservableObject {
         ])
     }
 
+    /// Ends the draft; the model removes its staged files once no copy is
+    /// still writing them. After a create, `task.create` has made its own
+    /// copies.
     private func close() {
         guard let panel else { return }
         lastPanelOrigin = panel.frame.origin
         panel.orderOut(nil)
         panel.contentView = nil
         self.panel = nil
+        model?.close()
         model = nil
-    }
-
-    private func removeStagingDirectory() {
-        if let stagingDirectoryURL {
-            try? FileManager.default.removeItem(at: stagingDirectoryURL)
-        }
-        stagingDirectoryURL = nil
     }
 
     /// Gives focus back: to the app that was in front, or to the Toastty
