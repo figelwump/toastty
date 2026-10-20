@@ -2150,6 +2150,7 @@ final class SidebarViewTests: XCTestCase {
             record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
             started,
         ])
+        defer { harness.window.orderOut(nil) }
         let coordinator = try XCTUnwrap(harness.taskCoordinator)
         let parentTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.parentID]?.title)
         try coordinator.records.insert(record("Composer drafts", setup: .settingUp, workspaceID: ids.parentID))
