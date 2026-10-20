@@ -145,9 +145,14 @@ struct ToasttyMobileRootView: View {
             ToasttyHapticFeedback.pairingCompleted(from: old, to: new)
         }
         .task {
+            let recorder = ToasttyDiagnosticRecorder.shared
+            recorder.submit(log: diagnostics.connectionLog)
             sessionController.installDiagnosticRecordHandler { record in
                 ToasttyDiagnosticLogger.record(record.event, recordedAt: record.recordedAt,
-                    pushDetails: record.pushDetails, in: &diagnostics)
+                    pushDetails: record.pushDetails, pushSnapshot: record.pushSnapshot, in: &diagnostics)
+            }
+            sessionController.pushController?.installDiagnosticSnapshotHandler { snapshot in
+                recorder.updatePushSnapshot(snapshot, log: diagnostics.connectionLog)
             }
             if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }
             recordDiagnostic(.authStarted)
@@ -195,6 +200,7 @@ struct ToasttyMobileRootView: View {
             case .background:
                 routedDestinationSinceActivation = false
                 sessionController.sceneEnteredBackground()
+                ToasttyDiagnosticRecorder.shared.flushInBackground()
             @unknown default:
                 sessionController.sceneBecameInactive()
             }

@@ -42,10 +42,12 @@ struct ToasttyDiagnosticRecord: Equatable, Sendable {
     let event: ToasttyConnectionDiagnosticEvent
     let pushDetails: ToasttyPushDiagnosticDetails?
     let recordedAt: Date
+    let pushSnapshot: ToasttyPushSetupSnapshot?
 
     init(event: ToasttyConnectionDiagnosticEvent, pushDetails: ToasttyPushDiagnosticDetails? = nil,
-         recordedAt: Date = .now) {
+         recordedAt: Date = .now, pushSnapshot: ToasttyPushSetupSnapshot? = nil) {
         self.event = event
+        self.pushSnapshot = pushSnapshot
         self.pushDetails = pushDetails
         self.recordedAt = recordedAt
     }

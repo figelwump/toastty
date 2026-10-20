@@ -40,6 +40,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     case authRequired = "auth_required"
     case authRevoked = "auth_revoked"
 
+    case pushSetupReturned = "push_setup_returned"
     case pushRegistrationRestored = "push_registration_restored"
     case pushTokenRequested = "push_token_requested"
     case pushTokenReceived = "push_token_received"
@@ -85,7 +86,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     var category: ToasttyDiagnosticCategory {
         switch self {
         case .gatewayRequestStarted, .gatewayRequestSucceeded, .gatewayRequestFailed,
-             .pushRegistrationRestored, .pushTokenRequested, .pushTokenReceived, .pushTokenRequestFailed,
+             .pushSetupReturned, .pushRegistrationRestored, .pushTokenRequested, .pushTokenReceived, .pushTokenRequestFailed,
              .pushBridgeAttached, .pushPayloadInvalid, .pushProofBuffered, .pushVerificationStarted,
              .pushVerificationResponse, .pushSetupContextChanged, .pushProofReceived, .pushProofInvalid,
              .pushProofNoPending, .pushProofOtherRegistration, .pushProofOtherPairing, .pushProofDisabled,
@@ -126,6 +127,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
         case .authSucceeded: "Authentication succeeded"
         case .authRequired: "Authentication required"
         case .authRevoked: "Access revoked"
+        case .pushSetupReturned: "Push setup action returned"
         case .pushRegistrationRestored: "Push registration restored"
         case .pushTokenRequested: "Requesting Apple notification token"
         case .pushTokenReceived: "Apple notification token received"
@@ -178,6 +180,7 @@ struct ToasttyConnectionDiagnosticEntry: Equatable, Identifiable, Sendable {
     let recordedAt: Date
     let event: ToasttyConnectionDiagnosticEvent
     var pushDetails: ToasttyPushDiagnosticDetails? = nil
+    var pushSnapshot: ToasttyPushSetupSnapshot? = nil
 }
 
 struct ToasttyConnectionDiagnosticLog: Equatable, Sendable {
@@ -199,13 +202,15 @@ struct ToasttyConnectionDiagnosticLog: Equatable, Sendable {
     mutating func append(
         _ event: ToasttyConnectionDiagnosticEvent,
         recordedAt: Date = .now,
-        pushDetails: ToasttyPushDiagnosticDetails? = nil
+        pushDetails: ToasttyPushDiagnosticDetails? = nil,
+        pushSnapshot: ToasttyPushSetupSnapshot? = nil
     ) {
         let entry = ToasttyConnectionDiagnosticEntry(
             sequence: nextSequence,
             recordedAt: recordedAt,
             event: event,
-            pushDetails: pushDetails
+            pushDetails: pushDetails,
+            pushSnapshot: pushSnapshot
         )
         nextSequence &+= 1
 
@@ -251,9 +256,10 @@ struct ToasttyDiagnosticsState: Equatable, Sendable {
     mutating func record(
         _ event: ToasttyConnectionDiagnosticEvent,
         recordedAt: Date = .now,
-        pushDetails: ToasttyPushDiagnosticDetails? = nil
+        pushDetails: ToasttyPushDiagnosticDetails? = nil,
+        pushSnapshot: ToasttyPushSetupSnapshot? = nil
     ) {
-        connectionLog.append(event, recordedAt: recordedAt, pushDetails: pushDetails)
+        connectionLog.append(event, recordedAt: recordedAt, pushDetails: pushDetails, pushSnapshot: pushSnapshot)
     }
 
     func isSystemLoggingEnabled(_ category: ToasttyDiagnosticCategory) -> Bool {

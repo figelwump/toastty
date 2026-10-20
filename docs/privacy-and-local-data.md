@@ -407,8 +407,17 @@ service accepts cleanup. Alerts already sent can still arrive.
 The iPhone's bounded diagnostic log records fixed setup events and result
 categories, HTTP status, a bounded retry delay, and registration numbers local
 to the current app run. It contains no registration UUIDs or pairing IDs. These
-records stay in memory unless the user enables Gateway system logging, which
-mirrors the same fixed categories and numeric details to the device system log.
+records are saved locally in a bounded report, together with the app build,
+run identifier, capture time, and categorical notification setup state. The
+setup state includes the last return reason, saved cooldown deadline, and
+scheduled retry time. The report contains no tokens, credentials, addresses,
+message text, titles, or transcript content. One previous app run is retained.
+The files are excluded from backup and are not uploaded automatically.
+
+The [USB collection command](agents/ios-diagnostics.md) reads the report from a
+trusted connected iPhone. Its capture time describes the saved observation;
+a suspended or terminated app cannot refresh it. Enabling Gateway system
+logging also mirrors fixed categories and numeric details to the device system log.
 
 See [iPhone notifications](remote-access.md#iphone-notifications) for permission
 and revocation behavior, and the [push relay runbook](../workers/push/README.md)

@@ -32,6 +32,69 @@ final class ToasttyPushControllerTests: XCTestCase {
         XCTAssertFalse(String(describing: records).contains(pending.registrationID.uuidString))
     }
 
+    func testRestoredCooldownAndRetryExposeExactStopWithoutAnotherRequest() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.failBeginOnce(.rateLimited(retryAfter: 120))
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        let deadline = try XCTUnwrap(h.controller.storedState?.retryAfter)
+        let restored = h.makeController()
+        await h.connect(restored)
+        restored.receivedToken(Harness.token)
+        await restored.reconcile()
+        XCTAssertEqual(restored.diagnosticSnapshot.lastReturnReason, .relayCooldown)
+        XCTAssertEqual(restored.diagnosticSnapshot.savedCooldownUntil, deadline)
+        XCTAssertEqual(restored.diagnosticSnapshot.cooldownUntil, deadline)
+        XCTAssertEqual(restored.diagnosticSnapshot.cooldownUntil?.timeIntervalSince(h.clock.date()), 120)
+        restored.retry()
+        XCTAssertEqual(restored.diagnosticSnapshot.lastReturnReason, .relayCooldown)
+        XCTAssertEqual(restored.diagnosticSnapshot.lastAction, .retry)
+        await assertBeginCount(1, h.relay)
+        restored.enteredBackground()
+        XCTAssertFalse(restored.diagnosticSnapshot.foreground)
+        XCTAssertNil(restored.diagnosticSnapshot.retryScheduledAt)
+        XCTAssertEqual(restored.diagnosticSnapshot.cooldownUntil, deadline)
+        h.clock.advance(121)
+        XCTAssertLessThan(try XCTUnwrap(restored.diagnosticSnapshot.cooldownUntil).timeIntervalSince(h.clock.date()), 0)
+    }
+
+    func testSetupReportsConnectionAndPermissionStopsWithoutRelayTraffic() async throws {
+        let h = try await Harness.make(desired: true)
+        h.controller.updateConnection(gatewayURL: nil, pairingID: nil, connected: false, supported: false)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.diagnosticSnapshot.lastReturnReason, .unpaired)
+        h.controller.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: false, supported: true)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.diagnosticSnapshot.lastReturnReason, .disconnected)
+        h.controller.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: true, supported: false)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.diagnosticSnapshot.lastReturnReason, .unsupported)
+        await h.connect(h.controller)
+        h.notifications.currentPermission = .denied
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.diagnosticSnapshot.lastReturnReason, .permissionRequired)
+        await assertBeginCount(0, h.relay)
+    }
+
+    func testRepeatedBlockedRetryAndBackgroundCallsPreserveEventHistory() async throws {
+        let h = try await Harness.make(desired: true)
+        h.controller.receivedToken(Harness.token)
+        await h.relay.failBeginOnce(.rateLimited(retryAfter: 120))
+        await h.controller.reconcile()
+        var records: [ToasttyDiagnosticRecord] = []
+        h.controller.installDiagnosticRecordHandler { records.append($0) }
+        for _ in 0..<200 { h.controller.retry() }
+        XCTAssertEqual(records.filter { $0.event == .pushSetupReturned }.count, 1)
+        XCTAssertEqual(records.first?.pushSnapshot?.lastReturnReason, .relayCooldown)
+        h.controller.enteredBackground()
+        for _ in 0..<200 { await h.controller.reconcile() }
+        XCTAssertEqual(records.filter { $0.event == .pushSetupReturned }.count, 1)
+        XCTAssertEqual(h.controller.diagnosticSnapshot.lastReturnReason, .background)
+        await assertBeginCount(1, h.relay)
+    }
+
     func testEachActualCooldownResponseKeepsItsAppliedDelay() async throws {
         let h = try await Harness.make(desired: true)
         var records: [ToasttyDiagnosticRecord] = []
@@ -610,6 +673,7 @@ final class ToasttyPushControllerTests: XCTestCase {
         let failedChecks = await h.relay.statusCount
 
         controller.enteredBackground()
+        XCTAssertNil(controller.diagnosticSnapshot.retryScheduledAt)
         try await waitUntil { sleeper.delays.isEmpty }
         h.clock.advance(60)
         controller.enteredForeground()
@@ -618,6 +682,9 @@ final class ToasttyPushControllerTests: XCTestCase {
         XCTAssertEqual(stillWaitingChecks, failedChecks)
         let delay = try XCTUnwrap(sleeper.delays.first)
         XCTAssertEqual(delay, 60, accuracy: 0.1)
+        XCTAssertEqual(controller.diagnosticSnapshot.retryScheduledAt, h.clock.date().addingTimeInterval(60))
+        XCTAssertNil(controller.diagnosticSnapshot.savedCooldownUntil)
+        XCTAssertNotNil(controller.diagnosticSnapshot.cooldownUntil)
         h.store.saveFailure = nil
         h.clock.advance(delay)
         sleeper.fireNext()

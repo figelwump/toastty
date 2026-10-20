@@ -15,9 +15,11 @@ enum ToasttyDiagnosticLogger {
         _ event: ToasttyConnectionDiagnosticEvent,
         recordedAt: Date = .now,
         pushDetails: ToasttyPushDiagnosticDetails? = nil,
+        pushSnapshot: ToasttyPushSetupSnapshot? = nil,
         in state: inout ToasttyDiagnosticsState
     ) {
-        state.record(event, recordedAt: recordedAt, pushDetails: pushDetails)
+        state.record(event, recordedAt: recordedAt, pushDetails: pushDetails, pushSnapshot: pushSnapshot)
+        ToasttyDiagnosticRecorder.shared.submit(log: state.connectionLog)
         guard state.isSystemLoggingEnabled(event.category) else { return }
         // Every string is a fixed enum value. These numbers contain no stable
         // registration identity or private server/phone data.
