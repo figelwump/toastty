@@ -77,6 +77,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCreate = "task.create"
     case taskRetry = "task.retry"
     case taskDelete = "task.delete"
+    case taskStartWork = "task.start-work"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -470,7 +471,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace; agent, model and effort default to [defaults] in ~/.toastty/tasks.toml. A repeated clientRequestID from the same caller returns the first task.",
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace; agent, model and effort default to [defaults] in ~/.toastty/tasks.toml. A repeated clientRequestID from the same caller returns the first task.",
                 selectors: [],
                 parameters: [
                     .taskText(required: false),
@@ -483,13 +484,29 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskModel(required: false),
                     .taskEffort(required: false),
                     .taskPrompt(required: false),
+                    .taskStartWork(required: false),
+                    .taskBase(required: false),
+                    .taskBranchPrefix(required: false),
+                ]
+            )
+        case .taskStartWork:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Move the calling agent's task into its own git worktree. Toastty fetches the base, adds the worktree next to the main checkout on branch <prefix>/<slug>, and runs the workspace's create_hook. Once the caller's turn ends, it forks the caller's Claude Code or Codex conversation into a new terminal in the worktree, waits for the fork's own conversation, then closes the caller's pane. Other agents start fresh there and the caller stays. Returns taskID at once; end the turn so the move can continue. From a session that is not a task's, it makes the task first: a top-level workspace gets a new task space.",
+                selectors: [],
+                parameters: [
+                    .taskBase(required: false),
+                    .taskBranchPrefix(required: false),
+                    .taskTitle(required: false),
+                    .taskSlug(required: false),
                 ]
             )
         case .taskRetry:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run setup again for a task whose setup failed. It continues from the last step that finished.",
+                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
             )
@@ -824,6 +841,18 @@ private extension AppControlParameterDescriptor {
 
     static func taskPrompt(required: Bool) -> Self {
         .init(name: "prompt", summary: "First prompt, sent before the task text.", valueType: .string, required: required)
+    }
+
+    static func taskStartWork(required: Bool) -> Self {
+        .init(name: "startWork", summary: "true makes a git worktree during setup and starts the agent there.", valueType: .boolean, required: required)
+    }
+
+    static func taskBase(required: Bool) -> Self {
+        .init(name: "base", summary: "Branch on the remote, fetched now, or local commit the worktree starts from. Defaults to the remote's default branch.", valueType: .string, required: required)
+    }
+
+    static func taskBranchPrefix(required: Bool) -> Self {
+        .init(name: "branchPrefix", summary: "First part of the worktree's branch name, before /<slug>. Defaults to the workspace's branch_prefix in tasks.toml, else task.", valueType: .string, required: required)
     }
 
     static func taskID(required: Bool) -> Self {

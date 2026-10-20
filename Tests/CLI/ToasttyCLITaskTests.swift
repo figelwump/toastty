@@ -48,6 +48,38 @@ struct ToasttyCLITaskTests {
     }
 
     @Test
+    func startWorkMapsFlagsToItsActionAndCreateTakesStartWorkFlags() throws {
+        let startWork = try ToasttyCLI.parse(
+            arguments: ["task", "start-work", "--base", "feat/stack", "--branch-prefix", "fix", "--title", "Split it"],
+            environment: [:]
+        )
+        #expect(startWork.command == .appControlRun(kind: .action, id: "task.start-work", args: [
+            "base": .string("feat/stack"),
+            "branchPrefix": .string("fix"),
+            "title": .string("Split it"),
+        ]))
+
+        let create = try ToasttyCLI.parse(
+            arguments: ["task", "create", "x", "--start-work", "--base", "main", "--branch-prefix", "feat"],
+            environment: [:]
+        )
+        guard case .appControlRun(_, "task.create", let args) = create.command else {
+            Issue.record("expected task.create")
+            return
+        }
+        #expect(args["startWork"] == .bool(true))
+        #expect(args["base"] == .string("main"))
+        #expect(args["branchPrefix"] == .string("feat"))
+
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "create", "x", "--base", "main"], environment: [:])
+        }
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "start-work", "now"], environment: [:])
+        }
+    }
+
+    @Test
     func taskCreateWaitTakesATimeout() throws {
         let invocation = try ToasttyCLI.parse(
             arguments: ["task", "create", "--text", "x", "--wait", "--timeout", "30"],

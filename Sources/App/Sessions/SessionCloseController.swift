@@ -135,6 +135,10 @@ final class SessionCloseController {
         /// Nobody: the agent exited on its own. Such a close never stops a
         /// process or removes a workspace, even when prompts are bypassed.
         case agentExit
+        /// Nobody: the agent's conversation moved to a task's worktree, so
+        /// stopping it loses nothing. Such a close still never removes a
+        /// workspace.
+        case movedSession
     }
 
     /// Closes the session in `panelID` without UI. A remote client shows its
@@ -165,6 +169,19 @@ final class SessionCloseController {
         )
     }
 
+    /// Closes the pane of a session whose conversation moved into a task's
+    /// worktree, stopping its agent, and its tab when it was the tab's last.
+    /// A pane that is its workspace's last, or whose tab holds an unsaved
+    /// document, stays open.
+    func closeMovedSessionPane(panelID: UUID) -> CloseResult {
+        close(
+            panelID: panelID,
+            stopIfBusy: true,
+            requester: .movedSession,
+            source: AppActionSource("task_start_work", detail: "moved_session")
+        )
+    }
+
     private func close(
         panelID: UUID,
         stopIfBusy: Bool,
@@ -177,7 +194,7 @@ final class SessionCloseController {
         case .person(let confirmedID):
             asks = shouldBypassConfirmation == false
             confirmedWorkspaceCloseID = confirmedID
-        case .agentExit:
+        case .agentExit, .movedSession:
             asks = true
             confirmedWorkspaceCloseID = nil
         }
