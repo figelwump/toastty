@@ -46,11 +46,17 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
     (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
 }
 
-func find(_ element: AXUIElement, depth: Int = 0, where match: (AXUIElement) -> Bool) -> AXUIElement? {
+func find(
+    _ element: AXUIElement,
+    depth: Int = 0,
+    skippingMenuBar: Bool = false,
+    where match: (AXUIElement) -> Bool
+) -> AXUIElement? {
+    if skippingMenuBar, attribute(element, kAXRoleAttribute) as? String == kAXMenuBarRole { return nil }
     if match(element) { return element }
     guard depth < 40 else { return nil }
     for child in children(element) {
-        if let found = find(child, depth: depth + 1, where: match) { return found }
+        if let found = find(child, depth: depth + 1, skippingMenuBar: skippingMenuBar, where: match) { return found }
     }
     return nil
 }
@@ -188,10 +194,11 @@ case "press-menu":
     var item: AXUIElement?
     for _ in 0..<50 {
         usleep(100_000)
-        // The open menu hangs under the button, or the app.
+        // The open menu hangs under the button, or the app. The app's menu
+        // bar can hold an item with the same title, such as a workspace.
         item = find(button, where: { attribute($0, kAXTitleAttribute) as? String == arguments[3]
             && attribute($0, kAXRoleAttribute) as? String == kAXMenuItemRole })
-            ?? find(app, where: { attribute($0, kAXTitleAttribute) as? String == arguments[3]
+            ?? find(app, skippingMenuBar: true, where: { attribute($0, kAXTitleAttribute) as? String == arguments[3]
                 && attribute($0, kAXRoleAttribute) as? String == kAXMenuItemRole })
         if item != nil { break }
     }

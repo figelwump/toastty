@@ -152,17 +152,27 @@ def main():
 
         # 1. Create a task from the panel.
         open_panel_from_finder()
+        drive('press-menu', pid, 'quick-entry.workspace', workspace['title'])
+        # The menu applies its choice after it closes.
+        wait_for('the picked workspace', lambda: drive('value', pid, 'quick-entry.workspace') == workspace['title'], timeout=10)
         drive('type', TASK_LINES[0])
         drive('key', KEY_RETURN)
         drive('type', TASK_LINES[1])
         typed = wait_for_text('\n'.join(TASK_LINES))
         drive('pasteboard-png', image)
         drive('key', KEY_V, 'cmd')
-        drive('press-menu', pid, 'quick-entry.workspace', workspace['title'])
-        step('filled in', text=typed)
+        time.sleep(0.5)
+        step('filled in', text=typed, workspace=drive('value', pid, 'quick-entry.workspace'))
         drive('key', KEY_RETURN, 'cmd')
 
-        task = wait_for('the created task', lambda: next(iter(run_cli('task', 'list')['tasks']), None), timeout=20)
+        def created_task():
+            task = next(iter(run_cli('task', 'list')['tasks']), None)
+            if task is None:
+                error = subprocess.run([str(driver), 'value', str(pid), 'quick-entry.error'], capture_output=True, text=True)
+                step('no task yet', error=error.stdout.strip() or error.stderr.strip(), panel=bool(panel_windows()))
+            return task
+
+        task = wait_for('the created task', created_task, timeout=20, interval=2)
         wait_for('the panel to close', panel_closed, timeout=10)
         front = drive('frontmost')
         require(front == FINDER, f'Focus did not go back to Finder: {front!r}')

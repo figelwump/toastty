@@ -109,6 +109,7 @@ struct QuickEntryView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isEditable == false)
+            .accessibilityValue(model.workspaceTitle)
             .accessibilityIdentifier("quick-entry.workspace")
 
             Menu {
@@ -126,6 +127,7 @@ struct QuickEntryView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isEditable == false)
+            .accessibilityValue(model.agentTitle)
             .accessibilityIdentifier("quick-entry.agent")
 
             Spacer(minLength: 8)
