@@ -190,7 +190,11 @@ case "press-menu":
     guard arguments.count == 4 else { fail("press-menu <pid> <identifier> <item-title>") }
     let app = application(arguments[1])
     guard let button = element(in: app, identifier: arguments[2]) else { fail("no element \(arguments[2])") }
-    AXUIElementPerformAction(button, kAXPressAction as CFString)
+    // A SwiftUI menu button offers AXShowMenu; other styles offer AXPress.
+    var actionNames: CFArray?
+    AXUIElementCopyActionNames(button, &actionNames)
+    let opensWithShowMenu = ((actionNames as? [String]) ?? []).contains(kAXShowMenuAction)
+    AXUIElementPerformAction(button, (opensWithShowMenu ? kAXShowMenuAction : kAXPressAction) as CFString)
     var item: AXUIElement?
     for _ in 0..<50 {
         usleep(100_000)

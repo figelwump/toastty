@@ -191,6 +191,9 @@ private struct PillLabel: View {
                 .stroke(isAuto ? ToastyTheme.accent.opacity(0.35) : Color.white.opacity(0.12), lineWidth: 1)
         )
         .contentShape(Capsule())
+        // One element named for the pill; the menu adds the value.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
     }
 }
 
