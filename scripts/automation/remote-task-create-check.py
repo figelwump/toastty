@@ -189,7 +189,9 @@ def main():
         message = (fake_bin / 'sessions' / f"{task['setup']['sessionID']}.message").read_text()
         require(TASK_TEXT in message, f'Task text not delivered as written: {message!r}')
         attachment = task['files'][0]
-        require(attachment.startswith(str(runtime_home / 'task-attachments' / task_id)), f'Attachment not copied: {attachment}')
+        require(os.path.realpath(attachment).startswith(str(runtime_home / 'task-attachments' / task_id)),
+                f'Attachment not copied: {attachment}')
+        require(Path(attachment).read_bytes() == b'png', f'Attachment copy has the wrong content: {attachment}')
         require(attachment in message, f'Attachment path not in the prompt: {message!r}')
         require(os.path.realpath(session['cwd']) == str(user_home), f'Agent did not start in the project root: {session}')
         listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
