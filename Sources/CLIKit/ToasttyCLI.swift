@@ -12,6 +12,16 @@ struct CLIOptions: Equatable {
 struct CLIInvocation: Equatable {
     var options: CLIOptions
     var command: CLICommand
+    /// Set by `toastty task create --wait`: after the task is created, poll
+    /// `task.get` until its setup ends.
+    var taskWait: CLITaskWait? = nil
+}
+
+struct CLITaskWait: Equatable {
+    static let defaultTimeout: TimeInterval = 180
+    static let pollInterval: TimeInterval = 0.5
+
+    var timeout: TimeInterval
 }
 
 struct SessionBackgroundActivitySyncEntry: Equatable {
@@ -771,6 +781,15 @@ public enum ToasttyCLI {
                 } else {
                     response = try client.send(invocation.command.makeEventEnvelope())
                 }
+                if let taskWait = invocation.taskWait, response.ok {
+                    return try runTaskWait(
+                        client: client,
+                        createResponse: response,
+                        wait: taskWait,
+                        options: invocation.options,
+                        callerSessionID: callerSessionID
+                    )
+                }
 
                 if invocation.options.jsonOutput {
                     try writeStdout(jsonString(for: response))
@@ -873,6 +892,9 @@ public enum ToasttyCLI {
                 command: try parseSessionCommand(Array(remainingArguments.dropFirst()), environment: environment)
             )
 
+        case "task":
+            return try parseTaskCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
+
         default:
             throw ToasttyCLIError.usage("unknown command: \(command)\n\n\(usage)")
         }
@@ -890,6 +912,9 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task get|retry|delete <task-id>
+      toastty [--json] [--socket-path <path>] task list
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1723,6 +1748,173 @@ public enum ToasttyCLI {
         }
 
         return parsed
+    }
+
+    /// `toastty task <verb>`: a shorter form of `action run task.<verb>` and
+    /// `query run task.<verb>`, with file paths resolved here.
+    private static func parseTaskCommand(
+        _ arguments: [String],
+        options: CLIOptions,
+        environment: [String: String]
+    ) throws -> CLIInvocation {
+        guard let verb = arguments.first else {
+            throw ToasttyCLIError.usage("task requires a subcommand\n\n\(usage)")
+        }
+        let remaining = Array(arguments.dropFirst())
+        switch verb {
+        case "create":
+            let parsed = try parseCommandArguments(
+                remaining,
+                valueOptions: [
+                    "--text", "--file", "--workspace", "--agent", "--model", "--effort",
+                    "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
+                ],
+                flagOptions: ["--wait"]
+            )
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task create takes the task text as one argument; quote it\n\n\(usage)")
+            }
+            guard parsed.positionals.isEmpty || parsed.singleValue("--text") == nil else {
+                throw ToasttyCLIError.usage("pass the task text as an argument or with --text, not both\n\n\(usage)")
+            }
+            guard parsed.singleValue("--prompt") == nil || parsed.singleValue("--prompt-file") == nil else {
+                throw ToasttyCLIError.usage("pass --prompt or --prompt-file, not both\n\n\(usage)")
+            }
+            let workingDirectory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
+            func absolutePath(_ path: String) -> String {
+                let expanded = (path as NSString).expandingTildeInPath
+                guard expanded.hasPrefix("/") == false else { return expanded }
+                return URL(filePath: workingDirectory, directoryHint: .isDirectory)
+                    .appending(path: expanded)
+                    .standardizedFileURL
+                    .path(percentEncoded: false)
+            }
+
+            var args: [String: AutomationJSONValue] = [:]
+            if let text = parsed.positionals.first ?? parsed.singleValue("--text") {
+                args["text"] = .string(text)
+            }
+            let files = parsed.values("--file").map(absolutePath)
+            if files.isEmpty == false {
+                args["files"] = .array(files.map(AutomationJSONValue.string))
+            }
+            if let workspace = parsed.singleValue("--workspace") {
+                guard UUID(uuidString: workspace) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
+                }
+                args["workspace"] = .string(workspace)
+            }
+            let valueKeys = [
+                "--agent": "agent", "--model": "model", "--effort": "effort", "--prompt": "prompt",
+                "--title": "title", "--slug": "slug", "--request-id": "clientRequestID",
+            ]
+            for (flag, key) in valueKeys {
+                if let value = parsed.singleValue(flag) {
+                    args[key] = .string(value)
+                }
+            }
+            if let promptFile = parsed.singleValue("--prompt-file") {
+                let path = absolutePath(promptFile)
+                guard let data = FileManager.default.contents(atPath: path),
+                      let prompt = String(data: data, encoding: .utf8) else {
+                    throw ToasttyCLIError.runtime("could not read --prompt-file \(path) as UTF-8 text")
+                }
+                args["prompt"] = .string(prompt)
+            }
+
+            var taskWait: CLITaskWait?
+            if parsed.hasFlag("--wait") {
+                var timeout = CLITaskWait.defaultTimeout
+                if let rawTimeout = parsed.singleValue("--timeout") {
+                    guard let seconds = TimeInterval(rawTimeout), seconds > 0 else {
+                        throw ToasttyCLIError.usage("--timeout must be a positive number of seconds\n\n\(usage)")
+                    }
+                    timeout = seconds
+                }
+                taskWait = CLITaskWait(timeout: timeout)
+            } else if parsed.singleValue("--timeout") != nil {
+                throw ToasttyCLIError.usage("--timeout needs --wait\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .action, id: "task.create", args: args),
+                taskWait: taskWait
+            )
+
+        case "get", "retry", "delete":
+            let parsed = try parseCommandArguments(remaining, valueOptions: [])
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
+                throw ToasttyCLIError.usage("task \(verb) requires one task ID\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(
+                    kind: verb == "get" ? .query : .action,
+                    id: "task.\(verb)",
+                    args: ["taskID": .string(taskID)]
+                )
+            )
+
+        case "list":
+            let parsed = try parseCommandArguments(remaining, valueOptions: [])
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("task list does not accept arguments\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.list", args: [:]))
+
+        default:
+            throw ToasttyCLIError.usage("unknown task subcommand: \(verb)\n\n\(usage)")
+        }
+    }
+
+    /// Polls `task.get` until the created task has started or its setup
+    /// failed, then prints the task. Exits 1 on a failed setup or timeout.
+    private static func runTaskWait(
+        client: ToasttySocketClient,
+        createResponse: AutomationResponseEnvelope,
+        wait: CLITaskWait,
+        options: CLIOptions,
+        callerSessionID: String?
+    ) throws -> Int32 {
+        guard case .string(let taskID)? = createResponse.result?["taskID"] else {
+            throw ToasttyCLIError.runtime("task.create did not return a taskID")
+        }
+        let deadline = Date().addingTimeInterval(wait.timeout)
+        var response = createResponse
+        while true {
+            if case .object(let setup)? = response.result?["setup"],
+               case .string(let state)? = setup["state"],
+               state != "settingUp" {
+                if options.jsonOutput {
+                    try writeStdout(jsonString(for: response))
+                } else {
+                    try writeStdout(renderAppControlRunResult(response: response, kind: .query, fallback: "task \(taskID)"))
+                }
+                if state == "setupFailed" {
+                    var reason = "setup failed"
+                    if case .string(let detail)? = setup["reason"] { reason = detail }
+                    fputs("task \(taskID) setup failed: \(reason)\n", stderr)
+                    return 1
+                }
+                return 0
+            }
+            guard Date() < deadline else {
+                fputs("task \(taskID) is still setting up after \(Int(wait.timeout)) s; check it with: toastty task get \(taskID)\n", stderr)
+                return 1
+            }
+            Thread.sleep(forTimeInterval: CLITaskWait.pollInterval)
+            let query = CLICommand.appControlRun(kind: .query, id: "task.get", args: ["taskID": .string(taskID)])
+            guard let request = query.makeRequestEnvelope(callerSessionID: callerSessionID) else {
+                throw ToasttyCLIError.runtime("could not build the task.get request")
+            }
+            response = try client.send(request)
+            guard response.ok else {
+                if let error = response.error {
+                    throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+                }
+                throw ToasttyCLIError.runtime("task.get failed")
+            }
+        }
     }
 
     private static func parseKeyValueAssignment(_ value: String) throws -> (key: String, value: String) {

@@ -74,6 +74,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case terminalSendText = "terminal.send-text"
     case terminalDropImageFiles = "terminal.drop-image-files"
     case sessionExitAfterTurn = "session.exit-after-turn"
+    case taskCreate = "task.create"
+    case taskRetry = "task.retry"
+    case taskDelete = "task.delete"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -463,6 +466,41 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID, .panelID],
                 parameters: [.expectedSessionID(required: true)]
             )
+        case .taskCreate:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace; agent, model and effort default to [defaults] in ~/.toastty/tasks.toml. A repeated clientRequestID from the same caller returns the first task.",
+                selectors: [],
+                parameters: [
+                    .taskText(required: false),
+                    .taskFiles(required: false),
+                    .taskClientRequestID(required: false),
+                    .taskTitle(required: false),
+                    .taskSlug(required: false),
+                    .taskWorkspace(required: false),
+                    .taskAgent(required: false),
+                    .taskModel(required: false),
+                    .taskEffort(required: false),
+                    .taskPrompt(required: false),
+                ]
+            )
+        case .taskRetry:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run setup again for a task whose setup failed. It continues from the last step that finished.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskDelete:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Delete a task and its attachments and stop its setup. A task space that setup made is closed if nothing used it; otherwise it stays without its task link.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
         }
     }
 
@@ -490,6 +528,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelScratchpadList = "panel.scratchpad.list"
     case panelScratchpadState = "panel.scratchpad.state"
     case agentProfileState = "agent.profile.state"
+    case taskGet = "task.get"
+    case taskList = "task.list"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -567,6 +607,21 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "Return the executable an agent profile would run, resolved in the launch environment and skipping Toastty's command shims. Launches no agent and starts no shell; omits the profile's arguments.",
                 selectors: [],
                 parameters: [.profileID(required: true)]
+            )
+        case .taskGet:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return one task: its text, title, chosen workspace, agent, model and effort, setup state (settingUp, setupFailed with a reason, or started) and task space.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List tasks, oldest first, in the task.get shape. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                selectors: []
             )
         }
     }
@@ -729,6 +784,50 @@ private extension AppControlParameterDescriptor {
             required: required,
             allowedValues: ScratchpadPanelCreatePolicy.allCases.map(\.rawValue)
         )
+    }
+
+    static func taskText(required: Bool) -> Self {
+        .init(name: "text", summary: "The task, as written. The agent receives it unchanged. Required unless prompt is given.", valueType: .string, required: required)
+    }
+
+    static func taskFiles(required: Bool) -> Self {
+        .init(name: "files", summary: "Absolute path of a file to attach; Toastty keeps a copy. Repeat for more files.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskClientRequestID(required: Bool) -> Self {
+        .init(name: "clientRequestID", summary: "The caller's key for this request. A repeat with the same key returns the first task.", valueType: .string, required: required)
+    }
+
+    static func taskTitle(required: Bool) -> Self {
+        .init(name: "title", summary: "One-line title. Defaults to the first line of the text.", valueType: .string, required: required)
+    }
+
+    static func taskSlug(required: Bool) -> Self {
+        .init(name: "slug", summary: "Lowercase words joined by hyphens; names the task space. Defaults to one made from the title.", valueType: .string, required: required)
+    }
+
+    static func taskWorkspace(required: Bool) -> Self {
+        .init(name: "workspace", summary: "Workspace ID the task belongs to. A subspace means its parent. Defaults to the calling agent's workspace.", valueType: .uuid, required: required)
+    }
+
+    static func taskAgent(required: Bool) -> Self {
+        .init(name: "agent", summary: "Agent profile ID from agents.toml.", valueType: .string, required: required)
+    }
+
+    static func taskModel(required: Bool) -> Self {
+        .init(name: "model", summary: "Model for the agent.", valueType: .string, required: required)
+    }
+
+    static func taskEffort(required: Bool) -> Self {
+        .init(name: "effort", summary: "Reasoning effort for the agent.", valueType: .string, required: required)
+    }
+
+    static func taskPrompt(required: Bool) -> Self {
+        .init(name: "prompt", summary: "First prompt, sent before the task text.", valueType: .string, required: required)
+    }
+
+    static func taskID(required: Bool) -> Self {
+        .init(name: "taskID", summary: "Task ID from task.create or task.list.", valueType: .uuid, required: required)
     }
 
     static func files(required: Bool) -> Self {

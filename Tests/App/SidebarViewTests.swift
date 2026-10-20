@@ -94,6 +94,7 @@ final class SidebarViewTests: XCTestCase {
         let sessionRuntimeStore: SessionRuntimeStore
         let hostingView: NSView
         let window: NSWindow
+        var taskCoordinator: TaskCoordinator? = nil
     }
 
     private struct MultiSessionSidebarHarness {
@@ -2008,7 +2009,8 @@ final class SidebarViewTests: XCTestCase {
     /// the spawner tags, and that subspaces do not render as cards.
     private func makeSubspacesHarness(
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
-        additionalSubspaceCount: Int = 0
+        additionalSubspaceCount: Int = 0,
+        taskRecords: [TaskRecord]? = nil
     ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
@@ -2080,7 +2082,7 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth)
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth, taskRecords: taskRecords)
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2126,6 +2128,60 @@ final class SidebarViewTests: XCTestCase {
             readyUnreadID: readyUnread.id,
             siblingID: sibling.id
         ))
+    }
+
+    func testInboxShowsTasksThatHaveNotStartedAboveTheCardsAndHidesWhenEmpty() throws {
+        let now = Date()
+        func record(_ title: String, setup: TaskSetupState, workspaceID: UUID? = nil) -> TaskRecord {
+            TaskRecord(
+                createdAt: now,
+                text: title,
+                title: title,
+                slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli,
+                resolved: TaskFields(agent: "codex"),
+                workspaceID: workspaceID,
+                setup: setup
+            )
+        }
+        let started = record("Already running", setup: .started)
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [
+            record("Flaky scratchpad unread test", setup: .settingUp),
+            record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
+            started,
+        ])
+        defer { harness.window.orderOut(nil) }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        let parentTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.parentID]?.title)
+        try coordinator.records.insert(record("Composer drafts", setup: .settingUp, workspaceID: ids.parentID))
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let textValues = renderedTextValues(in: harness.hostingView)
+
+        // Started tasks leave the Inbox; the others show their state.
+        XCTAssertTrue(textValues.contains("Inbox, 3 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Inbox task, setting up, → closed workspace · codex"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer drafts, Inbox task, setting up, → \(parentTitle) · codex"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The agent did not start: profile missing"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Already running") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-inbox")
+        let bitmap = try renderedBitmap(for: harness.hostingView)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "sidebar-inbox"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        for task in coordinator.records.records {
+            try coordinator.records.remove(id: task.id)
+        }
+        try coordinator.records.insert(started)
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let emptied = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(emptied.contains { $0.hasPrefix("Inbox") }, "An empty Inbox should not render: \(emptied)")
     }
 
     func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
@@ -3150,12 +3206,26 @@ final class SidebarViewTests: XCTestCase {
     private func makeSidebarHarness(
         state: AppState,
         windowID: UUID,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        taskRecords: [TaskRecord]? = nil
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let taskCoordinator = taskRecords.map { records in
+            let recordStore = TaskRecordStore.inMemory()
+            for record in records { try? recordStore.insert(record) }
+            return TaskCoordinator(
+                records: recordStore,
+                store: store,
+                launcher: nil,
+                configLoader: { .empty },
+                attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+                hasActiveSession: { _ in false },
+                grantScope: { _, _ in }
+            )
+        }
 
         let sidebarView = SidebarView(
             windowID: windowID,
@@ -3163,6 +3233,7 @@ final class SidebarViewTests: XCTestCase {
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
             annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskCoordinator: taskCoordinator,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
@@ -3189,7 +3260,8 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
-            window: hostWindow
+            window: hostWindow,
+            taskCoordinator: taskCoordinator
         )
     }
 

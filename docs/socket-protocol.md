@@ -244,6 +244,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 - `session.exit-after-turn`
+- `task.create`
+- `task.retry`
+- `task.delete`
 
 Notable action-specific behavior:
 
@@ -325,6 +328,21 @@ Notable action-specific behavior:
     missing, ended, or replaced session returns `INVALID_PAYLOAD` before any
     terminal bytes or submission are sent; `allowUnavailable` cannot bypass
     this condition.
+- `task.create`
+  - takes `text`, repeatable absolute `files`, and optional `clientRequestID`,
+    `title`, `slug`, `workspace` (UUID), `agent`, `model`, `effort` and `prompt`.
+    It takes no selectors.
+  - returns the task object (see `task.get`) as soon as the record is saved;
+    setup continues after the response. A repeated `clientRequestID` from the
+    same caller (the same managed session, or no session) returns the first
+    task.
+  - `workspace` defaults to the calling managed session's workspace; a subspace
+    resolves to its parent. A workspace-scoped session may always add tasks to
+    its own project; any other workspace must be in its scope.
+  - invalid requests return `INVALID_PAYLOAD` and save nothing.
+- `task.retry`, `task.delete`
+  - require `args.taskID`. A workspace-scoped session reaches only the tasks it
+    created or whose workspace or task space is in its scope.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -522,6 +540,15 @@ Common query IDs include:
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+- `task.get`
+- `task.list`
+
+`task.get` requires `args.taskID` and returns `taskID`, `title`, `slug`,
+`text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
+`agent`, `model`, `effort`, `files`, and `setup` with `state` (`settingUp`,
+`setupFailed` with `reason`, or `started`), `taskSpaceWorkspaceID` and
+`sessionID`. `task.list` returns `tasks`, oldest first, with the same scope
+rule as `task.retry`.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

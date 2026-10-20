@@ -261,6 +261,14 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// session runtime clears it when an agent in the workspace starts new
     /// work.
     public var doneAt: Date?
+    /// The project directory of a top-level workspace, usually its first
+    /// terminal's git root. Tasks use it as their project root; a subspace
+    /// uses its parent's.
+    public var rootDirectory: String?
+    /// The task this workspace is the task space of. The task record links
+    /// back through its operation, so either side can be rebuilt from the
+    /// other after a crash.
+    public var taskID: UUID?
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -287,7 +295,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         parentWorkspaceID: UUID? = nil,
         spawningSessionID: String? = nil,
         primaryAnnotationKey: String? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        rootDirectory: String? = nil,
+        taskID: UUID? = nil
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -311,6 +321,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
         self.doneAt = doneAt
+        self.rootDirectory = rootDirectory
+        self.taskID = taskID
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         normalizeSidebarSessionPanelOrder()
@@ -375,17 +387,20 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static func bootstrap(
+        id: UUID = UUID(),
+        panelID: UUID = UUID(),
         title: String = "Workspace 1",
         initialTerminalCWD: String? = nil,
         initialTerminalProfileBinding: TerminalProfileBinding? = nil,
         hasBeenVisited: Bool = true
     ) -> WorkspaceState {
         let tab = WorkspaceTabState.bootstrap(
+            panelID: panelID,
             initialTerminalCWD: initialTerminalCWD,
             initialTerminalProfileBinding: initialTerminalProfileBinding
         )
         return WorkspaceState(
-            id: UUID(),
+            id: id,
             title: title,
             hasBeenVisited: hasBeenVisited,
             selectedTabID: tab.id,
@@ -651,6 +666,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case parentWorkspaceID
         case spawningSessionID
         case doneAt
+        case rootDirectory
+        case taskID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -709,6 +726,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
+        rootDirectory = (try? container.decodeIfPresent(String.self, forKey: .rootDirectory)) ?? nil
+        taskID = (try? container.decodeIfPresent(UUID.self, forKey: .taskID)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -726,6 +745,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        try container.encodeIfPresent(rootDirectory, forKey: .rootDirectory)
+        try container.encodeIfPresent(taskID, forKey: .taskID)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

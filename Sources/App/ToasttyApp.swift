@@ -680,6 +680,7 @@ struct ToasttyApp: App {
     private let scratchpadSessionLinkCleanupCoordinator: ScratchpadSessionLinkCleanupCoordinator
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
+    private let taskCoordinator: TaskCoordinator
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
@@ -1038,6 +1039,25 @@ struct ToasttyApp: App {
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
+        let taskCoordinator = TaskCoordinator(
+            records: TaskRecordStore(runtimePaths: runtimePaths),
+            store: store,
+            launcher: agentLaunchService,
+            configLoader: { try TasksConfigFile.load() },
+            attachmentsDirectoryURL: runtimePaths.taskAttachmentsDirectoryURL,
+            hasActiveSession: { [weak sessionRuntimeStore] workspaceID in
+                guard let registry = sessionRuntimeStore?.sessionRegistry else { return false }
+                return registry.activeSessionIDByPanelID.values.contains { sessionID in
+                    registry.sessionsByID[sessionID]?.workspaceID == workspaceID
+                }
+            },
+            grantScope: { [weak sessionRuntimeStore] sessionID, workspaceID in
+                guard let sessionRuntimeStore, sessionRuntimeStore.isWorkspaceScoped(sessionID: sessionID) else { return }
+                _ = sessionRuntimeStore.addScope(sessionID: sessionID, workspaceIDs: [workspaceID])
+            }
+        )
+        taskCoordinator.reconcileAfterLaunch()
+        self.taskCoordinator = taskCoordinator
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1275,6 +1295,10 @@ struct ToasttyApp: App {
                 )
             }
             workspaceLayoutPersistenceCoordinator = coordinator
+            taskCoordinator.flushLayout = { [weak store, weak coordinator] in
+                guard let store else { return }
+                coordinator?.flushCurrentState(store.state, reason: "task_setup")
+            }
             workspaceLayoutDisplayDiagnosticsObserver = WorkspaceLayoutDisplayDiagnosticsObserver(
                 persistenceProfileID: layoutPersistenceContext.profileID
             )
@@ -1313,6 +1337,7 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+                taskCoordinator: taskCoordinator,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
@@ -1626,6 +1651,7 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 annotationStyleStore: annotationStyleStore,
+                taskCoordinator: taskCoordinator,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,

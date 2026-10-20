@@ -30,6 +30,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
     private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
+    private static let taskRecordsFileName = "task-records.json"
+    private static let taskAttachmentsDirectoryName = "task-attachments"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -87,6 +89,17 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var recentRightPanelItemsFileURL: URL {
         configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
+    }
+
+    /// Every task record. Runtime-isolated dev and test runs get their own
+    /// copy, so they never see or change real tasks.
+    public var taskRecordsFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskRecordsFileName, directoryHint: .notDirectory)
+    }
+
+    /// Toastty's copies of task attachments, in one folder per task.
+    public var taskAttachmentsDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
     }
 
     public var defaultLogFileURL: URL {

@@ -17,6 +17,7 @@ final class AppControlExecutor {
     private let agentLaunchService: AgentLaunchService
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+    let taskCoordinator: TaskCoordinator?
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -30,6 +31,7 @@ final class AppControlExecutor {
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
+        taskCoordinator: TaskCoordinator? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)?,
         scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
@@ -41,6 +43,7 @@ final class AppControlExecutor {
         self.agentLaunchService = agentLaunchService
         self.annotationStyleStore = annotationStyleStore
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
+        self.taskCoordinator = taskCoordinator
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
@@ -50,12 +53,17 @@ final class AppControlExecutor {
             if action == .configReload, reloadConfigurationAction == nil {
                 return nil
             }
+            if action.isTaskAction, taskCoordinator == nil {
+                return nil
+            }
             return action.descriptor
         }
     }
 
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
-        AppControlQueryID.allCases.map(\.descriptor)
+        AppControlQueryID.allCases.compactMap { query in
+            query.isTaskQuery && taskCoordinator == nil ? nil : query.descriptor
+        }
     }
 
     func runAction(
@@ -795,6 +803,9 @@ final class AppControlExecutor {
                 }
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
+
+        case .taskCreate, .taskRetry, .taskDelete:
+            return try runTaskAction(action, args: args)
         }
         }
     }
@@ -807,6 +818,13 @@ final class AppControlExecutor {
             commandName: "app_control.run_action"
         )
     ) async throws -> AppControlActionOutcome {
+        if AppControlActionID.resolve(rawID) == .taskCreate {
+            let (coordinator, preparation) = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskCreate.descriptor)
+                return try prepareTaskCreate(args: args)
+            }
+            return try await finishTaskCreate(coordinator, preparation)
+        }
         guard AppControlActionID.resolve(rawID) == .agentLaunch else {
             return try runAction(id: rawID, args: args, context: context)
         }
@@ -973,6 +991,9 @@ final class AppControlExecutor {
             return agentProfileStateSnapshot(
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
+
+        case .taskGet, .taskList:
+            return try runTaskQuery(query, args: args)
         }
         }
     }
@@ -1030,6 +1051,17 @@ extension AppControlExecutor {
             )
             throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
         }
+    }
+
+    func callerIsWorkspaceScoped(sessionID: String) -> Bool {
+        sessionRuntimeStore.isWorkspaceScoped(sessionID: sessionID)
+    }
+
+    func callerMayAutomateWorkspace(_ workspaceID: UUID) -> Bool {
+        sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: requestContext().callerSessionID,
+            of: workspaceID
+        )
     }
 
     func callerManagedSession() -> SessionRecord? {
