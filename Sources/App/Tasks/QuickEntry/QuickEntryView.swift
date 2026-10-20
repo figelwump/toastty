@@ -87,8 +87,11 @@ struct QuickEntryView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Button(action: attachFiles) {
-                Label("Attach", systemImage: "plus")
-                    .labelStyle(.titleAndIcon)
+                HStack(spacing: 5) {
+                    Label("Attach", systemImage: "plus")
+                        .labelStyle(.titleAndIcon)
+                    Text("⌘V").opacity(0.55)
+                }
             }
             .buttonStyle(FooterButtonStyle())
             .disabled(model.canAttachMore == false || model.isEditable == false)
@@ -105,7 +108,10 @@ struct QuickEntryView: View {
             } label: {
                 PillLabel(title: "Workspace", value: model.workspaceTitle, isAuto: model.workspaceID == nil)
             }
-            .menuStyle(.borderlessButton)
+            // The button style with a plain button keeps the custom pill
+            // label; the borderless style replaces it with the title.
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isEditable == false)
@@ -123,7 +129,10 @@ struct QuickEntryView: View {
             } label: {
                 PillLabel(title: "Agent", value: model.agentTitle, isAuto: model.agentID == nil)
             }
-            .menuStyle(.borderlessButton)
+            // The button style with a plain button keeps the custom pill
+            // label; the borderless style replaces it with the title.
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isEditable == false)

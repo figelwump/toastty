@@ -27,11 +27,12 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         defer { controller.dismiss() }
         let model = try XCTUnwrap(controller.model)
         model.text = "Sidebar unread pill doesn't clear when I read the session from the phone, see screenshot. Probably the read-receipt path skips the desktop store"
-        let rep = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 40, pixelsHigh: 30, bitsPerSample: 8, samplesPerPixel: 4,
-            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ))
-        model.attachImageData(try XCTUnwrap(rep.representation(using: .png, properties: [:])), named: "Screenshot 4.11.52 PM.png")
+        let screenshot = NSImage(size: NSSize(width: 40, height: 30), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        model.attachImageData(try XCTUnwrap(screenshot.tiffRepresentation), named: "Screenshot 4.11.52 PM.png")
         XCTAssertEqual(model.attachments.map(\.displayName), ["selection.txt", "Screenshot 4.11.52 PM.png"])
         XCTAssertEqual(model.workspaceTitle, "toastty")
         XCTAssertEqual(model.agentTitle, "Auto")
