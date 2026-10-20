@@ -357,13 +357,17 @@ def panel_ids(snapshot):
 
 
 def visible_text_with(instance, snapshot, marker):
+    """The screen of a panel where the agent replied with `marker` on a line
+    of its own. The instructions quote the marker too, so a mention inside
+    them does not count."""
     for panel in panel_ids(snapshot):
         try:
             text = instance.query('terminal.visible-text', panelID=panel, tail=60).get('text', '')
         except AssertionError:
             continue
-        if marker in text:
-            return text
+        for line in text.splitlines():
+            if line.strip() in (f'• {marker}', f'⏺ {marker}'):
+                return text
     return None
 
 
