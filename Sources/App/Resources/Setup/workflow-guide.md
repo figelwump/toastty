@@ -33,14 +33,14 @@ The shipped `toastty-capabilities` skill covers these actions in more depth, inc
 
 Match these to what the user works on and which tools they use. Issue trackers, documents, and monitoring are reached through the agent's own tools, such as MCP servers or the `gh` CLI; Toastty provides the workspace around them. If a workflow needs a tool the user's agent lacks, say so.
 
-- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new task space, and comes back with a screenshot report and a PR chip. Toastty bundles it; see below.
+- **Finishing tasks** ("merge it", "clean up"): accepts a task's reviewed PR, turns on auto-merge, and removes merged worktrees. Starting a task in its own worktree is built in. Toastty bundles these; see below.
 - **Issue to PR** ("start ENG-412"): reads a Linear or GitHub issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it is up.
 - **Review queue** ("review my PRs"): opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies the user as each one is ready.
 - **Spec to tasks** ("build from this spec"): opens a spec from Google Docs, Notion, or a Markdown file beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page current.
 - **Crash to fix** ("fix this crash"): reproduces a Sentry report or log error in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.
 - **Second opinion** ("ask another model"): runs two agents side by side on the same question and compares their answers in a Scratchpad.
 
-## Worked example: worktree handoff
+## Worked example: finishing tasks
 
 Toastty bundles example workflow skills, read-only, at:
 
@@ -48,17 +48,17 @@ Toastty bundles example workflow skills, read-only, at:
 {{WORKFLOW_EXAMPLES_DIR}}
 ```
 
-The worktree handoff is three packages there that work together. `worktree-create` hands a task to its own Git worktree and task space, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
+Starting a task in its own Git worktree needs no personal skill: the shipped `toastty-task-start` skill runs `toastty task start-work`, and Toastty makes the worktree and continues the conversation there. Two packages there finish the work. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
 
 To set it up for the user:
 
-1. Read the three `SKILL.md` files and the README.
-2. Ask what to adapt: the landing branch and remote, how PRs are reviewed and merged, the commands that verify a change, preferred agent models, and how task workspaces should be named. Keep anything they do not want to change.
+1. Read the two `SKILL.md` files and the README.
+2. Ask what to adapt: the landing branch and remote, how PRs are reviewed and merged, and which checks must pass before a merge. Keep anything they do not want to change.
 3. Copy each package folder into the user skills directory as real files, keeping its subfolders and the executable permission on its scripts (for example, `cp -R`). Then make the agreed edits. Show the planned folders and edits first, and write only after an explicit OK.
 4. If a package with the same name already exists, do not overwrite it. Show how it differs from the bundled copy and ask whether to keep it, merge the changes, or move it aside.
-5. Install all three packages together; they refer to each other.
+5. Install both packages together; they refer to each other.
 
-The examples are also a model for a custom workflow. `worktree-create` checks its inputs, creates the worktree with a script in its own folder, launches the child agent with `agent.launch`, opens the related documents in the new workspace's right panel, and records every ID it creates.
+The examples are also a model for a custom workflow. `worktree-cleanup` checks its inputs, runs a script from its own folder, reports a verdict for each PR before it changes anything, and asks before it merges. A workflow that starts its own agents uses `agent.launch` and records every ID it creates.
 
 ## Rules for workflow skills
 

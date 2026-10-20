@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskStartWork: true
         default: false
         }
     }
@@ -29,6 +29,15 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.retry(taskID: record.id) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
+        case .taskStartWork:
+            let request = TaskStartWorkRequest(
+                branchPrefix: args.taskString("branchPrefix"),
+                base: args.taskString("base"),
+                title: args.taskString("title"),
+                slug: args.taskString("slug")
+            )
+            let record = try perform { try coordinator.startWork(request, caller: taskCaller()) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(record))
         case .taskDelete:
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.delete(taskID: record.id) }
@@ -120,7 +129,10 @@ extension AppControlExecutor {
             agent: args.taskString("agent"),
             model: args.taskString("model"),
             effort: args.taskString("effort"),
-            prompt: args.taskString("prompt")
+            prompt: args.taskString("prompt"),
+            startWork: try args.taskBool("startWork") ?? false,
+            base: args.taskString("base"),
+            branchPrefix: args.taskString("branchPrefix")
         )
     }
 
@@ -188,8 +200,9 @@ extension AppControlExecutor {
         case .quickEntry: source = "quickEntry"
         case .recovered: source = "recovered"
         }
-        return [
+        var snapshot: [String: AutomationJSONValue] = [
             "taskID": .string(record.id.uuidString),
+            "parentTaskID": optional(record.parentTaskID?.uuidString),
             "title": .string(record.title),
             "slug": .string(record.slug),
             "text": .string(record.text),
@@ -203,7 +216,53 @@ extension AppControlExecutor {
             "effort": optional(record.resolved?.effort),
             "files": .array(record.attachments.map { .string($0.path) }),
             "setup": .object(setup),
+            "sessionID": optional(record.currentSessionID),
         ]
+        if let startWork = record.startWork {
+            snapshot["worktree"] = .object(worktreeSnapshot(record, startWork: startWork))
+        }
+        return snapshot
+    }
+
+    /// The `worktree` object: the move's state, and what it made so far.
+    private static func worktreeSnapshot(_ record: TaskRecord, startWork: TaskStartWork) -> [String: AutomationJSONValue] {
+        func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        let operation = record.operation
+        var result: [String: AutomationJSONValue] = [
+            "branchPrefix": .string(startWork.branchPrefix),
+            "requestedBase": optional(startWork.base),
+            "path": optional(record.worktree?.path),
+            "branch": optional(record.worktree?.branch),
+            "baseSHA": optional(operation.base?.sha),
+            "baseRef": optional(operation.base?.ref),
+            "baseFetched": operation.base.map { .bool($0.fetched) } ?? .null,
+            "baseNote": optional(operation.base?.note),
+            "sessionID": optional(operation.worktreeSession?.sessionID),
+            "forked": operation.worktreeSession.map { .bool($0.forked) } ?? .null,
+            "conversationConfirmed": .bool(operation.worktreeSession?.nativeConversationID != nil),
+            "sourceSessionID": optional(startWork.source?.sessionID),
+        ]
+        switch startWork.state {
+        case .running:
+            result["state"] = .string("running")
+        case .failed(let reason):
+            result["state"] = .string("failed")
+            result["reason"] = .string(reason)
+        case .finished:
+            result["state"] = .string("finished")
+        }
+        switch operation.sourceOutcome {
+        case nil:
+            result["source"] = .null
+        case .closed?:
+            result["source"] = .string("closed")
+        case .exited?:
+            result["source"] = .string("exited")
+        case .kept(let reason)?:
+            result["source"] = .string("kept")
+            result["sourceKeptReason"] = .string(reason)
+        }
+        return result
     }
 }
 
@@ -211,5 +270,18 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
     func taskString(_ key: String) -> String? {
         guard case .string(let value)? = self[key] else { return nil }
         return value
+    }
+
+    func taskBool(_ key: String) throws -> Bool? {
+        switch self[key] {
+        case nil, .null?:
+            return nil
+        case .bool(let value)?:
+            return value
+        case .string(let value)? where value == "true" || value == "false":
+            return value == "true"
+        default:
+            throw AutomationSocketError.invalidPayload("\(key) must be true or false")
+        }
     }
 }

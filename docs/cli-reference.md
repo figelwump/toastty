@@ -85,7 +85,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's five shipped skills and accepted
+The read-only inventory includes Toastty's six shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -505,7 +505,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.send-text`
 - `session.exit-after-turn`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
-- `task.create`, `task.retry`, `task.delete` (see [`task`](#task))
+- `task.create`, `task.start-work`, `task.retry`, `task.delete` (see [`task`](#task))
 
 Explicit foreground navigation through workspace/tab selection and
 `workspace.focus-panel` participates in Toastty's session navigation history.
@@ -867,7 +867,8 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 `~/.toastty/tasks.toml`.
 
 ```
-toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--wait [--timeout <seconds>]]
+toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
+toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get|retry|delete <task-id>
 toastty task list
 ```
@@ -875,8 +876,17 @@ toastty task list
 `task create` returns once the task is saved; `--wait` polls `task.get` until
 the agent has started (exit 0) or setup has failed or the wait timed out
 (exit 1). Relative `--file` and `--prompt-file` paths resolve against the
-current directory, and the CLI reads `--prompt-file` itself. These commands
-are short forms of `action run task.create|task.retry|task.delete` and
+current directory, and the CLI reads `--prompt-file` itself. With
+`--start-work`, setup makes a git worktree and starts the agent there.
+
+`task start-work` runs from an agent session and moves its task into a git
+worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It
+returns once the move is saved, and the agent should then end its turn: the
+move forks the conversation after the turn ends. `task get` reports the move
+under `worktree`, and `task retry` continues a move that failed.
+
+These commands are short forms of
+`action run task.create|task.start-work|task.retry|task.delete` and
 `query run task.get|task.list`.
 
 ```bash

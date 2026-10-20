@@ -334,7 +334,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("examples/skills", isDirectory: true)
-        let names = ["worktree-cleanup", "worktree-create", "worktree-done"]
+        let names = ["worktree-cleanup", "worktree-done"]
         for name in names {
             try FileManager.default.copyItem(
                 at: examplesURL.appendingPathComponent(name),
@@ -353,12 +353,8 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         let statusURL = snapshot.skillsRootURL
             .appendingPathComponent("worktree-cleanup/scripts/worktree-status.py")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: statusURL.path))
-        let helperURL = snapshot.skillsRootURL
-            .appendingPathComponent("worktree-create/scripts/create-worktree.sh")
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helperURL.path))
-        let result = try runProcess(helperURL.path, arguments: ["--help"])
+        let result = try runProcess(statusURL.path, arguments: ["--help"])
         XCTAssertEqual(result.status, 0, result.stderr)
-        XCTAssertTrue(result.stderr.contains("--repo-root"))
     }
 
     func testPrepareSnapshotBuildsExpectedLayoutAndReusesImmutably() throws {

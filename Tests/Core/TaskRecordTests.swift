@@ -90,4 +90,53 @@ struct TaskRecordTests {
         let data = try JSONEncoder().encode(source)
         #expect(try JSONDecoder().decode(TaskSource.self, from: data) == source)
     }
+
+    @Test
+    func moveIntoAWorktreeRoundTripsAndOlderRecordsStillRead() throws {
+        var record = TaskRecord(
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            text: "Fix it",
+            title: "Fix it",
+            slug: "fix-it",
+            source: .cli,
+            setup: .started,
+            parentTaskID: UUID(),
+            startWork: TaskStartWork(
+                branchPrefix: "fix",
+                base: "main",
+                source: .init(sessionID: "s1", panelID: UUID(), agent: "claude"),
+                requestedAt: Date(timeIntervalSince1970: 1_500),
+                state: .failed(reason: "hook failed")
+            )
+        )
+        record.operation.base = .init(sha: "abc", ref: "origin/main", fetched: false, note: "offline")
+        record.operation.worktree = .init(path: "/w", branch: "fix/fix-it", checkoutRoot: "/repo", added: false)
+        record.operation.worktreeSession = .init(workspaceID: UUID(), panelID: UUID(), sessionID: "s2", forked: true)
+        record.operation.sourceOutcome = .kept(reason: "typed")
+        #expect(try JSONDecoder().decode(TaskRecord.self, from: JSONEncoder().encode(record)) == record)
+        // Reserved but not added yet: not the task's worktree.
+        #expect(record.worktree == nil)
+        #expect(record.currentSessionID == "s2")
+
+        // A record saved before tasks could move has none of these fields.
+        var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(TaskRecord(
+            createdAt: Date(), text: "a", title: "a", slug: "a", source: .cli
+        ))) as? [String: Any])
+        old.removeValue(forKey: "startWork")
+        old.removeValue(forKey: "parentTaskID")
+        old["operation"] = [String: Any]()
+        let decoded = try JSONDecoder().decode(TaskRecord.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(decoded.startWork == nil)
+        #expect(decoded.operation == TaskOperation())
+    }
+
+    @Test
+    func branchPrefixIsLowercaseWordsJoinedBySlashes() {
+        for valid in ["fix", "feat", "user/vishal", "release-2"] {
+            #expect(TaskStartWork.isValidBranchPrefix(valid), "\(valid)")
+        }
+        for invalid in ["", "Fix", "fix/", "/fix", "fix//x", "fix it", "-fix", "fix..x", String(repeating: "a", count: 41)] {
+            #expect(TaskStartWork.isValidBranchPrefix(invalid) == false, "\(invalid)")
+        }
+    }
 }

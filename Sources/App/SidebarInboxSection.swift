@@ -18,17 +18,65 @@ struct SidebarInboxRowPresentation: Equatable {
         case .setupFailed(let reason):
             return .init(title: record.title, detail: reason, tag: "⚠ setup failed", needsUser: true)
         case .started:
-            return .init(title: record.title, detail: "→ \(workspace)\(agent)", tag: "started", needsUser: false)
+            switch record.startWork?.state {
+            case .running?:
+                return .init(title: record.title, detail: startWorkStep(record), tag: "moving to worktree", needsUser: false)
+            case .failed(let reason)?:
+                return .init(title: record.title, detail: reason, tag: "⚠ worktree failed", needsUser: true)
+            case .finished?, nil:
+                return .init(title: record.title, detail: "→ \(workspace)\(agent)", tag: "started", needsUser: false)
+            }
         }
+    }
+
+    /// What a move into a worktree is doing now, from the steps it saved.
+    static func startWorkStep(_ record: TaskRecord) -> String {
+        let operation = record.operation
+        if record.worktree == nil {
+            return "making the worktree"
+        }
+        if operation.hookFinishedAt == nil {
+            return "running create_hook"
+        }
+        guard let session = operation.worktreeSession, session.sessionID != nil else {
+            return "waiting for the agent's turn to end"
+        }
+        if session.forked, session.nativeConversationID == nil {
+            return "waiting for the forked agent"
+        }
+        return "closing the old session"
     }
 
     var accessibilityLabel: String {
         "\(title), Inbox task, \(tag.replacingOccurrences(of: "⚠ ", with: "")), \(detail)"
     }
 
-    /// The tasks the Inbox shows: those that have not started, oldest first.
+    /// The tasks the Inbox shows, oldest first: those that have not
+    /// started, and those moving into a worktree or whose move failed.
     static func inboxRecords(_ records: [TaskRecord]) -> [TaskRecord] {
-        records.filter { $0.setup.isStarted == false }
+        records.filter(isInInbox)
+    }
+
+    static func isInInbox(_ record: TaskRecord) -> Bool {
+        guard record.setup.isStarted else { return true }
+        switch record.startWork?.state {
+        case .running?, .failed?: return true
+        case .finished?, nil: return false
+        }
+    }
+
+    /// Whether Retry applies: setup or a move into a worktree failed.
+    static func canRetry(_ record: TaskRecord) -> Bool {
+        if case .setupFailed = record.setup { return true }
+        if record.setup.isStarted, case .failed? = record.startWork?.state { return true }
+        return false
+    }
+
+    /// Why setup or the move failed, for the popover.
+    static func failureReason(_ record: TaskRecord) -> String? {
+        if case .setupFailed(let reason) = record.setup { return reason }
+        if record.setup.isStarted, case .failed(let reason)? = record.startWork?.state { return reason }
+        return nil
     }
 }
 
@@ -174,8 +222,8 @@ struct SidebarInboxSection: View {
         }
         .contextMenu {
             Button("Show Task…") { presentedTaskID = record.id }
-            if case .setupFailed = record.setup {
-                Button("Retry Setup") { try? coordinator.retry(taskID: record.id) }
+            if SidebarInboxRowPresentation.canRetry(record) {
+                Button(record.setup.isStarted ? "Retry Move" : "Retry Setup") { try? coordinator.retry(taskID: record.id) }
             }
             Divider()
             Button("Delete Task", role: .destructive) { try? coordinator.delete(taskID: record.id) }
@@ -205,7 +253,7 @@ struct TaskInboxPopover: View {
 
     var body: some View {
         Group {
-            if let record = records.record(id: taskID), record.setup.isStarted == false {
+            if let record = records.record(id: taskID), SidebarInboxRowPresentation.isInInbox(record) {
                 content(record)
             } else {
                 // The task started or was deleted while the popover was open.
@@ -242,7 +290,7 @@ struct TaskInboxPopover: View {
                     .lineLimit(2)
             }
 
-            if case .setupFailed(let reason) = record.setup {
+            if let reason = SidebarInboxRowPresentation.failureReason(record) {
                 Text(reason)
                     .font(.system(size: 11))
                     .foregroundStyle(ToastyTheme.inactiveText)
@@ -264,7 +312,7 @@ struct TaskInboxPopover: View {
                     perform { try coordinator.delete(taskID: record.id) }
                 }
                 Spacer(minLength: 0)
-                if case .setupFailed = record.setup {
+                if SidebarInboxRowPresentation.canRetry(record) {
                     Button("Retry") {
                         perform { try coordinator.retry(taskID: record.id) }
                     }
