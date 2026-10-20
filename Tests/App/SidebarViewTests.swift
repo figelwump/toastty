@@ -2165,6 +2165,14 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The agent did not start: profile missing"), "\(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Already running") }, "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-inbox")
+        let bitmap = try renderedBitmap(for: harness.hostingView)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "sidebar-inbox"
+        attachment.lifetime = .keepAlways
+        add(attachment)
 
         for task in coordinator.records.records {
             try coordinator.records.remove(id: task.id)
