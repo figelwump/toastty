@@ -24,6 +24,7 @@ Finder in front, it checks that:
 
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -229,6 +230,9 @@ def main():
         app_log = runtime_home / 'logs' / 'toastty.log'
         if app_log.is_file():
             (artifacts / 'remote-quick-entry-check-toastty.log').write_bytes(app_log.read_bytes())
+        # The evidence is in the artifacts; the remote Mac's disk has filled
+        # with leftover run folders before.
+        shutil.rmtree(root, ignore_errors=True)
     print('[quick-entry-check] passed', flush=True)
 
 
