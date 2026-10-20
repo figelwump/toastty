@@ -2188,6 +2188,69 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(emptied.contains { $0.hasPrefix("Inbox") }, "An empty Inbox should not render: \(emptied)")
     }
 
+    func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let recents = RecentWorkspacesStore.inMemory()
+        recents.record(RecentWorkspace(
+            id: UUID(),
+            title: "control-plane",
+            rootDirectory: "/tmp/toastty-picker-test/control-plane",
+            closedAt: Date().addingTimeInterval(-3 * 86_400)
+        ))
+        let recordStore = TaskRecordStore.inMemory()
+        let record = TaskRecord(
+            createdAt: Date(),
+            text: "billing page shows the old plan after upgrade",
+            attachments: [TaskAttachment(path: "/tmp/IMG_2231.png", displayName: "IMG_2231.png")],
+            title: "Billing page shows the old plan",
+            slug: "billing-old-plan",
+            source: .cli,
+            setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")
+        )
+        try recordStore.insert(record)
+        let coordinator = TaskCoordinator(
+            records: recordStore,
+            store: store,
+            launcher: nil,
+            configLoader: { .empty },
+            attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+            hasActiveSession: { _ in false },
+            grantScope: { _, _ in },
+            recentWorkspaces: recents
+        )
+        let size = NSSize(width: 320, height: 300)
+        let hostingView = NSHostingView(
+            rootView: ZStack(alignment: .topLeading) {
+                Color(red: 0.16, green: 0.16, blue: 0.17)
+                TaskInboxPopover(taskID: record.id, records: recordStore, coordinator: coordinator, dismiss: {})
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+        )
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.2)
+        hostingView.layoutSubtreeIfNeeded()
+
+        // SwiftUI labels are not in the text scan; the menu and the task
+        // text are. The attached PNG shows the reason and the buttons.
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains("Choose…"), "\(textValues)")
+        XCTAssertEqual(coordinator.workspaceChoices().recent.map(\.title), ["control-plane"])
+
+        try writeSidebarEvidence(hostingView, name: "inbox-workspace-picker")
+        let bitmap = try renderedBitmap(for: hostingView)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "inbox-workspace-picker"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
