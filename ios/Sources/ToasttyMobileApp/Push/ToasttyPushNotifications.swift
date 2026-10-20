@@ -11,7 +11,7 @@ protocol ToasttyPushNotificationClient: AnyObject {
     func permission() async -> ToasttyNotificationPermission
     func requestPermission() async throws -> Bool
     func register()
-    func deliveredPayloads() async -> [RemotePushPayload]
+    func deliveredPayloads(context: ToasttyPushRecoveryContext) async -> [RemotePushPayload]
     func removeVerificationNotifications(registrationIDs: Set<UUID>) async
 }
 
@@ -19,6 +19,13 @@ protocol ToasttyPushNotificationClient: AnyObject {
 /// Keep only bounded, typed events until the controller is installed.
 @MainActor
 final class ToasttyPushNotificationBridge {
+    nonisolated let receiverDiagnostics: ToasttyPushReceiverDiagnostics
+    weak var expectedDelegate: (any UNUserNotificationCenterDelegate)?
+
+    init(receiverDiagnostics: ToasttyPushReceiverDiagnostics = ToasttyPushReceiverDiagnostics()) {
+        self.receiverDiagnostics = receiverDiagnostics
+    }
+
     var onDiagnosticRecord: (@MainActor (ToasttyDiagnosticRecord) -> Void)? {
         didSet {
             guard let onDiagnosticRecord else { return }
@@ -91,8 +98,25 @@ final class ToasttyPushNotificationBridge {
 
 @MainActor
 final class ToasttySystemPushNotificationClient: ToasttyPushNotificationClient {
+    private let bridge: ToasttyPushNotificationBridge?
+    private let deliveredNotifications: @MainActor () async -> [UNNotification]
+
+    init(bridge: ToasttyPushNotificationBridge? = nil,
+         deliveredNotifications: @escaping @MainActor () async -> [UNNotification] = {
+             await UNUserNotificationCenter.current().deliveredNotifications()
+         }) {
+        self.bridge = bridge
+        self.deliveredNotifications = deliveredNotifications
+    }
+
     func permission() async -> ToasttyNotificationPermission {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        bridge?.receiverDiagnostics.recordEnvironment(
+            settings: .init(authorizationStatus: settings.authorizationStatus,
+                alert: settings.alertSetting, lockScreen: settings.lockScreenSetting,
+                notificationCenter: settings.notificationCenterSetting),
+            delegate: .capture(actual: center.delegate, expected: bridge?.expectedDelegate))
         return Self.permission(authorizationStatus: settings.authorizationStatus,
                               alert: settings.alertSetting, lockScreen: settings.lockScreenSetting,
                               notificationCenter: settings.notificationCenterSetting)
@@ -113,14 +137,52 @@ final class ToasttySystemPushNotificationClient: ToasttyPushNotificationClient {
         return await permission() == .allowed
     }
     func register() { UIApplication.shared.registerForRemoteNotifications() }
-    func deliveredPayloads() async -> [RemotePushPayload] {
-        await UNUserNotificationCenter.current().deliveredNotifications().compactMap {
-            ToasttyPushNotificationBridge.payload($0.request.content.userInfo)
+    func deliveredPayloads(context: ToasttyPushRecoveryContext) async -> [RemotePushPayload] {
+        let delivered = await deliveredNotifications()
+        let result = Self.classifyDelivered(delivered, context: context, capturedAt: .now)
+        bridge?.receiverDiagnostics.recordRecovery(result.snapshot)
+        return result.payloads
+    }
+
+    /// Decode once. Recovery receives exactly the payloads counted here, and
+    /// this observation is recorded before the controller accepts/removes proofs.
+    static func classifyDelivered(_ notifications: [UNNotification],
+                                  context: ToasttyPushRecoveryContext, capturedAt: Date)
+        -> (payloads: [RemotePushPayload], snapshot: ToasttyPushReceiverSnapshot.Recovery) {
+        var snapshot = ToasttyPushReceiverSnapshot.Recovery(capturedAt: capturedAt,
+            referenceAt: context.referenceAt,
+            referenceKind: context.referenceAt == nil ? .none : context.referenceKind,
+            hasPendingRegistration: context.pendingRegistrationID != nil, hasPairing: context.pairingID != nil)
+        var payloads: [RemotePushPayload] = []
+        for notification in notifications {
+            snapshot.raw += 1
+            let afterReference = context.referenceAt.map { notification.date >= $0 }
+            if let afterReference {
+                if afterReference { snapshot.atOrAfterReference += 1 }
+                else { snapshot.beforeReference += 1 }
+            } else { snapshot.withoutReference += 1 }
+            guard let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo) else {
+                snapshot.malformed += 1
+                continue
+            }
+            payloads.append(payload)
+            switch payload.kind {
+            case .session: snapshot.session += 1
+            case .verification:
+                snapshot.verification += 1
+                let registrationMatches = payload.registrationID == context.pendingRegistrationID
+                let pairingMatches = payload.pairingID == context.pairingID
+                if registrationMatches { snapshot.matchingRegistration += 1 }
+                if pairingMatches { snapshot.matchingPairing += 1 }
+                if registrationMatches && pairingMatches { snapshot.matchingBoth += 1 }
+                if afterReference == true { snapshot.verificationAtOrAfterReference += 1 }
+            }
         }
+        return (payloads, snapshot)
     }
     func removeVerificationNotifications(registrationIDs: Set<UUID>) async {
         let center = UNUserNotificationCenter.current()
-        let ids = await center.deliveredNotifications().compactMap { notification in
+        let ids = await deliveredNotifications().compactMap { notification in
             guard let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo),
                   payload.kind == .verification, registrationIDs.contains(payload.registrationID) else { return nil as String? }
             return notification.request.identifier
@@ -131,7 +193,16 @@ final class ToasttySystemPushNotificationClient: ToasttyPushNotificationClient {
 
 @MainActor
 final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    let pushBridge = ToasttyPushNotificationBridge()
+    let pushBridge: ToasttyPushNotificationBridge
+    nonisolated let receiverDiagnostics: ToasttyPushReceiverDiagnostics
+
+    override init() {
+        let diagnostics = ToasttyPushReceiverDiagnostics()
+        receiverDiagnostics = diagnostics
+        pushBridge = ToasttyPushNotificationBridge(receiverDiagnostics: diagnostics)
+        super.init()
+        pushBridge.expectedDelegate = self
+    }
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -147,7 +218,10 @@ final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, U
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        guard let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo) else {
+        receiverDiagnostics.beginCallback(.foreground)
+        let payload = ToasttyPushNotificationBridge.payload(notification.request.content.userInfo)
+        receiverDiagnostics.decodedCallback(.foreground, payload: payload)
+        guard let payload else {
             await recordInvalidPayload()
             return []
         }
@@ -157,9 +231,11 @@ final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, U
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+        receiverDiagnostics.beginCallback(.response)
         let isDefaultAction = response.actionIdentifier == UNNotificationDefaultActionIdentifier
         let payload = isDefaultAction
             ? ToasttyPushNotificationBridge.payload(response.notification.request.content.userInfo) : nil
+        receiverDiagnostics.decodedCallback(.response, payload: payload, ignored: !isDefaultAction)
         // UIKit updates its snapshot when this callback finishes. The async
         // delegate form can invoke its generated completion off the main thread.
         Task { @MainActor in

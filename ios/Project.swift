@@ -418,6 +418,7 @@ let project = Project(
             deploymentTargets: deploymentTarget,
             infoPlist: .default,
             sources: ["Tests/ToasttyMobileAppTests/**"],
+            resources: [.folderReference(path: "../Tests/RemoteProtocol/Fixtures/v1")],
             dependencies: [
                 .target(name: "ToasttyMobileApp"),
                 .target(name: "ToasttyMobileDomain"),

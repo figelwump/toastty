@@ -68,6 +68,7 @@ struct ToasttyDiagnosticReport: Codable, Equatable, Sendable {
     let events: [Event]
     let truncatedCount: Int
     let push: ToasttyPushSetupSnapshot?
+    let receiver: ToasttyPushReceiverSnapshot?
 }
 
 /// The lock protects one latest observation and its scheduling flag. File access
@@ -90,6 +91,7 @@ final class ToasttyDiagnosticRecorder: @unchecked Sendable {
     private struct Observation {
         var log = ToasttyConnectionDiagnosticLog()
         var push: ToasttyPushSetupSnapshot?
+        var receiver: ToasttyPushReceiverSnapshot?
         var capturedAt: Date
         var revision: UInt64 = 0
     }
@@ -119,6 +121,21 @@ final class ToasttyDiagnosticRecorder: @unchecked Sendable {
 
     func updatePushSnapshot(_ snapshot: ToasttyPushSetupSnapshot, log: ToasttyConnectionDiagnosticLog) {
         submit(log: log, push: snapshot)
+    }
+
+    func updateReceiverSnapshot(_ snapshot: ToasttyPushReceiverSnapshot) {
+        let shouldSchedule = lock.withLock {
+            // Callback threads publish outside the receiver's lock. Ignore a
+            // late older observation without replacing the newer counters.
+            if let current = latest.receiver, snapshot.sequence <= current.sequence { return false }
+            latest.receiver = snapshot
+            latest.capturedAt = .now
+            latest.revision &+= 1
+            guard !workerScheduled else { return false }
+            workerScheduled = true
+            return true
+        }
+        if shouldSchedule { enqueueWorker() }
     }
 
     private func submit(log: ToasttyConnectionDiagnosticLog, push: ToasttyPushSetupSnapshot?) {
@@ -172,7 +189,8 @@ final class ToasttyDiagnosticRecorder: @unchecked Sendable {
             let report = ToasttyDiagnosticReport(schemaVersion: 1, app: app, runID: runID,
                 runStartedAt: runStartedAt, capturedAt: observation.capturedAt, lastFlushReason: reason,
                 events: observation.log.entries.suffix(eventCount).map(ToasttyDiagnosticReport.Event.init),
-                truncatedCount: observation.log.count - eventCount, push: observation.push)
+                truncatedCount: observation.log.count - eventCount, push: observation.push,
+                receiver: observation.receiver)
             let data = try encoder.encode(report)
             if data.count <= byteBudget { return data }
             // Keep the newest entries and the current push snapshot. A future

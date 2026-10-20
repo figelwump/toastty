@@ -71,7 +71,7 @@ private final class FixturePushNotifications: ToasttyPushNotificationClient {
     func permission() async -> ToasttyNotificationPermission { mode == .intro ? .undetermined : mode == .denied ? .denied : .allowed }
     func requestPermission() async throws -> Bool { mode = .pending; return true }
     func register() {}
-    func deliveredPayloads() async -> [RemotePushPayload] { [] }
+    func deliveredPayloads(context: ToasttyPushRecoveryContext) async -> [RemotePushPayload] { [] }
     func removeVerificationNotifications(registrationIDs: Set<UUID>) async {}
 }
 private struct FixturePushRelay: PushRelayClientProtocol {

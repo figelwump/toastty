@@ -288,6 +288,30 @@ final class ToasttyPushControllerTests: XCTestCase {
         await assertBeginCount(1, declined.relay)
     }
 
+    func testRecoveryReferenceTracksObservedRetryTimeAndRestoredPendingCreation() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.failBeginOnce(.network)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceKind, ToasttyPushReceiverSnapshot.Recovery.ReferenceKind.none)
+        XCTAssertNil(h.notifications.recoveryContext?.referenceAt)
+        let pending = try XCTUnwrap(h.controller.storedState?.pending)
+        h.clock.advance(30)
+        let retryAt = h.clock.date()
+        await h.controller.reconcile()
+        await h.controller.reconcile()
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceKind, .requestStarted)
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceAt, retryAt)
+        XCTAssertNotEqual(retryAt, pending.createdAt)
+
+        let restored = h.makeController()
+        await h.connect(restored)
+        await restored.reconcile()
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceKind, .pendingCreated)
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceAt, pending.createdAt)
+        await assertBeginCount(2, h.relay)
+    }
+
     func testDeliveredProofIsRetainedUntilItsNonceCanBeSaved() async throws {
         let h = try await Harness.make(desired: true)
         h.controller.receivedToken(Harness.token)
@@ -297,6 +321,10 @@ final class ToasttyPushControllerTests: XCTestCase {
         h.store.saveFailure = .locked
         await h.controller.reconcile()
         XCTAssertEqual(h.notifications.delivered.count, 1)
+        XCTAssertEqual(h.notifications.recoveryContext?.pendingRegistrationID, pending.registrationID)
+        XCTAssertEqual(h.notifications.recoveryContext?.pairingID, pending.pairingID)
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceKind, .requestStarted)
+        XCTAssertEqual(h.notifications.recoveryContext?.referenceAt, pending.createdAt)
         XCTAssertNil(h.controller.storedState?.pending?.nonce)
         await assertCompleteCount(0, h.relay)
         h.store.saveFailure = nil
@@ -1025,6 +1053,7 @@ private final class PushNotificationsSpy: ToasttyPushNotificationClient {
     var permissionRequests = 0
     var registrationRequests = 0
     var delivered: [RemotePushPayload] = []
+    var recoveryContext: ToasttyPushRecoveryContext?
     func permission() async -> ToasttyNotificationPermission { currentPermission }
     func requestPermission() async throws -> Bool {
         permissionRequests += 1
@@ -1032,7 +1061,10 @@ private final class PushNotificationsSpy: ToasttyPushNotificationClient {
         return grantsPermission
     }
     func register() { registrationRequests += 1 }
-    func deliveredPayloads() async -> [RemotePushPayload] { delivered }
+    func deliveredPayloads(context: ToasttyPushRecoveryContext) async -> [RemotePushPayload] {
+        recoveryContext = context
+        return delivered
+    }
     func removeVerificationNotifications(registrationIDs: Set<UUID>) async {
         delivered.removeAll { $0.kind == .verification && registrationIDs.contains($0.registrationID) }
     }

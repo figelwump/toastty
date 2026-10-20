@@ -4,6 +4,49 @@ import ToasttyMobileDomain
 @testable import ToasttyMobileApp
 
 final class ToasttyDiagnosticReportTests: XCTestCase {
+    func testConcurrentCallbacksAndHandlerAttachmentPersistTheNewestCompleteCounts() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = makeRecorder(directory)
+        let receiver = ToasttyPushReceiverDiagnostics()
+        DispatchQueue.concurrentPerform(iterations: 200) { index in
+            if index.isMultiple(of: 10) {
+                receiver.installHandler { recorder.updateReceiverSnapshot($0) }
+            }
+            receiver.beginCallback(.foreground)
+            receiver.decodedCallback(.foreground, payload: nil)
+        }
+        await assertFlush(recorder)
+        let final = try readReport(directory).receiver
+        XCTAssertEqual(final?.sequence, receiver.snapshot.sequence)
+        XCTAssertEqual(final?.foreground, receiver.snapshot.foreground)
+        XCTAssertEqual(final?.foreground.entered, 200)
+        XCTAssertEqual(final?.foreground.malformed, 200)
+    }
+
+    func testReceiverUpdatesPreserveOtherStateAndRejectLateOlderCounters() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = makeRecorder(directory)
+        let receiver = ToasttyPushReceiverDiagnostics()
+        receiver.beginCallback(.foreground)
+        let older = receiver.snapshot
+        receiver.beginCallback(.foreground)
+        let newer = receiver.snapshot
+        recorder.updateReceiverSnapshot(newer)
+        recorder.updateReceiverSnapshot(older)
+        var log = ToasttyConnectionDiagnosticLog()
+        log.append(.streamConnected)
+        let push = snapshot(sequence: 1, reason: .awaitingProof)
+        recorder.updatePushSnapshot(push, log: log)
+        await assertFlush(recorder)
+        let report = try readReport(directory)
+        XCTAssertEqual(report.receiver?.foreground.entered, 2)
+        XCTAssertEqual(report.receiver?.sequence, newer.sequence)
+        XCTAssertEqual(report.push, push)
+        XCTAssertEqual(report.events.map(\.event), ["connected"])
+    }
+
     func testInitialReportAndBurstPersistTheFinalBoundedRing() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -156,6 +199,20 @@ final class ToasttyDiagnosticReportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = makeRecorder(directory)
         let push = fullSnapshot()
+        var receiver = ToasttyPushReceiverSnapshot()
+        receiver.capturedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        receiver.settings = .init(authorizationStatus: .authorized, alert: .enabled,
+            lockScreen: .enabled, notificationCenter: .enabled)
+        receiver.delegate = .init(identity: .expected, foregroundSelector: true, responseSelector: true)
+        receiver.foreground = .init(entered: .max, verification: .max, session: .max, malformed: .max, ignored: .max)
+        receiver.response = receiver.foreground
+        receiver.firstRecovery = .init(capturedAt: receiver.capturedAt, referenceAt: receiver.capturedAt, referenceKind: .requestStarted,
+            hasPendingRegistration: true, hasPairing: true, raw: 99999, verification: 99999, session: 99999,
+            malformed: 99999, matchingRegistration: 99999, matchingPairing: 99999, matchingBoth: 99999,
+            beforeReference: 99999, atOrAfterReference: 99999, withoutReference: 99999,
+            verificationAtOrAfterReference: 99999)
+        receiver.latestRecovery = receiver.firstRecovery
+        recorder.updateReceiverSnapshot(receiver)
         var log = ToasttyConnectionDiagnosticLog()
         for _ in 0..<128 {
             log.append(.pushSetupReturned, pushDetails: fullPushDetails(), pushSnapshot: push)
@@ -168,6 +225,7 @@ final class ToasttyDiagnosticReportTests: XCTestCase {
         XCTAssertEqual(report.events.count, 128)
         XCTAssertEqual(report.truncatedCount, 0)
         XCTAssertEqual(report.push, push)
+        XCTAssertEqual(report.receiver, receiver)
     }
 
     func testByteBudgetDropsOldestEventsAndKeepsCurrentSnapshot() async throws {

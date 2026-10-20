@@ -147,6 +147,7 @@ struct ToasttyMobileRootView: View {
         .task {
             let recorder = ToasttyDiagnosticRecorder.shared
             recorder.submit(log: diagnostics.connectionLog)
+            pushBridge?.receiverDiagnostics.installHandler { recorder.updateReceiverSnapshot($0) }
             sessionController.installDiagnosticRecordHandler { record in
                 ToasttyDiagnosticLogger.record(record.event, recordedAt: record.recordedAt,
                     pushDetails: record.pushDetails, pushSnapshot: record.pushSnapshot, in: &diagnostics)

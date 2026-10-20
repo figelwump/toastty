@@ -410,7 +410,13 @@ to the current app run. It contains no registration UUIDs or pairing IDs. These
 records are saved locally in a bounded report, together with the app build,
 run identifier, capture time, and categorical notification setup state. The
 setup state includes the last return reason, saved cooldown deadline, and
-scheduled retry time. The report contains no tokens, credentials, addresses,
+scheduled retry time. A receiver snapshot adds categorical notification settings,
+delegate identity/selector checks, callback counts, and first/latest recovery
+counts by decoded kind, pending-registration/pairing match, and delivery-date
+bucket. Each recovery sample includes its capture time and the reference time
+for the observed request or restored pending registration. Matching uses
+identifiers only in memory and records counts. It does not
+record payloads, delegate class names, or object addresses. The report contains no tokens, credentials, addresses,
 message text, titles, or transcript content. One previous app run is retained.
 The files are excluded from backup and are not uploaded automatically.
 

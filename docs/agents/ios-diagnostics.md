@@ -2,7 +2,7 @@
 
 The native iPhone app saves a small diagnostics report in its app data container.
 The report contains the app version and build, a run ID, timestamps, up to 128
-categorical events, and an optional push state snapshot. It does not contain raw
+categorical events, and optional push setup and receiver snapshots. It does not contain raw
 errors, terminal contents, credentials, device tokens, or connection addresses.
 The recorder's typed fields enforce this privacy boundary. The collector
 preserves additive fields; it does not act as a general report redaction tool.
@@ -58,6 +58,28 @@ Cooldown seconds remaining are derived from each deadline and the report's
 current live state. The snapshot stores `reconciling`,
 `activeRegistrationEnabled`, and `permission`; it does not store a countdown that
 could become stale while the app is suspended.
+
+The optional `receiver` snapshot records notification authorization and visible
+delivery settings, whether the notification center's delegate is the retained
+app delegate (`expected`, `none`, or `other`), and whether it responds to the
+foreground and response selectors. It stores no class names or object addresses.
+Callback counters increment before decoding, then count verification, session,
+malformed, or ignored response payloads. Counters cover this app run, including
+callbacks before the report handler attaches.
+
+`firstRecovery` and `latestRecovery` describe the exact delivered-notification
+arrays used by recovery, sampled before proof handling and removal. They count
+raw items, decoded kinds, malformed items, and verification matches against the
+pending registration and current pairing at query start. They retain no payloads
+or identifiers. Date buckets count all raw items before or at/after the reference;
+`verificationAtOrAfterReference` counts only decoded verification items.
+`referenceKind=requestStarted` uses an observed request start in this run.
+`pendingCreated` uses the restored pending record's creation time, which is not
+proof of a send time. With no reference, items count under `withoutReference`.
+The first sample survives later cleanup; the latest sample has its own timestamp.
+Neither a nonempty list nor zero callbacks proves delivery or non-delivery of a
+specific push. Foreground pushes that the app suppresses may not appear in this
+list.
 
 By default, the collector accepts old
 reports so that diagnostics remain available after suspension or a crash. Use

@@ -48,6 +48,7 @@ final class ToasttyPushController {
     private var diagnosticReturn: ToasttyPushSetupSnapshot.ReturnReason?
     private var diagnosticReturnAt: Date?
     private var diagnosticResultSequence: UInt64 = 0
+    private var lastVerificationRequest: (registrationID: UUID, startedAt: Date)?
     private var retryScheduledAt: Date?
     private var diagnosticRegistrations: [(id: UUID, number: UInt64)] = []
     private var nextDiagnosticRegistration: UInt64 = 1
@@ -90,7 +91,7 @@ final class ToasttyPushController {
 
     init(configuration: ToasttyPushConfiguration?, vault: any AppSessionCredentialVault,
          store: any MobilePushStateStoring = KeychainMobilePushStateStore(),
-         notifications: any ToasttyPushNotificationClient = ToasttySystemPushNotificationClient(),
+         notifications: (any ToasttyPushNotificationClient)? = nil,
          installation: any ToasttyPushInstallationIdentifying = ToasttyPushInstallationMarker(),
          bridge: ToasttyPushNotificationBridge? = nil,
          relayFactory: @escaping @Sendable (URL) -> any PushRelayClientProtocol = { PushRelayClient(baseURL: $0) },
@@ -101,7 +102,8 @@ final class ToasttyPushController {
          automaticallyReconciles: Bool = true,
          sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.configuration = configuration; self.vault = vault; self.store = store
-        self.notifications = notifications; self.installation = installation
+        self.notifications = notifications ?? ToasttySystemPushNotificationClient(bridge: bridge)
+        self.installation = installation
         self.relayFactory = relayFactory; self.nativeFactory = nativeFactory; self.now = now; self.buildID = buildID
         self.automaticallyReconciles = automaticallyReconciles
         self.sleep = sleep
@@ -456,7 +458,14 @@ final class ToasttyPushController {
             guard await isCurrent(operationRevision, generation: generation) else { result = .contextChanged; return }
             guard permission == .allowed else { result = .permissionRequired; return }
             if !requestedToken { requestedToken = true; emit(.pushTokenRequested); notifications.register() }
-            let delivered = await notifications.deliveredPayloads()
+            let pending = storedState?.pending
+            let requestTime = lastVerificationRequest.flatMap {
+                $0.registrationID == pending?.registrationID ? $0.startedAt : nil
+            }
+            let delivered = await notifications.deliveredPayloads(context: .init(
+                pendingRegistrationID: pending?.registrationID, pairingID: context.pairingID,
+                referenceAt: requestTime ?? pending?.createdAt,
+                referenceKind: requestTime != nil ? .requestStarted : pending != nil ? .pendingCreated : .none))
             for payload in delivered where payload.kind == .verification { await acceptProof(payload) }
             let consumedProofs = delivered.filter { payload in
                 guard payload.kind == .verification else { return false }
@@ -541,6 +550,7 @@ final class ToasttyPushController {
                     operationRegistration = attempt
                     failedOperation = .pushRelayBeginFailed
                     let capture = ToasttyPushDiagnosticCapture()
+                    lastVerificationRequest = (attempt.registrationID, now())
                     emit(.pushVerificationStarted, registration: attempt)
                     let response: PushRelayBeginResponse
                     do {
