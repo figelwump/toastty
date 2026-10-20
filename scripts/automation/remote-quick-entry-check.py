@@ -17,7 +17,9 @@ Finder in front, it checks that:
 - typed text, a pasted image and a picked workspace become the task, with
   source quickEntry, and the agent starts with the text as written;
 - the panel closes and Finder is still in front;
-- Esc closes a second panel without creating a task.
+- Esc closes a second panel without creating a task, and Command+T in the
+  panel opens no tab in Toastty;
+- Command+W closes the panel without closing the terminal behind it.
 """
 
 import json
@@ -38,7 +40,7 @@ Instance, require, wait_for, FAKE_AGENT = task_check.Instance, task_check.requir
 TASK_LINES = ['Unread dot stays on after reading', 'Seen on the phone first.']
 FINDER = 'com.apple.finder'
 # Virtual key codes on a US keyboard.
-KEY_T, KEY_V, KEY_RETURN, KEY_ESCAPE = 17, 9, 36, 53
+KEY_T, KEY_V, KEY_W, KEY_RETURN, KEY_ESCAPE = 17, 9, 13, 36, 53
 PANEL = 'quick-entry.panel'
 
 
@@ -121,6 +123,15 @@ def main():
         listed = listed_windows()
         return listed is not None and len(listed) > 0 and all(w['identifier'] != PANEL for w in listed)
 
+    def wait_for_text(expected):
+        def read():
+            value = drive('value', pid, 'quick-entry.text')
+            if value == expected:
+                return value
+            step('text so far', value=value, focused=drive('focused', pid), frontmost=drive('frontmost'))
+            return None
+        return wait_for('the typed text', read, timeout=10, interval=1)
+
     def open_panel_from_finder():
         drive('activate', FINDER)
         wait_for('Finder in front', lambda: drive('frontmost') == FINDER, timeout=15)
@@ -144,8 +155,7 @@ def main():
         drive('type', TASK_LINES[0])
         drive('key', KEY_RETURN)
         drive('type', TASK_LINES[1])
-        typed = wait_for('the typed text', lambda: drive('value', pid, 'quick-entry.text') == '\n'.join(TASK_LINES)
-                         and drive('value', pid, 'quick-entry.text'), timeout=10)
+        typed = wait_for_text('\n'.join(TASK_LINES))
         drive('pasteboard-png', image)
         drive('key', KEY_V, 'cmd')
         drive('press-menu', pid, 'quick-entry.workspace', workspace['title'])
@@ -170,16 +180,34 @@ def main():
                 f'The agent did not get the task as written: {message!r}')
         step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message)
 
-        # 2. Esc closes a second panel and creates nothing.
+        def terminal_count():
+            listed = instance.query('workspace.list')['workspaces']
+            return sum(len(w['terminalCwds']) for w in listed)
+
+        # 2. Esc closes a second panel and creates nothing. Command+T in the
+        # panel must not reach Toastty's menus.
+        terminals = terminal_count()
         open_panel_from_finder()
         drive('type', 'Never mind')
-        wait_for('the typed text', lambda: drive('value', pid, 'quick-entry.text') == 'Never mind', timeout=10)
+        wait_for_text('Never mind')
+        drive('key', KEY_T, 'cmd')
+        time.sleep(1)
+        require(terminal_count() == terminals and panel_windows(), 'Command+T in the panel acted on Toastty')
         drive('key', KEY_ESCAPE)
         wait_for('the panel to close', panel_closed, timeout=10)
         tasks = run_cli('task', 'list')['tasks']
         require(len(tasks) == 1, f'Esc created a task: {tasks}')
         require(drive('frontmost') == FINDER, 'Focus did not go back to Finder after Esc')
-        step('escape discarded', tasks=len(tasks))
+        step('escape discarded', tasks=len(tasks), terminals=terminal_count())
+
+        # 3. Command+W closes the panel only.
+        open_panel_from_finder()
+        drive('key', KEY_W, 'cmd')
+        wait_for('the panel to close', panel_closed, timeout=10)
+        time.sleep(1)
+        require(terminal_count() == terminals, f'Command+W closed a terminal: {terminal_count()} of {terminals}')
+        require(len(run_cli('task', 'list')['tasks']) == 1, 'Command+W created a task')
+        step('command-w closed the panel only', terminals=terminal_count())
 
         evidence['status'] = 'passed'
     finally:
@@ -188,6 +216,9 @@ def main():
         except Exception:
             pass
         (artifacts / 'remote-quick-entry-check.json').write_text(json.dumps(evidence, indent=2, default=str))
+        app_log = runtime_home / 'logs' / 'toastty.log'
+        if app_log.is_file():
+            (artifacts / 'remote-quick-entry-check-toastty.log').write_bytes(app_log.read_bytes())
     print('[quick-entry-check] passed', flush=True)
 
 

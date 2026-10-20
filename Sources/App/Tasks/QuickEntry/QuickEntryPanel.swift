@@ -16,6 +16,9 @@ final class QuickEntryPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    var onSubmit: () -> Void = {}
+    var onCancel: () -> Void = {}
+
     init() {
         super.init(
             contentRect: NSRect(origin: .zero, size: Self.defaultSize),
@@ -37,30 +40,67 @@ final class QuickEntryPanel: NSPanel {
         setAccessibilityIdentifier("quick-entry.panel")
     }
 
-    /// While Toastty is not the active app, its menu bar does not handle
-    /// ⌘C, ⌘V and the other editing shortcuts, so the panel sends them to
-    /// the text field itself.
+    /// Command shortcuts stay inside the panel. Toastty's menus would
+    /// otherwise act on the Toastty window behind it: ⌘W would close a
+    /// terminal there, and ⌘T would open a tab. While Toastty is not the
+    /// active app its menu bar does not handle ⌘C or ⌘V either, so the
+    /// panel sends the editing shortcuts to the text field itself.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard modifiers == .command || modifiers == [.command, .shift],
-              let key = event.charactersIgnoringModifiers?.lowercased(),
-              let selector = Self.editingSelector(key: key, shift: modifiers.contains(.shift)) else {
+        guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard modifiers.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
+            // Typing and Control keys go to the text field as key events.
             return super.performKeyEquivalent(with: event)
         }
-        if let responder = firstResponder, responder.tryToPerform(selector, with: nil) {
-            return true
+        switch Self.commandAction(key: key, keyCode: event.keyCode, modifiers: modifiers) {
+        case .edit(let selector):
+            _ = firstResponder?.tryToPerform(selector, with: nil)
+        case .submit:
+            onSubmit()
+        case .close:
+            onCancel()
+        case .application:
+            return super.performKeyEquivalent(with: event)
+        case .ignore:
+            break
         }
-        return super.performKeyEquivalent(with: event)
+        return true
     }
 
-    static func editingSelector(key: String, shift: Bool) -> Selector? {
-        switch (key, shift) {
-        case ("x", false): #selector(NSText.cut(_:))
-        case ("c", false): #selector(NSText.copy(_:))
-        case ("v", false): #selector(NSText.paste(_:))
-        case ("a", false): #selector(NSText.selectAll(_:))
-        case ("z", false): Selector(("undo:"))
-        case ("z", true): Selector(("redo:"))
+    enum CommandAction: Equatable {
+        case edit(Selector)
+        case submit
+        case close
+        /// ⌘Q and ⌘H, which act on the app rather than a window.
+        case application
+        case ignore
+    }
+
+    static func commandAction(key: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> CommandAction {
+        if keyCode == 36 || keyCode == 76 {
+            return .submit
+        }
+        if modifiers == .command, key == "w" || key == "." {
+            return .close
+        }
+        if modifiers == .command, key == "q" || key == "h" {
+            return .application
+        }
+        if let selector = editingSelector(key: key, modifiers: modifiers) {
+            return .edit(selector)
+        }
+        return .ignore
+    }
+
+    static func editingSelector(key: String, modifiers: NSEvent.ModifierFlags) -> Selector? {
+        switch (key, modifiers) {
+        case ("x", .command): #selector(NSText.cut(_:))
+        case ("c", .command): #selector(NSText.copy(_:))
+        case ("v", .command): #selector(NSText.paste(_:))
+        case ("v", [.command, .option, .shift]): #selector(NSTextView.pasteAsPlainText(_:))
+        case ("a", .command): #selector(NSText.selectAll(_:))
+        case ("z", .command): Selector(("undo:"))
+        case ("z", [.command, .shift]): Selector(("redo:"))
         default: nil
         }
     }

@@ -171,6 +171,8 @@ final class QuickEntryController: ObservableObject {
 
         let dropTarget = QuickEntryDropTarget(model: model)
         let panel = QuickEntryPanel()
+        panel.onSubmit = { [weak model] in model?.submit() }
+        panel.onCancel = { [weak model] in model?.cancel() }
         panel.contentView = QuickEntryContentView(
             rootView: QuickEntryView(
                 model: model,

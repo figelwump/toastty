@@ -130,14 +130,20 @@ case "type":
     let source = CGEventSource(stateID: .hidSystemState)
     for character in arguments[1] {
         let units = Array(String(character).utf16)
+        // Paced like a fast typist: events posted closer together are
+        // sometimes dropped by the event system.
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else {
                 fail("could not make a key event")
             }
             event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            // Plain characters: an event takes the system's current modifier
+            // state otherwise, and a stale Fn turns "f" into a menu shortcut.
+            event.flags = []
             event.post(tap: .cghidEventTap)
+            usleep(12_000)
         }
-        usleep(8_000)
+        usleep(30_000)
     }
 
 case "windows":
@@ -166,6 +172,14 @@ case "value":
         ?? ""
     print(value)
 
+case "set-value":
+    guard arguments.count == 4 else { fail("set-value <pid> <identifier> <text>") }
+    guard let found = element(in: application(arguments[1]), identifier: arguments[2]) else {
+        fail("no element \(arguments[2])")
+    }
+    let error = AXUIElementSetAttributeValue(found, kAXValueAttribute as CFString, arguments[3] as CFString)
+    guard error == .success else { fail("could not set the value: error \(error.rawValue)") }
+
 case "press-menu":
     guard arguments.count == 4 else { fail("press-menu <pid> <identifier> <item-title>") }
     let app = application(arguments[1])
@@ -183,6 +197,23 @@ case "press-menu":
     }
     guard let item else { fail("no menu item \(arguments[3])") }
     AXUIElementPerformAction(item, kAXPressAction as CFString)
+
+case "focused":
+    // The app's focused element, for diagnosing where key events go.
+    guard arguments.count == 2 else { fail("focused <pid>") }
+    let app = application(arguments[1])
+    guard let focused = attribute(app, kAXFocusedUIElementAttribute) else {
+        print("{}")
+        break
+    }
+    let element = focused as! AXUIElement
+    let described: [String: String] = [
+        "role": attribute(element, kAXRoleAttribute) as? String ?? "",
+        "identifier": identifier(element) ?? "",
+        "value": attribute(element, kAXValueAttribute) as? String ?? "",
+    ]
+    let data = try JSONSerialization.data(withJSONObject: described)
+    print(String(decoding: data, as: UTF8.self))
 
 case "pasteboard-png":
     guard arguments.count == 2, let data = FileManager.default.contents(atPath: arguments[1]) else {

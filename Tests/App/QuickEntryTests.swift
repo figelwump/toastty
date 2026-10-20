@@ -244,6 +244,50 @@ struct QuickEntryTests {
         harness.controller.dismiss()
     }
 
+    static func commandKey(_ characters: String, keyCode: Int, modifiers: NSEvent.ModifierFlags = .command) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: UInt16(keyCode)
+        ))
+    }
+
+    @Test func commandShortcutsStayInsideThePanel() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        try harness.type("Draft")
+        let before = fixture.store.state
+
+        // ⌘T would open a tab in the Toastty window behind the panel.
+        #expect(panel.performKeyEquivalent(with: try Self.commandKey("t", keyCode: kVK_ANSI_T)))
+        #expect(fixture.store.state == before)
+        #expect(harness.controller.isPresented)
+
+        // ⌘W closes the panel, not the focused terminal behind it.
+        #expect(panel.performKeyEquivalent(with: try Self.commandKey("w", keyCode: kVK_ANSI_W)))
+        #expect(harness.controller.isPresented == false)
+        #expect(fixture.store.state == before)
+        #expect(fixture.coordinator.records.records.isEmpty)
+    }
+
+    @Test func commandShortcutRouting() {
+        let cases: [(String, Int, NSEvent.ModifierFlags, QuickEntryPanel.CommandAction)] = [
+            ("w", kVK_ANSI_W, .command, .close),
+            (".", kVK_ANSI_Period, .command, .close),
+            ("\r", kVK_Return, .command, .submit),
+            ("q", kVK_ANSI_Q, .command, .application),
+            ("v", kVK_ANSI_V, .command, .edit(#selector(NSText.paste(_:)))),
+            ("z", kVK_ANSI_Z, [.command, .shift], .edit(Selector(("redo:")))),
+            ("n", kVK_ANSI_N, .command, .ignore),
+            ("d", kVK_ANSI_D, .command, .ignore),
+        ]
+        for (key, keyCode, modifiers, action) in cases {
+            #expect(QuickEntryPanel.commandAction(key: key, keyCode: UInt16(keyCode), modifiers: modifiers) == action, "\(modifiers) \(key)")
+        }
+    }
+
     @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
