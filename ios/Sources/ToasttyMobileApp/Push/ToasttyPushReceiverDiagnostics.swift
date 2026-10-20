@@ -163,7 +163,8 @@ final class ToasttyPushReceiverDiagnostics: @unchecked Sendable {
     }
 
     private func update(_ body: (inout ToasttyPushReceiverSnapshot) -> Void) {
-        let (snapshot, handler) = lock.withLock {
+        let (snapshot, publish): (ToasttyPushReceiverSnapshot,
+            (@Sendable (ToasttyPushReceiverSnapshot) -> Void)?) = lock.withLock {
             body(&value)
             value.sequence &+= 1
             value.capturedAt = .now
@@ -171,6 +172,6 @@ final class ToasttyPushReceiverDiagnostics: @unchecked Sendable {
         }
         // Concurrent callback threads can publish out of order. The file
         // recorder accepts only newer sequence numbers.
-        handler?(snapshot)
+        publish?(snapshot)
     }
 }
