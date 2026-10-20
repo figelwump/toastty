@@ -32,5 +32,9 @@ public enum ToasttyShippedSkillCatalog {
             name: "toastty-send-diagnostics",
             summary: "Collect, review, and send redacted Toastty diagnostics."
         ),
+        ToasttyShippedSkillDescriptor(
+            name: "toastty-task-start",
+            summary: "Move a task into its own git worktree, or split it into new tasks."
+        ),
     ]
 }

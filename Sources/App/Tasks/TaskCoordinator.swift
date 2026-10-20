@@ -9,8 +9,10 @@ import RemoteProtocol
 protocol TaskAgentLaunching: AnyObject {
     func launchProfileSummaries() -> [AgentLaunchProfileSummary]
     /// Launches into the given terminal without moving focus. The session
-    /// is scoped to its own task space. `beforeDispatch` runs directly
-    /// before the command is sent; a throw there cancels the launch.
+    /// is scoped to its own task space. With `forkFromSessionID`, the new
+    /// session continues a copy of that session's conversation.
+    /// `beforeDispatch` runs directly before the command is sent; a throw
+    /// there cancels the launch.
     func launchTask(
         profileID: String,
         workspaceID: UUID,
@@ -20,6 +22,7 @@ protocol TaskAgentLaunching: AnyObject {
         reasoningEffort: String?,
         initialPrompt: String,
         parentSessionID: String?,
+        forkFromSessionID: String?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult
 }
@@ -34,6 +37,7 @@ extension AgentLaunchService: TaskAgentLaunching {
         reasoningEffort: String?,
         initialPrompt: String,
         parentSessionID: String?,
+        forkFromSessionID: String?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult {
         try await launchAsync(
@@ -44,6 +48,7 @@ extension AgentLaunchService: TaskAgentLaunching {
             model: model,
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
+            forkFromSessionID: forkFromSessionID,
             // An empty set scopes the session to its own task space.
             inheritedScopedWorkspaceIDs: [],
             parentSessionID: parentSessionID,
@@ -51,6 +56,37 @@ extension AgentLaunchService: TaskAgentLaunching {
             beforeDispatch: beforeDispatch
         )
     }
+}
+
+/// What a task needs to know about a managed agent session.
+struct TaskSessionInfo: Equatable {
+    var sessionID: String
+    var agent: AgentKind
+    var panelID: UUID
+    var workspaceID: UUID
+    var cwd: String?
+    var isActive: Bool
+    /// Working, or waiting for an approval.
+    var isInTurn: Bool
+    /// The provider conversation Toastty confirmed for the session.
+    var nativeConversationID: String?
+    var title: String?
+}
+
+/// The session side of moving a task into its worktree. A protocol so tests
+/// can move tasks without agents.
+@MainActor
+protocol TaskSessionProviding: AnyObject {
+    func session(_ sessionID: String) -> TaskSessionInfo?
+    /// The managed session running in the panel now, if any.
+    func activeSession(panelID: UUID) -> TaskSessionInfo?
+    /// Whether a person typed into the panel, or a phone message reached
+    /// it, after `date`.
+    func hasInput(panelID: UUID, since date: Date) -> Bool
+    /// Closes the pane of a session whose conversation moved. When the pane
+    /// is its workspace's last, types the agent's native exit instead, so
+    /// the workspace and its shell stay.
+    func closeMovedSessionPane(panelID: UUID, agent: AgentKind) -> TaskOperation.SourceOutcome
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -67,6 +103,12 @@ struct TaskCreateRequest: Equatable {
     var model: String?
     var effort: String?
     var prompt: String?
+    /// Make a git worktree during setup and start the agent there.
+    var startWork = false
+    /// For `startWork`: the branch or commit to start from.
+    var base: String?
+    /// For `startWork`: the first part of the branch name.
+    var branchPrefix: String?
 }
 
 /// Who sent a `task.create`, captured before any asynchronous step.
@@ -109,32 +151,52 @@ final class TaskCoordinator {
     static let maximumAttachmentBytes = 50 * 1024 * 1024
 
     let records: TaskRecordStore
-    private let store: AppStore
-    private weak var launcher: (any TaskAgentLaunching)?
-    private let configLoader: () throws -> TasksConfig
+    let store: AppStore
+    weak var launcher: (any TaskAgentLaunching)?
+    let configLoader: () throws -> TasksConfig
     private let attachmentsDirectoryURL: URL
     private let hasActiveSession: (UUID) -> Bool
     /// Adds a task space to a session's workspace scope when that session
     /// is scoped; does nothing for an unscoped session.
     private let grantScope: (String, UUID) -> Void
-    private let fileManager: FileManager
-    private let now: () -> Date
-    private let terminalReadinessTimeout: Duration
+    let worktreeCreator: TaskWorktreeCreator
+    let fileManager: FileManager
+    let now: () -> Date
+    let terminalReadinessTimeout: Duration
+    let timing: StartWorkTiming
+
+    /// How long a move into a worktree waits; shorter in tests.
+    struct StartWorkTiming {
+        /// For the moving session to finish the turn that asked for it.
+        var sourceTurnTimeout: Duration = .seconds(600)
+        /// For the forked agent to report its new conversation.
+        var forkConfirmationTimeout: Duration = .seconds(60)
+        /// For Toastty to identify the moving session's conversation, which
+        /// a fork needs. A move asked for in a session's first seconds can
+        /// arrive before that.
+        var sourceDiscoveryTimeout: Duration = .seconds(60)
+        var pollInterval: Duration = .milliseconds(250)
+    }
     /// Runs `[triage] command`; `nil` turns triage off.
-    private let triageRunner: (any TaskTriageRunning)?
+    let triageRunner: (any TaskTriageRunning)?
     /// The closed workspaces a task can reopen.
     let recentWorkspaces: RecentWorkspacesStore?
-    private let homeDirectoryPath: String
+    let homeDirectoryPath: String
 
     /// One per running setup; a newer attempt or a delete makes an older
     /// one stop at its next check.
     private var setupAttempts: [UUID: UUID] = [:]
     private var setupTasks: [UUID: Task<Void, Never>] = [:]
+    /// The same for moves into a worktree.
+    var startWorkAttempts: [UUID: UUID] = [:]
+    var startWorkTasks: [UUID: Task<Void, Never>] = [:]
 
     /// Saves the workspace layout at once. Setup calls it after it makes or
     /// unlinks a task space, so the layout on disk never lags a record that
     /// depends on it. Set once layout persistence exists.
     var flushLayout: () -> Void = {}
+    /// Set once the session store exists. Without it, tasks cannot move.
+    var sessions: (any TaskSessionProviding)?
 
     init(
         records: TaskRecordStore,
@@ -144,9 +206,11 @@ final class TaskCoordinator {
         attachmentsDirectoryURL: URL,
         hasActiveSession: @escaping (UUID) -> Bool,
         grantScope: @escaping (String, UUID) -> Void,
+        worktreeCreator: TaskWorktreeCreator = TaskWorktreeCreator(),
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         terminalReadinessTimeout: Duration = .seconds(10),
+        timing: StartWorkTiming = StartWorkTiming(),
         triageRunner: (any TaskTriageRunning)? = nil,
         recentWorkspaces: RecentWorkspacesStore? = nil,
         homeDirectoryPath: String = NSHomeDirectory()
@@ -158,9 +222,11 @@ final class TaskCoordinator {
         self.attachmentsDirectoryURL = attachmentsDirectoryURL
         self.hasActiveSession = hasActiveSession
         self.grantScope = grantScope
+        self.worktreeCreator = worktreeCreator
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
+        self.timing = timing
         self.triageRunner = triageRunner
         self.recentWorkspaces = recentWorkspaces
         self.homeDirectoryPath = homeDirectoryPath
@@ -188,7 +254,7 @@ final class TaskCoordinator {
 
         // The text is kept exactly as written; only the checks trim it.
         let text = request.text
-        let prompt = request.prompt.flatMap(nonEmpty)
+        let prompt = request.prompt.flatMap(taskNonEmpty)
         guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || prompt != nil else {
             throw TaskError("A task needs text or a prompt.")
         }
@@ -205,13 +271,13 @@ final class TaskCoordinator {
         } catch {
             throw TaskError(error.localizedDescription)
         }
-        let pinnedTitle = request.title.flatMap(nonEmpty)
-        let pinnedSlug = request.slug.flatMap(nonEmpty)
+        let pinnedTitle = request.title.flatMap(taskNonEmpty)
+        let pinnedSlug = request.slug.flatMap(taskNonEmpty)
         let pinned = TaskFields(
             workspaceID: request.workspaceID,
-            agent: request.agent.flatMap(nonEmpty),
-            model: request.model.flatMap(nonEmpty),
-            effort: request.effort.flatMap(nonEmpty),
+            agent: request.agent.flatMap(taskNonEmpty),
+            model: request.model.flatMap(taskNonEmpty),
+            effort: request.effort.flatMap(taskNonEmpty),
             prompt: prompt,
             title: pinnedTitle,
             slug: pinnedSlug
@@ -242,30 +308,29 @@ final class TaskCoordinator {
             setup = .needsWorkspace(reason: "No workspace was named, and triage is off. Pick a workspace for this task.")
         }
 
-        let title: String
-        if let pinnedTitle {
-            guard let cleaned = TaskRecord.defaultTitle(for: pinnedTitle), cleaned == pinnedTitle else {
-                throw TaskError("A title must be one line of at most \(TaskRecord.maximumTitleLength) characters.")
+        var startWork: TaskStartWork?
+        if request.startWork {
+            // The worktree belongs to the project, so it needs the workspace
+            // now; an agent caller always has its own.
+            guard let projectRoot else {
+                throw TaskError("--start-work needs a workspace: pass --workspace, or create the task from an agent session.")
             }
-            title = cleaned
-        } else {
-            title = TaskRecord.defaultTitle(for: text)
-                ?? prompt.flatMap(TaskRecord.defaultTitle(for:))
-                ?? "Untitled task"
+            startWork = try newStartWork(
+                branchPrefix: request.branchPrefix,
+                base: request.base,
+                source: nil,
+                projectRoot: projectRoot.path,
+                config: config
+            )
+        } else if request.base != nil || request.branchPrefix != nil {
+            throw TaskError("--base and --branch-prefix need --start-work.")
         }
-        let takenSlugs = Set(records.records.map(\.slug))
-        let slug: String
-        if let pinnedSlug {
-            guard TaskRecord.sanitizedSlug(pinnedSlug) == pinnedSlug else {
-                throw TaskError("A slug must be lowercase letters, digits and single hyphens, at most \(TaskRecord.maximumSlugLength) characters.")
-            }
-            guard takenSlugs.contains(pinnedSlug) == false else {
-                throw TaskError("Another task already uses the slug \(pinnedSlug).")
-            }
-            slug = pinnedSlug
-        } else {
-            slug = TaskRecord.uniqueSlug(TaskRecord.sanitizedSlug(title) ?? "task", taken: takenSlugs)
-        }
+
+        let (title, slug) = try titleAndSlug(
+            pinnedTitle: pinnedTitle,
+            pinnedSlug: pinnedSlug,
+            fallbacks: [text, prompt ?? ""]
+        )
 
         let taskID = UUID()
         let directoryURL = attachmentsDirectoryURL.appending(path: taskID.uuidString, directoryHint: .isDirectory)
@@ -304,7 +369,9 @@ final class TaskCoordinator {
             resolved: resolved,
             workspaceID: workspaceID,
             projectRoot: projectRoot?.path,
-            setup: setup
+            setup: setup,
+            parentTaskID: caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID },
+            startWork: startWork
         )
         return TaskCreatePreparation(
             record: record,
@@ -377,9 +444,9 @@ final class TaskCoordinator {
 
     // MARK: - Retry, delete
 
-    /// Runs setup again for a task whose setup failed, from the last step
-    /// it finished. A task that has no workspace or agent yet goes through
-    /// triage again.
+    /// Runs setup again for a task whose setup failed, or a move into a
+    /// worktree that failed, from the last step it finished. A task that
+    /// has no workspace or agent yet goes through triage again.
     func retry(taskID: UUID) throws {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
@@ -390,11 +457,23 @@ final class TaskCoordinator {
         case .routing, .settingUp:
             throw TaskError("This task is still setting up.")
         case .started:
-            throw TaskError("This task has already started.")
+            guard case .failed? = record.startWork?.state else {
+                throw TaskError("This task has already started.")
+            }
+            do {
+                try records.save(id: taskID) { $0.startWork?.state = .running }
+            } catch {
+                throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+            }
+            startStartWork(taskID: taskID)
+            return
         }
         let needsRouting = record.resolved == nil || record.workspaceID == nil
         do {
-            try records.save(id: taskID) { $0.setup = needsRouting ? .routing : .settingUp }
+            try records.save(id: taskID) {
+                $0.setup = needsRouting ? .routing : .settingUp
+                if $0.startWork != nil { $0.startWork?.state = .running }
+            }
         } catch {
             throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
         }
@@ -504,6 +583,8 @@ final class TaskCoordinator {
         }
         setupAttempts[taskID] = nil
         setupTasks.removeValue(forKey: taskID)?.cancel()
+        startWorkAttempts[taskID] = nil
+        startWorkTasks.removeValue(forKey: taskID)?.cancel()
         if let taskSpace = record.operation.taskSpace,
            store.state.workspacesByID[taskSpace.workspaceID] != nil {
             if closeTaskSpaceIfUnused(taskSpace, record: record) == false {
@@ -536,10 +617,32 @@ final class TaskCoordinator {
         }
         for record in records.records where record.setup == .settingUp && setupAttempts[record.id] == nil {
             if record.operation.agentLaunch != nil {
-                saveOrDefer(taskID: record.id) { $0.setup = .started }
+                saveOrDefer(taskID: record.id) {
+                    $0.setup = .started
+                    if $0.startWork != nil { $0.startWork?.state = .finished }
+                }
+            } else {
+                let reason = "Toastty quit before setup finished. Retry to continue."
+                saveOrDefer(taskID: record.id) {
+                    $0.setup = .setupFailed(reason: reason)
+                    if $0.startWork != nil { $0.startWork?.state = .failed(reason: reason) }
+                }
+            }
+        }
+        for record in records.records
+        where record.setup == .started && record.startWork?.state == .running && startWorkAttempts[record.id] == nil {
+            if record.operation.worktreeSession?.nativeConversationID != nil || record.operation.sourceOutcome != nil {
+                // The agent already works in the worktree; only closing the
+                // old session was left.
+                saveOrDefer(taskID: record.id) {
+                    if $0.operation.sourceOutcome == nil {
+                        $0.operation.sourceOutcome = .kept(reason: "Toastty quit before it closed this session.")
+                    }
+                    $0.startWork?.state = .finished
+                }
             } else {
                 saveOrDefer(taskID: record.id) {
-                    $0.setup = .setupFailed(reason: "Toastty quit before setup finished. Retry to continue.")
+                    $0.startWork?.state = .failed(reason: "Toastty quit before the move into the worktree finished. Retry to continue.")
                 }
             }
         }
@@ -591,7 +694,7 @@ final class TaskCoordinator {
     /// Saves a change at once; if the disk refuses it, keeps it in memory
     /// and saves it with the next delayed write. For bookkeeping after the
     /// fact, where stopping would not undo anything.
-    private func saveOrDefer(taskID: UUID, _ body: (inout TaskRecord) -> Void) {
+    func saveOrDefer(taskID: UUID, _ body: (inout TaskRecord) -> Void) {
         do {
             try records.save(id: taskID, body)
         } catch {
@@ -603,7 +706,7 @@ final class TaskCoordinator {
         }
     }
 
-    private func isCurrent(taskID: UUID, attempt: UUID) -> Bool {
+    func isCurrent(taskID: UUID, attempt: UUID) -> Bool {
         setupAttempts[taskID] == attempt
             && records.record(id: taskID)?.setup == .settingUp
             && Task.isCancelled == false
@@ -622,13 +725,23 @@ final class TaskCoordinator {
             setupFailed(taskID: taskID, attempt: attempt, reason: "The task's workspace is closed. Open it, then retry.")
             return
         }
-        guard let directory = record.projectRoot, isDirectory(directory) else {
+        guard let projectRoot = record.projectRoot, isDirectory(projectRoot) else {
             setupFailed(
                 taskID: taskID,
                 attempt: attempt,
                 reason: "The project directory \(record.projectRoot ?? "") no longer exists."
             )
             return
+        }
+
+        // 0. With --start-work, the worktree, which the task space's terminal
+        // and the agent then use.
+        var directory = projectRoot
+        var worktree: TaskOperation.Worktree?
+        if record.startWork != nil {
+            guard let prepared = await prepareWorktree(taskID: taskID, job: .setup(attempt)) else { return }
+            worktree = prepared
+            directory = prepared.path
         }
 
         // 1. The task space. One that an earlier attempt made is reused,
@@ -687,7 +800,9 @@ final class TaskCoordinator {
         let prompt = TaskPrompt.compose(
             firstPrompt: resolved.prompt,
             text: record.text,
-            attachmentPaths: record.attachments.map(\.path)
+            attachmentPaths: record.attachments.map(\.path),
+            worktree: worktree,
+            base: records.record(id: taskID)?.operation.base
         )
         let parentSessionID = creatorSessionID(of: record)
         let result: AgentLaunchResult
@@ -702,6 +817,7 @@ final class TaskCoordinator {
                     reasoningEffort: resolved.effort,
                     initialPrompt: prompt,
                     parentSessionID: parentSessionID,
+                    forkFromSessionID: nil,
                     beforeDispatch: { [weak self] in
                         guard let self, self.isCurrent(taskID: taskID, attempt: attempt) else {
                             throw CancellationError()
@@ -737,18 +853,24 @@ final class TaskCoordinator {
         guard setupAttempts[taskID] == attempt else { return }
         setupAttempts[taskID] = nil
         setupTasks[taskID] = nil
-        saveOrDefer(taskID: taskID) { $0.setup = .started }
+        saveOrDefer(taskID: taskID) {
+            $0.setup = .started
+            if $0.startWork != nil { $0.startWork?.state = .finished }
+        }
         ToasttyLog.info("Started a task", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
             "workspace_id": records.record(id: taskID)?.taskSpaceWorkspaceID?.uuidString ?? "",
         ])
     }
 
-    private func setupFailed(taskID: UUID, attempt: UUID, reason: String) {
+    func setupFailed(taskID: UUID, attempt: UUID, reason: String) {
         guard setupAttempts[taskID] == attempt else { return }
         setupAttempts[taskID] = nil
         setupTasks[taskID] = nil
-        saveOrDefer(taskID: taskID) { $0.setup = .setupFailed(reason: reason) }
+        saveOrDefer(taskID: taskID) {
+            $0.setup = .setupFailed(reason: reason)
+            if $0.startWork != nil { $0.startWork?.state = .failed(reason: reason) }
+        }
         ToasttyLog.info("Task setup failed", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
             "reason": reason,
@@ -898,6 +1020,17 @@ final class TaskCoordinator {
         var finalNote = triageNote
         do {
             projectRoot = try resolvedProjectRoot(workspaceID: workspaceID)
+            // A worktree needs a git repository at the project root the task
+            // now has.
+            if let startWork = current.startWork {
+                _ = try newStartWork(
+                    branchPrefix: startWork.branchPrefix,
+                    base: startWork.base,
+                    source: startWork.source,
+                    projectRoot: projectRoot.path,
+                    config: config
+                )
+            }
             guard resolution.agent ?? config.defaults.agent != nil else {
                 throw TaskError("Triage did not choose an agent, and [defaults] in ~/.toastty/tasks.toml names none. Set agent there, then retry.")
             }
@@ -1075,7 +1208,7 @@ final class TaskCoordinator {
     // MARK: - Resolution
 
     private func validatedClientRequestID(_ raw: String?) throws -> String? {
-        guard let value = raw.flatMap(nonEmpty) else { return nil }
+        guard let value = raw.flatMap(taskNonEmpty) else { return nil }
         guard value.count <= TaskRecord.maximumClientRequestIDLength,
               value.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7F }) else {
             throw TaskError("A request ID must be printable ASCII with no spaces, at most \(TaskRecord.maximumClientRequestIDLength) characters.")
@@ -1104,7 +1237,7 @@ final class TaskCoordinator {
     /// its first terminal's git root, or that terminal's directory outside a
     /// repository; `isNew` tells the caller to save it on the workspace once
     /// the task is saved.
-    private func resolvedProjectRoot(workspaceID: UUID) throws -> (path: String, isNew: Bool) {
+    func resolvedProjectRoot(workspaceID: UUID) throws -> (path: String, isNew: Bool) {
         guard let workspace = store.state.workspacesByID[workspaceID] else {
             throw TaskError("No open workspace has ID \(workspaceID.uuidString).")
         }
@@ -1184,6 +1317,35 @@ final class TaskCoordinator {
         }
     }
 
+    /// The pinned title, checked, or the first line of the first fallback
+    /// that has one; and the pinned slug, checked, or one made from the
+    /// title that no other task uses.
+    func titleAndSlug(pinnedTitle: String?, pinnedSlug: String?, fallbacks: [String]) throws -> (title: String, slug: String) {
+        let title: String
+        if let pinnedTitle {
+            guard let cleaned = TaskRecord.defaultTitle(for: pinnedTitle), cleaned == pinnedTitle else {
+                throw TaskError("A title must be one line of at most \(TaskRecord.maximumTitleLength) characters.")
+            }
+            title = cleaned
+        } else {
+            title = fallbacks.lazy.compactMap(TaskRecord.defaultTitle(for:)).first ?? "Untitled task"
+        }
+        let takenSlugs = Set(records.records.map(\.slug))
+        let slug: String
+        if let pinnedSlug = pinnedSlug.flatMap(taskNonEmpty) {
+            guard TaskRecord.sanitizedSlug(pinnedSlug) == pinnedSlug else {
+                throw TaskError("A slug must be lowercase letters, digits and single hyphens, at most \(TaskRecord.maximumSlugLength) characters.")
+            }
+            guard takenSlugs.contains(pinnedSlug) == false else {
+                throw TaskError("Another task already uses the slug \(pinnedSlug).")
+            }
+            slug = pinnedSlug
+        } else {
+            slug = TaskRecord.uniqueSlug(TaskRecord.sanitizedSlug(title) ?? "task", taken: takenSlugs)
+        }
+        return (title, slug)
+    }
+
     // MARK: - Attachments
 
     /// The file a requested path names, with symbolic links resolved so
@@ -1225,14 +1387,14 @@ final class TaskCoordinator {
 
     // MARK: - Task space helpers
 
-    private func isDirectory(_ path: String) -> Bool {
+    func isDirectory(_ path: String) -> Bool {
         var isDirectory: ObjCBool = false
         return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     /// The task space's terminal when it is still there, else a new
     /// background terminal tab in the project directory.
-    private func reusablePanel(in workspaceID: UUID, preferred panelID: UUID, directory: String) -> UUID? {
+    func reusablePanel(in workspaceID: UUID, preferred panelID: UUID, directory: String) -> UUID? {
         if let workspace = store.state.workspacesByID[workspaceID],
            case .terminal? = workspace.panelState(for: panelID) {
             return panelID
@@ -1304,7 +1466,7 @@ final class TaskCoordinator {
         }
     }
 
-    private static func launchFailureReason(for error: any Error) -> String {
+    static func launchFailureReason(for error: any Error) -> String {
         guard let launchError = error as? AgentLaunchError else {
             return "The agent did not start: \(error.localizedDescription)"
         }
@@ -1317,7 +1479,7 @@ final class TaskCoordinator {
     }
 }
 
-private func nonEmpty(_ value: String) -> String? {
+func taskNonEmpty(_ value: String) -> String? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
 }

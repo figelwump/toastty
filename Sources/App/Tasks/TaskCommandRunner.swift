@@ -1,18 +1,18 @@
 import Darwin
 import Foundation
 
-/// One run of an external command for a task: git, or the workspace's
-/// `create_hook`.
+/// One run of an external command for a task: git, the workspace's
+/// `create_hook`, or the `[triage] command`.
 struct TaskCommand: Sendable, Equatable {
     var executablePath: String
     /// Arguments after the executable name.
     var arguments: [String]
     var directory: String
     var environment: [String: String]
+    var timeout: TimeInterval
     /// Written to the command's stdin, which then closes. `nil` connects
     /// stdin to /dev/null.
-    var standardInput: Data?
-    var timeout: TimeInterval
+    var standardInput: Data? = nil
 }
 
 struct TaskCommandResult: Sendable, Equatable {
@@ -36,17 +36,20 @@ protocol TaskCommandRunning: Sendable {
     func run(_ command: TaskCommand) async -> TaskCommandResult
 }
 
-/// Runs a command in a new process group, so a timeout or a cancel stops
-/// the whole tree it started, not only its first process. A descendant
-/// that leaves the group (for example with `setsid`) is not stopped.
-/// Output beyond `outputLimit` is read and dropped, so a chatty command
-/// can never stall on a full pipe.
+/// Runs a command in a new process group, with stdin from
+/// `standardInput` or /dev/null, so a timeout or a cancel stops the whole
+/// tree it started, not only its first process. A descendant that leaves the group (for example with `setsid`)
+/// is not stopped. Only the last `outputLimit` bytes of each stream are
+/// kept, so a chatty command can never stall on a full pipe, and a failure
+/// at the end of long output stays visible.
 struct TaskLiveCommandRunner: TaskCommandRunning {
     var outputLimit = 256 * 1024
     var terminationGracePeriod: TimeInterval = 2
     /// How long to keep reading after the command exits, for output that
     /// descendants still write to the shared pipes.
     var outputDrainGracePeriod: TimeInterval = 1
+    /// Where running commands are registered, so quitting can stop them.
+    var groups: TaskCommandGroups = .shared
 
     func run(_ command: TaskCommand) async -> TaskCommandResult {
         let cancellation = CancellationFlag()
@@ -122,20 +125,20 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         guard spawnStatus == 0 else {
             return launchFailure("Could not run \(command.executablePath): \(String(cString: strerror(spawnStatus)))")
         }
-        Self.runningGroups.insert(processID)
-        defer { Self.runningGroups.remove(processID) }
+        groups.insert(processID)
+        defer { groups.remove(processID) }
 
         // Only the child keeps the write ends of the output pipes and the
         // read end of stdin, so EOF arrives when the child's tree is done.
         close(stdoutPipe[1]); stdoutPipe[1] = -1
         close(stderrPipe[1]); stderrPipe[1] = -1
-        if command.standardInput != nil {
-            close(stdinPipe[0]); stdinPipe[0] = -1
-        }
         let writerDone = DispatchSemaphore(value: 0)
         if let input = command.standardInput {
+            close(stdinPipe[0]); stdinPipe[0] = -1
             let writeDescriptor = stdinPipe[1]
             stdinPipe[1] = -1
+            // A command that exits without reading stdin must not raise
+            // SIGPIPE in the app.
             _ = fcntl(writeDescriptor, F_SETNOSIGPIPE, 1)
             DispatchQueue.global(qos: .utility).async {
                 Self.writeAll(input, to: writeDescriptor)
@@ -208,11 +211,27 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         } else {
             termination = .signaled(waitStatus & 0x7F)
         }
-        return TaskCommandResult(termination: termination, stdout: stdout.data, stderr: stderr.data)
+        return TaskCommandResult(termination: termination, stdout: stdout.tail, stderr: stderr.tail)
     }
 
     private func launchFailure(_ message: String) -> TaskCommandResult {
         TaskCommandResult(termination: .launchFailed(message), stdout: Data(), stderr: Data())
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) {
+        data.withUnsafeBytes { buffer in
+            guard var pointer = buffer.baseAddress else { return }
+            var remaining = buffer.count
+            while remaining > 0 {
+                let written = write(descriptor, pointer, remaining)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                remaining -= written
+                pointer = pointer.advanced(by: written)
+            }
+        }
     }
 
     /// Waits up to 100 ms for output, then reads what is there. A closed
@@ -247,22 +266,6 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         }
     }
 
-    private static func writeAll(_ data: Data, to descriptor: Int32) {
-        data.withUnsafeBytes { buffer in
-            guard var pointer = buffer.baseAddress else { return }
-            var remaining = buffer.count
-            while remaining > 0 {
-                let written = write(descriptor, pointer, remaining)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    return
-                }
-                remaining -= written
-                pointer = pointer.advanced(by: written)
-            }
-        }
-    }
-
     private func withCStringArray<Result>(
         _ strings: [String],
         _ body: (UnsafePointer<UnsafeMutablePointer<CChar>?>) -> Result
@@ -272,42 +275,26 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         return pointers.withUnsafeBufferPointer { body($0.baseAddress!) }
     }
 
-    // MARK: - Running groups
-
-    private static let runningGroups = RunningGroups()
-
     /// Stops every task command still running, for app quit: their process
     /// groups would otherwise outlive Toastty and race a later retry.
-    static func stopAllRunningCommands(gracePeriod: TimeInterval = 0.3) {
-        guard runningGroups.signalAll(SIGTERM) else { return }
-        Thread.sleep(forTimeInterval: gracePeriod)
-        _ = runningGroups.signalAll(SIGKILL)
+    static func stopAllRunningCommands() {
+        TaskCommandGroups.shared.stopAll()
     }
 
-    private final class RunningGroups: @unchecked Sendable {
-        private let lock = NSLock()
-        private var groups = Set<pid_t>()
-
-        func insert(_ group: pid_t) { lock.withLock { _ = groups.insert(group) } }
-        func remove(_ group: pid_t) { lock.withLock { _ = groups.remove(group) } }
-
-        /// Returns whether any group was signaled.
-        func signalAll(_ signal: Int32) -> Bool {
-            let current = lock.withLock { groups }
-            for group in current { killpg(group, signal) }
-            return current.isEmpty == false
-        }
-    }
-
+    /// The last `limit` bytes appended.
     private struct BoundedBuffer {
         let limit: Int
         var data = Data()
 
         mutating func append(_ bytes: ArraySlice<UInt8>) {
-            let room = limit - data.count
-            guard room > 0 else { return }
-            data.append(contentsOf: bytes.prefix(room))
+            data.append(contentsOf: bytes.suffix(limit))
+            // Trimmed in batches, so a long stream does not copy on every read.
+            if data.count > limit * 2 {
+                data = data.suffix(limit)
+            }
         }
+
+        var tail: Data { data.suffix(limit) }
     }
 
     private final class CancellationFlag: @unchecked Sendable {
@@ -342,5 +329,30 @@ enum TaskCommandEnvironment {
         environment["GH_PROMPT_DISABLED"] = "1"
         environment.merge(extra) { _, new in new }
         return environment
+    }
+}
+
+/// The process groups of running task commands.
+final class TaskCommandGroups: @unchecked Sendable {
+    static let shared = TaskCommandGroups()
+
+    private let lock = NSLock()
+    private var groups = Set<pid_t>()
+
+    func insert(_ group: pid_t) { lock.withLock { _ = groups.insert(group) } }
+    func remove(_ group: pid_t) { lock.withLock { _ = groups.remove(group) } }
+
+    /// Sends SIGTERM to every group, then SIGKILL after `gracePeriod`.
+    func stopAll(gracePeriod: TimeInterval = 0.3) {
+        guard signalAll(SIGTERM) else { return }
+        Thread.sleep(forTimeInterval: gracePeriod)
+        _ = signalAll(SIGKILL)
+    }
+
+    /// Returns whether any group was signaled.
+    private func signalAll(_ signal: Int32) -> Bool {
+        let current = lock.withLock { groups }
+        for group in current { killpg(group, signal) }
+        return current.isEmpty == false
     }
 }

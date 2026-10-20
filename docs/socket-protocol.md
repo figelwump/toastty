@@ -245,6 +245,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 - `session.exit-after-turn`
 - `task.create`
+- `task.start-work`
 - `task.retry`
 - `task.delete`
 - `task.set-workspace`
@@ -331,8 +332,9 @@ Notable action-specific behavior:
     this condition.
 - `task.create`
   - takes `text`, repeatable absolute `files`, and optional `clientRequestID`,
-    `title`, `slug`, `workspace` (UUID), `agent`, `model`, `effort` and `prompt`.
-    It takes no selectors.
+    `title`, `slug`, `workspace` (UUID), `agent`, `model`, `effort`, `prompt`,
+    and `startWork` (boolean) with `base` and `branchPrefix`. It takes no
+    selectors.
   - returns the task object (see `task.get`) as soon as the record is saved;
     setup continues after the response. A repeated `clientRequestID` from the
     same caller (the same managed session, or no session) returns the first
@@ -345,6 +347,17 @@ Notable action-specific behavior:
     takes, setup starts in the `routing` state while triage chooses them. A
     task with no workspace afterwards is in `needsWorkspace`.
   - invalid requests return `INVALID_PAYLOAD` and save nothing.
+- `task.start-work`
+  - requires a calling managed session, whose task moves into a new git
+    worktree. Takes optional `base`, `branchPrefix`, and, for a session that is
+    not a task's yet, `title` and `slug`. It takes no selectors.
+  - returns the task object as soon as the request is saved. The move waits for
+    the caller's turn to end before it forks the conversation, so the caller
+    should end its turn.
+  - fails with `INVALID_PAYLOAD` when the caller is not a managed session, the
+    task is still setting up, already has a worktree or is already moving, the
+    session works in another git worktree, or the project is not a git
+    repository.
 - `task.retry`, `task.delete`
   - require `args.taskID`. A workspace-scoped session reaches only the tasks it
     created or whose workspace or task space is in its scope. `task.retry`
@@ -561,12 +574,19 @@ Common query IDs include:
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
 `agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, and `setup` with
 `state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
-with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`.
-`task.list` returns `tasks`, oldest first, with the same scope rule as
-`task.retry`. `task.workspace-choices` returns `open` (`workspaceID`, `title`)
-and `recent` (`recentWorkspace`, `title`, `rootDirectory`, `closedAt`) for
-`task.set-workspace`; a workspace-scoped session sees only open workspaces in
-its scope.
+with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
+has `parentTaskID`, and a top-level `sessionID` for the session that works on
+the task now. A task with a
+worktree request also has `worktree`: `state` (`running`, `failed` with
+`reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`,
+`baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
+session that continues in the worktree, `conversationConfirmed`,
+`sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with
+`sourceKeptReason`). `task.list` returns `tasks`, oldest first, with the same
+scope rule as `task.retry`. `task.workspace-choices` returns `open`
+(`workspaceID`, `title`) and `recent` (`recentWorkspace`, `title`,
+`rootDirectory`, `closedAt`) for `task.set-workspace`; a workspace-scoped
+session sees only open workspaces in its scope.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

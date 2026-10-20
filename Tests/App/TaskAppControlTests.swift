@@ -99,6 +99,16 @@ struct TaskAppControlTests {
         await expectInvalidPayload("workspace must be a workspace ID") {
             _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "workspace": .string("toastty")], context: context())
         }
+        await expectInvalidPayload("startWork must be true or false") {
+            _ = try await executor.runActionAsync(
+                id: "task.create",
+                args: ["text": .string("x"), "workspace": .string(fixture.workspaceID.uuidString), "startWork": .string("yes")],
+                context: context()
+            )
+        }
+        await expectInvalidPayload("task start-work runs from the agent session whose work moves into the worktree.") {
+            _ = try executor.runAction(id: "task.start-work", args: [:], context: context())
+        }
         let missing = UUID()
         await expectInvalidPayload("No task has ID \(missing.uuidString).") {
             _ = try executor.runQuery(id: "task.get", args: ["taskID": .string(missing.uuidString)])
@@ -192,7 +202,7 @@ struct TaskAppControlTests {
         #expect(executor.listActionDescriptors().contains { $0.id.hasPrefix("task.") } == false)
         #expect(executor.listQueryDescriptors().contains { $0.id.hasPrefix("task.") } == false)
         let withTasks = makeExecutor(fixture, coordinator: fixture.coordinator)
-        #expect(Set(withTasks.listActionDescriptors().map(\.id)).isSuperset(of: ["task.create", "task.retry", "task.delete", "task.set-workspace"]))
+        #expect(Set(withTasks.listActionDescriptors().map(\.id)).isSuperset(of: ["task.create", "task.retry", "task.delete", "task.set-workspace", "task.start-work"]))
         #expect(Set(withTasks.listQueryDescriptors().map(\.id)).isSuperset(of: ["task.get", "task.list", "task.workspace-choices"]))
     }
 

@@ -912,7 +912,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get|retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id>)
       toastty [--json] [--socket-path <path>] task list|workspace-choices
@@ -1769,8 +1770,9 @@ public enum ToasttyCLI {
                 valueOptions: [
                     "--text", "--file", "--workspace", "--agent", "--model", "--effort",
                     "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
+                    "--base", "--branch-prefix",
                 ],
-                flagOptions: ["--wait"]
+                flagOptions: ["--wait", "--start-work"]
             )
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task create takes the task text as one argument; quote it\n\n\(usage)")
@@ -1808,11 +1810,17 @@ public enum ToasttyCLI {
             let valueKeys = [
                 "--agent": "agent", "--model": "model", "--effort": "effort", "--prompt": "prompt",
                 "--title": "title", "--slug": "slug", "--request-id": "clientRequestID",
+                "--base": "base", "--branch-prefix": "branchPrefix",
             ]
             for (flag, key) in valueKeys {
                 if let value = parsed.singleValue(flag) {
                     args[key] = .string(value)
                 }
+            }
+            if parsed.hasFlag("--start-work") {
+                args["startWork"] = .bool(true)
+            } else if parsed.singleValue("--base") != nil || parsed.singleValue("--branch-prefix") != nil {
+                throw ToasttyCLIError.usage("--base and --branch-prefix need --start-work\n\n\(usage)")
             }
             if let promptFile = parsed.singleValue("--prompt-file") {
                 let path = absolutePath(promptFile)
@@ -1841,6 +1849,22 @@ public enum ToasttyCLI {
                 command: .appControlRun(kind: .action, id: "task.create", args: args),
                 taskWait: taskWait
             )
+
+        case "start-work":
+            let parsed = try parseCommandArguments(
+                remaining,
+                valueOptions: ["--base", "--branch-prefix", "--title", "--slug"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("task start-work takes no arguments; run it from the agent session whose work moves\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            for (flag, key) in ["--base": "base", "--branch-prefix": "branchPrefix", "--title": "title", "--slug": "slug"] {
+                if let value = parsed.singleValue(flag) {
+                    args[key] = .string(value)
+                }
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.start-work", args: args))
 
         case "get", "retry", "delete":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])

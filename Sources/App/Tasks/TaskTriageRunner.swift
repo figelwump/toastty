@@ -62,8 +62,8 @@ struct TaskLiveTriageRunner: TaskTriageRunning {
             arguments: ["-c", commandLine],
             directory: directory.path(percentEncoded: false),
             environment: TaskCommandEnvironment.make(path: path),
-            standardInput: Data(prompt.utf8),
-            timeout: TimeInterval(triage.timeoutSeconds)
+            timeout: TimeInterval(triage.timeoutSeconds),
+            standardInput: Data(prompt.utf8)
         )
         let result = await runner.run(command)
 

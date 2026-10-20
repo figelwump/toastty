@@ -13,8 +13,8 @@ Resolve `scripts/worktree-status.py` relative to this loaded package. Run it wit
 `--repo <any checkout of the repository>`; it needs `git`, an authenticated `gh`,
 and, for cleanup, `TOASTTY_CLI_PATH` pointing at a Toastty with `workspace.list`.
 Cleanup refuses to run from a workspace-scoped session, because that session sees
-only some workspaces. A project session that launched tasks with `worktree-create`
-is scoped. Ask the user whether to clear this session's scope with
+only some workspaces. A project session that launched tasks is usually scoped.
+Ask the user whether to clear this session's scope with
 `"$TOASTTY_CLI_PATH" session scope clear`, or to run cleanup from a new session;
 do not clear it without their answer.
 

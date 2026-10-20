@@ -16,6 +16,7 @@ EXPECTED_SKILLS = [
     "toastty-read-terminal",
     "toastty-scratchpad",
     "toastty-send-diagnostics",
+    "toastty-task-start",
 ]
 
 EXPECTED_CURSOR_HOOKS = [

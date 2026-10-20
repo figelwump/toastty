@@ -18,9 +18,9 @@ public struct TasksConfigParseError: LocalizedError, Equatable, Sendable {
 /// The settings in `~/.toastty/tasks.toml`. Every table is optional.
 ///
 /// `[triage]`, `[defaults]` agent, model and effort, and workspace
-/// `guidelines` act today. The other keys are read and checked now, so the
-/// file format is settled; the worktree hook, merging and releases use them
-/// as they arrive.
+/// `guidelines`, `create_hook` and `branch_prefix` act today. The other keys
+/// are read and checked now, so the file format is settled; merging and
+/// releases use them as they arrive.
 public struct TasksConfig: Equatable, Sendable {
     public enum MergeMode: String, Equatable, Sendable {
         /// Merge sends `merge_prompt` to the task's agent, which checks the

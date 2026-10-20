@@ -36,11 +36,25 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// is set, so later moves of the work keep the same config.
     public var projectRoot: String?
     public var setup: TaskSetupState
-    /// The steps setup finished, saved as each one happens.
+    /// The task whose agent created this one, when an agent split its work.
+    /// Shown as "started from"; it does not nest task spaces.
+    public var parentTaskID: UUID?
+    /// Set when the work moves, or starts, in its own git worktree.
+    public var startWork: TaskStartWork?
+    /// The steps setup and start-work finished, saved as each one happens.
     public var operation: TaskOperation
     /// The task space, once setup made it.
     public var taskSpaceWorkspaceID: UUID? {
         operation.taskSpace?.workspaceID
+    }
+    /// The task's worktree, once `git worktree add` made it.
+    public var worktree: TaskOperation.Worktree? {
+        operation.worktree.flatMap { $0.added ? $0 : nil }
+    }
+    /// The agent session that works on the task now: the one that continues
+    /// in the worktree after a move, else the one setup started.
+    public var currentSessionID: String? {
+        operation.worktreeSession?.sessionID ?? operation.agentLaunch?.sessionID
     }
 
     public init(
@@ -58,6 +72,8 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
         workspaceID: UUID? = nil,
         projectRoot: String? = nil,
         setup: TaskSetupState = .settingUp,
+        parentTaskID: UUID? = nil,
+        startWork: TaskStartWork? = nil,
         operation: TaskOperation = TaskOperation()
     ) {
         self.id = id
@@ -74,7 +90,116 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
         self.workspaceID = workspaceID
         self.projectRoot = projectRoot
         self.setup = setup
+        self.parentTaskID = parentTaskID
+        self.startWork = startWork
         self.operation = operation
+    }
+}
+
+/// A request to give a task its own git worktree, and how far it got.
+///
+/// Two callers make one. `task.start-work` moves a running task: Toastty
+/// makes the worktree, forks the agent's conversation into a new terminal
+/// there, and closes the old one. `task.create --start-work` makes the
+/// worktree during setup, and the task's agent starts there fresh.
+public struct TaskStartWork: Codable, Equatable, Sendable {
+    /// The session whose conversation moves into the worktree. `nil` when
+    /// the task's agent starts fresh there.
+    public struct Source: Codable, Equatable, Sendable {
+        /// Updated when Toastty restores the session under a new ID after
+        /// a relaunch.
+        public var sessionID: String
+        public var panelID: UUID
+        /// An agent profile ID.
+        public var agent: String
+        /// The provider conversation, when known: how a session restored in
+        /// the same pane is recognized as this one.
+        public var conversationID: String?
+
+        public init(sessionID: String, panelID: UUID, agent: String, conversationID: String? = nil) {
+            self.sessionID = sessionID
+            self.panelID = panelID
+            self.agent = agent
+            self.conversationID = conversationID
+        }
+    }
+
+    /// The first part of the branch name; the slug follows it.
+    public var branchPrefix: String
+    /// What the caller asked to start from: a branch name on the remote,
+    /// or a local commit. `nil` means the remote's default branch.
+    public var base: String?
+    public var source: Source?
+    public var requestedAt: Date
+    public var state: TaskStartWorkState
+
+    public init(
+        branchPrefix: String,
+        base: String? = nil,
+        source: Source? = nil,
+        requestedAt: Date,
+        state: TaskStartWorkState = .running
+    ) {
+        self.branchPrefix = branchPrefix
+        self.base = base
+        self.source = source
+        self.requestedAt = requestedAt
+        self.state = state
+    }
+
+    public static let defaultBranchPrefix = "task"
+    public static let maximumBranchPrefixLength = 40
+
+    /// Whether `prefix` can start a branch name: lowercase ASCII words,
+    /// digits, hyphens and slashes, with no empty part.
+    public static func isValidBranchPrefix(_ prefix: String) -> Bool {
+        guard prefix.isEmpty == false, prefix.count <= maximumBranchPrefixLength else { return false }
+        return prefix.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { part in
+            TaskRecord.sanitizedSlug(String(part)) == String(part)
+        }
+    }
+}
+
+public enum TaskStartWorkState: Codable, Equatable, Sendable {
+    case running
+    case failed(reason: String)
+    /// The agent works in the worktree.
+    case finished
+
+    private enum Kind: String, Codable {
+        case running
+        case failed
+        case finished
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case reason
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .running:
+            self = .running
+        case .failed:
+            self = .failed(reason: try container.decode(String.self, forKey: .reason))
+        case .finished:
+            self = .finished
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .running:
+            try container.encode(Kind.running, forKey: .kind)
+        case .failed(let reason):
+            try container.encode(Kind.failed, forKey: .kind)
+            try container.encode(reason, forKey: .reason)
+        case .finished:
+            try container.encode(Kind.finished, forKey: .kind)
+        }
     }
 }
 
@@ -261,15 +386,149 @@ public struct TaskOperation: Codable, Equatable, Sendable {
         }
     }
 
+    /// The commit a worktree starts from.
+    public struct Base: Codable, Equatable, Sendable {
+        public var sha: String
+        /// Where the commit came from, such as `origin/main`, or the local
+        /// commit or ref the caller named.
+        public var ref: String
+        /// Whether a fetch just returned `sha`. `false` with a `note` means
+        /// the fetch failed and the last fetched commit was used.
+        public var fetched: Bool
+        public var note: String?
+
+        public init(sha: String, ref: String, fetched: Bool, note: String? = nil) {
+            self.sha = sha
+            self.ref = ref
+            self.fetched = fetched
+            self.note = note
+        }
+    }
+
+    public struct Worktree: Codable, Equatable, Sendable {
+        public var path: String
+        public var branch: String
+        /// The repository's main checkout, where git commands for the
+        /// worktree run.
+        public var checkoutRoot: String
+        /// `false` while the names are reserved and `git worktree add` has
+        /// not finished.
+        public var added: Bool
+
+        public init(path: String, branch: String, checkoutRoot: String, added: Bool) {
+            self.path = path
+            self.branch = branch
+            self.checkoutRoot = checkoutRoot
+            self.added = added
+        }
+    }
+
+    /// The agent session that continues a moved task in its worktree.
+    public struct WorktreeSession: Codable, Equatable, Sendable {
+        public var workspaceID: UUID
+        public var panelID: UUID
+        /// Saved once the launch command reached the terminal.
+        public var sessionID: String?
+        /// Whether the session forks the source's conversation, or starts
+        /// fresh because the source's agent cannot be forked.
+        public var forked: Bool
+        /// The new conversation's own ID, once the provider reported it.
+        /// Its presence confirms the fork.
+        public var nativeConversationID: String?
+
+        public init(
+            workspaceID: UUID,
+            panelID: UUID,
+            sessionID: String? = nil,
+            forked: Bool,
+            nativeConversationID: String? = nil
+        ) {
+            self.workspaceID = workspaceID
+            self.panelID = panelID
+            self.sessionID = sessionID
+            self.forked = forked
+            self.nativeConversationID = nativeConversationID
+        }
+    }
+
+    /// What happened to the session the work moved from.
+    public enum SourceOutcome: Codable, Equatable, Sendable {
+        case closed
+        /// Its pane was the workspace's last, so its agent exited instead
+        /// and the shell stays.
+        case exited
+        case kept(reason: String)
+
+        private enum Kind: String, Codable {
+            case closed
+            case exited
+            case kept
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind
+            case reason
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            switch try container.decode(Kind.self, forKey: .kind) {
+            case .closed:
+                self = .closed
+            case .exited:
+                self = .exited
+            case .kept:
+                self = .kept(reason: try container.decode(String.self, forKey: .reason))
+            }
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .closed:
+                try container.encode(Kind.closed, forKey: .kind)
+            case .exited:
+                try container.encode(Kind.exited, forKey: .kind)
+            case .kept(let reason):
+                try container.encode(Kind.kept, forKey: .kind)
+                try container.encode(reason, forKey: .reason)
+            }
+        }
+    }
+
     /// Saved before the task space is made, so a crash in between finds
     /// the IDs instead of making a second one.
     public var taskSpace: TaskSpace?
     /// Saved once the launch command reached the task space's terminal.
     public var agentLaunch: AgentLaunch?
+    /// Saved once the base commit is pinned, so a retry starts from the
+    /// same commit.
+    public var base: Base?
+    /// Saved with `added == false` before `git worktree add` runs, then
+    /// with `added == true` after it.
+    public var worktree: Worktree?
+    /// Set once `create_hook` succeeded, or when there is none.
+    public var hookFinishedAt: Date?
+    /// Saved before its terminal is made, like `taskSpace`.
+    public var worktreeSession: WorktreeSession?
+    public var sourceOutcome: SourceOutcome?
 
-    public init(taskSpace: TaskSpace? = nil, agentLaunch: AgentLaunch? = nil) {
+    public init(
+        taskSpace: TaskSpace? = nil,
+        agentLaunch: AgentLaunch? = nil,
+        base: Base? = nil,
+        worktree: Worktree? = nil,
+        hookFinishedAt: Date? = nil,
+        worktreeSession: WorktreeSession? = nil,
+        sourceOutcome: SourceOutcome? = nil
+    ) {
         self.taskSpace = taskSpace
         self.agentLaunch = agentLaunch
+        self.base = base
+        self.worktree = worktree
+        self.hookFinishedAt = hookFinishedAt
+        self.worktreeSession = worktreeSession
+        self.sourceOutcome = sourceOutcome
     }
 }
 
