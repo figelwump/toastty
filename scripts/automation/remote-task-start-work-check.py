@@ -314,9 +314,10 @@ def provider_profile(provider, environment, repository):
     cli = shutil.which('claude', path=environment.get('PATH')) or str(Path.home() / '.local/bin/claude')
     require(Path(cli).is_file(), 'Claude CLI is not installed on the remote host')
     version = subprocess.check_output([cli, '--version'], text=True, timeout=30, env=environment).strip()
-    # Only the throwaway repository's local settings, which do not exist; an
-    # empty value would stop Toastty from adding the fork's arguments.
-    return version, [cli, '--setting-sources=local', '--allowedTools', 'Bash', '--tools', 'Bash', '--strict-mcp-config']
+    # The plain command, as a user's profile has it: Toastty adds a fork's
+    # arguments only to argv it can read, and refuses tool and settings
+    # restrictions there.
+    return version, [cli]
 
 
 def forget_codex_trust(parent):
