@@ -891,7 +891,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         return initialPrompt
     }
 
-    private static let maximumInitialPromptUTF8Count = 64 * 1024
+    static let maximumInitialPromptUTF8Count = 64 * 1024
 
     private func initialPromptPlacement(
         for profile: AgentProfile,

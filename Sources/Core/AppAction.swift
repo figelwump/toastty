@@ -49,6 +49,22 @@ public enum AppAction: Equatable, Sendable {
     /// terminal takes no profile binding: a profile's startup command would
     /// occupy the shell that the caller is about to use.
     case createBackgroundTerminalTab(workspaceID: UUID, tabID: UUID, panelID: UUID, terminalCWD: String)
+    /// Creates a task's task space nested under `parentWorkspaceID`'s root,
+    /// without selecting it, in one step so no half-made workspace is ever
+    /// visible. The caller chooses the IDs and saves them first, so a retry
+    /// after a crash finds this workspace. The one terminal starts in
+    /// `terminalCWD` with no profile binding, for the same reason as
+    /// `createBackgroundTerminalTab`.
+    case createTaskSpace(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID,
+        parentWorkspaceID: UUID,
+        spawningSessionID: String?,
+        taskID: UUID,
+        title: String,
+        terminalCWD: String
+    )
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -62,6 +78,11 @@ public enum AppAction: Equatable, Sendable {
     case setWorkspaceParent(workspaceID: UUID, parentWorkspaceID: UUID?, spawningSessionID: String?)
     /// Marks a workspace done at `doneAt`, or clears the mark when it is `nil`.
     case setWorkspaceDone(workspaceID: UUID, doneAt: Date?)
+    /// Sets or clears a top-level workspace's project root directory.
+    case setWorkspaceRootDirectory(workspaceID: UUID, rootDirectory: String?)
+    /// Links a workspace to the task it is the task space of, or clears the
+    /// link.
+    case setWorkspaceTaskID(workspaceID: UUID, taskID: UUID?)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -169,6 +190,8 @@ public extension AppAction {
             return "createWorkspaceTab"
         case .createBackgroundTerminalTab:
             return "createBackgroundTerminalTab"
+        case .createTaskSpace:
+            return "createTaskSpace"
         case .createWindow:
             return "createWindow"
         case .closeWindow:
@@ -183,6 +206,10 @@ public extension AppAction {
             return "setWorkspaceParent"
         case .setWorkspaceDone:
             return "setWorkspaceDone"
+        case .setWorkspaceRootDirectory:
+            return "setWorkspaceRootDirectory"
+        case .setWorkspaceTaskID:
+            return "setWorkspaceTaskID"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:

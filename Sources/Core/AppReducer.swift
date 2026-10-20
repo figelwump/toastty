@@ -133,6 +133,39 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .createTaskSpace(
+            let windowID,
+            let workspaceID,
+            let panelID,
+            let parentWorkspaceID,
+            let spawningSessionID,
+            let taskID,
+            let title,
+            let terminalCWD
+        ):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  let rootID = state.resolvedParentWorkspaceID(
+                      forNewWorkspaceIn: windowID,
+                      under: parentWorkspaceID
+                  ) else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: normalizedWorkspaceTitle(title)
+                    ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state),
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.parentWorkspaceID = rootID
+            workspace.spawningSessionID = normalizedMetadataValue(spawningSessionID)
+            workspace.taskID = taskID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
         case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
                 title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",
@@ -217,6 +250,25 @@ public struct AppReducer {
             // Marking an already-done workspace keeps its original time.
             guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
             workspace.doneAt = doneAt
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceRootDirectory(let workspaceID, let rootDirectory):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let normalizedRoot = normalizedMetadataValue(rootDirectory)
+            // A subspace uses its parent's root; only top-level workspaces
+            // hold one.
+            guard normalizedRoot == nil || workspace.parentWorkspaceID == nil else { return false }
+            guard rootDirectory == nil || normalizedRoot?.hasPrefix("/") == true else { return false }
+            guard workspace.rootDirectory != normalizedRoot else { return false }
+            workspace.rootDirectory = normalizedRoot
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceTaskID(let workspaceID, let taskID):
+            guard var workspace = state.workspacesByID[workspaceID],
+                  workspace.taskID != taskID else { return false }
+            workspace.taskID = taskID
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 

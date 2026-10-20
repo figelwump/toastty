@@ -58,6 +58,13 @@ Toastty is designed to run locally on your machine. The app itself does not send
     document paths, and Scratchpad document IDs/titles. The list contains up to
     20 items and may contain URLs or local paths that identify the supporting
     material you opened.
+- `~/.toastty/task-records.json`
+  - Every task you or an agent created: its text and title, the chosen
+    workspace, project directory, agent, model and effort, setup state, and the
+    IDs of its task space and agent session. Deleting a task removes its record.
+- `~/.toastty/task-attachments/<task-id>/`
+  - Toastty's copies of files attached to a task. They are removed when the
+    task is deleted.
 - `~/.toastty/remote-access/devices.json`
   - Paired-device IDs, names, browser/native kind, scopes, timestamps,
     revocation state, and SHA-256 hashes of device credentials. Native records
@@ -158,6 +165,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/recent-right-panel-items.json`
+  - `<runtime-home>/task-records.json`
+  - `<runtime-home>/task-attachments/`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`

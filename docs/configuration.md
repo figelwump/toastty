@@ -83,6 +83,7 @@ local-document-opening-alternate-placement = newTab
 
 ## Related docs
 
+- [Tasks](tasks.md), including `~/.toastty/tasks.toml`
 - [README](../README.md)
 - [Terminal Profiles](terminal-profiles.md)
 - [Running Agents](running-agents.md)
