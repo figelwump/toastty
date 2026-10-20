@@ -61,6 +61,7 @@ enum CommandPaletteCatalog {
             (.openLocalFileInSplit, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.newScratchpad, actions.canCreateScratchpad(originWindowID: originWindowID)),
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
+            (.newTask, actions.canCreateTask()),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
@@ -96,7 +97,8 @@ enum CommandPaletteCatalog {
             guard isAvailable else { return nil }
             return descriptor(
                 for: command,
-                title: title(for: command, originWindowID: originWindowID, actions: actions)
+                title: title(for: command, originWindowID: originWindowID, actions: actions),
+                shortcut: command == .newTask ? actions.newTaskShortcut() : nil
             )
         }
     }
@@ -180,14 +182,15 @@ enum CommandPaletteCatalog {
 
     private static func descriptor(
         for command: ToasttyBuiltInCommand,
-        title: String? = nil
+        title: String? = nil,
+        shortcut: PaletteShortcut? = nil
     ) -> PaletteCommandDescriptor {
         PaletteCommandDescriptor(
             id: command.id,
             usageKey: command.id,
             title: title ?? command.title,
             keywords: command.keywords,
-            shortcut: command.shortcut.map(PaletteShortcut.init),
+            shortcut: shortcut ?? command.shortcut.map(PaletteShortcut.init),
             invocation: .builtIn(command)
         )
     }

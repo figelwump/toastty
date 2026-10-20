@@ -25,6 +25,8 @@ final class TerminalHostView: NSView {
     var resolveFileDrop: (([URL]) -> PreparedFileDrop?)?
     var performFileDrop: ((PreparedFileDrop) -> Bool)?
     var openSearchSelectionURL: ((URL) -> Bool)?
+    /// Opens the quick entry panel with the selected text attached.
+    var newTaskFromSelection: ((String) -> Void)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
@@ -56,6 +58,7 @@ final class TerminalHostView: NSView {
         .urlReadingFileURLsOnly: true,
     ]
     private static let searchWithGoogleMenuItemTitle = "Search with Google"
+    static let newTaskFromSelectionMenuItemTitle = "New Task from Selection…"
     private static let commandClickDragCancellationDistance: CGFloat = 4
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -1019,6 +1022,13 @@ final class TerminalHostView: NSView {
         _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
     }
 
+    @objc func createTaskFromSelection(_ sender: Any?) {
+        // The menu item carries the selection read when the menu opened;
+        // a later click must not depend on the selection still being there.
+        guard let selectionText = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        newTaskFromSelection?(selectionText)
+    }
+
     @objc func searchWithGoogle(_ sender: Any?) {
         guard let ghosttySurface,
               let selectedText = selectedText(from: ghosttySurface) else {
@@ -1459,6 +1469,20 @@ final class TerminalHostView: NSView {
             )
             searchItem.target = self
             menu.addItem(searchItem)
+        }
+
+        if newTaskFromSelection != nil,
+           let selectionText,
+           Self.hasCopyableSelectionText(selectionText) {
+            menu.addItem(.separator())
+            let taskItem = NSMenuItem(
+                title: Self.newTaskFromSelectionMenuItemTitle,
+                action: #selector(createTaskFromSelection(_:)),
+                keyEquivalent: ""
+            )
+            taskItem.target = self
+            taskItem.representedObject = selectionText
+            menu.addItem(taskItem)
         }
 
         return menu

@@ -5,8 +5,46 @@ it, makes a task space for it under a workspace, and starts the agent there.
 The task keeps its own record, so it exists before its task space is ready and
 after setup fails.
 
-This page covers creating tasks from the CLI or from an agent, the sidebar
-Inbox, and `~/.toastty/tasks.toml`.
+This page covers the quick entry panel, creating tasks from the CLI or from
+an agent, the sidebar Inbox, and `~/.toastty/tasks.toml`.
+
+## Quick entry
+
+Press `Option+Shift+T` from any app, Toastty included, to open the quick entry
+panel. Write the task, attach what helps, and press `Cmd+Return` or Create
+Task. Toastty saves the task at once and shows "Task created · in the Inbox".
+Focus goes back to the app you were in.
+
+- **Attach files** by dropping them anywhere on the panel, including a
+  screenshot's thumbnail, by pasting an image or a copied file with `Cmd+V`,
+  or with Attach. Toastty copies each file when you add it, so a screenshot
+  that macOS later moves or deletes is still attached. A task holds up to 10
+  files.
+- **Drop a link** to add it to the text.
+- **Workspace and Agent** start on Auto. Pick one to pin it for this task.
+  Auto leaves the choice to triage, or to `[defaults]` for the agent. Until
+  triage is available, a task needs a pinned workspace.
+- The panel floats over other apps and full-screen windows and stays open
+  while you switch apps, for example to take a screenshot. Drag its
+  background to move it. `Esc` closes it without saving; the attached copies
+  are deleted.
+- Pressing the shortcut while the panel is open brings it back with your
+  draft.
+
+Other ways to open the same panel:
+
+- **File > New Task…** and **New Task…** in the command palette. Both show
+  the shortcut.
+- **New Task from Selection…** in a terminal's context menu, with text
+  selected. The selection is attached as `selection.txt`, and the terminal's
+  workspace is picked.
+
+Change the shortcut with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`,
+or turn it off with `shortcut = "none"`. Toastty reads it at launch and on
+Reload Configuration. The shortcut needs no Accessibility permission. If
+another app already uses it, Reload Configuration says so, and the shortcut
+still works inside Toastty from the File menu. Smoke runs and test hosts do
+not register it.
 
 ## Create a task
 
@@ -94,9 +132,20 @@ effort = "high"
 default model and effort apply only with the default agent; a request that
 names another agent gets that agent's own defaults.
 
+```toml
+[quick_entry]
+shortcut = "opt+shift+t"   # the default; "none" turns it off
+```
+
+A shortcut joins modifiers and one key with `+`. Modifiers are `cmd`,
+`ctrl`, `opt` (or `alt`) and `shift`. The key is a letter, a digit,
+punctuation, `space`, `return`, `tab`, or `f1` to `f20`, named as a US
+keyboard types it. It needs `cmd`, `ctrl` or `opt`, so it cannot take
+ordinary typing away from other apps; a function key may stand alone.
+
 Toastty also reads and checks these tables, which later features use:
 `[triage]` (`command`, `guidelines` or `guidelines_file`, `timeout_seconds`),
-`[defaults]` `merge` and `merge_prompt`, `[quick_entry]` (`shortcut`), and
+`[defaults]` `merge` and `merge_prompt`, and
 `[workspace."<root directory>"]` (`guidelines`, `create_hook`,
 `branch_prefix`, `release_tags`, `release_prompt`, `merge`, `merge_prompt`).
 They have no effect yet.

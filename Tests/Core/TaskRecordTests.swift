@@ -84,4 +84,10 @@ struct TaskRecordTests {
         #expect(try JSONDecoder().decode(TaskRecord.self, from: data) == record)
         #expect(record.taskSpaceWorkspaceID == record.operation.taskSpace?.workspaceID)
     }
+
+    @Test(arguments: [TaskSource.cli, .agent(sessionID: "s1"), .quickEntry, .recovered])
+    func sourceRoundTripsThroughJSON(source: TaskSource) throws {
+        let data = try JSONEncoder().encode(source)
+        #expect(try JSONDecoder().decode(TaskSource.self, from: data) == source)
+    }
 }

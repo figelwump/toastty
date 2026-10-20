@@ -77,9 +77,11 @@ public struct TasksConfig: Equatable, Sendable {
     }
 
     public struct QuickEntry: Equatable, Sendable {
-        public var shortcut: String?
+        /// The global shortcut for the quick entry panel; nil when the file
+        /// turns it off with `shortcut = "none"`.
+        public var shortcut: QuickEntryShortcut?
 
-        public init(shortcut: String? = nil) {
+        public init(shortcut: QuickEntryShortcut? = .default) {
             self.shortcut = shortcut
         }
     }
@@ -380,7 +382,17 @@ private struct TasksConfigParser {
     private func quickEntry(_ entries: Entries) throws -> TasksConfig.QuickEntry {
         let table = Table.quickEntry
         try Self.rejectUnknownKeys(entries, table: table, allowed: ["shortcut"])
-        return TasksConfig.QuickEntry(shortcut: try Self.string("shortcut", in: entries, table: table))
+        guard let entry = entries["shortcut"], let value = try Self.string("shortcut", in: entries, table: table) else {
+            return TasksConfig.QuickEntry()
+        }
+        if value.lowercased() == "none" {
+            return TasksConfig.QuickEntry(shortcut: nil)
+        }
+        do {
+            return TasksConfig.QuickEntry(shortcut: try QuickEntryShortcut.parse(value))
+        } catch {
+            throw TasksConfigParseError(line: entry.line, message: "\(table.name) \(error.localizedDescription)")
+        }
     }
 
     private func workspace(path: String, _ entries: Entries) throws -> TasksConfig.Workspace {

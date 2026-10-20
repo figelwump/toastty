@@ -66,7 +66,7 @@ struct TasksConfigFileTests {
             merge: .agent,
             mergePrompt: "Use toastty-task-merge."
         ))
-        #expect(config.quickEntry.shortcut == "opt+shift+t")
+        #expect(config.quickEntry.shortcut == .default)
         #expect(config.workspaces == [
             TasksConfig.Workspace(
                 path: "~/GiantThings/repos/toastty",
@@ -87,6 +87,14 @@ struct TasksConfigFileTests {
         let missingHome = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-tasks-config-\(UUID().uuidString)").path
         #expect(try TasksConfigFile.load(homeDirectoryPath: missingHome) == .empty)
+    }
+
+    @Test
+    func quickEntryShortcutDefaultsAndCanBeTurnedOff() throws {
+        #expect(try parse("").quickEntry.shortcut == .default)
+        #expect(try parse("[quick_entry]\nshortcut = \"None\"").quickEntry.shortcut == nil)
+        #expect(try parse("[quick_entry]\nshortcut = \"ctrl+opt+space\"").quickEntry.shortcut
+            == QuickEntryShortcut(modifiers: [.control, .option], key: .space))
     }
 
     @Test
@@ -129,6 +137,8 @@ struct TasksConfigFileTests {
         ("[workspace.\"repos/toastty\"]", 1, "absolute"),
         ("[workspace.\"/r\"]\nbranch_prefix = \"Fix\"", 2, "branch_prefix"),
         ("[workspace.\"/r\"]\nrelease_tag = \"v*\"", 2, "unknown key 'release_tag'"),
+        ("[quick_entry]\nshortcut = \"shift+t\"", 2, "[quick_entry] the shortcut \"shift+t\" needs Command"),
+        ("[quick_entry]\nshortcut = \"opt+shift+tt\"", 2, "unknown key \"tt\""),
     ])
     func reportsErrorsWithLines(contents: String, line: Int, mention: String) {
         let error = parseError(contents)

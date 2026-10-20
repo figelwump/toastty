@@ -32,6 +32,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFileInSplit
     case newScratchpad
     case showScratchpadForCurrentSession
+    case newTask
     case toggleSidebar
     case toggleRightPanel
     case toggleFocusedPanelMode
@@ -122,6 +123,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-split"
         case .newScratchpad:
             return "scratchpad.create"
+        case .newTask:
+            return "task.new"
         case .showScratchpadForCurrentSession:
             return "scratchpad.show-current-session"
         case .toggleSidebar:
@@ -230,6 +233,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Split"
         case .newScratchpad:
             return "New Scratchpad"
+        case .newTask:
+            return "New Task…"
         case .showScratchpadForCurrentSession:
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
@@ -336,6 +341,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .newScratchpad:
             return ToasttyKeyboardShortcuts.newScratchpad
         case .showScratchpadForCurrentSession:
+            return nil
+        case .newTask:
+            // The global quick entry shortcut comes from tasks.toml; menus
+            // and the palette read it from QuickEntryController.
             return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
@@ -447,6 +456,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["scratchpad", "new", "create", "visual", "canvas", "diagram", "wireframe"]
         case .showScratchpadForCurrentSession:
             return ["scratchpad", "show", "current", "session", "agent", "visual"]
+        case .newTask:
+            return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleRightPanel:

@@ -24,6 +24,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenLocalDocumentValue = true
     var canCreateScratchpadValue = true
     var canShowScratchpadForCurrentSessionValue = true
+    var canCreateTaskValue = true
+    var newTaskShortcutValue: PaletteShortcut?
+    var createTaskCount = 0
     var canToggleSidebarValue = true
     var canToggleRightPanelValue = true
     var canToggleFocusedPanelModeValue = true
@@ -255,6 +258,15 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         _ = originWindowID
         return canShowScratchpadForCurrentSessionValue
     }
+
+    func canCreateTask() -> Bool { canCreateTaskValue }
+
+    func createTask() -> Bool {
+        createTaskCount += 1
+        return canCreateTaskValue
+    }
+
+    func newTaskShortcut() -> PaletteShortcut? { newTaskShortcutValue }
 
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
         shownScratchpadWindowIDs.append(originWindowID)
@@ -618,6 +630,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return createScratchpad(originWindowID: originWindowID)
             case .showScratchpadForCurrentSession:
                 return showScratchpadForCurrentSession(originWindowID: originWindowID)
+            case .newTask:
+                return createTask()
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:

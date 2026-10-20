@@ -29,6 +29,10 @@ protocol CommandPaletteActionHandling: AnyObject {
     func canCreateScratchpad(originWindowID: UUID) -> Bool
     func createScratchpad(originWindowID: UUID) -> Bool
     func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool
+    func canCreateTask() -> Bool
+    func createTask() -> Bool
+    /// The global quick entry shortcut, if one is set.
+    func newTaskShortcut() -> PaletteShortcut?
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
@@ -104,6 +108,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let openLocalDocumentAction: @MainActor (UUID?, WebPanelPlacement) -> Bool
     private let createScratchpadAction: @MainActor (UUID?) -> Bool
     private let showScratchpadForCurrentSessionAction: @MainActor (UUID?) -> Bool
+    private let createTaskAction: (@MainActor () -> Void)?
+    private let newTaskShortcutProvider: @MainActor () -> QuickEntryShortcut?
     private let openManageConfigAction: @MainActor (UUID) -> Bool
     private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
@@ -124,6 +130,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
         createScratchpadAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        createTaskAction: (@MainActor () -> Void)? = nil,
+        newTaskShortcutProvider: @escaping @MainActor () -> QuickEntryShortcut? = { nil },
         openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
@@ -154,6 +162,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.openLocalDocumentAction = openLocalDocumentAction
         self.createScratchpadAction = createScratchpadAction
         self.showScratchpadForCurrentSessionAction = showScratchpadForCurrentSessionAction
+        self.createTaskAction = createTaskAction
+        self.newTaskShortcutProvider = newTaskShortcutProvider
         self.openManageConfigAction = openManageConfigAction
         self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
         self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
@@ -310,6 +320,20 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return false
         }
         return createScratchpadAction(originWindowID)
+    }
+
+    func canCreateTask() -> Bool {
+        createTaskAction != nil
+    }
+
+    func createTask() -> Bool {
+        guard let createTaskAction else { return false }
+        createTaskAction()
+        return true
+    }
+
+    func newTaskShortcut() -> PaletteShortcut? {
+        newTaskShortcutProvider().map { PaletteShortcut(symbolLabel: $0.symbolLabel) }
     }
 
     func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
@@ -778,6 +802,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return createScratchpad(originWindowID: originWindowID)
         case .showScratchpadForCurrentSession:
             return showScratchpadForCurrentSession(originWindowID: originWindowID)
+        case .newTask:
+            return createTask()
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
         case .toggleRightPanel:

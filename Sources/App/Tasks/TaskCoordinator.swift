@@ -75,8 +75,16 @@ struct TaskCaller: Equatable {
     var sessionID: String?
     /// That session's workspace.
     var workspaceID: UUID?
+    /// The quick entry panel, rather than the CLI.
+    var isQuickEntry = false
 
     static let unmanaged = TaskCaller()
+    static let quickEntry = TaskCaller(isQuickEntry: true)
+
+    var source: TaskSource {
+        if let sessionID { return .agent(sessionID: sessionID) }
+        return isQuickEntry ? .quickEntry : .cli
+    }
 }
 
 /// A checked `task.create` request, ready for its files to be copied.
@@ -167,7 +175,7 @@ final class TaskCoordinator {
 
     /// Every check that needs app state, done before any file is copied.
     func prepareCreate(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) throws -> TaskCreatePreparation {
-        let source: TaskSource = caller.sessionID.map { .agent(sessionID: $0) } ?? .cli
+        let source = caller.source
         let clientRequestID = try validatedClientRequestID(request.clientRequestID)
         // Request IDs belong to their caller, so one caller cannot read
         // another's task by reusing its ID.
