@@ -18,7 +18,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             names,
             ToasttyAgentPluginBundle.skills.map(\.name).sorted()
         )
-        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 5)
+        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 6)
         // ToasttyAgentPluginBundle.read rejects symlinks, and one inside a
         // skill folder silently breaks delivery for every managed agent.
         let symlinks = try symbolicLinks(under: shippedSkillsURL())
@@ -309,7 +309,7 @@ final class SetupResourcesDriftTests: XCTestCase {
         )
         // The CLI replaces this with the bundled examples directory when it prints the guide.
         XCTAssertTrue(guide.contains("{{WORKFLOW_EXAMPLES_DIR}}"))
-        for packageName in ["worktree-create", "worktree-done", "worktree-cleanup"] {
+        for packageName in ["toastty-task-start", "worktree-done", "worktree-cleanup"] {
             XCTAssertTrue(guide.contains("`\(packageName)`"), "Workflow guide is missing \(packageName)")
         }
         for rule in ["`ok`", "`scope_denied`", "merging"] {
@@ -326,7 +326,7 @@ final class SetupResourcesDriftTests: XCTestCase {
         XCTAssertTrue(state.globalDiagnostics.isEmpty, "\(state.globalDiagnostics)")
         XCTAssertEqual(
             state.packages.map(\.name).sorted(),
-            ["worktree-cleanup", "worktree-create", "worktree-done"]
+            ["worktree-cleanup", "worktree-done"]
         )
 
         for package in state.packages {

@@ -484,6 +484,9 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
+        // A create_hook or git command must not outlive the app: a retry
+        // after relaunch would run beside it in the same worktree.
+        TaskLiveCommandRunner.stopAllRunningCommands()
         #if TOASTTY_HAS_GHOSTTY_KIT
         GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
         #endif
@@ -1260,6 +1263,19 @@ struct ToasttyApp: App {
             }
         )
         sessionRuntimeStore.sessionExitController = sessionExitController
+        taskCoordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: sessionRuntimeStore,
+            closeController: remoteSessionCloseController,
+            exitController: sessionExitController,
+            sendText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendText(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? false
+            }
+        )
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
