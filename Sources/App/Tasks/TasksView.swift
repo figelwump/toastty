@@ -53,8 +53,6 @@ struct TasksView: View {
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
-    /// Taken on appear, so the terminal under the view loses keyboard focus.
-    @FocusState private var isListFocused: Bool
 
     private static let detailWidth: CGFloat = 360
 
@@ -72,9 +70,7 @@ struct TasksView: View {
                     list(sections, selectedID: selected?.id)
                         .padding(.bottom, 16)
                 }
-                .focusable()
-                .focusEffectDisabled()
-                .focused($isListFocused)
+
             }
             .frame(maxWidth: .infinity)
 
@@ -103,19 +99,19 @@ struct TasksView: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .background(ToastyTheme.surfaceBackground)
-        .onAppear {
-            board.tasksViewDidOpen()
-            isListFocused = true
+        .onAppear { board.tasksViewDidOpen() }
+        // Holds keyboard focus in this window while the view shows, so keys
+        // never reach the terminal underneath, and closes the view on Esc.
+        .background {
+            TasksViewKeySink {
+                _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
+            }
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
         }
         // A container's identifier would replace its children's.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tasks.view")
-        // Esc leaves the Tasks view, back to the selected workspace. Not a
-        // keyboard shortcut: AppKit offers those to the main window too, so
-        // one would take Esc from a panel open over it, such as quick entry.
-        .onExitCommand {
-            _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
-        }
     }
 
     private var header: some View {
@@ -336,6 +332,79 @@ private struct TasksViewRow: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
         .accessibilityIdentifier("tasks.view.row")
+    }
+}
+
+/// The Tasks view's first responder. SwiftUI focus alone did not keep the
+/// terminal under the view from getting keys back when the window became
+/// key again, so this AppKit view takes first responder in its own window
+/// when it appears and again whenever a terminal has it while the view shows.
+/// Esc here closes the view. It is not a keyboard shortcut: AppKit offers
+/// those to the main window too, which would take Esc from a panel open over
+/// the view, such as quick entry.
+private struct TasksViewKeySink: NSViewRepresentable {
+    let close: () -> Void
+
+    func makeNSView(context _: Context) -> KeySinkView {
+        let view = KeySinkView()
+        view.close = close
+        return view
+    }
+
+    func updateNSView(_ view: KeySinkView, context _: Context) {
+        view.close = close
+    }
+
+    final class KeySinkView: NSView {
+        var close: (() -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didUpdateNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.claimIfATerminalHasFocus() }
+                })
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        private func claimIfATerminalHasFocus() {
+            guard let window else { return }
+            if window.firstResponder === window || (window.firstResponder as? NSView)?.enclosingTerminalHost != nil {
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            // Esc closes; other keys stop here instead of reaching the
+            // terminal or beeping.
+            if event.keyCode == 53 { close?() }
+        }
+
+        override func cancelOperation(_: Any?) {
+            close?()
+        }
+    }
+}
+
+private extension NSView {
+    /// The terminal this view is part of, if any.
+    var enclosingTerminalHost: TerminalHostView? {
+        var view: NSView? = self
+        while let current = view {
+            if let host = current as? TerminalHostView { return host }
+            view = current.superview
+        }
+        return nil
     }
 }
 
