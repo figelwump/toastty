@@ -52,6 +52,7 @@ public final class PanelFrame {
     private let zoomButton: WidgetPtr
     private var presentation: PanelFramePresentation?
 
+    /// A press in the frame, or keyboard focus entering an unfocused frame.
     public var onActivate: (() -> Void)?
     public var onClose: (() -> Void)?
     public var onToggleZoom: (() -> Void)?
@@ -86,11 +87,17 @@ public final class PanelFrame {
         Signal.connect(zoomButton, "clicked") { [weak self] in self?.onToggleZoom?() }
         Signal.connect(closeButton, "clicked") { [weak self] in self?.onClose?() }
 
+        // Every press activates the panel, even one already focused: like
+        // macOS `TerminalHostView.mouseDown` / `BrowserPanelView`, a click is
+        // how the user reads what the panel announced (its unread mark and
+        // the workspace's unread notification count). `onActivate` decides
+        // whether that needs a state change. Any mouse button, as macOS
+        // also activates on right and other mouse down.
         let click = gtk_gesture_click_new()!
+        gtk_gesture_single_set_button(cast(click), 0)
         gtk_event_controller_set_propagation_phase(cast(click), GTK_PHASE_CAPTURE)
         Signal.connectPress(click) { [weak self] _, _, _ in
-            guard let self, self.presentation?.isFocused != true else { return }
-            self.onActivate?()
+            self?.handlePress()
         }
         gtk_widget_add_controller(root, cast(click))
 
@@ -100,6 +107,12 @@ public final class PanelFrame {
             self.onActivate?()
         }
         gtk_widget_add_controller(root, focus)
+    }
+
+    /// A mouse press anywhere in the frame (also the `panel-click`
+    /// automation command).
+    public func handlePress() {
+        onActivate?()
     }
 
     public func update(_ presentation: PanelFramePresentation) {

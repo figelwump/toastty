@@ -84,6 +84,62 @@ struct UnreadAttentionTests {
         #expect(unread(store, workspaceID) == [panels[2]])
     }
 
+    // MARK: Clicking reads (macOS mouseDown → focusPanel)
+
+    @Test func clickInFocusedPanelReadsWorkspaceAndPanelUnread() throws {
+        let (store, _, workspaceID, panels) = try threePanelStore()
+        func needsFocus(_ panelID: UUID) throws -> Bool {
+            SeenUnreadPolicy.clickNeedsFocusAction(workspace: try #require(store.state.workspacesByID[workspaceID]), panelID: panelID)
+        }
+        // Focused and read: a click changes nothing, so it sends nothing.
+        #expect(try needsFocus(panels[2]) == false)
+        #expect(try needsFocus(panels[0]))
+
+        // `toastty notify` without a panel: only a focus action reads it.
+        store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: nil))
+        #expect(store.state.workspacesByID[workspaceID]?.unreadNotificationCount == 1)
+        #expect(try needsFocus(panels[2]))
+        store.send(.focusPanel(workspaceID: workspaceID, panelID: panels[2]))
+        #expect(store.state.workspacesByID[workspaceID]?.unreadNotificationCount == 0)
+        #expect(try needsFocus(panels[2]) == false)
+
+        // The focused panel unread (e.g. before the seen delay ran out).
+        store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panels[2]))
+        #expect(try needsFocus(panels[2]))
+    }
+
+    @Test func clickInRightPanelReadsIt() throws {
+        let (store, _, workspaceID, _) = try threePanelStore()
+        store.send(.createWebPanel(workspaceID: workspaceID, panel: WebPanelState(definition: .browser), placement: .rightPanel))
+        let rightPanelID = try #require(store.state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        func needsFocus() throws -> Bool {
+            SeenUnreadPolicy.clickNeedsFocusAction(workspace: try #require(store.state.workspacesByID[workspaceID]), panelID: rightPanelID)
+        }
+        store.send(.focusRightAuxPanel(workspaceID: workspaceID, panelID: rightPanelID))
+        #expect(try needsFocus() == false)
+        store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: nil))
+        #expect(try needsFocus())
+        store.send(.focusRightAuxPanel(workspaceID: workspaceID, panelID: rightPanelID))
+        #expect(try needsFocus() == false)
+        #expect(store.state.workspacesByID[workspaceID]?.unreadNotificationCount == 0)
+    }
+
+    /// macOS `sessionRailState`: a ready session's row shows the ready dot
+    /// only while it is unread; once seen it rests like an idle row.
+    @Test func readySessionDotGoesAwayOnceRead() {
+        func row(_ kind: SessionStatusKind, unread: Bool) -> SidebarSessionRowModel {
+            SidebarSessionRowModel(
+                sessionID: "s", panelID: UUID(), name: "Claude", agentLabel: "claude", statusKind: kind,
+                chipLabel: nil, summary: nil, isUnread: unread, isFocused: false, isFlaggedForLater: false
+            )
+        }
+        #expect(row(.ready, unread: true).dotClass == "ready")
+        #expect(row(.ready, unread: false).dotClass == "idle")
+        #expect(row(.working, unread: false).dotClass == "working")
+        #expect(row(.needsApproval, unread: false).dotClass == "needs-approval")
+        #expect(row(.error, unread: false).dotClass == "error")
+    }
+
     // MARK: Withdrawing read notifications
 
     @Test func ledgerWithdrawsExactlyTheReadNotifications() throws {

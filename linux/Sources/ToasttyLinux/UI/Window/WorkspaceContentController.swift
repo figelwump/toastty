@@ -160,8 +160,9 @@ public final class WorkspaceContentController {
         let frame = PanelFrame(panelID: panelID, content: content)
         frame.onActivate = { [weak self] in
             guard let self,
-                  let workspaceID = self.store.state.workspaceSelection(containingPanelID: panelID)?.workspaceID else { return }
-            self.store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                  let selection = self.store.state.workspaceSelection(containingPanelID: panelID),
+                  SeenUnreadPolicy.clickNeedsFocusAction(workspace: selection.workspace, panelID: panelID) else { return }
+            self.store.send(.focusPanel(workspaceID: selection.workspaceID, panelID: panelID))
         }
         frame.onClose = { [weak self] in
             guard let self else { return }

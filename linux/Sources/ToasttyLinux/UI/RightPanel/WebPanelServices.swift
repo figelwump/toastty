@@ -14,8 +14,11 @@ public protocol WebPanelServices: AnyObject {
 
     /// Page title / URL observed in a panel (persists `currentURL`).
     func webPanelMetadataDidChange(panelID: UUID, title: String?, url: String?)
-    /// The user clicked or tabbed into a panel's page.
+    /// Keyboard focus entered a panel's page (click or Tab).
     func webPanelDidRequestFocus(panelID: UUID)
+    /// The user pressed a mouse button in a panel's page, even one already
+    /// focused (a click reads its unread state, as on macOS).
+    func webPanelWasClicked(panelID: UUID)
     /// A link the panel will not navigate in place (Ctrl/middle click,
     /// `target=_blank`, non-web schemes, Scratchpad links). Returns whether
     /// it was routed.
@@ -70,8 +73,7 @@ public final class StoreWebPanelServices: WebPanelServices {
         if hooks.didRequestFocus?(panelID) == true { return }
         let state = store.state
         for (workspaceID, workspace) in state.workspacesByID {
-            if let tab = workspace.rightAuxPanel.tabID(containingPanelID: panelID) {
-                _ = tab
+            if workspace.rightAuxPanel.tabID(containingPanelID: panelID) != nil {
                 if workspace.rightAuxPanel.focusedPanelID != panelID {
                     store.send(.focusRightAuxPanel(workspaceID: workspaceID, panelID: panelID))
                 }
@@ -83,6 +85,18 @@ public final class StoreWebPanelServices: WebPanelServices {
                 }
                 return
             }
+        }
+    }
+
+    public func webPanelWasClicked(panelID: UUID) {
+        let state = store.state
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              selection.workspace.rightAuxPanel.tabID(containingPanelID: panelID) != nil else {
+            // Main-area web panels are activated by their `PanelFrame`.
+            return
+        }
+        if SeenUnreadPolicy.clickNeedsFocusAction(workspace: selection.workspace, panelID: panelID) {
+            store.send(.focusRightAuxPanel(workspaceID: selection.workspaceID, panelID: panelID))
         }
     }
 

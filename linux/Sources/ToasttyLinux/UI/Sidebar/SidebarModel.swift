@@ -28,6 +28,14 @@ public struct SidebarSessionRowModel: Equatable, Sendable {
         }
     }
 
+    /// The row's status dot (macOS `SidebarSessionPresentation.sessionRailState`):
+    /// a ready session shows the ready dot only while its panel is unread;
+    /// once the user has seen it the row rests like an idle one, so the
+    /// "ready" mark goes away with the unread mark.
+    public var dotClass: String {
+        statusKind == .ready && isUnread == false ? "idle" : statusClass
+    }
+
     public var statusClass: String {
         switch statusKind {
         case .idle: return "idle"
