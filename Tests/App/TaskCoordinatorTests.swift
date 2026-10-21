@@ -10,7 +10,9 @@ struct TaskCoordinatorTests {
     @MainActor
     final class Fixture {
         let store = AppStore(persistTerminalFontPreference: false)
-        let sessionRuntimeStore = SessionRuntimeStore()
+        /// Status changes send no desktop notification: without notification
+        /// access, as on CI, the access alert would block the test host.
+        let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
         let router = TestTerminalCommandRouter()
         let root: URL
         /// A git repository root; the workspace terminal starts in a
