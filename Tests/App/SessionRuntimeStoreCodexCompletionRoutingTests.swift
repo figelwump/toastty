@@ -692,6 +692,72 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexRolloutTurnCompletionEndsOnlyTheNewestWorkingFallbackTurn() {
+        func makeStore(source: CodexStatusTrackingSource) -> SessionRuntimeStore {
+            let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+            store.startSession(
+                sessionID: "sess-codex",
+                agent: .codex,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: UUID(),
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: source,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            return store
+        }
+        func complete(_ store: SessionRuntimeStore, turnID: String?, latest: String?, error: String? = nil) -> Bool {
+            store.handleCodexRolloutTurnCompletion(
+                sessionID: "sess-codex",
+                turnID: turnID,
+                latestRolloutTurnID: latest,
+                detail: "DONE",
+                turnError: error,
+                at: Date(timeIntervalSince1970: 1_700_000_010)
+            )
+        }
+        func setWorking(_ store: SessionRuntimeStore) {
+            store.updateStatus(
+                sessionID: "sess-codex",
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Go"),
+                at: Date(timeIntervalSince1970: 1_700_000_005)
+            )
+        }
+        func kind(_ store: SessionRuntimeStore) -> SessionStatusKind? {
+            store.sessionRegistry.activeSession(sessionID: "sess-codex")?.status?.kind
+        }
+
+        // An idle session is not in a turn, so a replayed completion changes nothing.
+        let fallback = makeStore(source: .sessionLogFallback(reason: "test"))
+        #expect(complete(fallback, turnID: "turn-1", latest: "turn-1") == false)
+
+        // Only the rollout's newest turn ends the working turn.
+        setWorking(fallback)
+        #expect(complete(fallback, turnID: "turn-0", latest: "turn-1") == false)
+        #expect(complete(fallback, turnID: nil, latest: "turn-1") == false)
+        #expect(kind(fallback) == .working)
+        #expect(complete(fallback, turnID: "turn-1", latest: "turn-1"))
+        #expect(kind(fallback) == .ready)
+
+        // When `notify` already ended the turn, the rollout reports nothing more.
+        #expect(complete(fallback, turnID: "turn-1", latest: "turn-1") == false)
+
+        // A failed turn shows as an error.
+        setWorking(fallback)
+        #expect(complete(fallback, turnID: "turn-2", latest: "turn-2", error: "Selected model is at capacity"))
+        #expect(kind(fallback) == .error)
+
+        // Hooks report their own completions.
+        let hooks = makeStore(source: .hooks)
+        setWorking(hooks)
+        #expect(complete(hooks, turnID: "turn-1", latest: "turn-1") == false)
+        #expect(kind(hooks) == .working)
+    }
+
+    @Test
     func codexSessionLogFallbackReportsAFailedTurnAsAnError() {
         let store = SessionRuntimeStore()
         let sessionID = "sess-codex-fallback-failure"

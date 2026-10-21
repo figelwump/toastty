@@ -1452,6 +1452,69 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(status?.detail, "401 Unauthorized: Incorrect API key provided")
     }
 
+    /// A Codex session resumed after a relaunch may never run `notify`, so
+    /// without hooks the rollout's `task_complete` must end its turn.
+    func testCodexRolloutTurnCompletionEndsAFallbackTurnThatNotifyNeverReported() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", "thread-root"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+        func activeStatus() -> SessionStatus? {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+        }
+
+        // The resumed thread's earlier turn is already in the rollout. Replaying
+        // it must not end a turn: the session is idle, waiting for a prompt.
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-10-21T02:46:00.000Z","type":"turn_context","payload":{"turn_id":"turn-old","cwd":"/tmp/repo","approval_policy":"never"}}
+            {"timestamp":"2026-10-21T02:46:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"READY-A"}}
+            """,
+            to: rolloutURL
+        )
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: rolloutURL.path
+                )
+            )
+        ))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(activeStatus()?.kind, .idle)
+
+        // A new prompt starts a turn, and Codex never runs `notify` for it.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reply with DONE-A"),
+            at: Date()
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-10-21T02:46:30.000Z","type":"turn_context","payload":{"turn_id":"turn-new","cwd":"/tmp/repo","approval_policy":"never"}}
+            {"timestamp":"2026-10-21T02:46:31.740Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-new","last_agent_message":"DONE-A"}}
+            """,
+            to: rolloutURL
+        )
+
+        await waitUntil { activeStatus()?.kind == .ready }
+        XCTAssertEqual(activeStatus()?.kind, .ready)
+        XCTAssertEqual(activeStatus()?.detail, "DONE-A")
+    }
+
     func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
@@ -3149,7 +3212,7 @@ private func makePlannerFixture(
     }
 
     let store = AppStore(state: state, persistTerminalFontPreference: false)
-    let sessionRuntimeStore = SessionRuntimeStore()
+    let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
     sessionRuntimeStore.bind(store: store)
 
     let resolvedCodexSkillsResolver = codexSkillsResolver

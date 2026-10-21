@@ -1403,6 +1403,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             // Canonical turn_context entries are effective, turn-scoped state.
             // Keep status/completion ownership with hooks; forward only the
             // approval fields needed to classify PermissionRequest events.
+            if let turnID = normalizedNonEmpty(event.rootTurnID) {
+                codexRolloutWatchersBySessionID[sessionID]?.latestTurnID = turnID
+            }
             sessionRuntimeStore?.recordCodexCanonicalTurnContext(
                 sessionID: sessionID,
                 turnID: event.rootTurnID,
@@ -1427,6 +1430,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 )
             }
         case .taskCompleted:
+            // Without hooks, the rollout backs up `notify`, which a resumed
+            // Codex session may never run.
+            sessionRuntimeStore?.handleCodexRolloutTurnCompletion(
+                sessionID: sessionID,
+                turnID: event.completionTurnID,
+                latestRolloutTurnID: registration.latestTurnID,
+                detail: event.detail,
+                turnError: event.turnError,
+                at: nowProvider()
+            )
             // Hooks report successful turns through `Stop`, but Codex fires no
             // hook when a turn fails, so the rollout is the only failure signal.
             guard let turnError = event.turnError else { return }
@@ -1846,6 +1859,8 @@ private struct CodexRolloutSessionLogWatcherRegistration {
     let id: UUID
     let logURL: URL
     let watcher: CodexSessionLogWatcher
+    /// The turn of the newest `turn_context` this watcher has read.
+    var latestTurnID: String?
 }
 
 private struct CodexRolloutWatcherTransition {
