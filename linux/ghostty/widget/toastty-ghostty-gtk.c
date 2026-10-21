@@ -20,6 +20,141 @@
 #include "keymap-generated.h"
 
 /* ====================================================================== */
+/* Latency trace (TOASTTY_GHOSTTY_LATENCY_TRACE=1)                        */
+
+/* Off by default. When set, every key press is followed through the
+ * pipeline and one line per key is written to stderr:
+ *   key->(ghostty_surface_key returned) ->first wakeup ->tick ->RENDER
+ *   ->snapshot (changed frame pulled) ->after-paint
+ * all in milliseconds since the key event reached the widget, plus main
+ * loop iterations that were busy (not polling) for >= 8 ms. Typing is
+ * serial, so one in-flight record is enough. */
+typedef struct
+{
+  gint64 key;        /* key event reached the widget */
+  gint64 key_done;   /* ghostty_surface_key returned */
+  gint64 wakeup;     /* first wakeup_cb after the key (any thread) */
+  gint64 tick;       /* first ghostty_app_tick after that wakeup */
+  gint64 render;     /* first RENDER action */
+  gint64 snapshot;   /* first snapshot that pulled a changed frame */
+  gint64 paint;      /* frame clock after-paint following that snapshot */
+  guint keyval;
+  guint32 key_hash;  /* CPU frames: hash of the frame on screen at the key */
+  int unchanged;     /* CPU frames identical to key_hash pulled meanwhile */
+} LatencyRecord;
+
+static int latency_trace = -1;
+static LatencyRecord trace_rec;
+static guint32 trace_last_hash;   /* hash of the last CPU frame pulled */
+static gboolean trace_frame_unchanged;
+static gpointer trace_wakeup_atomic; /* gintptr time; written from any thread */
+static gint trace_armed;            /* atomic: a key is in flight */
+
+static gboolean
+latency_tracing (void)
+{
+  if (G_UNLIKELY (latency_trace < 0))
+    {
+      const char *env = g_getenv ("TOASTTY_GHOSTTY_LATENCY_TRACE");
+      latency_trace = env != NULL && *env != '\0' && g_strcmp0 (env, "0") != 0;
+    }
+  return latency_trace;
+}
+
+static double
+trace_ms (gint64 t)
+{
+  return t > 0 && trace_rec.key > 0 ? (double) (t - trace_rec.key) / 1000.0 : -1.0;
+}
+
+static void
+latency_trace_flush (void)
+{
+  if (trace_rec.key == 0)
+    return;
+  gint64 wakeup = (gint64) (gintptr) g_atomic_pointer_get (&trace_wakeup_atomic);
+  g_printerr ("toastty-ghostty latency: keyval=0x%x key_handled=%.2f wakeup=%.2f tick=%.2f "
+              "render=%.2f snapshot=%.2f paint=%.2f unchanged_frames=%d\n",
+              trace_rec.keyval, trace_ms (trace_rec.key_done), trace_ms (wakeup),
+              trace_ms (trace_rec.tick), trace_ms (trace_rec.render),
+              trace_ms (trace_rec.snapshot), trace_ms (trace_rec.paint), trace_rec.unchanged);
+  memset (&trace_rec, 0, sizeof trace_rec);
+  g_atomic_int_set (&trace_armed, 0);
+  g_atomic_pointer_set (&trace_wakeup_atomic, NULL);
+}
+
+static void
+latency_trace_key (guint keyval)
+{
+  latency_trace_flush ();
+  trace_rec.key = g_get_monotonic_time ();
+  trace_rec.keyval = keyval;
+  trace_rec.key_hash = trace_last_hash;
+  g_atomic_int_set (&trace_armed, 1);
+}
+
+static void
+latency_trace_wakeup (void)
+{
+  if (!g_atomic_int_get (&trace_armed))
+    return;
+  gintptr now = (gintptr) g_get_monotonic_time ();
+  g_atomic_pointer_compare_and_exchange (&trace_wakeup_atomic, NULL, (gpointer) now);
+}
+
+static void
+latency_trace_mark (gint64 *slot)
+{
+  if (trace_rec.key != 0 && *slot == 0)
+    *slot = g_get_monotonic_time ();
+}
+
+/* CPU (offscreen) frames are hashed so that `snapshot`/`paint` mark the
+ * first frame whose contents differ from what was on screen at the key.
+ * DMA-BUF frames cannot be compared cheaply: the first frame counts. */
+static void
+latency_trace_frame (const ghostty_frame_s *frame)
+{
+  trace_frame_unchanged = FALSE;
+  if (frame->kind != GHOSTTY_FRAME_MEMORY || frame->pixels == NULL)
+    return;
+  guint32 h = 2166136261u;
+  const guint32 *px = (const guint32 *) frame->pixels;
+  for (size_t i = 0; i < frame->pixels_len / 4; i++)
+    h = (h ^ px[i]) * 16777619u;
+  trace_frame_unchanged = trace_rec.key != 0 && h == trace_rec.key_hash;
+  if (trace_frame_unchanged)
+    trace_rec.unchanged++;
+  trace_last_hash = h;
+}
+
+/* Main-loop busy detector: time spent between two polls. */
+static GPollFunc trace_default_poll = NULL;
+static gint64 trace_poll_returned = 0;
+
+static gint
+latency_trace_poll (GPollFD *ufds, guint nfds, gint timeout)
+{
+  gint64 start = g_get_monotonic_time ();
+  if (trace_poll_returned != 0 && start - trace_poll_returned >= 8000)
+    g_printerr ("toastty-ghostty latency: main loop busy %.2f ms\n",
+                (double) (start - trace_poll_returned) / 1000.0);
+  gint ret = trace_default_poll (ufds, nfds, timeout);
+  trace_poll_returned = g_get_monotonic_time ();
+  return ret;
+}
+
+static void
+latency_trace_install_poll (void)
+{
+  if (!latency_tracing () || trace_default_poll != NULL)
+    return;
+  GMainContext *ctx = g_main_context_default ();
+  trace_default_poll = g_main_context_get_poll_func (ctx);
+  g_main_context_set_poll_func (ctx, latency_trace_poll);
+}
+
+/* ====================================================================== */
 /* Library init                                                           */
 
 static char *resources_dir = NULL;
@@ -121,6 +256,8 @@ runtime_tick_idle (gpointer data)
 {
   Runtime *rt = data;
   g_atomic_int_set (&rt->tick_scheduled, 0);
+  if (G_UNLIKELY (latency_trace > 0) && g_atomic_pointer_get (&trace_wakeup_atomic) != NULL)
+    latency_trace_mark (&trace_rec.tick);
   if (!rt->freed && rt->app != NULL)
     ghostty_app_tick (rt->app);
   return G_SOURCE_REMOVE;
@@ -144,6 +281,8 @@ runtime_schedule_tick (Runtime *rt)
 static void
 runtime_wakeup_cb (void *userdata)
 {
+  if (G_UNLIKELY (latency_trace > 0))
+    latency_trace_wakeup ();
   if (userdata != NULL)
     runtime_schedule_tick (userdata);
 }
@@ -184,6 +323,7 @@ toastty_ghostty_runtime_config_init (ghostty_runtime_config_s *config)
 ghostty_app_t
 toastty_ghostty_app_new (ghostty_config_t config, const ToasttyGhosttyRuntimeOptions *options)
 {
+  latency_trace_install_poll ();
   Runtime *rt = g_atomic_rc_box_new0 (Runtime);
   if (options != NULL)
     {
@@ -315,6 +455,9 @@ struct _ToasttyGhosttySurface
   guint suppressed_buttons; /* bitmask of buttons whose release we drop */
 
   gboolean focused;
+
+  GdkFrameClock *trace_clock; /* latency trace only */
+  gulong trace_paint_id;
 };
 
 G_DEFINE_FINAL_TYPE (ToasttyGhosttySurface, toastty_ghostty_surface, GTK_TYPE_WIDGET)
@@ -480,6 +623,8 @@ pull_frame (ToasttyGhosttySurface *self)
   if (!ghostty_surface_take_frame (self->surface, &frame))
     return;
 
+  if (G_UNLIKELY (latency_trace > 0))
+    latency_trace_frame (&frame);
   g_autoptr (GError) error = NULL;
   gboolean was_dmabuf = frame.kind == GHOSTTY_FRAME_DMABUF;
   GdkTexture *texture = texture_from_frame (self, &frame, &error);
@@ -500,6 +645,8 @@ pull_frame (ToasttyGhosttySurface *self)
 
   g_clear_object (&self->texture);
   self->texture = texture;
+  if (G_UNLIKELY (latency_trace > 0) && trace_rec.render != 0 && !trace_frame_unchanged)
+    latency_trace_mark (&trace_rec.snapshot);
 }
 
 static void
@@ -653,11 +800,27 @@ css_to_ghostty (ToasttyGhosttySurface *self, double *x, double *y)
 /* Realize / map                                                          */
 
 static void
+on_trace_after_paint (GdkFrameClock *clock, ToasttyGhosttySurface *self)
+{
+  if (trace_rec.snapshot != 0 && trace_rec.paint == 0)
+    {
+      latency_trace_mark (&trace_rec.paint);
+      latency_trace_flush ();
+    }
+}
+
+static void
 toastty_ghostty_surface_realize (GtkWidget *widget)
 {
   ToasttyGhosttySurface *self = TOASTTY_GHOSTTY_SURFACE (widget);
   GTK_WIDGET_CLASS (toastty_ghostty_surface_parent_class)->realize (widget);
   connect_scale_notify (self);
+  if (latency_tracing ())
+    {
+      self->trace_clock = g_object_ref (gtk_widget_get_frame_clock (widget));
+      self->trace_paint_id = g_signal_connect (self->trace_clock, "after-paint",
+                                               G_CALLBACK (on_trace_after_paint), self);
+    }
   if (self->surface != NULL)
     ghostty_surface_set_display_realized (self->surface, true);
   gtk_im_context_set_client_widget (self->im, widget);
@@ -675,6 +838,12 @@ toastty_ghostty_surface_unrealize (GtkWidget *widget)
       self->scale_notify_id = 0;
     }
   g_clear_object (&self->texture);
+  if (self->trace_clock != NULL)
+    {
+      g_signal_handler_disconnect (self->trace_clock, self->trace_paint_id);
+      g_clear_object (&self->trace_clock);
+      self->trace_paint_id = 0;
+    }
   if (self->surface != NULL)
     ghostty_surface_set_display_realized (self->surface, false);
   gtk_im_context_set_client_widget (self->im, NULL);
@@ -858,6 +1027,9 @@ process_key (ToasttyGhosttySurface *self,
              gboolean event_is_modifier,
              gboolean num_lock)
 {
+  if (G_UNLIKELY (latency_trace > 0) && pressed)
+    latency_trace_key (keyval);
+
   if (self->key_filter != NULL &&
       self->key_filter (self, keyval, keycode, state, pressed, self->key_filter_data))
     return TRUE;
@@ -976,6 +1148,8 @@ process_key (ToasttyGhosttySurface *self,
   gboolean was_composing = self->im_composing;
   gboolean consumed_by_ghostty = ghostty_surface_key_ex (self->surface, ev, key);
   self->im_len = 0;
+  if (G_UNLIKELY (latency_trace > 0) && pressed)
+    latency_trace_mark (&trace_rec.key_done);
 
   if (consumed_by_ghostty && action != GHOSTTY_ACTION_RELEASE)
     {
@@ -1415,6 +1589,8 @@ toastty_ghostty_handle_action (ghostty_app_t app, ghostty_target_s target, ghost
   switch (action.tag)
     {
     case GHOSTTY_ACTION_RENDER:
+      if (G_UNLIKELY (latency_trace > 0))
+        latency_trace_mark (&trace_rec.render);
       gtk_widget_queue_draw (GTK_WIDGET (self));
       return TRUE;
 
