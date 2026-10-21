@@ -248,13 +248,15 @@ struct TaskCoordinationTests {
     @Test func stageWatchesFireOnceTheTaskBoardShowsTheStageOrALaterOne() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let gitHub = TaskBoardTests.FakeGitHub()
-        fixture.coordinator.board = TaskBoardStore(
+        // The coordinator holds its board weakly, as the app does.
+        let board = TaskBoardStore(
             coordinator: fixture.coordinator,
             store: fixture.store,
             sessionRuntimeStore: fixture.sessionRuntimeStore,
             pullRequests: PullRequestStateCache(runner: gitHub),
             refreshInterval: nil
         )
+        fixture.coordinator.board = board
         let created = try await fixture.coordinator.create(TaskCreateRequest(
             text: "The unread dot stays on",
             workspaceID: fixture.workspaceID,
@@ -290,7 +292,7 @@ struct TaskCoordinationTests {
 
         // Without release tags a merge goes straight to Done, past To ship.
         gitHub.answer(url, state: "MERGED", mergeCommit: "abc123")
-        await fixture.coordinator.board?.pullRequests?.refresh(try #require(WorkspacePullRequestLink(annotationURL: url))).value
+        await board.pullRequests?.refresh(try #require(WorkspacePullRequestLink(annotationURL: url))).value
         fixture.coordinator.evaluateWatches()
         #expect(outcome(merged) == "is merged")
         #expect(outcome(toShip) == "is done")
@@ -305,12 +307,17 @@ struct TaskCoordinationTests {
         let watcher = try await fixture.startedTask()
         let done = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)
         let archived = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .archived, notifyTaskID: watcher.id)
+        let idle = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .idle, notifyTaskID: watcher.id)
 
+        // The agent also finishes a turn: the archive still wins.
+        fixture.sessions.report(try sessionID(target), .working, at: Date().addingTimeInterval(1))
+        fixture.sessions.report(try sessionID(target), .ready, at: Date().addingTimeInterval(2))
         try fixture.coordinator.records.save(id: target.id) { $0.archivedAt = Date() }
         fixture.coordinator.evaluateWatches()
         let sent = try messages(fixture, to: watcher)
-        #expect(sent.count == 2)
+        #expect(sent.count == 3)
         #expect(sent.contains("[Toastty watch \(done.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived, so your watch until done can never fire."))
+        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(idle.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived,") })
         #expect(sent.contains { $0.hasPrefix("[Toastty watch \(archived.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) is archived.") })
         #expect(throws: TaskError("Task \(target.title) was archived, so it can never be done.")) {
             try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)

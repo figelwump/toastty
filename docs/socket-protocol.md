@@ -412,7 +412,9 @@ Notable action-specific behavior:
     `wait=true` watch lives in memory, notifies nobody, and is dropped when no
     `task.watches` read of it arrives for 60 seconds.
   - returns the watch object (see `task.watches`). A target that is already
-    archived returns `INVALID_PAYLOAD`.
+    archived returns `INVALID_PAYLOAD`, except for `until=archived`, which
+    fires at once. A fired stage watch's `reason` names the stage the task
+    reached, which can be later than `until`.
 - `task.unwatch`
   - requires `args.watchID` and cancels that watch.
 - `task.adopt`
@@ -650,7 +652,7 @@ session's transcript. `task.list` returns `tasks`, oldest first, with the same
 scope rule as `task.retry`, with `agentState` but without `lastReply` unless
 `args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, and
 `reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
-the tasks whose record or `agentState` changed since, and `deletedTaskIDs` the
+the tasks whose record, `stage` or `agentState` changed since, and `deletedTaskIDs` the
 tasks deleted since; a cursor from another launch, or one Toastty cannot read,
 returns every task with `reset: true`. `task.watches` returns `watches`, each
 with `watchID`, `taskID` (the watched task), `until`, `notifyTaskID` (`null` for

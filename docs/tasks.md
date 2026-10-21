@@ -272,7 +272,7 @@ worktree.
   at 16 KB. It is `null` until Toastty has confirmed the session's transcript.
 - `toastty task list` reports `agentState` for every task and returns a
   `cursor`. With `--changed-since <cursor>`, it lists only the tasks whose
-  record or agent state changed since that answer, and the IDs of deleted tasks
+  record, stage or agent state changed since that answer, and the IDs of deleted tasks
   in `deletedTaskIDs`. A cursor from before a relaunch gets every task back with
   `reset: true`. `--include-reply` adds each task's `lastReply`.
 - `toastty task send <task-id> "<message>"` types the message into the task's
@@ -301,7 +301,11 @@ The stage conditions follow the [stages](#stages), in the order
 the task moves past it, so a watch fires even when the task skips a stage. For
 example, a merged task also meets `ready-for-review`, and a merge in a project
 without `release_tags`, which goes straight to Done, also meets `to-ship`. A
-task marked done by hand meets only `ready-for-review` and `done`.
+task marked done by hand meets only `ready-for-review` and `done`. The message
+names the stage the task reached, which can be later than the one you watched
+for. Toastty checks about once a second, so a stage that the task enters and
+leaves again within that time can be missed; `ready-for-review` also ends while
+an agent works in the task space again.
 
 A watch is saved with the record of the task it notifies, so it survives a
 relaunch, and it fires once. A watch whose task is deleted, or archived while

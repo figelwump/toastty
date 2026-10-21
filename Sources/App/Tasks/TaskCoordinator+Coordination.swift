@@ -248,8 +248,13 @@ extension TaskCoordinator {
     func evaluateWatches() {
         let at = now()
         // Building the board walks every task, so only a pass with a pending
-        // stage watch does it, and only once.
-        let hasPendingStageWatch = allWatches().contains { $0.watch.isPending && $0.watch.condition.isStageCondition }
+        // watch that needs it does so, and only once. Archived is read from
+        // the record.
+        func needsBoard(_ watch: TaskWatch) -> Bool {
+            watch.isPending && watch.condition.isStageCondition && watch.condition != .archived
+        }
+        let hasPendingStageWatch = waitWatches.values.contains { needsBoard($0.watch) }
+            || records.records.contains { $0.watches?.contains(where: needsBoard) == true }
         let stages = hasPendingStageWatch ? stageConditionsByTaskID() : [:]
         for holder in records.records where holder.watches?.isEmpty == false {
             guard holder.activeWatches.isEmpty == false else {
@@ -309,12 +314,14 @@ extension TaskCoordinator {
             return .fired(at: at, reason: "was deleted", impossible: true, delivered: false)
         }
         let facts = watchFacts(target, stages: stages)
+        // An archived task ends every watch but one until archived, even one
+        // whose agent happens to be idle or waiting.
+        if let reason = TaskWatchEvaluation.impossibility(watch.condition, facts: facts) {
+            return .fired(at: at, reason: reason, impossible: true, delivered: false)
+        }
         if TaskWatchEvaluation.holds(watch.condition, createdAt: watch.createdAt, facts: facts) {
             let reason = TaskWatchEvaluation.reason(watch.condition, facts: facts)
             return .fired(at: at, reason: reason, impossible: false, delivered: false)
-        }
-        if let reason = TaskWatchEvaluation.impossibility(watch.condition, facts: facts) {
-            return .fired(at: at, reason: reason, impossible: true, delivered: false)
         }
         return nil
     }
