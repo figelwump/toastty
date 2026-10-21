@@ -190,7 +190,7 @@ def main():
         wait_for('the panel to close', panel_closed, timeout=10)
         front = drive('frontmost')
         require(front == FINDER, f'Focus did not go back to Finder: {front!r}')
-        task = wait_for('setup to end', lambda: (lambda t: t if t['setup']['state'] != 'settingUp' else None)(
+        task = wait_for('setup to end', lambda: (lambda t: t if t['setup']['state'] not in ('routing', 'settingUp') else None)(
             run_cli('task', 'get', task['taskID'])), timeout=60)
         require(task['source'] == 'quickEntry', f'Wrong source: {task}')
         require(task['text'] == '\n'.join(TASK_LINES), f'Text not kept as typed: {task["text"]!r}')
