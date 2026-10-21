@@ -4,7 +4,8 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+             .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -28,7 +29,7 @@ extension AppControlExecutor {
         case .taskRetry:
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.retry(taskID: record.id) }
-            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
         case .taskStartWork:
             let request = TaskStartWorkRequest(
                 branchPrefix: args.taskString("branchPrefix"),
@@ -48,7 +49,7 @@ extension AppControlExecutor {
             let choice = try taskWorkspaceChoice(args: args)
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
-            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
         case .taskSend:
             let record = try visibleTask(args: args, coordinator: coordinator)
             guard let text = args.taskString("text") else {
@@ -118,27 +119,39 @@ extension AppControlExecutor {
         }
     }
 
+    /// `task.adopt`, once the caller's access to the workspace is checked.
+    func runTaskAdopt(workspaceID: UUID) throws -> AppControlActionOutcome {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try perform { try coordinator.adopt(workspaceID: workspaceID) }
+        return .init(didMutateState: true, result: Self.taskSnapshot(record, stage: Self.stagesByTaskID(coordinator.board)[record.id]))
+    }
+
     func runTaskQuery(_ query: AppControlQueryID, args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
         let coordinator = try requiredTaskCoordinator()
         switch query {
         case .taskGet:
             // Without a taskID, a task's agent reads its own task.
+            let record: TaskRecord
             if args.taskString("taskID") == nil {
                 guard let own = coordinator.task(inWorkspace: callerManagedSession()?.workspaceID) else {
                     throw AutomationSocketError.invalidPayload("taskID is required outside a task's agent session")
                 }
-                return liveTaskSnapshot(own, coordinator: coordinator, includeReply: true)
+                record = own
+            } else {
+                record = try visibleTask(args: args, coordinator: coordinator)
             }
-            let record = try visibleTask(args: args, coordinator: coordinator)
-            return liveTaskSnapshot(record, coordinator: coordinator, includeReply: true)
+            return liveTaskSnapshot(
+                record, coordinator: coordinator, stage: Self.stagesByTaskID(coordinator.board)[record.id], includeReply: true
+            )
         case .taskList:
             let includeReply = try args.taskBool("includeReply") ?? false
+            let stages = Self.stagesByTaskID(coordinator.board)
             // Every task's snapshot goes to the change feed, so one caller's
             // poll never hides a change from another. The reply is left out
             // of what the feed compares: it changes only with agentState.
             let records = coordinator.records.records
             let snapshots = Dictionary(uniqueKeysWithValues: records.map {
-                ($0.id, liveTaskSnapshot($0, coordinator: coordinator, includeReply: false))
+                ($0.id, liveTaskSnapshot($0, coordinator: coordinator, stage: stages[$0.id], includeReply: false))
             })
             let entries = Dictionary(uniqueKeysWithValues: records.map { record in
                 (record.id, TaskChangeFeed.Entry(snapshot: .object(snapshots[record.id] ?? [:]), visibility: Self.visibility(of: record)))
@@ -149,7 +162,7 @@ extension AppControlExecutor {
             }
             let tasks = listed.map { record -> AutomationJSONValue in
                 guard includeReply else { return .object(snapshots[record.id] ?? [:]) }
-                return .object(liveTaskSnapshot(record, coordinator: coordinator, includeReply: true))
+                return .object(liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true))
             }
             return [
                 "tasks": .array(tasks),
@@ -187,8 +200,13 @@ extension AppControlExecutor {
 
     /// The record snapshot plus what only the running app knows: the agent's
     /// state and, when asked, its last reply.
-    private func liveTaskSnapshot(_ record: TaskRecord, coordinator: TaskCoordinator, includeReply: Bool) -> [String: AutomationJSONValue] {
-        var snapshot = Self.taskSnapshot(record)
+    private func liveTaskSnapshot(
+        _ record: TaskRecord,
+        coordinator: TaskCoordinator,
+        stage: TaskStage?,
+        includeReply: Bool
+    ) -> [String: AutomationJSONValue] {
+        var snapshot = Self.taskSnapshot(record, stage: stage)
         let status = coordinator.agentStatus(of: record)
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         snapshot["agentState"] = .object([
@@ -397,8 +415,39 @@ extension AppControlExecutor {
         }
     }
 
-    static func taskSnapshot(_ record: TaskRecord) -> [String: AutomationJSONValue] {
+    private static func stagesByTaskID(_ board: TaskBoardStore?) -> [UUID: TaskStage] {
+        guard let board else { return [:] }
+        return Dictionary(board.items().compactMap { item in item.taskID.map { ($0, item.stage) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// `stage` as `{group, attention?, reason?}`: the group the Tasks view
+    /// lists the task in, and why it needs the user.
+    static func stageSnapshot(_ stage: TaskStage) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = ["group": .string("\(stage.group)"), "needsUser": .bool(stage.needsUser)]
+        if case .needsYou(let attention) = stage {
+            switch attention {
+            case .pickWorkspace(let reason):
+                result["attention"] = .string("pickWorkspace")
+                result["reason"] = .string(reason)
+            case .setupFailed(let reason):
+                result["attention"] = .string("setupFailed")
+                result["reason"] = .string(reason)
+            case .moveFailed(let reason):
+                result["attention"] = .string("moveFailed")
+                result["reason"] = .string(reason)
+            case .taskSpaceClosed: result["attention"] = .string("taskSpaceClosed")
+            case .agentNeedsInput: result["attention"] = .string("agentNeedsInput")
+            case .agentError: result["attention"] = .string("agentError")
+            case .review: result["attention"] = .string("review")
+            case .readyForReview: result["attention"] = .string("readyForReview")
+            }
+        }
+        return result
+    }
+
+    static func taskSnapshot(_ record: TaskRecord, stage: TaskStage? = nil) -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        func date(_ value: Date?) -> AutomationJSONValue { optional(value.map { ISO8601DateFormatter().string(from: $0) }) }
         var setup: [String: AutomationJSONValue]
         switch record.setup {
         case .routing:
@@ -420,6 +469,7 @@ extension AppControlExecutor {
         case .agent: source = "agent"
         case .quickEntry: source = "quickEntry"
         case .recovered: source = "recovered"
+        case .adopted: source = "adopted"
         }
         var snapshot: [String: AutomationJSONValue] = [
             "taskID": .string(record.id.uuidString),
@@ -440,7 +490,13 @@ extension AppControlExecutor {
             "files": .array(record.attachments.map { .string($0.path) }),
             "setup": .object(setup),
             "sessionID": optional(record.currentSessionID),
+            "pullRequestURL": optional(record.pullRequestURL),
+            "mergedAt": date(record.mergedAt),
+            "mergeCommit": optional(record.mergeCommit),
         ]
+        if let stage {
+            snapshot["stage"] = .object(stageSnapshot(stage))
+        }
         if let startWork = record.startWork {
             snapshot["worktree"] = .object(worktreeSnapshot(record, startWork: startWork))
         }

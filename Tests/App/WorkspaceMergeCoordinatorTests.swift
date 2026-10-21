@@ -209,7 +209,9 @@ struct WorkspaceMergeCoordinatorTests {
         try await fixture.waitUntil { fixture.request == nil }
 
         #expect(fixture.runner.checkCalls.count == 3)
-        #expect(fixture.runner.checkCalls.first == ["gh", "pr", "view", MergeFixture.pullRequest.url, "--json", "state"])
+        #expect(fixture.runner.checkCalls.first == [
+            "gh", "pr", "view", MergeFixture.pullRequest.url, "--json", "state,isDraft,headRefOid,mergeCommit",
+        ])
         #expect(fixture.runner.scriptCalls.last == fixture.arguments("clean-up"))
         #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
         #expect(fixture.notifications.first?.body.hasPrefix("fix-question-lifetime: closed") == true)

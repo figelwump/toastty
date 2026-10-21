@@ -684,6 +684,7 @@ struct ToasttyApp: App {
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
+    private let taskBoard: TaskBoardStore
     private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -1066,6 +1067,18 @@ struct ToasttyApp: App {
         )
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator
+        let pullRequestStateCache = PullRequestStateCache(
+            runner: WorkspaceMergeLiveCommandRunner(socketPath: socketPath, cliExecutablePath: cliExecutablePath)
+        )
+        sessionRuntimeStore.workspaceMergeCoordinator?.pullRequestStateCache = pullRequestStateCache
+        let taskBoard = TaskBoardStore(
+            coordinator: taskCoordinator,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            pullRequests: pullRequestStateCache
+        )
+        taskCoordinator.board = taskBoard
+        self.taskBoard = taskBoard
         let quickEntryController = QuickEntryController(
             store: store,
             agentCatalogProvider: agentCatalogStore,
@@ -1081,6 +1094,12 @@ struct ToasttyApp: App {
         )
         quickEntryController.reloadShortcut()
         self.quickEntryController = quickEntryController
+        taskBoard.newTask = { [weak quickEntryController] in
+            quickEntryController?.present(prefill: .empty)
+        }
+        taskBoard.newTaskShortcutLabel = { [weak quickEntryController] in
+            quickEntryController?.shortcut?.symbolLabel
+        }
         terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
             quickEntryController?.presentFromSelection(text, panelID: panelID)
         }

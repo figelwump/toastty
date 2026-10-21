@@ -878,6 +878,7 @@ toastty task send <task-id> (<text> | --text-file <path>)
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
+toastty task adopt [--workspace <id>]
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
@@ -898,6 +899,12 @@ returns once the move is saved, and the agent should then end its turn: the
 move forks the conversation after the turn ends. `task get` reports the move
 under `worktree`, and `task retry` continues a move that failed.
 
+`task get` and `task list` report each task's `stage`: its `group` (`inbox`,
+`needsYou`, `running`, `toShip`, `done` or `archived`), `needsUser`, and for
+Needs you the `attention` and `reason`. See [Stages](tasks.md#stages).
+`task adopt` gives a task space without a record one; it defaults to the
+calling agent's task space.
+
 `task send`, `task watch` and `task list --changed-since` let an agent follow
 and talk to other tasks by task ID; see
 [Coordinate tasks](tasks.md#coordinate-tasks). `task watch` tells the calling
@@ -906,8 +913,10 @@ condition holds. With `--wait`, it blocks instead and exits 0 when the condition
 held, or 1 when it can never hold or `--timeout` ran out.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.send|task.watch|task.unwatch`
-and `query run task.get|task.list|task.workspace-choices|task.watches`.
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch`
+and `query run task.get|task.list|task.workspace-choices|task.watches`. The
+Tasks view and the sidebar segment have actions too: `window.tasks.show`,
+`window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

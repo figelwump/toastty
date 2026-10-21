@@ -1,0 +1,186 @@
+import CoreState
+import Foundation
+import Testing
+
+struct TaskStageTests {
+    private let date = Date(timeIntervalSince1970: 1_800_000_000)
+    private let openPR = TaskPullRequestState(state: .open)
+    private let draftPR = TaskPullRequestState(state: .open, isDraft: true)
+    private let mergedPR = TaskPullRequestState(state: .merged, mergeCommit: "abc123")
+
+    private func started(
+        startWork: TaskStartWorkState? = nil,
+        readyForReviewAt: Date? = nil,
+        mergedAt: Date? = nil
+    ) -> TaskStageFacts {
+        TaskStageFacts(
+            setup: .started,
+            startWork: startWork,
+            hasTaskSpace: true,
+            readyForReviewAt: readyForReviewAt,
+            mergedAt: mergedAt
+        )
+    }
+
+    private func stage(
+        _ facts: TaskStageFacts,
+        _ live: TaskLiveFacts = TaskLiveFacts(taskSpaceOpen: true, agent: .idle),
+        releaseTags: Bool = false
+    ) -> TaskStage {
+        TaskStage.derive(facts, live: live, releaseTagsConfigured: releaseTags)
+    }
+
+    // MARK: - Finished work
+
+    @Test
+    func archivedWinsOverEverything() {
+        var facts = started(mergedAt: date)
+        facts.archivedAt = date
+        facts.doneAt = date
+        #expect(stage(facts, TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == .archived)
+    }
+
+    @Test
+    func doneMarkOrShipmentMeansDone() {
+        var marked = started()
+        marked.doneAt = date
+        #expect(stage(marked, TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == .done)
+
+        var shipped = started(mergedAt: date)
+        shipped.shippedAt = date
+        #expect(stage(shipped, releaseTags: true) == .done)
+    }
+
+    @Test
+    func aMergeWaitsToShipOnlyWhereReleaseTagsAreSet() {
+        let recorded = started(mergedAt: date)
+        #expect(stage(recorded) == .done)
+        #expect(stage(recorded, releaseTags: true) == .toShip)
+
+        // GitHub's answer counts before the record catches up, and after the
+        // task space closed.
+        let seen = TaskLiveFacts(taskSpaceOpen: false, pullRequest: mergedPR)
+        #expect(stage(started(), seen) == .done)
+        #expect(stage(started(), seen, releaseTags: true) == .toShip)
+    }
+
+    // MARK: - Before the task space
+
+    @Test
+    func setupThatIsStillRunningIsInTheInbox() {
+        for setup in [TaskSetupState.routing, .settingUp] {
+            let facts = TaskStageFacts(setup: setup, hasTaskSpace: false)
+            let result = stage(facts, TaskLiveFacts(taskSpaceOpen: false))
+            #expect(result == .inbox)
+            #expect(result.needsUser == false)
+        }
+        #expect(stage(started(startWork: .running)) == .inbox)
+    }
+
+    @Test
+    func failuresBeforeTheTaskSpaceNeedTheUserButListWithTheInbox() {
+        let cases: [(TaskStageFacts, TaskStage.Attention)] = [
+            (TaskStageFacts(setup: .needsWorkspace(reason: "no fit"), hasTaskSpace: false), .pickWorkspace(reason: "no fit")),
+            (TaskStageFacts(setup: .setupFailed(reason: "hook failed"), hasTaskSpace: false), .setupFailed(reason: "hook failed")),
+            (started(startWork: .failed(reason: "fork failed")), .moveFailed(reason: "fork failed")),
+        ]
+        for (facts, attention) in cases {
+            let result = stage(facts, TaskLiveFacts(taskSpaceOpen: true, agent: .working))
+            #expect(result == .needsYou(attention))
+            #expect(result.needsUser)
+            #expect(result.group == .inbox)
+        }
+    }
+
+    // MARK: - Running task spaces
+
+    @Test
+    func theAgentAskingForSomethingNeedsTheUser() {
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == .needsYou(.agentNeedsInput))
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .error)) == .needsYou(.agentError))
+        // Its question comes before the open pull request.
+        let asking = TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(started(), asking) == .needsYou(.agentNeedsInput))
+        #expect(stage(started(), asking).group == .needsYou)
+    }
+
+    @Test
+    func anOpenPullRequestWaitsForReviewOnlyWhileTheAgentIsIdle() {
+        let idle = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(started(), idle) == .needsYou(.review))
+
+        var noAgent = idle
+        noAgent.agent = .none
+        #expect(stage(started(), noAgent) == .needsYou(.review))
+
+        var working = idle
+        working.agent = .working
+        #expect(stage(started(), working) == .running)
+
+        var draft = idle
+        draft.pullRequest = draftPR
+        #expect(stage(started(), draft) == .running)
+
+        var closed = idle
+        closed.pullRequest = TaskPullRequestState(state: .closed)
+        #expect(stage(started(), closed) == .running)
+    }
+
+    @Test
+    func withoutAnAnswerFromGitHubALinkedPullRequestCountsAsOpen() {
+        let unknown = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: nil, hasPullRequestLink: true)
+        #expect(stage(started(), unknown) == .needsYou(.review))
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .running)
+    }
+
+    @Test
+    func workWithoutAPullRequestWaitsForReviewOnceMarkedReady() {
+        let ready = started(readyForReviewAt: date)
+        #expect(stage(ready) == .needsYou(.readyForReview))
+        #expect(stage(ready, TaskLiveFacts(taskSpaceOpen: true, agent: .working)) == .running)
+    }
+
+    @Test
+    func aClosedTaskSpaceWithUnfinishedWorkNeedsTheUser() {
+        let result = stage(started(), TaskLiveFacts(taskSpaceOpen: false))
+        #expect(result == .needsYou(.taskSpaceClosed))
+        #expect(result.group == .needsYou)
+    }
+
+    // MARK: - Task spaces without a record
+
+    @Test
+    func observedTaskSpacesUseTheirDoneMarkAndPullRequest() {
+        #expect(stage(.observed(doneAt: date)) == .done)
+        #expect(stage(.observed(doneAt: nil)) == .running)
+        let merged = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: mergedPR, hasPullRequestLink: true)
+        #expect(stage(.observed(doneAt: nil), merged, releaseTags: true) == .toShip)
+        let review = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(.observed(doneAt: nil), review) == .needsYou(.review))
+    }
+
+    @Test
+    func finishedStagesLeaveTheSidebar() {
+        #expect(TaskStage.toShip.isFinished)
+        #expect(TaskStage.done.isFinished)
+        #expect(TaskStage.archived.isFinished)
+        #expect(TaskStage.needsYou(.review).isFinished == false)
+        #expect(TaskStage.running.isFinished == false)
+        #expect(TaskStage.Group.allCases.sorted() == [.inbox, .needsYou, .running, .toShip, .done, .archived])
+    }
+
+    @Test
+    func olderRecordsWithoutLifecycleFieldsStillDecode() throws {
+        let record = TaskRecord(createdAt: date, text: "fix it", title: "fix it", slug: "fix-it", source: .cli, setup: .started)
+        var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        for key in ["pullRequestURL", "readyForReviewAt", "mergedAt", "mergeCommit", "shippedAt", "releaseTag", "archivedAt", "doneAt"] {
+            object.removeValue(forKey: key)
+        }
+        let decoded = try JSONDecoder().decode(TaskRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(decoded == record)
+
+        var adopted = record
+        adopted.source = .adopted
+        #expect(try JSONDecoder().decode(TaskRecord.self, from: JSONEncoder().encode(adopted)).source == .adopted)
+    }
+}

@@ -806,6 +806,33 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch:
             return try runTaskAction(action, args: args)
+
+        case .taskAdopt:
+            return try runTaskAdopt(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
+
+        case .windowTasksShow, .windowTasksHide:
+            guard taskCoordinator != nil else {
+                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
+            }
+            return .init(
+                didMutateState: try requiredStore().send(.setTasksViewShown(
+                    windowID: try resolveWindowID(args: args),
+                    shown: action == .windowTasksShow
+                )),
+                result: nil
+            )
+
+        case .windowSidebarSetSegment:
+            guard taskCoordinator != nil else {
+                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
+            }
+            guard let rawSegment = args.stringValue("segment"), let segment = SidebarSegment(rawValue: rawSegment) else {
+                throw AutomationSocketError.invalidPayload("segment must be projects or status")
+            }
+            return .init(
+                didMutateState: try requiredStore().send(.setSidebarSegment(windowID: try resolveWindowID(args: args), segment: segment)),
+                result: nil
+            )
         }
         }
     }

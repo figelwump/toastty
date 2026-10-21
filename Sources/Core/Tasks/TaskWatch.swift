@@ -120,7 +120,7 @@ public enum TaskWatchState: Codable, Equatable, Sendable {
 }
 
 /// What a task's agent is doing, as a coordinator sees it.
-public enum TaskAgentActivity: String, Codable, Equatable, Sendable {
+public enum TaskAgentState: String, Codable, Equatable, Sendable {
     /// No managed agent session runs for the task.
     case notRunning
     case busy
@@ -134,7 +134,7 @@ public enum TaskAgentActivity: String, Codable, Equatable, Sendable {
 /// The facts a watch reads, gathered by the app from the live session and
 /// the task's stage.
 public struct TaskWatchFacts: Equatable, Sendable {
-    public var activity: TaskAgentActivity
+    public var activity: TaskAgentState
     /// When the agent's status last changed.
     public var activityChangedAt: Date?
     /// When the agent last finished a turn in this app run. A session
@@ -145,7 +145,7 @@ public struct TaskWatchFacts: Equatable, Sendable {
     public var stages: Set<TaskWatchCondition>
 
     public init(
-        activity: TaskAgentActivity,
+        activity: TaskAgentState,
         activityChangedAt: Date?,
         turnEndedAt: Date? = nil,
         stages: Set<TaskWatchCondition> = []

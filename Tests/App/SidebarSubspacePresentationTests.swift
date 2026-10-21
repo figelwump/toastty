@@ -645,4 +645,52 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             draggedWorkspaceID: a, targetIndex: 3, topLevelWorkspaceIDs: cards, windowWorkspaceIDs: windowOrder
         ))
     }
+
+    func testTaskStageSetsAQuietRowsMarkButAnAgentStillComesFirst() {
+        typealias P = SidebarSubspacePresentation
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .needsYou(.review)), .review)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .needsYou(.readyForReview)), .review)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .toShip), .toShip)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .done), .done)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .running), .ready)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: true, stage: nil), .done)
+        for agent in [P.RowStatus.working, .needsApproval, .error] {
+            XCTAssertEqual(P.rowStatus(sessionStatus: agent, isDone: true, stage: .toShip), agent)
+        }
+
+        // Finished rows leave a project card only while nothing in them runs
+        // or waits for the user.
+        XCTAssertTrue(P.isHiddenAsFinished(row("merged", status: .toShip, index: 0)))
+        XCTAssertTrue(P.isHiddenAsFinished(row("done", status: .done, index: 0)))
+        XCTAssertFalse(P.isHiddenAsFinished(row("review", status: .review, index: 0)))
+        XCTAssertFalse(P.isHiddenAsFinished(row("working", status: .working, index: 0)))
+        // An unread finished turn sets the status, but another agent still works.
+        let mixed = row("mixed", status: .done, index: 0, sessions: [
+            session(.ready, reportedAt: 2, unread: true),
+            session(.working, reportedAt: 1),
+        ])
+        XCTAssertFalse(P.isHiddenAsFinished(mixed))
+
+        XCTAssertEqual(P.tally([row("a", status: .review, index: 0), row("b", status: .review, index: 1)]).review, 2)
+        XCTAssertTrue(P.showsDoneToggle(row("review", status: .review, index: 0)))
+        XCTAssertFalse(P.showsDoneToggle(row("merged", status: .toShip, index: 0)))
+    }
+
+    func testLinkedChildrenDrawUnderTheTaskThatStartedThemOneLevelDeep() {
+        var parent = row("task-inbox", status: .working, index: 0)
+        var child = row("hotkey-capture", status: .review, index: 1)
+        var grandchild = row("hotkey-docs", status: .working, index: 2)
+        let other = row("pricing-page", status: .idle, index: 3)
+        var orphan = row("ios-outbox", status: .idle, index: 4)
+        child.linkedParentID = parent.id
+        grandchild.linkedParentID = child.id
+        orphan.linkedParentID = UUID()
+        parent.childProgressLabel = SidebarSubspacePresentation.childProgressLabel(merged: 0, total: 2)
+
+        let grouped = SidebarSubspacePresentation.groupingLinkedChildren([child, other, grandchild, parent, orphan])
+        // A grandchild and a child whose parent is not listed keep their places.
+        XCTAssertEqual(grouped.map(\.title), ["pricing-page", "hotkey-docs", "task-inbox", "hotkey-capture", "ios-outbox"])
+        XCTAssertEqual(grouped.map(\.isLinkedChild), [false, false, false, true, false])
+        XCTAssertEqual(parent.childProgressLabel, "0/2 merged")
+    }
 }

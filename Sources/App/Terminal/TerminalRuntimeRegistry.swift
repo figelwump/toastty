@@ -1106,11 +1106,22 @@ private extension TerminalRuntimeRegistry {
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         ) { [weak self] in
             guard let self,
-                  let panelID = resolvePanelID() else {
+                  let panelID = resolvePanelID(),
+                  self.isCoveredByTasksView(panelID: panelID) == false else {
                 return false
             }
             return self.focusPanelIfPossible(panelID: panelID)
         }
+    }
+
+    /// Whether the Tasks view covers the panel's window, so typing must not
+    /// reach the terminal underneath.
+    private func isCoveredByTasksView(panelID: UUID) -> Bool {
+        guard let state = store?.state,
+              let windowID = state.workspaceSelection(containingPanelID: panelID)?.windowID else {
+            return false
+        }
+        return state.windows.first { $0.id == windowID }?.showsTasksView == true
     }
 
 

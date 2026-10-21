@@ -3,7 +3,7 @@ import Foundation
 
 /// What `task.get` and `task.list` report about a task's agent.
 struct TaskAgentStatus: Equatable {
-    var activity: TaskAgentActivity
+    var activity: TaskAgentState
     var session: TaskSessionInfo?
 
     var changedAt: Date? { session?.statusUpdatedAt }
@@ -70,7 +70,7 @@ extension TaskCoordinator {
         guard let session = liveAgentSession(of: record) else {
             return TaskAgentStatus(activity: .notRunning, session: nil)
         }
-        let activity: TaskAgentActivity
+        let activity: TaskAgentState
         switch session.status?.kind {
         case .working?: activity = .busy
         case .needsApproval?: activity = .waiting
