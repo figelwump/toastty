@@ -549,6 +549,27 @@ struct QuickEntryPlacementTests {
         #expect(clamped.maxY == laptopVisible.maxY)
     }
 
+    @Test func theFrontWindowSkipsInvisibleOtherLayerAndOtherAppWindows() {
+        func window(pid: pid_t, layer: Int, alpha: Double, _ bounds: CGRect) -> [String: Any] {
+            [
+                kCGWindowOwnerPID as String: pid,
+                kCGWindowLayer as String: layer,
+                kCGWindowAlpha as String: alpha,
+                kCGWindowBounds as String: bounds.dictionaryRepresentation,
+            ]
+        }
+        let visible = CGRect(x: -3000, y: 300, width: 1400, height: 900)
+        let windows = [
+            window(pid: 7, layer: 25, alpha: 1, CGRect(x: 1200, y: 0, width: 30, height: 24)),
+            window(pid: 9, layer: 0, alpha: 1, CGRect(x: 100, y: 100, width: 800, height: 600)),
+            window(pid: 7, layer: 0, alpha: 0, CGRect(x: 100, y: 100, width: 800, height: 600)),
+            window(pid: 7, layer: 0, alpha: 1, visible),
+        ]
+
+        #expect(QuickEntryPlacement.frontWindowBounds(of: 7, in: windows) == visible)
+        #expect(QuickEntryPlacement.frontWindowBounds(of: 8, in: windows) == nil)
+    }
+
     @Test func windowServerBoundsFlipToAppKitCoordinates() {
         // 100 pt below the top of a 982 pt primary screen, 500 pt tall.
         let bounds = CGRect(x: 1700, y: 100, width: 800, height: 500)

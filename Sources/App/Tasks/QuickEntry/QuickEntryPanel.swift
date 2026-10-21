@@ -173,18 +173,9 @@ final class QuickEntryPanel: NSPanel {
               ) as? [[String: Any]] else {
             return nil
         }
-        // Front to back: the first normal-layer window of the app in front.
-        for window in windows {
-            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
-                  (window[kCGWindowLayer as String] as? Int) == 0,
-                  let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.width > 1, bounds.height > 1 else {
-                continue
-            }
-            return QuickEntryPlacement.cocoaFrame(fromWindowServerBounds: bounds, primaryScreenHeight: primaryHeight)
+        return QuickEntryPlacement.frontWindowBounds(of: pid, in: windows).map {
+            QuickEntryPlacement.cocoaFrame(fromWindowServerBounds: $0, primaryScreenHeight: primaryHeight)
         }
-        return nil
     }
 }
 
@@ -232,6 +223,25 @@ enum QuickEntryPlacement {
         frame.origin.x = min(max(frame.minX, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - size.width))
         frame.origin.y = min(max(frame.minY, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - size.height))
         return frame
+    }
+
+    /// The bounds of `pid`'s frontmost visible normal-layer window, from a
+    /// window server list ordered front to back. A focused floating panel
+    /// is not found this way; finding it needs Accessibility permission.
+    static func frontWindowBounds(of pid: pid_t, in windows: [[String: Any]]) -> CGRect? {
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (window[kCGWindowLayer as String] as? Int) == 0,
+                  // Apps keep invisible helper windows on screen.
+                  ((window[kCGWindowAlpha as String] as? Double) ?? 1) > 0,
+                  let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                  bounds.width > 1, bounds.height > 1 else {
+                continue
+            }
+            return bounds
+        }
+        return nil
     }
 
     /// Window server bounds have their origin at the top left of the primary
