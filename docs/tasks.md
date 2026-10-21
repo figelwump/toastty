@@ -6,7 +6,8 @@ The task keeps its own record, so it exists before its task space is ready and
 after setup fails.
 
 This page covers creating tasks from the CLI or from an agent, triage, moving
-a task into its own git worktree, the sidebar Inbox, and `~/.toastty/tasks.toml`.
+a task into its own git worktree, the sidebar Inbox, task stages with the
+Status sidebar and the Tasks view, and `~/.toastty/tasks.toml`.
 
 ## Create a task
 
@@ -224,6 +225,61 @@ the reason and Retry.
 
 Deleting a task closes its task space only while nothing has used it. A task
 space that has run an agent stays, without its link to the task.
+
+## Stages
+
+Toastty works out each task's stage from its record and from what it sees
+now: the agents in its task space, its pull request, and `tasks.toml`. Nothing
+stores the stage, so it never goes stale. The first rule that matches wins:
+
+| Stage | When |
+| --- | --- |
+| Archived | the task was closed without finishing |
+| Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
+| To ship | it merged, and its project has `release_tags` |
+| Needs you | triage could not place it, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
+| Inbox | triage or setup is still running, or it is moving into a worktree |
+| Running | anything else |
+
+The pull request comes from the task space's `github-pr` annotation. Toastty
+asks `gh` about it every two minutes while the task is open, when an agent's
+turn ends in the task space, and when the Tasks view opens, and copies the
+link and the merge onto the task record. Without `gh`, a linked pull request
+with no agent working counts as waiting for review. Seeing a merge only
+records it; merging and cleaning up stay with the Merge button.
+
+Task spaces that an agent made with `workspace.create`, before they had a
+record, are only watched: their done mark counts as Done, and the mark clears
+when their work starts again. `toastty task adopt`, or Track as Task in the
+Tasks view, gives one a record, so its history stays after it closes.
+`task start-work` from one of its sessions also gives it a record.
+
+## The sidebar and the Tasks view
+
+The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
+the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
+the sidebar by **Projects** or by **Status**. The choice is saved for each
+window.
+
+- **Projects** is the workspace list. A task space whose task is To ship or
+  Done leaves its card unless an agent in it is working or waiting for you;
+  a footer under the card counts those tasks and opens the Tasks view.
+- **Status** lists task spaces by stage: Needs you, Running, To ship (one line
+  for each project), and a Done count. Each row carries its project's name.
+  Top-level workspaces show only in Projects.
+
+Both keep the Inbox at the top. Task space rows use square marks: blue for a
+pull request waiting for review, violet ↑ for a merge waiting for a release,
+a green check for done, and a dashed box for a task that has not started.
+When an agent splits its work, the new tasks draw under the task that started
+them, and that task shows how many of them have merged.
+
+The Tasks view covers the workspace while it shows; selecting a workspace or
+pressing Esc leaves it. It lists every task in the same groups, with Done and
+Archived collapsed, and a detail pane with the task's text, stage, pull
+request, branch, agent and history, and actions to open its task space or pull
+request. A task that has not started shows the Inbox's controls there. An
+error in `tasks.toml` shows as a banner at the top.
 
 ## `~/.toastty/tasks.toml`
 

@@ -872,6 +872,7 @@ toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text
 toastty task get|retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id>)
 toastty task list|workspace-choices
+toastty task adopt [--workspace <id>]
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
@@ -892,9 +893,17 @@ returns once the move is saved, and the agent should then end its turn: the
 move forks the conversation after the turn ends. `task get` reports the move
 under `worktree`, and `task retry` continues a move that failed.
 
+`task get` and `task list` report each task's `stage`: its `group` (`inbox`,
+`needsYou`, `running`, `toShip`, `done` or `archived`), `needsUser`, and for
+Needs you the `attention` and `reason`. See [Stages](tasks.md#stages).
+`task adopt` gives a task space without a record one; it defaults to the
+calling agent's task space.
+
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace`
-and `query run task.get|task.list|task.workspace-choices`.
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt`
+and `query run task.get|task.list|task.workspace-choices`. The Tasks view and
+the sidebar segment have actions too: `window.tasks.show`, `window.tasks.hide`,
+and `window.sidebar.set-segment segment=projects|status`.
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

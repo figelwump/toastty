@@ -249,6 +249,10 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.retry`
 - `task.delete`
 - `task.set-workspace`
+- `task.adopt`
+- `window.tasks.show`
+- `window.tasks.hide`
+- `window.sidebar.set-segment`
 
 Notable action-specific behavior:
 
@@ -369,6 +373,17 @@ Notable action-specific behavior:
     again with the workspace fixed, then setup starts.
   - a workspace-scoped session may choose only workspaces in its scope, and
     cannot reopen a closed workspace.
+- `task.adopt`
+  - gives a task space without a task record one, with source `adopted`, and
+    returns the task object with its `stage`. Targets the calling managed
+    session's workspace when no `workspaceID` is given; a workspace-scoped
+    session reaches only workspaces in its scope. A task space that already has
+    a record returns that task; a top-level workspace fails with
+    `INVALID_PAYLOAD`.
+- `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
+  - take the `windowID` selector. `window.sidebar.set-segment` requires
+    `segment` (`projects` or `status`). All three are listed only when the task
+    system is available.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -575,8 +590,10 @@ Common query IDs include:
 `agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, and `setup` with
 `state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
-has `parentTaskID`, and a top-level `sessionID` for the session that works on
-the task now. A task with a
+has `parentTaskID`, a top-level `sessionID` for the session that works on
+the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, and `stage` with
+`group` (`inbox`, `needsYou`, `running`, `toShip`, `done`, or `archived`),
+`needsUser`, and for Needs you `attention` and, for failures, `reason`. A task with a
 worktree request also has `worktree`: `state` (`running`, `failed` with
 `reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`,
 `baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
