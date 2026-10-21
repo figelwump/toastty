@@ -122,6 +122,10 @@ extension ToasttyLinuxMain {
     @MainActor
     static func runWithAppLogic(arguments: [String], automation: AutomationScript?, nonUnique: Bool) -> Int32 {
         let environment = ProcessInfo.processInfo.environment
+        // The temporary runtime home created below, removed on return so
+        // scripted runs do not fill $TMPDIR.
+        var temporaryRuntimeHome: URL?
+        defer { if let temporaryRuntimeHome { try? FileManager.default.removeItem(at: temporaryRuntimeHome) } }
         if automation != nil {
             // Scripted UI runs (Broadway tests) are automation sessions: no
             // layout persistence, and an isolated runtime home unless the
@@ -132,6 +136,7 @@ extension ToasttyLinuxMain {
                     .appendingPathComponent("toastty-linux-automation-\(getpid())", isDirectory: true)
                 try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
                 setenv("TOASTTY_RUNTIME_HOME", home.path, 1)
+                temporaryRuntimeHome = home
             }
         }
         // Main-loop hooks first: bootstrap schedules main-actor work.
