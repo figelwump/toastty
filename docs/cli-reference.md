@@ -505,7 +505,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.send-text`
 - `session.exit-after-turn`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
-- `task.create`, `task.start-work`, `task.retry`, `task.delete` (see [`task`](#task))
+- `task.create`, `task.start-work`, `task.retry`, `task.delete`, `task.set-workspace` (see [`task`](#task))
 
 Explicit foreground navigation through workspace/tab selection and
 `workspace.focus-panel` participates in Toastty's session navigation history.
@@ -713,7 +713,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
-- `task.get`, `task.list` (see [`task`](#task))
+- `task.get`, `task.list`, `task.workspace-choices` (see [`task`](#task))
 
 `agent.profile.state` requires `profileID` and reports the executable that
 profile would run in Toastty's launch environment, skipping Toastty's command
@@ -870,14 +870,21 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get|retry|delete <task-id>
-toastty task list
+toastty task set-workspace <task-id> (--workspace <id> | --recent <id>)
+toastty task list|workspace-choices
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
-the agent has started (exit 0) or setup has failed or the wait timed out
-(exit 1). Relative `--file` and `--prompt-file` paths resolve against the
-current directory, and the CLI reads `--prompt-file` itself. With
-`--start-work`, setup makes a git worktree and starts the agent there.
+the agent has started (exit 0), or setup failed, the task waits for a
+workspace, or the wait timed out (exit 1). Relative `--file` and
+`--prompt-file` paths resolve against the current directory, and the CLI reads
+`--prompt-file` itself. With `--start-work`, setup makes a git worktree and
+starts the agent there; it needs a workspace.
+
+Triage fills what `task create` leaves out when `[triage]` is set up.
+`task set-workspace` places a task that waits for a workspace, in an open one
+or in a recently closed one from `task workspace-choices`, which Toastty
+reopens.
 
 `task start-work` runs from an agent session and moves its task into a git
 worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It
@@ -886,8 +893,8 @@ move forks the conversation after the turn ends. `task get` reports the move
 under `worktree`, and `task retry` continues a move that failed.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete` and
-`query run task.get|task.list`.
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace`
+and `query run task.get|task.list|task.workspace-choices`.
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

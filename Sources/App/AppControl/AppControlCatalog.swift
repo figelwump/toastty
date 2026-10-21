@@ -77,6 +77,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCreate = "task.create"
     case taskRetry = "task.retry"
     case taskDelete = "task.delete"
+    case taskSetWorkspace = "task.set-workspace"
     case taskStartWork = "task.start-work"
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -471,7 +472,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace; agent, model and effort default to [defaults] in ~/.toastty/tasks.toml. A repeated clientRequestID from the same caller returns the first task.",
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. When [triage] in ~/.toastty/tasks.toml has a command, it chooses the workspace, agent, model, effort and first prompt the request leaves out; set them all to skip it. [defaults] fills an agent, model or effort still missing. A task with no workspace waits in the Inbox until one is picked with task.set-workspace. A repeated clientRequestID from the same caller returns the first task.",
                 selectors: [],
                 parameters: [
                     .taskText(required: false),
@@ -506,7 +507,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished.",
+                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent goes through triage again.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
             )
@@ -517,6 +518,18 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Delete a task and its attachments and stop its setup. A task space that setup made is closed if nothing used it; otherwise it stays without its task link.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
+            )
+        case .taskSetWorkspace:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Place a task that has not started in a workspace: an open one (workspace) or a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again. Triage then runs for anything else the task still needs, and setup starts.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .taskWorkspace(required: false),
+                    .taskRecentWorkspace(required: false),
+                ]
             )
         }
     }
@@ -547,6 +560,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case agentProfileState = "agent.profile.state"
     case taskGet = "task.get"
     case taskList = "task.list"
+    case taskWorkspaceChoices = "task.workspace-choices"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -629,7 +643,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model and effort, setup state (settingUp, setupFailed with a reason, or started) and task space.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while triage runs, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, and task space.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
             )
@@ -638,6 +652,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 id: rawValue,
                 kind: .query,
                 summary: "List tasks, oldest first, in the task.get shape. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                selectors: []
+            )
+        case .taskWorkspaceChoices:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. A workspace-scoped session sees only open workspaces in its scope.",
                 selectors: []
             )
         }
@@ -837,6 +858,10 @@ private extension AppControlParameterDescriptor {
 
     static func taskEffort(required: Bool) -> Self {
         .init(name: "effort", summary: "Reasoning effort for the agent.", valueType: .string, required: required)
+    }
+
+    static func taskRecentWorkspace(required: Bool) -> Self {
+        .init(name: "recentWorkspace", summary: "ID of a recently closed workspace from task.workspace-choices. Toastty opens it again.", valueType: .uuid, required: required)
     }
 
     static func taskPrompt(required: Bool) -> Self {

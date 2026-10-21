@@ -137,6 +137,26 @@ struct QuickEntryTests {
         #expect(fixture.record(record.id)?.setup == .started)
     }
 
+    @Test func autoWorkspaceWithTriageOffSavesTheTaskForTheUserToPlace() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        #expect(model.workspaceID == nil)
+        try harness.type("Place me later")
+
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+
+        let record = try #require(fixture.coordinator.records.records.first)
+        #expect(record.source == .quickEntry)
+        #expect(record.workspaceID == nil)
+        guard case .needsWorkspace = record.setup else {
+            Issue.record("Expected the task to wait for a workspace, got \(record.setup)")
+            return
+        }
+    }
+
     @Test func aFailedCreateKeepsThePanelAndTheTextUntilItSucceeds() async throws {
         let harness = try Harness()
         let fixture = harness.fixture

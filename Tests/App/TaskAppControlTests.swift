@@ -93,8 +93,8 @@ struct TaskAppControlTests {
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
-        await expectInvalidPayload("Name a workspace for the task with --workspace <id>, or create it from an agent session in that workspace.") {
-            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "agent": .string("codex")], context: context())
+        await expectInvalidPayload("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.") {
+            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x")], context: context())
         }
         await expectInvalidPayload("workspace must be a workspace ID") {
             _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "workspace": .string("toastty")], context: context())
@@ -202,7 +202,58 @@ struct TaskAppControlTests {
         #expect(executor.listActionDescriptors().contains { $0.id.hasPrefix("task.") } == false)
         #expect(executor.listQueryDescriptors().contains { $0.id.hasPrefix("task.") } == false)
         let withTasks = makeExecutor(fixture, coordinator: fixture.coordinator)
-        #expect(Set(withTasks.listActionDescriptors().map(\.id)).isSuperset(of: ["task.create", "task.retry", "task.delete", "task.start-work"]))
-        #expect(Set(withTasks.listQueryDescriptors().map(\.id)).isSuperset(of: ["task.get", "task.list"]))
+        #expect(Set(withTasks.listActionDescriptors().map(\.id)).isSuperset(of: ["task.create", "task.retry", "task.delete", "task.set-workspace", "task.start-work"]))
+        #expect(Set(withTasks.listQueryDescriptors().map(\.id)).isSuperset(of: ["task.get", "task.list", "task.workspace-choices"]))
+    }
+
+    @Test func aTaskWithNoWorkspaceWaitsUntilSetWorkspacePlacesIt() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let outcome = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("Fix the unread dot"), "agent": .string("codex")],
+            context: context()
+        )
+        let id = try taskID(outcome.result)
+        let created = try #require(outcome.result)
+        #expect(setupState(created) == "needsWorkspace")
+        #expect(created["workspaceID"] == .null)
+
+        let choices = try executor.runQuery(id: "task.workspace-choices", args: [:])
+        #expect(choices["open"] == .array([.object([
+            "workspaceID": .string(fixture.workspaceID.uuidString),
+            "title": .string("toastty"),
+        ])]))
+        #expect(choices["recent"] == .array([]))
+
+        await expectInvalidPayload("pass either workspace or recentWorkspace") {
+            _ = try executor.runAction(id: "task.set-workspace", args: ["taskID": .string(id.uuidString)], context: context())
+        }
+        let placed = try executor.runAction(
+            id: "task.set-workspace",
+            args: ["taskID": .string(id.uuidString), "workspace": .string(fixture.workspaceID.uuidString)],
+            context: context()
+        )
+        #expect(placed.result.map(setupState) == "routing")
+        await fixture.waitUntil("the task starts") { fixture.record(id)?.setup == .started }
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(id.uuidString)])
+        #expect(got["workspaceID"] == .string(fixture.workspaceID.uuidString))
+
+        // A scoped session cannot reopen a closed workspace: that makes a
+        // top-level workspace no scope covers.
+        let scopedSessionID = try #require(fixture.record(id)?.operation.agentLaunch?.sessionID)
+        #expect(fixture.sessionRuntimeStore.isWorkspaceScoped(sessionID: scopedSessionID))
+        let second = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("second"), "agent": .string("codex")],
+            context: context()
+        )
+        await expectInvalidPayload("a workspace-scoped session cannot reopen a closed workspace") {
+            _ = try executor.runAction(
+                id: "task.set-workspace",
+                args: ["taskID": .string(try taskID(second.result).uuidString), "recentWorkspace": .string(UUID().uuidString)],
+                context: context(scopedSessionID)
+            )
+        }
     }
 }

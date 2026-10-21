@@ -119,9 +119,17 @@ final class TaskRecordStore: ObservableObject {
             )
             return
         }
-        let workItem = DispatchWorkItem {
+        let workItem = Self.delayedWriteWorkItem(data, to: fileURL)
+        pendingPersistWorkItem = workItem
+        persistQueue.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
+    }
+
+    /// Made outside the main actor: a closure formed in a main-actor method
+    /// is main-actor isolated, and running it on the persist queue traps.
+    private nonisolated static func delayedWriteWorkItem(_ data: Data, to fileURL: URL) -> DispatchWorkItem {
+        DispatchWorkItem {
             do {
-                try Self.writeSnapshotData(data, to: fileURL)
+                try writeSnapshotData(data, to: fileURL)
             } catch {
                 ToasttyLog.warning(
                     "Failed saving task records",
@@ -130,8 +138,6 @@ final class TaskRecordStore: ObservableObject {
                 )
             }
         }
-        pendingPersistWorkItem = workItem
-        persistQueue.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
     }
 
     private static func loadRecords(from fileURL: URL?) -> [TaskRecord] {

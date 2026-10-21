@@ -915,7 +915,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get|retry|delete <task-id>
-      toastty [--json] [--socket-path <path>] task list
+      toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id>)
+      toastty [--json] [--socket-path <path>] task list|workspace-choices
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1879,20 +1880,43 @@ public enum ToasttyCLI {
                 )
             )
 
-        case "list":
+        case "set-workspace":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace", "--recent"])
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
+                throw ToasttyCLIError.usage("task set-workspace requires one task ID\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = ["taskID": .string(taskID)]
+            switch (parsed.singleValue("--workspace"), parsed.singleValue("--recent")) {
+            case (let workspace?, nil):
+                guard UUID(uuidString: workspace) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
+                }
+                args["workspace"] = .string(workspace)
+            case (nil, let recent?):
+                guard UUID(uuidString: recent) != nil else {
+                    throw ToasttyCLIError.usage("--recent must be an ID from task workspace-choices\n\n\(usage)")
+                }
+                args["recentWorkspace"] = .string(recent)
+            default:
+                throw ToasttyCLIError.usage("task set-workspace takes --workspace or --recent\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-workspace", args: args))
+
+        case "list", "workspace-choices":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
             guard parsed.positionals.isEmpty else {
-                throw ToasttyCLIError.usage("task list does not accept arguments\n\n\(usage)")
+                throw ToasttyCLIError.usage("task \(verb) does not accept arguments\n\n\(usage)")
             }
-            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.list", args: [:]))
+            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.\(verb)", args: [:]))
 
         default:
             throw ToasttyCLIError.usage("unknown task subcommand: \(verb)\n\n\(usage)")
         }
     }
 
-    /// Polls `task.get` until the created task has started or its setup
-    /// failed, then prints the task. Exits 1 on a failed setup or timeout.
+    /// Polls `task.get` until the created task has started, its setup
+    /// failed, or it waits for a workspace, then prints the task. Exits 1
+    /// unless it started.
     private static func runTaskWait(
         client: ToasttySocketClient,
         createResponse: AutomationResponseEnvelope,
@@ -1908,7 +1932,7 @@ public enum ToasttyCLI {
         while true {
             if case .object(let setup)? = response.result?["setup"],
                case .string(let state)? = setup["state"],
-               state != "settingUp" {
+               state != "settingUp", state != "routing" {
                 if options.jsonOutput {
                     try writeStdout(jsonString(for: response))
                 } else {
@@ -1918,6 +1942,12 @@ public enum ToasttyCLI {
                     var reason = "setup failed"
                     if case .string(let detail)? = setup["reason"] { reason = detail }
                     fputs("task \(taskID) setup failed: \(reason)\n", stderr)
+                    return 1
+                }
+                if state == "needsWorkspace" {
+                    var reason = "it has no workspace"
+                    if case .string(let detail)? = setup["reason"] { reason = detail }
+                    fputs("task \(taskID) needs a workspace: \(reason)\nPick one in the Inbox, or run: toastty task set-workspace \(taskID) --workspace <id>\n", stderr)
                     return 1
                 }
                 return 0

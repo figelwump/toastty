@@ -17,6 +17,8 @@ Finder in front, it checks that:
 - typed text, a pasted image and a picked workspace become the task, with
   source quickEntry, and the agent starts with the text as written;
 - the panel closes and Finder is still in front;
+- with Workspace left on Auto, triage (a fake command that picks the first
+  open workspace) places the task and it starts;
 - Esc closes a second panel without creating a task, and Command+T in the
   panel opens no tab in Toastty;
 - Command+W closes the panel without closing the terminal behind it.
@@ -39,6 +41,14 @@ _spec.loader.exec_module(task_check)
 Instance, require, wait_for, FAKE_AGENT = task_check.Instance, task_check.require, task_check.wait_for, task_check.FAKE_AGENT
 
 TASK_LINES = ['Unread dot stays on after reading', 'Seen on the phone first.']
+AUTO_TEXT = 'Placed by triage'
+
+# Answers triage with the first open workspace in the JSON Toastty writes.
+FAKE_TRIAGE = r'''import json, re, sys
+data = sys.stdin.read()
+match = re.search(r'"workspaces"\s*:\s*\[.*?"id"\s*:\s*"([0-9A-F-]{36})"', data, re.S)
+print(json.dumps({"workspace": match.group(1) if match else None, "reason": "remote check"}))
+'''
 FINDER = 'com.apple.finder'
 # Virtual key codes on a US keyboard.
 KEY_T, KEY_V, KEY_W, KEY_RETURN, KEY_ESCAPE = 17, 9, 13, 36, 53
@@ -73,7 +83,10 @@ def main():
     agent.chmod(0o755)
     (user_home / '.toastty/agents.toml').write_text(
         f'[claude]\ndisplayName = "Claude Code"\nargv = {json.dumps([str(agent)])}\n')
+    triage = root / 'triage.py'
+    triage.write_text(FAKE_TRIAGE)
     (user_home / '.toastty/tasks.toml').write_text(
+        '[triage]\ncommand = "/usr/bin/python3 ' + str(triage) + '"\ntimeout_seconds = 30\n\n'
         '[defaults]\nagent = "claude"\n\n[quick_entry]\nshortcut = "ctrl+opt+shift+t"\n')
     image = root / 'pasted.png'
     subprocess.run(['sips', '-s', 'format', 'png', '/System/Library/CoreServices/Finder.app/Contents/Resources/Finder.icns',
@@ -191,6 +204,28 @@ def main():
                 f'The agent did not get the task as written: {message!r}')
         step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message)
 
+        # 1b. Workspace left on Auto: triage places the task.
+        open_panel_from_finder()
+        require(drive('value', pid, 'quick-entry.workspace') == 'Auto', 'The workspace did not start on Auto')
+        drive('type', AUTO_TEXT)
+        wait_for_text(AUTO_TEXT)
+        drive('key', KEY_RETURN, 'cmd')
+        wait_for('the panel to close', panel_closed, timeout=10)
+
+        def auto_task():
+            listed = [t for t in run_cli('task', 'list')['tasks'] if t['text'] == AUTO_TEXT]
+            if not listed:
+                return None
+            placed = run_cli('task', 'get', listed[0]['taskID'])
+            return placed if placed['setup']['state'] not in ('routing', 'settingUp') else None
+
+        placed = wait_for('triage to place the task', auto_task, timeout=60)
+        require(placed['source'] == 'quickEntry', f'Wrong source: {placed}')
+        require(placed['workspaceID'] == workspace['workspaceID'], f'Triage did not place it in the open workspace: {placed}')
+        require(placed['setup']['state'] == 'started', f'The placed task did not start: {placed}')
+        step('auto workspace placed by triage', taskID=placed['taskID'], workspaceID=placed['workspaceID'],
+             triageNote=placed.get('triageNote'))
+
         def terminal_count():
             listed = instance.query('workspace.list')['workspaces']
             return sum(len(w['terminalCwds']) for w in listed)
@@ -207,7 +242,7 @@ def main():
         drive('key', KEY_ESCAPE)
         wait_for('the panel to close', panel_closed, timeout=10)
         tasks = run_cli('task', 'list')['tasks']
-        require(len(tasks) == 1, f'Esc created a task: {tasks}')
+        require(len(tasks) == 2, f'Esc created a task: {tasks}')
         require(drive('frontmost') == FINDER, 'Focus did not go back to Finder after Esc')
         step('escape discarded', tasks=len(tasks), terminals=terminal_count())
 
@@ -217,7 +252,7 @@ def main():
         wait_for('the panel to close', panel_closed, timeout=10)
         time.sleep(1)
         require(terminal_count() == terminals, f'Command+W closed a terminal: {terminal_count()} of {terminals}')
-        require(len(run_cli('task', 'list')['tasks']) == 1, 'Command+W created a task')
+        require(len(run_cli('task', 'list')['tasks']) == 2, 'Command+W created a task')
         step('command-w closed the panel only', terminals=terminal_count())
 
         evidence['status'] = 'passed'
