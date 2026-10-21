@@ -365,6 +365,30 @@ clear (the focused unread panel of a shown workspace is marked read 300 ms
 after it is on screen while Toastty is active); `WorkspaceView.swift` is
 not part of the Linux build.
 
+Reading, as on macOS, also happens on a click and on activation:
+
+- Every mouse press in a panel activates it, already focused or not, like
+  macOS `TerminalHostView.mouseDown` / `BrowserPanelView` (both send
+  `focusPanel` on each mouse down). That focus action is what reads the
+  panel's unread mark and the workspace-scoped unread count that
+  `toastty notify` without `--panel` records; before, a click in the
+  focused pane did nothing and that sidebar dot stayed lit until the user
+  switched workspaces away and back. `PanelFrame` (main area) and
+  `WebPanelController` (right panel) send the action only when it changes
+  something (`SeenUnreadPolicy.clickNeedsFocusAction`).
+- `LinuxAppController` reports Toastty gaining or losing focus (window
+  `is-active`, coalesced so moving between Toastty windows is not a
+  resign/activate pair) to `LinuxAppLogic.applicationActivityDidChange`,
+  which posts `NSApplication.didBecomeActiveNotification` /
+  `didResignActiveNotification` through
+  `LinuxPlatform.postApplicationActivationChange` (nothing posted them
+  before) and acknowledges the visible program-status result, as macOS
+  `AppWindowView` does on `didBecomeActive`.
+- Sidebar session rows follow macOS `sessionRailState`: a ready session
+  shows the ready dot only while its panel is unread
+  (`SidebarSessionRowModel.dotClass`); before, the dot stayed after the
+  user had seen the result.
+
 `HeadlessLinuxPlatformServices` is the default: `xdg-open`, alerts answered
 with their cancel button (`LinuxAlertRequest.safeDefaultButtonIndex`) and
 logged to stderr, notifications recorded and logged, a process-local
@@ -646,6 +670,16 @@ notification), local input, configured font, link opening, panel close.
   context menu, and quitting through the window's close button.
   Screenshots: `artifacts/manual/linux-terminal/`.
 - The gtk-shell `BroadwaySmokeTests` now run with Ghostty terminals.
+- `linux/Tests/ToasttyLinuxTests/UnreadBroadwayTests.swift`: the sidebar
+  unread dot and session marks follow the user reading, with real senders
+  (a managed session driven through the staged CLI, `toastty notify`): a
+  background workspace's agent finishing, then selecting it; a
+  workspace-scoped notification on screen, then a click in the focused pane
+  (`panel-click`); the focused panel's agent finishing while another
+  application has focus (`app-focus off`), then switching back, including
+  the AppKit activation notifications (`appKitActivations`). Summary keys
+  `sidebarUnread`, `unreadCounts`, `sidebarSessions`, `appActive`.
+  `BROADWAY_TEST_DISPLAY` picks the display.
 
 ## Right panel, desktop integration, Remote Access UI (panels-remote)
 

@@ -23,6 +23,8 @@ import Foundation
 ///     resize 1280 800
 ///     perform agent.run.claude      # run a window command by id (shortcut/button path)
 ///     sidebar-width 320             # as if the sidebar handle were dragged (also right-panel-width)
+///     panel-click 1                 # mouse press in pane 1 of the selected tab (no argument: the focused pane)
+///     app-focus off|on              # another application takes focus / the user switches back
 ///     quit
 ///
 /// `TOASTTY_LINUX_SCREENSHOT_PATH` alone writes one screenshot after the
@@ -205,6 +207,27 @@ public final class AutomationScript {
                 guard let window = app.selectedWindowController() else { fail("window-close: no window"); continue }
                 gtk_window_close(cast(window.window))
                 MainLoop.spin(untilMilliseconds: 10)
+            case "panel-click":
+                // A mouse press in pane N of the selected tab (default: the
+                // focused pane), through the panel frame's press handler.
+                guard let window = app.selectedWindowController(),
+                      let tab = app.store.state.workspaceSelection(in: window.windowID)?.workspace.selectedTab else {
+                    fail("panel-click: no workspace"); continue
+                }
+                let slots = tab.layoutTree.allSlotInfos.map(\.panelID)
+                let panelID = Int(argument).flatMap { slots.indices.contains($0) ? slots[$0] : nil }
+                    ?? (argument.isEmpty ? tab.resolvedFocusedPanelID : nil)
+                guard let panelID, let frame = window.content.frame(for: panelID) else {
+                    fail("panel-click \(argument): no such pane"); continue
+                }
+                frame.handlePress()
+                settle(app: app)
+            case "app-focus":
+                // `off`: another application takes focus (a plain toplevel
+                // that is not a Toastty window becomes the active window);
+                // `on`: the user switches back to the selected window.
+                setOtherApplicationFocused(argument == "off", app: app)
+                settle(app: app)
             case "color-scheme":
                 if let scheme = LinuxColorSchemePreference(rawValue: argument) { app.preferences.colorScheme = scheme }
             case "quit":
@@ -238,6 +261,31 @@ public final class AutomationScript {
         }
         if closed == false { fail("\(command): the dialog did not close") }
         settle(app: app)
+    }
+
+    /// Stand-in for another application's window (`app-focus off`).
+    private var otherApplicationWindow: WidgetPtr?
+
+    private func setOtherApplicationFocused(_ focused: Bool, app: LinuxAppController) {
+        if focused {
+            let window = otherApplicationWindow ?? gtk_window_new()!
+            if otherApplicationWindow == nil {
+                gtk_window_set_title(cast(window), "Other application")
+                gtk_window_set_default_size(cast(window), 200, 120)
+                otherApplicationWindow = window
+            }
+            gtk_window_present(cast(window))
+            let left = MainLoop.spin(untilMilliseconds: 3000) { app.isApplicationActive == false }
+            if left == false { fail("app-focus off: a Toastty window stayed active") }
+        } else {
+            if let window = otherApplicationWindow {
+                otherApplicationWindow = nil
+                gtk_window_destroy(cast(window))
+            }
+            app.selectedWindowController()?.present()
+            let back = MainLoop.spin(untilMilliseconds: 3000) { app.isApplicationActive }
+            if back == false { fail("app-focus on: no Toastty window became active") }
+        }
     }
 
     private func resolve(_ path: String) -> URL {
@@ -309,6 +357,21 @@ public final class AutomationScript {
             result["frameCounter"] = "\(gdk_frame_clock_get_frame_counter(clock))"
         }
         result["sidebarRows"] = "\(controller.sidebar.rowModels.count)"
+        // Sidebar rows showing the unread dot ("none" when none do), each
+        // workspace's unread count in state, and whether Toastty is active.
+        let unreadRows = controller.sidebar.rowModels.filter(\.hasUnread).map { "\($0.index)" }
+        result["sidebarUnread"] = unreadRows.isEmpty ? "none" : unreadRows.joined(separator: ",")
+        result["unreadCounts"] = window.workspaceIDs
+            .map { "\(state.workspacesByID[$0]?.unreadNotificationCount ?? 0)" }
+            .joined(separator: ",")
+        result["appActive"] = "\(app.isApplicationActive)"
+        // Agent session rows as `<workspace>:<dot>[:<chip>]`.
+        let sessionRows = controller.sidebar.rowModels.flatMap { row in
+            row.sessions.map { session in
+                (["\(row.index)", session.dotClass] + (session.chipLabel.map { [$0] } ?? [])).joined(separator: ":")
+            }
+        }
+        result["sidebarSessions"] = sessionRows.isEmpty ? "none" : sessionRows.joined(separator: ",")
         if let selection = state.workspaceSelection(in: window.id), let tab = selection.workspace.selectedTab {
             let workspace = selection.workspace
             result["workspace"] = workspace.title

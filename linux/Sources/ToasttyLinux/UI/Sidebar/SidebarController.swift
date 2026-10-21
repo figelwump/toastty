@@ -177,7 +177,7 @@ public final class SidebarController {
         Gtk.setClass(row, "focused", session.isFocused)
         if let attention = session.attentionClass { Gtk.addClasses(row, [attention]) }
 
-        let dot = Gtk.box(GTK_ORIENTATION_HORIZONTAL, classes: ["status-dot", session.statusClass])
+        let dot = Gtk.box(GTK_ORIENTATION_HORIZONTAL, classes: ["status-dot", session.dotClass])
         gtk_widget_set_valign(dot, GTK_ALIGN_START)
         gtk_widget_set_margin_top(dot, 5)
         Gtk.append(row, dot)

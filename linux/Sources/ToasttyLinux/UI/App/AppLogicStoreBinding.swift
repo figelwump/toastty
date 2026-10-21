@@ -157,6 +157,11 @@ extension ToasttyLinuxMain {
         let platformServices = GtkPlatformServices(app: app)
         platformServices.notifications.adoptLedgerFile(at: logic.desktopNotificationLedgerURL)
         LinuxPlatform.install(platformServices)
+        // Toastty gaining or losing focus reaches the shared layer as
+        // AppKit's activation notifications.
+        app.onApplicationActivityChange = { [weak logic] active in
+            logic?.applicationActivityDidChange(isActive: active)
+        }
         let webPanels = app.installWebPanels()
         webPanels.attach(logic: logic)
         logic.setBrowserHostMaterializer { [weak app] panelID in app?.materializeWebPanel(panelID: panelID) }
@@ -178,6 +183,24 @@ extension ToasttyLinuxMain {
             guard let logic, let window = app.selectedWindowController(),
                   let workspaceID = logic.state.workspaceSelection(in: window.windowID)?.workspaceID else { return [:] }
             return ["sessions": logic.sessionStatuses(workspaceID: workspaceID).map(\.status.kind.rawValue).joined(separator: ",")]
+        }
+        // `appKitActivations=<didBecomeActive>/<didResignActive>`: what the
+        // shared layer has been told about Toastty's focus.
+        if automation != nil {
+            let activations = ActivationCounter()
+            let center = NotificationCenter.default
+            let observers = [
+                center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
+                    MainActor.assumeIsolated { activations.became += 1 }
+                },
+                center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: nil) { _ in
+                    MainActor.assumeIsolated { activations.resigned += 1 }
+                },
+            ]
+            AutomationScript.summaryContributors.append { _ in
+                withExtendedLifetime(observers) {}
+                return ["appKitActivations": "\(activations.became)/\(activations.resigned)"]
+            }
         }
         Signal.connect(app.application, "activate", after: true) {
             MainLoop.idle { logic.markAutomationReady() }
@@ -224,5 +247,14 @@ final class AppLogicAgentLauncher: TerminalProfileShortcuts.AgentLaunching {
     func launchAgent(profileID: String, windowID: UUID) -> Bool {
         logic.launchAgentFromUI(profileID: profileID, windowID: windowID)
     }
+}
+#endif
+
+#if TOASTTY_LINUX_APP_LOGIC
+/// Activation notifications seen by scripted runs (`appKitActivations`).
+@MainActor
+private final class ActivationCounter {
+    var became = 0
+    var resigned = 0
 }
 #endif

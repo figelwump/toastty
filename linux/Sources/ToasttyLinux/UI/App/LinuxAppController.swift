@@ -28,6 +28,29 @@ public final class LinuxAppController {
         windows.values.contains { gtk_window_is_active(cast($0.window)).bool }
     }
 
+    /// Called when Toastty as a whole gains or loses focus (not when focus
+    /// only moves between Toastty windows). The app-logic frontend posts
+    /// AppKit's `didBecomeActive` / `didResignActive` from it.
+    public var onApplicationActivityChange: ((Bool) -> Void)?
+    private var reportedApplicationActive = false
+    private var activityCheckScheduled = false
+
+    /// Window `is-active` changes arrive one window at a time (the old
+    /// window resigns before the new one activates), so the app-level state
+    /// is read once they have settled.
+    private func scheduleApplicationActivityCheck() {
+        guard activityCheckScheduled == false else { return }
+        activityCheckScheduled = true
+        _ = MainLoop.idle { [weak self] in
+            guard let self else { return }
+            self.activityCheckScheduled = false
+            let active = self.isApplicationActive
+            guard active != self.reportedApplicationActive else { return }
+            self.reportedApplicationActive = active
+            self.onApplicationActivityChange?(active)
+        }
+    }
+
     public init(store: any LinuxStoreBinding, hosts: PanelHostRegistry = PanelHostRegistry(), nonUnique: Bool) {
         self.store = store
         self.hosts = hosts
@@ -131,6 +154,7 @@ public final class LinuxAppController {
             Signal.notify(controller.window, "is-active") { [weak self] in
                 guard let self else { return }
                 self.seenUnreadClearer.refresh(self.store.state)
+                self.scheduleApplicationActivityCheck()
             }
             windows[windowID] = controller
             windowOrder.append(windowID)

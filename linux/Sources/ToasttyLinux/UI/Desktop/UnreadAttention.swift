@@ -37,6 +37,22 @@ public enum SeenUnreadPolicy {
         return Candidate(workspaceID: workspace.id, panelIDs: panelIDs)
     }
 
+    /// Whether a click in `panelID` must send a focus action. macOS sends
+    /// `focusPanel` on every mouse down in a panel (`TerminalHostView`,
+    /// `BrowserPanelView`), and that action is what reads the panel's unread
+    /// mark and the workspace-scoped notification count
+    /// (`toastty notify` without a panel). Linux sends it only when it
+    /// changes something, so clicks in an already focused, already read
+    /// panel do not churn state.
+    public static func clickNeedsFocusAction(workspace: WorkspaceState, panelID: UUID) -> Bool {
+        if workspace.unreadWorkspaceNotificationCount > 0 { return true }
+        if workspace.tabsByID.values.contains(where: { $0.unreadPanelIDs.contains(panelID) }) { return true }
+        if workspace.rightAuxPanel.tabID(containingPanelID: panelID) != nil {
+            return workspace.rightAuxPanel.focusedPanelID != panelID
+        }
+        return workspace.focusedPanelID != panelID || workspace.rightAuxPanel.focusedPanelID != nil
+    }
+
     /// Panels from `candidate` that are still unread and still seen after the delay.
     public static func panelIDsToClear(
         currentWorkspace: WorkspaceState?,

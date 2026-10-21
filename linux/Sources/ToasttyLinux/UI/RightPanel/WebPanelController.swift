@@ -61,6 +61,14 @@ public class WebPanelController {
             self.services.webPanelDidRequestFocus(panelID: self.panelID)
         }
         gtk_widget_add_controller(root, focus)
+        let click = gtk_gesture_click_new()!
+        gtk_gesture_single_set_button(cast(click), 0)
+        gtk_event_controller_set_propagation_phase(cast(click), GTK_PHASE_CAPTURE)
+        Signal.connectPress(click) { [weak self] _, _, _ in
+            guard let self, self.isClosed == false else { return }
+            self.services.webPanelWasClicked(panelID: self.panelID)
+        }
+        gtk_widget_add_controller(root, cast(click))
 
         Signal.connectUInt(viewWidget, "web-process-terminated") { [weak self] reason in
             self?.record("web process terminated (reason \(reason))")

@@ -212,6 +212,21 @@ extension LinuxAppLogic {
         sessionRuntimeStore.objectWillChange.map { _ in () }.eraseToAnyPublisher()
     }
 
+    /// Toastty gained or lost application focus (the GTK frontend reports
+    /// its windows' activity; Linux has no AppKit to do it). Posts
+    /// `NSApplication.didBecomeActiveNotification` /
+    /// `didResignActiveNotification` for the shared observers, and on
+    /// activation acknowledges the program-status result the user now sees,
+    /// as macOS `AppWindowView` does on `didBecomeActive`: a notification
+    /// click can read the panel while Toastty is still inactive, so the
+    /// read itself could not acknowledge it.
+    public func applicationActivityDidChange(isActive: Bool) {
+        LinuxPlatform.postApplicationActivationChange(isActive: isActive)
+        if isActive {
+            sessionRuntimeStore.acknowledgeViewedProgramStatusResults()
+        }
+    }
+
     /// `handler` runs after session state changed (coalesced per turn).
     public func observeSessions(_ handler: @escaping @MainActor () -> Void) -> LinuxAppLogicSubscription {
         LinuxAppLogicSubscription(sessionRuntimeStore.$sessionRegistry.sink { _ in
