@@ -200,6 +200,46 @@ struct ToasttyCLITaskTests {
     }
 
     @Test
+    func lifecycleVerbsMapToTheirActions() throws {
+        let taskID = UUID().uuidString
+        let workspaceID = UUID().uuidString
+        func command(_ arguments: [String]) throws -> CLICommand {
+            try ToasttyCLI.parse(arguments: ["task"] + arguments, environment: [:]).command
+        }
+
+        // A task's agent merges its own task; a coordinator names a child.
+        #expect(try command(["merge", "--head", "abc1234"])
+            == .appControlRun(kind: .action, id: "task.merge", args: ["head": .string("abc1234")]))
+        #expect(try command(["merge", taskID])
+            == .appControlRun(kind: .action, id: "task.merge", args: ["taskID": .string(taskID)]))
+        #expect(try command(["cancel-merge"]) == .appControlRun(kind: .action, id: "task.cancel-merge", args: [:]))
+        #expect(try command(["ready-for-review"]) == .appControlRun(kind: .action, id: "task.ready-for-review", args: [:]))
+        #expect(try command(["mark-done", taskID])
+            == .appControlRun(kind: .action, id: "task.mark-done", args: ["taskID": .string(taskID)]))
+        #expect(try command(["clean-up", taskID])
+            == .appControlRun(kind: .action, id: "task.clean-up", args: ["taskID": .string(taskID)]))
+        #expect(try command(["archive", taskID, "--close-pr", "--discard-changes"])
+            == .appControlRun(kind: .action, id: "task.archive", args: [
+                "taskID": .string(taskID),
+                "closePullRequest": .bool(true),
+                "deleteUnpushedCommits": .bool(false),
+                "discardChanges": .bool(true),
+            ]))
+        #expect(try command(["release"]) == .appControlRun(kind: .action, id: "task.release", args: [:]))
+        #expect(try command(["release", "--workspace", workspaceID])
+            == .appControlRun(kind: .action, id: "task.release", args: ["workspaceID": .string(workspaceID)]))
+        #expect(try command(["list", "--parent", taskID])
+            == .appControlRun(kind: .query, id: "task.list", args: ["parent": .string(taskID)]))
+
+        for arguments in [
+            ["mark-done"], ["clean-up"], ["archive"], ["archive", "not-an-id"], ["merge", "a", "b"],
+            ["merge", "--head"], ["release", "extra"], ["list", "--parent", "nope"],
+        ] {
+            #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }
+        }
+    }
+
+    @Test
     func sendAndWatchRejectAmbiguousArguments() {
         let taskID = UUID().uuidString
         for arguments in [

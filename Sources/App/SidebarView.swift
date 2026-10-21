@@ -1050,8 +1050,16 @@ struct SidebarView: View {
     /// Inbox the sidebar always shows.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems)
-        return SidebarStatusSegment(sections: sections, openTasksView: openTasksView(selecting:)) { entry in
+        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)
+        return SidebarStatusSegment(
+            sections: sections,
+            openTasksView: openTasksView(selecting:),
+            release: { workspaceID in
+                if let coordinator = taskBoard.coordinator {
+                    TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
+                }
+            }
+        ) { entry in
             if let workspaceID = entry.item.taskSpaceWorkspaceID,
                let workspace = store.state.workspacesByID[workspaceID] {
                 subspaceRow(
@@ -4192,6 +4200,20 @@ struct SidebarView: View {
         presentation: WorkspaceMergePresentation
     ) -> some View {
         switch presentation {
+        case .ready(let pullRequest, _) where sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id):
+            // A task merges its own way and always cleans up after.
+            Button(ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle("Merge \(pullRequest)")) {
+                requestWorkspaceMerge(row.id, store.workspaceMergeMode)
+            }
+            Button("Merge \(pullRequest) Without Checks") {
+                TaskActions.mergeWithoutChecks(workspaceID: row.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
+            }
+            Button("Archive Task…") {
+                if let coordinator = sessionRuntimeStore.taskCoordinator,
+                   let taskID = store.state.workspacesByID[row.id]?.taskID {
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
+            }
         case .ready(let pullRequest, let currentMode):
             ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
                 let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
@@ -4223,12 +4245,13 @@ struct SidebarView: View {
     private func subspaceMergeMenuPresentation(
         _ row: SidebarSubspacePresentation.Row
     ) -> WorkspaceMergePresentation? {
-        guard store.isWorkspaceMergeEnabled,
+        guard store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id),
               let workspace = store.state.workspacesByID[row.id],
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],
-                mode: store.workspaceMergeMode
+                mode: store.workspaceMergeMode,
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: row.id)
               ) else {
             return nil
         }

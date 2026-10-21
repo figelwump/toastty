@@ -82,6 +82,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskSend = "task.send"
     case taskWatch = "task.watch"
     case taskUnwatch = "task.unwatch"
+    case taskMerge = "task.merge"
+    case taskCancelMerge = "task.cancel-merge"
+    case taskCleanUp = "task.clean-up"
+    case taskReadyForReview = "task.ready-for-review"
+    case taskMarkDone = "task.mark-done"
+    case taskArchive = "task.archive"
+    case taskRelease = "task.release"
     case taskAdopt = "task.adopt"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
@@ -233,7 +240,18 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
-            return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its task spaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Close a workspace. Its task spaces stay open as top-level workspaces.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.init(
+                    name: "requireDone",
+                    summary: "true to refuse unless the workspace is still marked done: new work since the mark was set clears it.",
+                    valueType: .boolean,
+                    required: false
+                )]
+            )
         case .workspaceTabCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a terminal tab and return workspaceID, tabID and panelID. Managed callers default to their own workspace.", selectors: [.windowID, .workspaceID], parameters: [.terminalCreationActivation(required: false)], aliases: aliases)
         case .workspaceTabSelect:
@@ -562,6 +580,66 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.taskWatchID(required: true)]
             )
+        case .taskMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance and hands the merge to Toastty's merge owner, then returns. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Refused after the user cancelled the merge, for the agent turn that was checking it.",
+                selectors: [],
+                parameters: [.taskID(required: false), .taskHead(required: false)]
+            )
+        case .taskCancelMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Stop a merge the user accepted while the task's agent checks it or Toastty waits for GitHub's checks. Clears the acceptance and the task space's done mark. Refused while Toastty is merging or after the pull request merged.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        case .taskCleanUp:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Try again a cleanup that stopped: after a merge (\"Merged · clean up?\"), an archive, or a release.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskReadyForReview:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark a task's work, which has no pull request, ready for the user to review. The task waits in Needs you until the user marks it done. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        case .taskMarkDone:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Finish a task without a merge. Its task space gets the done mark too; new work there clears that mark again.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskArchive:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Close a task without merging. Checks first and refuses with the reason: unsaved documents, a merge under way, uncommitted changes without discardChanges, or a detached worktree whose commit is on no remote branch or tag without deleteUnpushedCommits. Then, in the background and each step saved: closes the pull request only with closePullRequest, closes the task space, removes the worktree, and deletes the local branch when the remote has all its commits (or with deleteUnpushedCommits). The remote branch stays. Running it again continues a stopped archive.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "closePullRequest", summary: "true also closes the task's pull request on GitHub.", valueType: .boolean, required: false),
+                    .init(name: "deleteUnpushedCommits", summary: "true deletes the local branch, or a detached worktree, even with commits no remote has.", valueType: .boolean, required: false),
+                    .init(name: "discardChanges", summary: "true removes the worktree even with uncommitted changes.", valueType: .boolean, required: false),
+                ]
+            )
+        case .taskRelease:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Start a release task for a project whose tasks.toml section sets release_prompt. Toastty fetches the remote's default branch (the fetch must succeed) and starts the default agent with release_prompt in a new worktree on no branch at that commit, with the project's To ship tasks in its first message. Release tags matching release_tags mark tasks shipped. Uses the given workspace's project, or the calling agent's.",
+                selectors: [.windowID, .workspaceID]
+            )
         case .taskAdopt:
             return .init(
                 id: rawValue,
@@ -710,7 +788,11 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 kind: .query,
                 summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage or agentState changed since are listed, deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
                 selectors: [],
-                parameters: [.taskChangedSince(required: false), .taskIncludeReply(required: false)]
+                parameters: [
+                    .taskChangedSince(required: false),
+                    .taskIncludeReply(required: false),
+                    .init(name: "parent", summary: "List only the tasks this task started.", valueType: .uuid, required: false),
+                ]
             )
         case .taskWorkspaceChoices:
             return .init(
@@ -978,6 +1060,10 @@ private extension AppControlParameterDescriptor {
 
     static func taskIncludeReply(required: Bool) -> Self {
         .init(name: "includeReply", summary: "true adds each task's lastReply.", valueType: .boolean, required: required)
+    }
+
+    static func taskHead(required: Bool) -> Self {
+        .init(name: "head", summary: "The commit the merge checks ran on; the merge is refused if the checkout moved.", valueType: .string, required: required)
     }
 
     static func taskID(required: Bool) -> Self {

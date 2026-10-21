@@ -61,11 +61,9 @@ toastty setup guide [--topic onboarding|workflows] [--format text|md]
 
 The default `onboarding` topic is the agent-guided Getting Started guide. The
 `workflows` topic explains how to turn a user's way of working into a workflow
-skill: the Toastty building blocks, example workflows, and rules for writing
-one. It also prints the absolute path of the example skills bundled with the
-app (`Contents/Resources/WorkflowExamples/skills`, copied from this
-repository's `examples/skills`), which the agent copies and adapts into the
-user skills directory. The onboarding guide's "Pick a workflow" step reads it.
+skill: the Toastty building blocks, example workflows, how the built-in task
+lifecycle starts and merges tasks, and rules for writing one. The onboarding
+guide's "Pick a workflow" step reads it.
 
 The default `text` format is optimized for terminal reading. Use `--format md`
 when another agent or tool should preserve Markdown headings and code fences.
@@ -85,7 +83,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's six shipped skills and accepted
+The read-only inventory includes Toastty's seven shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -872,13 +870,20 @@ toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id>)
-toastty task list [--changed-since <cursor>] [--include-reply]
+toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices
 toastty task send <task-id> (<text> | --text-file <path>)
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
 toastty task adopt [--workspace <id>]
+toastty task merge [<task-id>] [--head <commit>]
+toastty task cancel-merge [<task-id>]
+toastty task clean-up <task-id>
+toastty task ready-for-review [<task-id>]
+toastty task mark-done <task-id>
+toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
+toastty task release [--workspace <id>]
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
@@ -912,8 +917,22 @@ agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition
 held, or 1 when it can never hold or `--timeout` ran out.
 
+`task merge` is what a merge skill runs once its checks pass; without a task
+ID it merges the calling agent's own task. Toastty merges at the checkout's
+commit, refuses with `--head` when the checkout moved past the checked commit,
+waits for checks that still run, and cleans up after the agent's turn ends.
+`task cancel-merge` stops a merge the user accepted. `task archive` closes a
+task without merging; it refuses with the reason, and `--close-pr`,
+`--delete-unpushed` and `--discard-changes` allow what it would otherwise
+refuse or leave. `task clean-up` retries a cleanup that stopped.
+`task ready-for-review` marks work without a pull request ready, and
+`task mark-done` finishes it. `task release` starts a release task for a
+project with `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
+[Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
+`task list --parent` lists the tasks one task started.
+
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.

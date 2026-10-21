@@ -15,6 +15,11 @@ struct WorkspaceHeaderMergeControl: View {
     var retryCleanup: () -> Void = {}
     var cancelCleanup: () -> Void = {}
     var closeWithoutMerging: () -> Void = {}
+    /// A task space: Merge goes through the task, which always cleans up,
+    /// and its menu offers the task's own choices instead of the modes.
+    var isTask = false
+    var mergeWithoutChecks: () -> Void = {}
+    var archiveTask: () -> Void = {}
 
     private var shortcut: ToasttyKeyboardShortcut { ToasttyKeyboardShortcuts.mergeWorkspacePullRequest }
 
@@ -30,26 +35,18 @@ struct WorkspaceHeaderMergeControl: View {
                     }
                 }
                 .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .leading))
-                .help(shortcut.helpText(helpText(for: mode)))
+                .help(shortcut.helpText(isTask ? taskHelpText : helpText(for: mode)))
                 .accessibilityLabel(presentation.title)
                 .accessibilityIdentifier("topbar.workspace.merge")
 
                 Menu {
-                    ForEach(WorkspaceMergeMode.allCases, id: \.self) { option in
-                        Toggle(
-                            option == mode ? shortcut.menuTitle(option.menuTitle) : option.menuTitle,
-                            isOn: Binding(
-                                get: { option == mode },
-                                set: { isOn in
-                                    if isOn { setMode(option) }
-                                }
-                            )
-                        )
+                    if isTask {
+                        Button("Merge Without Checks", action: mergeWithoutChecks)
+                        Divider()
+                        Button("Archive Task…", action: archiveTask)
+                    } else {
+                        modeMenuItems(mode: mode)
                     }
-                    // A one-off action, not a mode, so the button and its
-                    // shortcut never close a pull request.
-                    Divider()
-                    Button(WorkspaceMergePresentation.closeWithoutMergingTitle, action: closeWithoutMerging)
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 7, weight: .bold))
@@ -59,7 +56,7 @@ struct WorkspaceHeaderMergeControl: View {
                 .menuIndicator(.hidden)
                 .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .trailing, horizontalPadding: 4))
                 .fixedSize()
-                .help("Choose what the Merge button does")
+                .help(isTask ? "More ways to finish this task" : "Choose what the Merge button does")
                 .accessibilityLabel("Merge options")
                 .accessibilityIdentifier("topbar.workspace.merge.mode")
             }
@@ -96,6 +93,30 @@ struct WorkspaceHeaderMergeControl: View {
             .accessibilityLabel(presentation.title)
             .accessibilityIdentifier("topbar.workspace.merge.done")
         }
+    }
+
+    @ViewBuilder
+    private func modeMenuItems(mode: WorkspaceMergeMode) -> some View {
+        ForEach(WorkspaceMergeMode.allCases, id: \.self) { option in
+            Toggle(
+                option == mode ? shortcut.menuTitle(option.menuTitle) : option.menuTitle,
+                isOn: Binding(
+                    get: { option == mode },
+                    set: { isOn in
+                        if isOn { setMode(option) }
+                    }
+                )
+            )
+        }
+        // A one-off action, not a mode, so the button and its
+        // shortcut never close a pull request.
+        Divider()
+        Button(WorkspaceMergePresentation.closeWithoutMergingTitle, action: closeWithoutMerging)
+    }
+
+    private var taskHelpText: String {
+        "Merge \(pullRequestName) the task's way: its agent checks it first unless tasks.toml says merge = \"direct\". "
+            + "Toastty then closes the task space and removes its worktree"
     }
 
     private func helpText(for mode: WorkspaceMergeMode) -> String {

@@ -33,7 +33,6 @@ for (const [path, expected] of [
   ['Tests/BuildConfig/PushManifestTests.mjs', ['macos']],
   ['scripts/dev/bootstrap-worktree.sh', ['macos']],
   ['scripts/remote/test.sh', ['ios', 'macos']],
-  ['examples/skills/worktree-cleanup/scripts/worktree-status.py', ['macos']],
   ['.github/workflows/mobile-ios.yml', ['ios', 'macos', 'web']],
   ['.github/ci-paths.yml', ['ios', 'macos', 'web']],
   ['Tests/CI/workflow.test.mjs', ['ios', 'macos', 'web']],

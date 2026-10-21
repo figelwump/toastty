@@ -78,6 +78,9 @@ final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
     /// Set once at launch; runs what the Merge button asks for.
     var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Set once at launch; a task space's Merge button asks it first, so
+    /// the task's agent can check the pull request before it merges.
+    weak var taskCoordinator: TaskCoordinator?
     /// Set once at launch; exits an agent after its turn on request, and
     /// closes a phone-started session's pane after a clean agent exit.
     var sessionExitController: SessionExitController?
@@ -5460,7 +5463,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// A turn that starts from rest: working or waiting on approval after
     /// being idle, ready, errored, or new. Approval inside a turn and the
     /// ready at its end do not count, so the turn that marks a workspace done
-    /// (`worktree-done`, which is already working when it sets the mark)
+    /// (the merge skill's `task merge`, which runs while the agent works)
     /// does not reopen it.
     static func statusStartsNewWork(previousKind: SessionStatusKind?, nextKind: SessionStatusKind) -> Bool {
         func isBusy(_ kind: SessionStatusKind?) -> Bool {

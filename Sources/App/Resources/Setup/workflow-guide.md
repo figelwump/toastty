@@ -40,25 +40,11 @@ Match these to what the user works on and which tools they use. Issue trackers, 
 - **Crash to fix** ("fix this crash"): reproduces a Sentry report or log error in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.
 - **Second opinion** ("ask another model"): runs two agents side by side on the same question and compares their answers in a Scratchpad.
 
-## Worked example: finishing tasks
+## Worked example: the task lifecycle
 
-Toastty bundles example workflow skills, read-only, at:
+Starting and finishing a task needs no personal skill. The shipped `toastty-task-start` skill runs `toastty task start-work`, and Toastty makes the worktree and continues the conversation there. When the user presses Merge on a task, or says "merge it", the shipped `toastty-task-merge` skill checks the pull request: unresolved review threads, merge prerequisites in its description, tasks that must land first, and CI. If nothing blocks, it runs `toastty task merge`; otherwise it reports the blockers and stops. Toastty then merges at the commit the skill checked, waits for checks that still run, and after the agent's turn ends closes the task space and removes its worktree. The checks need an authenticated `gh` CLI.
 
-```text
-{{WORKFLOW_EXAMPLES_DIR}}
-```
-
-Starting a task in its own Git worktree needs no personal skill: the shipped `toastty-task-start` skill runs `toastty task start-work`, and Toastty makes the worktree and continues the conversation there. Two packages there finish the work. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
-
-To set it up for the user:
-
-1. Read the two `SKILL.md` files and the README.
-2. Ask what to adapt: the landing branch and remote, how PRs are reviewed and merged, and which checks must pass before a merge. Keep anything they do not want to change.
-3. Copy each package folder into the user skills directory as real files, keeping its subfolders and the executable permission on its scripts (for example, `cp -R`). Then make the agreed edits. Show the planned folders and edits first, and write only after an explicit OK.
-4. If a package with the same name already exists, do not overwrite it. Show how it differs from the bundled copy and ask whether to keep it, merge the changes, or move it aside.
-5. Install both packages together; they refer to each other.
-
-The examples are also a model for a custom workflow. `worktree-cleanup` checks its inputs, runs a script from its own folder, reports a verdict for each PR before it changes anything, and asks before it merges. A workflow that starts its own agents uses `agent.launch` and records every ID it creates.
+To change how a project merges, set its `merge_prompt` in `~/.toastty/tasks.toml` to name the user's own skill, or set `merge = "direct"` to merge without an agent. A custom merge skill decides, then calls `toastty task merge`; it does not merge with `gh` itself, so Toastty stays the one place that merges and cleans up.
 
 ## Rules for workflow skills
 

@@ -3395,7 +3395,8 @@ final class SidebarViewTests: XCTestCase {
                 store: store,
                 sessionRuntimeStore: sessionRuntimeStore,
                 pullRequests: PullRequestStateCache(runner: OfflineGitHub()),
-                refreshInterval: nil
+                refreshInterval: nil,
+                releaseCheckInterval: nil
             )
         } : nil
 

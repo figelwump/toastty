@@ -159,6 +159,39 @@ struct TaskStageTests {
         #expect(stage(.observed(doneAt: nil), review) == .needsYou(.review))
     }
 
+    // MARK: - Merge and cleanup
+
+    @Test
+    func aStoppedCleanupNeedsTheUserWhateverTheStageWouldBe() {
+        var merged = started(mergedAt: date)
+        merged.cleanupProblem = "the worktree has uncommitted changes"
+        #expect(stage(merged) == .needsYou(.cleanupStopped(reason: "the worktree has uncommitted changes")))
+
+        var archived = started()
+        archived.archivedAt = date
+        archived.cleanupProblem = "unsaved documents"
+        #expect(stage(archived) == .needsYou(.cleanupStopped(reason: "unsaved documents")))
+        #expect(stage(archived).group == .needsYou)
+
+        // The merge owner's own stopped request counts before the record does.
+        let live = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, cleanupProblem: "PR #7 was closed without merging.")
+        #expect(stage(started(mergedAt: date), live) == .needsYou(.cleanupStopped(reason: "PR #7 was closed without merging.")))
+    }
+
+    @Test
+    func aMergeUnderWayIsRunningUntilTheSkillStops() {
+        for activity in [TaskMergeActivity.checking, .merging, .waitingForChecks, .cleaningUp] {
+            let live = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true, merge: activity)
+            #expect(stage(started(), live) == .running, "\(activity)")
+        }
+        // A question from the agent still comes first.
+        let asking = TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput, pullRequest: openPR, merge: .checking)
+        #expect(stage(started(), asking) == .needsYou(.agentNeedsInput))
+        // The skill found a blocker and ended its turn: back to review.
+        let stopped = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(started(), stopped) == .needsYou(.review))
+    }
+
     @Test
     func finishedStagesLeaveTheSidebar() {
         #expect(TaskStage.toShip.isFinished)
@@ -173,7 +206,10 @@ struct TaskStageTests {
     func olderRecordsWithoutLifecycleFieldsStillDecode() throws {
         let record = TaskRecord(createdAt: date, text: "fix it", title: "fix it", slug: "fix-it", source: .cli, setup: .started)
         var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
-        for key in ["pullRequestURL", "readyForReviewAt", "mergedAt", "mergeCommit", "shippedAt", "releaseTag", "archivedAt", "doneAt"] {
+        for key in [
+            "pullRequestURL", "readyForReviewAt", "mergedAt", "mergeCommit", "shippedAt", "releaseTag", "archivedAt", "doneAt",
+            "mergeRequestedAt", "mergeCancelledAt", "cleanup", "release",
+        ] {
             object.removeValue(forKey: key)
         }
         let decoded = try JSONDecoder().decode(TaskRecord.self, from: JSONSerialization.data(withJSONObject: object))

@@ -526,13 +526,6 @@ let project = Project(
                     subpath: "ToasttyAgentPluginBundle/plugins",
                     files: [.folderReference(path: "plugins/toastty")]
                 ),
-                // Example workflow skills that the workflow guide tells agents to copy
-                // and adapt; SetupResourceResolver.workflowExamplesSubpath names this location.
-                .resources(
-                    name: "Bundle Workflow Example Skills",
-                    subpath: "WorkflowExamples",
-                    files: [.folderReference(path: "examples/skills")]
-                ),
             ],
             scripts: [
                 .post(

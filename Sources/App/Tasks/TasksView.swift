@@ -6,9 +6,13 @@ import SwiftUI
 /// it has tasks; To ship lists its tasks under one header per project.
 struct TasksViewSections: Equatable {
     struct Lane: Equatable, Identifiable {
+        /// The project's root directory, or its title for tasks without one:
+        /// two projects with the same title keep separate lanes.
+        let id: String
         let projectTitle: String
         let entries: [SidebarStatusSections.Entry]
-        var id: String { projectTitle }
+        /// Where Release starts a release; `nil` without `release_prompt`.
+        var releaseWorkspaceID: UUID? = nil
     }
 
     var inbox: [SidebarStatusSections.Entry] = []
@@ -18,7 +22,7 @@ struct TasksViewSections: Equatable {
     var done: [SidebarStatusSections.Entry] = []
     var archived: [SidebarStatusSections.Entry] = []
 
-    static func make(_ items: [TaskBoardItem]) -> Self {
+    static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
         func entries(_ group: TaskStage.Group) -> [SidebarStatusSections.Entry] {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
@@ -26,8 +30,15 @@ struct TasksViewSections: Equatable {
         sections.inbox = entries(.inbox)
         sections.needsYou = entries(.needsYou)
         sections.running = entries(.running)
-        sections.toShip = Dictionary(grouping: entries(.toShip), by: { $0.item.projectTitle ?? "Other" })
-            .map { Lane(projectTitle: $0.key, entries: $0.value) }
+        sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
+            .map { key, entries in
+                Lane(
+                    id: key,
+                    projectTitle: entries.first?.item.projectTitle ?? "Other",
+                    entries: entries,
+                    releaseWorkspaceID: entries.map(\.item).first(where: releasable)?.projectWorkspaceID
+                )
+            }
             .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
         sections.done = entries(.done)
         sections.archived = entries(.archived)
@@ -58,7 +69,7 @@ struct TasksView: View {
 
     var body: some View {
         let items = board.items()
-        let sections = TasksViewSections.make(items)
+        let sections = TasksViewSections.make(items, releasable: board.canRelease)
         let selected = selectedItem(in: items, sections: sections)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
@@ -187,11 +198,20 @@ struct TasksView: View {
             rows(sections.running, selectedID: selectedID)
             groupHeader(.toShip, count: sections.toShip.reduce(0) { $0 + $1.entries.count })
             ForEach(sections.toShip) { lane in
-                Text("\(lane.projectTitle) · \(lane.entries.count) \(lane.entries.count == 1 ? "task" : "tasks")")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 6)
+                HStack(spacing: 8) {
+                    Text("\(lane.projectTitle) · \(lane.entries.count) \(lane.entries.count == 1 ? "task" : "tasks")")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                    Spacer(minLength: 0)
+                    if let workspaceID = lane.releaseWorkspaceID, let coordinator = board.coordinator {
+                        TaskReleaseButton(title: "Release…") {
+                            TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
+                        }
+                        .accessibilityIdentifier("tasks.view.toShip.\(lane.projectTitle).release")
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 6)
                 rows(lane.entries, selectedID: selectedID)
             }
             collapsibleGroup(.done, entries: sections.done, isExpanded: $isDoneExpanded, selectedID: selectedID)
@@ -251,7 +271,21 @@ struct TasksView: View {
             TasksViewRow(entry: entry, isSelected: entry.id == selectedID) {
                 board.selectionByWindowID[windowID] = entry.id
             }
+            // The lazy stack kept a row's old drawing when its task moved to
+            // another group while the view showed, so a row is rebuilt
+            // whenever its group or status line changes.
+            .id(RowIdentity(
+                subject: entry.id,
+                group: entry.item.stage.group,
+                statusLine: TaskBoardPresentation.statusLine(entry.item)
+            ))
         }
+    }
+
+    private struct RowIdentity: Hashable {
+        let subject: TaskBoardItem.Subject
+        let group: TaskStage.Group
+        let statusLine: String
     }
 
     /// The chosen task, or the first one that needs the user, or the first.
@@ -523,6 +557,46 @@ private struct TasksViewDetail: View {
     }
 
     private var actions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            navigationActions
+            if let record = item.record, let coordinator = board.coordinator {
+                let buttons = TaskBoardPresentation.detailActions(item)
+                if buttons.isEmpty == false {
+                    HStack(spacing: 8) {
+                        ForEach(buttons, id: \.self) { action in
+                            taskActionButton(action, record: record, coordinator: coordinator)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func taskActionButton(_ action: TaskBoardPresentation.DetailAction, record: TaskRecord, coordinator: TaskCoordinator) -> some View {
+        Button(action.title) {
+            switch action {
+            case .merge:
+                perform { try coordinator.requestMerge(taskID: record.id) }
+            case .mergeWithoutChecks:
+                perform { try coordinator.requestMerge(taskID: record.id, route: .direct) }
+            case .cancelMerge:
+                perform { try coordinator.cancelMerge(taskID: record.id) }
+            case .markDone:
+                perform { _ = try coordinator.markDone(taskID: record.id) }
+            case .archive:
+                TaskActions.archive(taskID: record.id, coordinator: coordinator)
+            case .cleanUp:
+                perform { try coordinator.retryCleanup(taskID: record.id) }
+            case .keepAsIs:
+                perform { try coordinator.dismissCleanup(taskID: record.id) }
+            }
+        }
+        .buttonStyle(TasksViewButtonStyle(isPrimary: action.isPrimary))
+        .help(action.help)
+        .accessibilityIdentifier("tasks.view.detail.\(action)")
+    }
+
+    private var navigationActions: some View {
         HStack(spacing: 8) {
             if let workspaceID = item.taskSpaceWorkspaceID {
                 Button("Open Task Space") { openTaskSpace(workspaceID) }

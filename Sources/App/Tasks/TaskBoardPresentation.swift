@@ -41,8 +41,20 @@ enum TaskBoardPresentation {
             case .agentNeedsInput: return "\(agentName(item)) is waiting for your input"
             case .agentError: return "\(agentName(item)) stopped with an error"
             case .review, .readyForReview: return "Ready for your review"
+            case .cleanupStopped:
+                switch item.record?.cleanup?.kind {
+                case .archive?: return "⚠ archive stopped"
+                case .release?: return "Released · clean up?"
+                case .merge?, nil: return "Merged · clean up?"
+                }
             }
         case .running:
+            switch item.merge {
+            case .checking?, .merging?: return "Merging…"
+            case .waitingForChecks?: return "Waiting for checks"
+            case .cleaningUp?: return "Cleaning up…"
+            case nil: break
+            }
             switch item.agent {
             case .working: return "\(agentName(item)) · working"
             case .none: return "No agent running"
@@ -68,6 +80,7 @@ enum TaskBoardPresentation {
             case .review:
                 return ("Review", item.pullRequestState == nil ? "PR linked, agent idle" : "PR open, agent idle")
             case .readyForReview: return ("Review", "marked ready, agent idle")
+            case .cleanupStopped(let reason): return ("Needs you", reason)
             }
         case .running: return ("Running", statusLine(item))
         case .toShip: return ("To ship", "merged, waiting for a release tag")
@@ -76,6 +89,90 @@ enum TaskBoardPresentation {
             return ("Done", item.record?.mergedAt != nil || item.pullRequestState?.state == .merged ? "merged" : "marked done")
         case .archived: return ("Archived", "closed without finishing")
         }
+    }
+
+    /// The task actions the detail pane offers, in order.
+    enum DetailAction: Hashable, CustomStringConvertible {
+        case merge
+        case mergeWithoutChecks
+        case cancelMerge
+        case markDone
+        case archive
+        case cleanUp
+        case keepAsIs
+
+        var title: String {
+            switch self {
+            case .merge: "Merge"
+            case .mergeWithoutChecks: "Merge Without Checks"
+            case .cancelMerge: "Cancel Merge"
+            case .markDone: "Mark Done"
+            case .archive: "Archive…"
+            case .cleanUp: "Clean Up"
+            case .keepAsIs: "Keep As Is"
+            }
+        }
+
+        var isPrimary: Bool { self == .merge || self == .cleanUp }
+
+        var help: String {
+            switch self {
+            case .merge: "The task's agent checks the pull request, then merges it; Toastty then closes the task space and removes its worktree"
+            case .mergeWithoutChecks: "Merge the pull request now, without the agent's checks"
+            case .cancelMerge: "Stop the merge: the agent's check, or Toastty's wait for GitHub's checks"
+            case .markDone: "Finish the task without a merge"
+            case .archive: "Close the task without merging"
+            case .cleanUp: "Try the cleanup again"
+            case .keepAsIs: "Leave the task space and worktree as they are"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .merge: "merge"
+            case .mergeWithoutChecks: "mergeWithoutChecks"
+            case .cancelMerge: "cancelMerge"
+            case .markDone: "markDone"
+            case .archive: "archive"
+            case .cleanUp: "cleanUp"
+            case .keepAsIs: "keepAsIs"
+            }
+        }
+    }
+
+    static func detailActions(_ item: TaskBoardItem) -> [DetailAction] {
+        guard let record = item.record else { return [] }
+        if case .needsYou(.cleanupStopped) = item.stage {
+            return [.cleanUp, .keepAsIs]
+        }
+        switch item.merge {
+        case .checking?, .waitingForChecks?:
+            return [.cancelMerge]
+        case .merging?, .cleaningUp?:
+            return []
+        case nil:
+            break
+        }
+        switch item.stage {
+        case .needsYou(let attention) where attention.isBeforeStart == false && attention != .taskSpaceClosed:
+            break
+        case .running:
+            break
+        case .needsYou(.taskSpaceClosed):
+            return [.archive]
+        default:
+            return []
+        }
+        var actions: [DetailAction] = []
+        let hasOpenPullRequest = item.pullRequest != nil && item.pullRequestState?.state != .merged
+            && item.pullRequestState?.state != .closed
+        if hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
+            actions += [.merge, .mergeWithoutChecks]
+        } else if record.release == nil {
+            actions.append(.markDone)
+        }
+        actions.append(.archive)
+        return actions
     }
 
     static func pullRequestLine(_ item: TaskBoardItem) -> String? {
@@ -109,16 +206,29 @@ enum TaskBoardPresentation {
         guard let record = item.record else { return [] }
         var lines = ["Created" + (record.attachments.isEmpty ? "" : ", with \(record.attachments.count) \(record.attachments.count == 1 ? "attachment" : "attachments")")]
         if let worktree = record.worktree {
-            lines.append("Moved to worktree \(worktree.branch)")
+            if worktree.isDetached {
+                let at = record.operation.base.map { " at \($0.ref) (\($0.sha.prefix(8)))" } ?? ""
+                lines.append("Started in a worktree on no branch\(at)")
+            } else {
+                lines.append("Moved to worktree \(worktree.branch)")
+            }
         }
         if let link = item.pullRequest {
             lines.append("PR #\(link.number) opened")
         }
         if record.readyForReviewAt != nil { lines.append("Marked ready for review") }
+        if record.mergeRequestedAt != nil { lines.append("Merge accepted") }
+        if record.mergeCancelledAt != nil, record.mergeRequestedAt == nil { lines.append("Merge cancelled") }
+        if let release = record.release {
+            lines.append("Releasing \(release.childTaskIDs.count) \(release.childTaskIDs.count == 1 ? "task" : "tasks")")
+        }
         if record.mergedAt != nil { lines.append("Merged") }
         if let tag = record.releaseTag { lines.append("Shipped in \(tag)") }
         if record.doneAt != nil { lines.append("Marked done") }
         if record.archivedAt != nil { lines.append("Archived") }
+        if let cleanup = record.cleanup {
+            lines.append(contentsOf: cleanup.stepsDone.map { $0.prefix(1).uppercased() + $0.dropFirst() })
+        }
         return lines
     }
 }
@@ -146,7 +256,7 @@ struct TaskStageMark: View {
                         .frame(width: 9, height: 9)
                 case .agentError:
                     RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
-                case .agentNeedsInput, .taskSpaceClosed:
+                case .agentNeedsInput, .taskSpaceClosed, .cleanupStopped:
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(ToastyTheme.sessionNeedsApprovalText)
                         .frame(width: 7, height: 7)

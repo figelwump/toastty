@@ -5,6 +5,7 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive, .taskRelease,
              .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
@@ -50,6 +51,30 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskMerge:
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            let merged = try perform {
+                try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller())
+            }
+            return .init(didMutateState: true, result: Self.taskSnapshot(merged))
+        case .taskCancelMerge:
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            try perform { try coordinator.cancelMerge(taskID: record.id) }
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskCleanUp:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            try perform { try coordinator.retryCleanup(taskID: record.id) }
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskReadyForReview:
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            let updated = try perform { try coordinator.readyForReview(taskID: record.id) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskMarkDone:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            let updated = try perform { try coordinator.markDone(taskID: record.id) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskArchive:
+            throw AutomationSocketError.invalidPayload("task.archive checks git before it returns; send it through app_control.run_action")
         case .taskSend:
             let record = try visibleTask(args: args, coordinator: coordinator)
             guard let text = args.taskString("text") else {
@@ -119,6 +144,48 @@ extension AppControlExecutor {
         }
     }
 
+    /// The checks that need only the request's context; the git checks run
+    /// after an await.
+    func prepareTaskArchive(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, TaskArchiveOptions) {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try visibleTask(args: args, coordinator: coordinator)
+        let options = TaskArchiveOptions(
+            closePullRequest: try args.taskBool("closePullRequest") ?? false,
+            deleteUnpushedCommits: try args.taskBool("deleteUnpushedCommits") ?? false,
+            discardChanges: try args.taskBool("discardChanges") ?? false
+        )
+        return (coordinator, record.id, options)
+    }
+
+    func finishTaskArchive(_ coordinator: TaskCoordinator, taskID: UUID, options: TaskArchiveOptions) async throws -> AppControlActionOutcome {
+        do {
+            let record = try await coordinator.archive(taskID: taskID, options: options)
+            return .init(didMutateState: true, result: Self.taskSnapshot(record))
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    /// `task.release`, once the caller's access to the workspace is checked.
+    func runTaskRelease(workspaceID: UUID) throws -> AppControlActionOutcome {
+        let coordinator = try requiredTaskCoordinator()
+        let parentIDs = try requiredStore().state.subspaceParentIDsByWorkspaceID()
+        try enforceWorkspaceAutomationAccess(parentIDs[workspaceID] ?? workspaceID)
+        let record = try perform { try coordinator.release(workspaceID: workspaceID, caller: taskCaller()) }
+        return .init(didMutateState: true, result: Self.taskSnapshot(record))
+    }
+
+    /// The named task, or without a taskID the calling agent's own task.
+    private func ownOrVisibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
+        if args.taskString("taskID") == nil {
+            guard let own = coordinator.task(inWorkspace: callerManagedSession()?.workspaceID) else {
+                throw AutomationSocketError.invalidPayload("taskID is required outside a task's agent session")
+            }
+            return own
+        }
+        return try visibleTask(args: args, coordinator: coordinator)
+    }
+
     /// `task.adopt`, once the caller's access to the workspace is checked.
     func runTaskAdopt(workspaceID: UUID) throws -> AppControlActionOutcome {
         let coordinator = try requiredTaskCoordinator()
@@ -157,8 +224,14 @@ extension AppControlExecutor {
                 (record.id, TaskChangeFeed.Entry(snapshot: .object(snapshots[record.id] ?? [:]), visibility: Self.visibility(of: record)))
             })
             let changes = coordinator.changeFeed.observe(entries, since: args.taskString("changedSince"))
+            let parent = try args.taskString("parent").map { raw -> UUID in
+                guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("parent must be a task ID") }
+                return id
+            }
             let listed = records.filter { record in
-                callerMaySee(record) && (args.taskString("changedSince") == nil || changes.changedTaskIDs.contains(record.id))
+                callerMaySee(record)
+                    && (args.taskString("changedSince") == nil || changes.changedTaskIDs.contains(record.id))
+                    && (parent == nil || record.parentTaskID == parent)
             }
             let tasks = listed.map { record -> AutomationJSONValue in
                 guard includeReply else { return .object(snapshots[record.id] ?? [:]) }
@@ -207,6 +280,7 @@ extension AppControlExecutor {
         includeReply: Bool
     ) -> [String: AutomationJSONValue] {
         var snapshot = Self.taskSnapshot(record, stage: stage)
+        snapshot["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
         let status = coordinator.agentStatus(of: record)
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         snapshot["agentState"] = .object([
@@ -440,6 +514,9 @@ extension AppControlExecutor {
             case .agentError: result["attention"] = .string("agentError")
             case .review: result["attention"] = .string("review")
             case .readyForReview: result["attention"] = .string("readyForReview")
+            case .cleanupStopped(let reason):
+                result["attention"] = .string("cleanupStopped")
+                result["reason"] = .string(reason)
             }
         }
         return result
@@ -493,7 +570,27 @@ extension AppControlExecutor {
             "pullRequestURL": optional(record.pullRequestURL),
             "mergedAt": date(record.mergedAt),
             "mergeCommit": optional(record.mergeCommit),
+            "readyForReviewAt": date(record.readyForReviewAt),
+            "mergeRequestedAt": date(record.mergeRequestedAt),
+            "mergeCancelledAt": date(record.mergeCancelledAt),
+            "shippedAt": date(record.shippedAt),
+            "releaseTag": optional(record.releaseTag),
+            "doneAt": date(record.doneAt),
+            "archivedAt": date(record.archivedAt),
         ]
+        if let cleanup = record.cleanup {
+            snapshot["cleanup"] = .object([
+                "kind": .string(cleanup.kind.rawValue),
+                "stepsDone": .array(cleanup.stepsDone.map(AutomationJSONValue.string)),
+                "problem": optional(cleanup.problem),
+                "finishedAt": date(cleanup.finishedAt),
+            ])
+        }
+        if let release = record.release {
+            snapshot["release"] = .object([
+                "childTaskIDs": .array(release.childTaskIDs.map { .string($0.uuidString) }),
+            ])
+        }
         if let stage {
             snapshot["stage"] = .object(stageSnapshot(stage))
         }
@@ -511,7 +608,8 @@ extension AppControlExecutor {
             "branchPrefix": .string(startWork.branchPrefix),
             "requestedBase": optional(startWork.base),
             "path": optional(record.worktree?.path),
-            "branch": optional(record.worktree?.branch),
+            "branch": optional(record.worktree.flatMap { $0.isDetached ? nil : $0.branch }),
+            "detached": .bool(record.worktree?.isDetached ?? false),
             "baseSHA": optional(operation.base?.sha),
             "baseRef": optional(operation.base?.ref),
             "baseFetched": operation.base.map { .bool($0.fetched) } ?? .null,

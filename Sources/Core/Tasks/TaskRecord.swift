@@ -68,6 +68,18 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var archivedAt: Date?
     /// Finished by hand, for work that does not merge or ship.
     public var doneAt: Date?
+    /// When the user accepted the pull request for merging: a Merge click,
+    /// or the first `task.merge`. The merge itself may still be checked
+    /// by the agent, or wait for GitHub's checks.
+    public var mergeRequestedAt: Date?
+    /// When the user cancelled a merge. A `task.merge` from the same agent
+    /// turn is refused after it.
+    public var mergeCancelledAt: Date?
+    /// The steps that closed the task space and removed its worktree after
+    /// a merge, an archive, or a release, and why they stopped if they did.
+    public var cleanup: TaskCleanup?
+    /// Set on a release task: the tasks it releases.
+    public var release: TaskRelease?
     /// The task space, once setup made it.
     public var taskSpaceWorkspaceID: UUID? {
         operation.taskSpace?.workspaceID
@@ -121,6 +133,72 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// What closing a task's task space and worktree got done. Each step is
+/// saved as it finishes, so a retry skips what is done and a stop stays
+/// visible after the task space closes.
+public struct TaskCleanup: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        /// After the pull request merged.
+        case merge
+        /// Closing the task without merging.
+        case archive
+        /// After a release shipped.
+        case release
+    }
+
+    public var kind: Kind
+    /// What was done, in order, as the user reads it.
+    public var stepsDone: [String]
+    /// Why the cleanup stopped; `nil` while it runs and once it finished.
+    public var problem: String?
+    public var finishedAt: Date?
+    /// What the user chose for an archive, so a retry does the same.
+    public var archiveOptions: TaskArchiveOptions?
+
+    public init(
+        kind: Kind,
+        stepsDone: [String] = [],
+        problem: String? = nil,
+        finishedAt: Date? = nil,
+        archiveOptions: TaskArchiveOptions? = nil
+    ) {
+        self.kind = kind
+        self.stepsDone = stepsDone
+        self.problem = problem
+        self.finishedAt = finishedAt
+        self.archiveOptions = archiveOptions
+    }
+}
+
+/// What an archive may do beyond closing the task space and removing a
+/// clean worktree. Each is off unless the user chose it.
+public struct TaskArchiveOptions: Codable, Equatable, Sendable {
+    /// Close the pull request on GitHub. Its branch stays there either way.
+    public var closePullRequest: Bool
+    /// Delete the local branch even when some of its commits are on no
+    /// remote branch, or remove a detached worktree whose commit is on no
+    /// remote branch or tag.
+    public var deleteUnpushedCommits: Bool
+    /// Remove the worktree even with uncommitted changes.
+    public var discardChanges: Bool
+
+    public init(closePullRequest: Bool = false, deleteUnpushedCommits: Bool = false, discardChanges: Bool = false) {
+        self.closePullRequest = closePullRequest
+        self.deleteUnpushedCommits = deleteUnpushedCommits
+        self.discardChanges = discardChanges
+    }
+}
+
+/// What a release task releases. Its commit is the setup's pinned base.
+public struct TaskRelease: Codable, Equatable, Sendable {
+    /// The project's To ship tasks when the release started.
+    public var childTaskIDs: [UUID]
+
+    public init(childTaskIDs: [UUID]) {
+        self.childTaskIDs = childTaskIDs
+    }
+}
+
 /// A request to give a task its own git worktree, and how far it got.
 ///
 /// Two callers make one. `task.start-work` moves a running task: Toastty
@@ -157,19 +235,24 @@ public struct TaskStartWork: Codable, Equatable, Sendable {
     public var source: Source?
     public var requestedAt: Date
     public var state: TaskStartWorkState
+    /// A worktree on no branch, at the pinned commit: what a release task
+    /// builds from.
+    public var detached: Bool?
 
     public init(
         branchPrefix: String,
         base: String? = nil,
         source: Source? = nil,
         requestedAt: Date,
-        state: TaskStartWorkState = .running
+        state: TaskStartWorkState = .running,
+        detached: Bool? = nil
     ) {
         self.branchPrefix = branchPrefix
         self.base = base
         self.source = source
         self.requestedAt = requestedAt
         self.state = state
+        self.detached = detached
     }
 
     public static let defaultBranchPrefix = "task"
@@ -447,6 +530,8 @@ public struct TaskOperation: Codable, Equatable, Sendable {
 
     public struct Worktree: Codable, Equatable, Sendable {
         public var path: String
+        /// The branch the worktree is on. A detached worktree keeps the name
+        /// it was given, but no branch of that name exists.
         public var branch: String
         /// The repository's main checkout, where git commands for the
         /// worktree run.
@@ -454,12 +539,17 @@ public struct TaskOperation: Codable, Equatable, Sendable {
         /// `false` while the names are reserved and `git worktree add` has
         /// not finished.
         public var added: Bool
+        /// On no branch: `git worktree add --detach`.
+        public var detached: Bool?
 
-        public init(path: String, branch: String, checkoutRoot: String, added: Bool) {
+        public var isDetached: Bool { detached == true }
+
+        public init(path: String, branch: String, checkoutRoot: String, added: Bool, detached: Bool? = nil) {
             self.path = path
             self.branch = branch
             self.checkoutRoot = checkoutRoot
             self.added = added
+            self.detached = detached
         }
     }
 

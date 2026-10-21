@@ -18,7 +18,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             names,
             ToasttyAgentPluginBundle.skills.map(\.name).sorted()
         )
-        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 6)
+        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 7)
         // ToasttyAgentPluginBundle.read rejects symlinks, and one inside a
         // skill folder silently breaks delivery for every managed agent.
         let symlinks = try symbolicLinks(under: shippedSkillsURL())
@@ -307,35 +307,11 @@ final class SetupResourcesDriftTests: XCTestCase {
             mentionedIDs.subtracting(knownIDs).isEmpty,
             "Workflow guide mentions unknown app-control IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
         )
-        // The CLI replaces this with the bundled examples directory when it prints the guide.
-        XCTAssertTrue(guide.contains("{{WORKFLOW_EXAMPLES_DIR}}"))
-        for packageName in ["toastty-task-start", "worktree-done", "worktree-cleanup"] {
+        for packageName in ["toastty-task-start", "toastty-task-merge"] {
             XCTAssertTrue(guide.contains("`\(packageName)`"), "Workflow guide is missing \(packageName)")
         }
         for rule in ["`ok`", "`scope_denied`", "merging"] {
             XCTAssertTrue(guide.contains(rule), "Workflow guide is missing rule: \(rule)")
-        }
-    }
-
-    /// The app bundles `examples/skills`, and the workflow guide tells agents
-    /// to copy these packages onto user machines, where the user skill catalog
-    /// must accept them as they ship.
-    func testBundledExamplePackagesAreAcceptedUserSkills() throws {
-        let examplesURL = repoRootURL().appendingPathComponent("examples/skills", isDirectory: true)
-        let state = ToasttyUserSkillValidator().scan(userSkillsDirectoryURL: examplesURL).state
-        XCTAssertTrue(state.globalDiagnostics.isEmpty, "\(state.globalDiagnostics)")
-        XCTAssertEqual(
-            state.packages.map(\.name).sorted(),
-            ["worktree-cleanup", "worktree-done"]
-        )
-
-        for package in state.packages {
-            XCTAssertEqual(package.status, .accepted, package.name)
-            for fileURL in try regularFiles(under: package.sourceURL) {
-                let content = try String(contentsOf: fileURL, encoding: .utf8)
-                XCTAssertFalse(content.contains("/Users/vishal"), fileURL.path)
-                XCTAssertFalse(content.contains("TOASTTY_DEV_WORKTREE_ROOT"), fileURL.path)
-            }
         }
     }
 

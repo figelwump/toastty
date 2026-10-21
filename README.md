@@ -34,7 +34,7 @@ Toastty is a native macOS terminal multiplexer for coding agents, built on [Ghos
    Read the guide, narrate each step, dry-run every setup installer first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.
    ```
 
-3. **Pick a workflow.** Copy the [task workflow examples](examples/skills/README.md) into `~/.toastty/skills`, or describe how you work and let your agent write a skill there.
+3. **Pick a workflow.** Tasks start, merge and clean up with Toastty's shipped skills. Describe anything else you do the same way each time, and let your agent write a skill for it in `~/.toastty/skills`.
 
 To build from source, see [Building and Releasing](docs/building-and-releasing.md).
 
@@ -53,7 +53,7 @@ To build from source, see [Building and Releasing](docs/building-and-releasing.m
   </tr>
 </table>
 
-A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. Moving a task into its own Git worktree is built in: tell the task's agent to implement the work, and Toastty continues the conversation in a new worktree. The [task workflow examples](examples/skills/README.md) (`worktree-done` and `worktree-cleanup`) accept the reviewed PR and clean up merged worktrees. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a task space per PR to review, or split a spec into tasks.
+A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. The task lifecycle is built in: tell the task's agent to implement the work, and Toastty continues the conversation in a new worktree; press Merge on the task, and its agent checks the PR, Toastty merges it and cleans up the worktree. See [Tasks](docs/tasks.md). Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a task space per PR to review, or split a spec into tasks.
 
 ## Features
 
@@ -132,7 +132,7 @@ Everything above can be driven from scripts and skills through the bundled `toas
 "$TOASTTY_CLI_PATH" action run workspace.set-annotation --workspace "$WS" key=github-pr text="PR #128" url="$PR_URL"
 ```
 
-Run `"$TOASTTY_CLI_PATH" action list` and `query list` to see what the running app supports. See the [CLI reference](docs/cli-reference.md), the [socket protocol](docs/socket-protocol.md), and the [skill examples](examples/skills/README.md).
+Run `"$TOASTTY_CLI_PATH" action list` and `query list` to see what the running app supports. See the [CLI reference](docs/cli-reference.md) and the [socket protocol](docs/socket-protocol.md).
 
 ## Keyboard shortcuts
 
