@@ -125,6 +125,24 @@ background flush, nothing at exit), so `ToasttyAppDefaults` on Linux writes
 every change through; anything that bypasses `ToasttyAppDefaults.current`
 must call `synchronize()` itself.
 
+The GTK Preferences dialog persists each setting where the shared code reads
+it (`LinuxUIPreferences` with `AppLogicUIPreferenceStorage`, over
+`linux/Sources/ToasttyAppLogic/Bootstrap/LinuxAppLogic+Preferences.swift`),
+loaded before the first window is built:
+
+| Setting | Store |
+|---|---|
+| Ask Before Quitting | `AppStore.setAskBeforeQuitting` → `toastty.askBeforeQuitting` (`ToasttySettingsStore`, as the macOS menu toggle); the quit confirmation reads the same value |
+| Default Font Size | `terminal-font-size` in the Toastty `config` (the active line is rewritten, or the template's commented example is uncommented in place); startup, Reload Configuration and Ghostty config loads re-apply it |
+| Style (Linux only) | `toastty.linux.colorScheme` (`system`/`light`/`dark`) in `ToasttyAppDefaults.current`; `TOASTTY_LINUX_COLOR_SCHEME` overrides it for one run without saving |
+| Shortcut Hints (Linux only) | `toastty.linux.showsShortcutHintsWithAlt` |
+| Tab bar autohide (Linux only, no dialog row yet) | `toastty.linux.tabBarAutohide` |
+
+All of these follow runtime isolation (the isolated suite and config file)
+and, like `AppStore`'s own settings, are neither loaded nor saved in
+automation sessions, so scripted runs start from defaults. The reducer-only
+binding (`TOASTTY_LINUX_REDUCER_STORE=1`) keeps them in memory.
+
 Nothing in the shared modules uses Application Support or Caches, so no XDG
 data/cache mapping is needed there yet.
 
@@ -928,6 +946,13 @@ keys `remoteAccess`, `remotePairing`, `remoteQRCode`, `remoteEnabled`,
 `remoteOrigin`. `scripts/linux/e2e-app-logic.sh` runs this path;
 `RemoteAccessPersistenceTests` (panels tests) checks that the enable switch
 and tailnet origin survive a window-close / Quit restart.
+`PreferencesPersistenceTests` does the same for the Preferences dialog
+(script command `preferences style|ask-before-quitting|shortcut-hints|font-size <value>`
+on the open dialog; summary keys `prefStyle`, `appliedStyle`,
+`prefAskBeforeQuitting`, `sharedAskBeforeQuitting`, `prefShortcutHints`,
+`prefTabBarAutohide`, `defaultFontSize`, and `prefsDialog*` for the rows).
+Both use `RestartTestHarness` (non-automation launches sharing one isolated
+home on a private Broadway display).
 
 ### gtk-shell files edited by panels-remote
 

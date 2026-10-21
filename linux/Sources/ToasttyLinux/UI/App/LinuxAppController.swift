@@ -11,7 +11,7 @@ public final class LinuxAppController {
     public let application: OpaquePointer
     public let store: any LinuxStoreBinding
     public let hosts: PanelHostRegistry
-    public let preferences = LinuxUIPreferences()
+    public let preferences: LinuxUIPreferences
     public private(set) var windows: [UUID: LinuxWindowController] = [:]
     private var windowOrder: [UUID] = []
     private var observation: LinuxObservation?
@@ -51,9 +51,17 @@ public final class LinuxAppController {
         }
     }
 
-    public init(store: any LinuxStoreBinding, hosts: PanelHostRegistry = PanelHostRegistry(), nonUnique: Bool) {
+    /// `preferences` defaults to in-memory ones; the app-logic frontend
+    /// passes persistent ones (loaded before `startup` applies the style).
+    public init(
+        store: any LinuxStoreBinding,
+        hosts: PanelHostRegistry = PanelHostRegistry(),
+        preferences: LinuxUIPreferences? = nil,
+        nonUnique: Bool
+    ) {
         self.store = store
         self.hosts = hosts
+        self.preferences = preferences ?? LinuxUIPreferences()
         let flags = GApplicationFlags(rawValue: nonUnique ? 1 << 5 : 0) // G_APPLICATION_NON_UNIQUE
         application = OpaquePointer(adw_application_new(Self.applicationID, flags))
 

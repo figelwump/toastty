@@ -20,6 +20,8 @@ import Foundation
 ///     window-close                  # close the selected window (title-bar close button, Alt+F4)
 ///     sidebar-double-click 0        # double-click sidebar row 0 (rename)
 ///     alt-hints on|off              # show sidebar shortcut hints
+///     preferences style dark        # in the open Preferences dialog: style system|light|dark,
+///                                   # ask-before-quitting on|off, shortcut-hints on|off, font-size <points>
 ///     resize 1280 800
 ///     perform agent.run.claude      # run a window command by id (shortcut/button path)
 ///     sidebar-width 320             # as if the sidebar handle were dragged (also right-panel-width)
@@ -230,6 +232,15 @@ public final class AutomationScript {
                 settle(app: app)
             case "color-scheme":
                 if let scheme = LinuxColorSchemePreference(rawValue: argument) { app.preferences.colorScheme = scheme }
+            case "preferences":
+                // A row of the open Preferences dialog (`action app.preferences`).
+                let pieces = argument.split(separator: " ", maxSplits: 1).map(String.init)
+                guard let dialog = PreferencesDialog.current else { fail("preferences \(argument): the Preferences dialog is not open"); continue }
+                if let error = dialog.set(row: pieces.first ?? "", value: pieces.count > 1 ? pieces[1] : "") {
+                    fail("preferences \(argument): \(error)")
+                }
+                MainLoop.spin(untilMilliseconds: 20)
+                settle(app: app)
             case "quit":
                 for controller in app.orderedWindows { controller.destroy() }
                 g_application_quit(cast(app.application))
@@ -419,6 +430,13 @@ public final class AutomationScript {
         let windowIcon = gtk_window_get_icon_name(cast(controller.window)) ?? gtk_window_get_default_icon_name()
         result["windowIcon"] = windowIcon.map { String(cString: $0) } ?? "none"
         result["appIcon"] = AppIcon.resolvedFile().map { $0.hasPrefix("\(AppIcon.name).") ? "toastty" : $0 } ?? "missing"
+        // Preferences: the model, the applied style, the default font size,
+        // and (while it is open) what the Preferences dialog's rows show.
+        result.merge(app.preferences.summary()) { _, new in new }
+        result["defaultFontSize"] = LinuxUIPreferences.format(points: state.configuredTerminalFontBaselinePoints)
+        if let preferencesDialog = PreferencesDialog.current {
+            result.merge(preferencesDialog.widgetSummary()) { _, new in new }
+        }
         for contributor in summaryContributors {
             result.merge(contributor(app)) { _, new in new }
         }

@@ -150,7 +150,10 @@ extension ToasttyLinuxMain {
         }
         let logic = LinuxAppLogic(options: options)
         let binding = AppLogicStoreBinding(logic: logic)
-        let app = LinuxAppController(store: binding, nonUnique: nonUnique)
+        // Saved preferences load here, before startup applies the style and
+        // the first window is built.
+        let preferences = LinuxUIPreferences(storage: AppLogicUIPreferenceStorage(logic: logic))
+        let app = LinuxAppController(store: binding, preferences: preferences, nonUnique: nonUnique)
         app.automation = automation
         // Real desktop services once the application exists (alerts, URLs,
         // clipboard, notifications, dock badge, windows).
@@ -202,6 +205,10 @@ extension ToasttyLinuxMain {
                 return ["appKitActivations": "\(activations.became)/\(activations.resigned)"]
             }
         }
+        // `expect sharedAskBeforeQuitting=false`: the AppStore setting.
+        AutomationScript.summaryContributors.append { [weak logic] _ in
+            logic.map { ["sharedAskBeforeQuitting": String($0.askBeforeQuitting)] } ?? [:]
+        }
         Signal.connect(app.application, "activate", after: true) {
             MainLoop.idle { logic.markAutomationReady() }
         }
@@ -235,6 +242,27 @@ extension ToasttyLinuxMain {
 #endif
 
 #if TOASTTY_LINUX_APP_LOGIC
+/// Preferences in the stores macOS uses: Ask Before Quitting through
+/// `AppStore` (`toastty.askBeforeQuitting`), the default font size in the
+/// config file (`terminal-font-size`), Linux-only settings in
+/// `ToasttyAppDefaults.current` (`toastty.linux.*`). Automation sessions
+/// neither load nor save them (see `LinuxAppLogic+Preferences.swift`).
+@MainActor
+final class AppLogicUIPreferenceStorage: LinuxUIPreferenceStorage {
+    private let logic: LinuxAppLogic
+    init(logic: LinuxAppLogic) { self.logic = logic }
+
+    var askBeforeQuitting: Bool { logic.askBeforeQuitting }
+    func setAskBeforeQuitting(_ value: Bool) { logic.setAskBeforeQuitting(value) }
+    func bool(forKey key: String) -> Bool? { logic.linuxPreferenceBool(forKey: key) }
+    func string(forKey key: String) -> String? { logic.linuxPreferenceString(forKey: key) }
+    func set(_ value: Bool, forKey key: String) { logic.setLinuxPreference(value, forKey: key) }
+    func set(_ value: String, forKey key: String) { logic.setLinuxPreference(value, forKey: key) }
+    func setDefaultTerminalFontSize(points: Double) {
+        logic.setDefaultTerminalFontSize(points: points)
+    }
+}
+
 @MainActor
 final class AppLogicAgentLauncher: TerminalProfileShortcuts.AgentLaunching {
     private let logic: LinuxAppLogic

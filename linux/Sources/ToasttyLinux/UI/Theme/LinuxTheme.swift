@@ -43,6 +43,12 @@ public enum LinuxTheme {
         adw_style_manager_set_color_scheme(adw_style_manager_get_default(), preference.adwScheme)
     }
 
+    /// The preference whose scheme the style manager currently forces.
+    public static var appliedPreference: LinuxColorSchemePreference {
+        let scheme = adw_style_manager_get_color_scheme(adw_style_manager_get_default())
+        return LinuxColorSchemePreference.allCases.first { $0.adwScheme == scheme } ?? .system
+    }
+
     public static var isDark: Bool {
         adw_style_manager_get_dark(adw_style_manager_get_default()).bool
     }
