@@ -145,13 +145,26 @@ struct SidebarStatusSegment<RowContent: View>: View {
                 .padding(.horizontal, 8)
                 .padding(.top, 8)
                 .help("Show finished tasks in the Tasks view")
-                .accessibilityLabel("Done, \(sections.doneCount) tasks, opens the Tasks view")
+                .accessibilityLabel(Self.doneLabel(sections.doneCount))
                 .accessibilityIdentifier("sidebar.status.done")
+                .background {
+                    SidebarSemanticTextBridge(text: Self.doneLabel(sections.doneCount))
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 10)
         .accessibilityIdentifier("sidebar.status")
+    }
+
+    static func doneLabel(_ count: Int) -> String {
+        "Done, \(count) \(count == 1 ? "task" : "tasks"), opens the Tasks view"
+    }
+
+    static func laneLabel(_ lane: SidebarStatusSections.Lane) -> String {
+        "\(lane.projectTitle), \(lane.count) \(lane.count == 1 ? "task" : "tasks") to ship"
     }
 
     private func rows(_ entries: [SidebarStatusSections.Entry]) -> some View {
@@ -221,8 +234,13 @@ struct SidebarStatusSegment<RowContent: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarStatusRowButtonStyle())
-        .accessibilityLabel("\(lane.projectTitle), \(lane.count) tasks to ship")
+        .accessibilityLabel(Self.laneLabel(lane))
         .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle)")
+        .background {
+            SidebarSemanticTextBridge(text: Self.laneLabel(lane))
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -274,6 +292,11 @@ struct SidebarTaskRecordRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 5))
         .onTapGesture(perform: open)
         .onHover { isHovered = $0 }
+        .background {
+            SidebarSemanticTextBridge(text: "\(item.title), \(TaskBoardPresentation.statusLine(item))")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
         .accessibilityAddTraits(.isButton)

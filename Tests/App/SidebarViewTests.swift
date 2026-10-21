@@ -95,6 +95,14 @@ final class SidebarViewTests: XCTestCase {
         let hostingView: NSView
         let window: NSWindow
         var taskCoordinator: TaskCoordinator? = nil
+        var taskBoard: TaskBoardStore? = nil
+    }
+
+    /// `gh` that never answers, so stages come from links and the record.
+    private struct OfflineGitHub: WorkspaceMergeCommandRunning {
+        func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+            WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+        }
     }
 
     private struct MultiSessionSidebarHarness {
@@ -2010,7 +2018,8 @@ final class SidebarViewTests: XCTestCase {
     private func makeSubspacesHarness(
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
         additionalSubspaceCount: Int = 0,
-        taskRecords: [TaskRecord]? = nil
+        taskRecords: [TaskRecord]? = nil,
+        withTaskBoard: Bool = false
     ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
@@ -2082,7 +2091,13 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth, taskRecords: taskRecords)
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            sidebarWidth: sidebarWidth,
+            taskRecords: taskRecords,
+            withTaskBoard: withTaskBoard
+        )
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2186,6 +2201,46 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
         let emptied = renderedTextValues(in: harness.hostingView)
         XCTAssertFalse(emptied.contains { $0.hasPrefix("Inbox") }, "An empty Inbox should not render: \(emptied)")
+    }
+
+    func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
+        let pickWorkspace = TaskRecord(
+            createdAt: Date(),
+            text: "Billing page shows the old plan",
+            title: "Billing page shows the old plan",
+            slug: "billing-old-plan",
+            source: .cli,
+            setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [pickWorkspace], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        var textValues = renderedTextValues(in: harness.hostingView)
+
+        // Needs you: the agent asking for approval, the linked pull request
+        // with no agent working on it, and the task triage could not place.
+        XCTAssertTrue(textValues.contains("Tasks, 3 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
+        // The finished task space leaves its card; the footer counts it.
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
+
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
+        // The Inbox stays at the top of both segments.
+        XCTAssertTrue(textValues.contains("Inbox, 1 task"), "\(textValues)")
+        // Top-level workspaces show only in Projects.
+        XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
     }
 
     func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
@@ -3274,7 +3329,8 @@ final class SidebarViewTests: XCTestCase {
         state: AppState,
         windowID: UUID,
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
-        taskRecords: [TaskRecord]? = nil
+        taskRecords: [TaskRecord]? = nil,
+        withTaskBoard: Bool = false
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -3293,6 +3349,15 @@ final class SidebarViewTests: XCTestCase {
                 grantScope: { _, _ in }
             )
         }
+        let taskBoard = withTaskBoard ? taskCoordinator.map { coordinator in
+            TaskBoardStore(
+                coordinator: coordinator,
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore,
+                pullRequests: PullRequestStateCache(runner: OfflineGitHub()),
+                refreshInterval: nil
+            )
+        } : nil
 
         let sidebarView = SidebarView(
             windowID: windowID,
@@ -3301,6 +3366,8 @@ final class SidebarViewTests: XCTestCase {
             sessionRuntimeStore: sessionRuntimeStore,
             annotationStyleStore: makeTestAnnotationStyleStore(),
             taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard ?? .disabled,
+            newTask: withTaskBoard ? {} : nil,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
@@ -3328,7 +3395,8 @@ final class SidebarViewTests: XCTestCase {
             sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
             window: hostWindow,
-            taskCoordinator: taskCoordinator
+            taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard
         )
     }
 

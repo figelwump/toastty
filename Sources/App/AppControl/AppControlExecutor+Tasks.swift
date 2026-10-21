@@ -4,7 +4,8 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskAdopt: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskAdopt,
+             .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
     }

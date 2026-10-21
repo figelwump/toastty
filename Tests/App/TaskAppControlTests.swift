@@ -257,3 +257,67 @@ struct TaskAppControlTests {
         }
     }
 }
+
+extension TaskAppControlTests {
+    @Test func adoptGivesAnUntrackedTaskSpaceARecordOnce() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        let before = Set(fixture.store.state.workspacesByID.keys)
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: "qa-mobile-navigation", activate: false))
+        let taskSpace = try #require(Set(fixture.store.state.workspacesByID.keys).subtracting(before).first)
+        _ = fixture.store.send(.setWorkspaceParent(workspaceID: taskSpace, parentWorkspaceID: fixture.workspaceID, spawningSessionID: nil))
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #130", url: "https://github.com/example/toastty/pull/130")
+        ))
+
+        let adopted = try executor.runAction(id: "task.adopt", args: ["workspaceID": .string(taskSpace.uuidString)])
+        guard case .string(let rawID)? = adopted.result?["taskID"], let taskID = UUID(uuidString: rawID) else {
+            Issue.record("no taskID in \(String(describing: adopted.result))")
+            return
+        }
+        let record = try #require(fixture.record(taskID))
+        #expect(record.source == .adopted)
+        #expect(record.title == "qa-mobile-navigation")
+        #expect(record.workspaceID == fixture.workspaceID)
+        #expect(record.taskSpaceWorkspaceID == taskSpace)
+        #expect(record.pullRequestURL == "https://github.com/example/toastty/pull/130")
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.taskID == taskID)
+
+        // A second adopt returns the same task.
+        let again = try executor.runAction(id: "task.adopt", args: ["workspaceID": .string(taskSpace.uuidString)])
+        #expect(again.result?["taskID"] == .string(taskID.uuidString))
+        #expect(fixture.coordinator.records.records.count == 1)
+
+        // Only task spaces can become tasks.
+        do {
+            _ = try executor.runAction(id: "task.adopt", args: ["workspaceID": .string(fixture.workspaceID.uuidString)])
+            Issue.record("adopting a top-level workspace should fail")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message.contains("top-level workspace"))
+        }
+    }
+
+    @Test func windowActionsShowTheTasksViewAndSwitchTheSidebar() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        let args: [String: AutomationJSONValue] = ["windowID": .string(windowID.uuidString)]
+
+        _ = try executor.runAction(id: "window.tasks.show", args: args)
+        #expect(fixture.store.window(id: windowID)?.showsTasksView == true)
+        _ = try executor.runAction(id: "window.tasks.hide", args: args)
+        #expect(fixture.store.window(id: windowID)?.showsTasksView == false)
+
+        _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("status")]) { $1 })
+        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .status)
+        do {
+            _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("stages")]) { $1 })
+            Issue.record("an unknown segment should fail")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "segment must be projects or status")
+        }
+    }
+}
