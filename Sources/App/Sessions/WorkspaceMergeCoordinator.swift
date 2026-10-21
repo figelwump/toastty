@@ -195,6 +195,9 @@ final class WorkspaceMergeCoordinator {
 
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
+    /// Receives every answer from the merge polling, so tasks see merges
+    /// without asking GitHub a second time.
+    weak var pullRequestStateCache: PullRequestStateCache?
     private let runner: any WorkspaceMergeCommandRunning
     private let scriptPath: String?
     private let userDefaults: UserDefaults?
@@ -471,11 +474,15 @@ final class WorkspaceMergeCoordinator {
         }
         guard request.phase == .awaitingMerge else { return false }
         let number = request.pullRequest.number
+        let askedAt = Date()
         let result = await runner.run(
-            arguments: ["gh", "pr", "view", request.pullRequest.url, "--json", "state"],
+            arguments: ["gh", "pr", "view", request.pullRequest.url, "--json", PullRequestStateCache.viewFields],
             directory: request.repoPath,
             timeout: Self.pullRequestCheckTimeout
         )
+        if let state = PullRequestStateCache.state(from: result) {
+            pullRequestStateCache?.store(state, for: request.pullRequest, observedAt: askedAt)
+        }
         guard Task.isCancelled == false,
               requests[workspaceID] == request else { return false }
         switch Self.pullRequestState(from: result) {

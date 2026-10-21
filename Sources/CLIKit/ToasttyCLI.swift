@@ -917,6 +917,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task get|retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id>)
       toastty [--json] [--socket-path <path>] task list|workspace-choices
+      toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1901,6 +1902,20 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("task set-workspace takes --workspace or --recent\n\n\(usage)")
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-workspace", args: args))
+
+        case "adopt":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace"])
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("task adopt takes --workspace, or adopts the calling agent's task space\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let workspace = parsed.singleValue("--workspace") {
+                guard UUID(uuidString: workspace) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
+                }
+                args["workspaceID"] = .string(workspace)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.adopt", args: args))
 
         case "list", "workspace-choices":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])

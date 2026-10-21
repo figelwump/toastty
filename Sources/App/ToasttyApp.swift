@@ -684,6 +684,7 @@ struct ToasttyApp: App {
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
+    private let taskBoard: TaskBoardStore
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
@@ -1065,6 +1066,18 @@ struct ToasttyApp: App {
         )
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator
+        let pullRequestStateCache = PullRequestStateCache(
+            runner: WorkspaceMergeLiveCommandRunner(socketPath: socketPath, cliExecutablePath: cliExecutablePath)
+        )
+        sessionRuntimeStore.workspaceMergeCoordinator?.pullRequestStateCache = pullRequestStateCache
+        let taskBoard = TaskBoardStore(
+            coordinator: taskCoordinator,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            pullRequests: pullRequestStateCache
+        )
+        taskCoordinator.board = taskBoard
+        self.taskBoard = taskBoard
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }

@@ -7,15 +7,19 @@ import Foundation
 @MainActor
 enum SidebarSubspacePresentation {
     /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers an unread finished turn. `done` is the
-    /// workspace's done mark rather than a session state, so finished tasks
-    /// sink to the bottom.
+    /// always win; `ready` covers an unread finished turn. `review` and
+    /// `toShip` come from the task's stage: a pull request waiting for the
+    /// user, and a merge waiting for a release. `done` is the workspace's
+    /// done mark or the task's stage rather than a session state, so finished
+    /// tasks sink to the bottom.
     enum RowStatus: Int, Comparable, Sendable {
         case ready = 0
         case needsApproval
         case error
+        case review
         case working
         case idle
+        case toShip
         case done
 
         static func < (lhs: RowStatus, rhs: RowStatus) -> Bool {
@@ -35,7 +39,7 @@ enum SidebarSubspacePresentation {
             case .error: return 3
             case .ready: return 2
             case .working: return 1
-            case .idle, .done: return 0
+            case .idle, .review, .toShip, .done: return 0
             }
         }
     }
@@ -56,6 +60,19 @@ enum SidebarSubspacePresentation {
         let id: UUID
         let title: String
         let status: RowStatus
+        /// The task's stage, when the task system is on.
+        var stage: TaskStage? = nil
+        /// The project the row belongs to, shown where rows from several
+        /// projects share a list.
+        var projectTag: String? = nil
+        /// The task space of the task that started this one, when an agent
+        /// split its work. The row draws under that one.
+        var linkedParentID: UUID? = nil
+        /// Set when the row draws under its parent in this list.
+        var isLinkedChild = false
+        /// How many of the tasks this one started have merged, such as
+        /// "1/3 merged".
+        var childProgressLabel: String? = nil
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
         var isDone: Bool { doneAt != nil }
@@ -96,7 +113,7 @@ enum SidebarSubspacePresentation {
                 return nil
             case .done:
                 return [doneAt, latestActivityAt].compactMap { $0 }.max()
-            case .idle:
+            case .idle, .review, .toShip:
                 return latestActivityAt
             case .ready, .needsApproval, .error:
                 return sessions.lazy.filter {
@@ -137,8 +154,9 @@ enum SidebarSubspacePresentation {
         var ready = 0
         var needsApproval = 0
         var error = 0
+        var review = 0
 
-        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 }
+        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 && review == 0 }
     }
 
     /// Tone of the ⑂ chip on a spawning session's row.
@@ -166,8 +184,40 @@ enum SidebarSubspacePresentation {
     static func rowStatus(sessionStatus: RowStatus, isDone: Bool) -> RowStatus {
         guard isDone else { return sessionStatus }
         switch sessionStatus {
-        case .idle, .ready, .done: return .done
+        case .idle, .ready, .done, .review, .toShip: return .done
         case .needsApproval, .error, .working: return sessionStatus
+        }
+    }
+
+    /// The same, with the task's stage: a working agent or one that wants
+    /// the user still shows first, since the user may need to act; a quiet
+    /// task space shows where its task stands.
+    static func rowStatus(sessionStatus: RowStatus, isDone: Bool, stage: TaskStage?) -> RowStatus {
+        switch sessionStatus {
+        case .needsApproval, .error, .working:
+            return sessionStatus
+        case .idle, .ready, .review, .toShip, .done:
+            break
+        }
+        switch stage {
+        case .needsYou(.review)?, .needsYou(.readyForReview)?:
+            return .review
+        case .toShip?:
+            return .toShip
+        case .done?, .archived?:
+            return .done
+        case .inbox?, .running?, .needsYou?, nil:
+            return rowStatus(sessionStatus: sessionStatus, isDone: isDone)
+        }
+    }
+
+    /// Whether a project's Task Spaces group leaves the row out: its task
+    /// is finished and nothing in it is running or waiting for the user.
+    /// The Tasks view still lists it.
+    static func isHiddenAsFinished(_ row: Row) -> Bool {
+        switch row.status {
+        case .done, .toShip: true
+        case .ready, .needsApproval, .error, .review, .working, .idle: false
         }
     }
 
@@ -273,6 +323,35 @@ enum SidebarSubspacePresentation {
         return result
     }
 
+    /// Draws each linked child right under the task that started it, in
+    /// the order the children already had. A child whose parent is not in
+    /// the list keeps its own place.
+    static func groupingLinkedChildren(_ rows: [Row]) -> [Row] {
+        // One level only: a child's own children draw as top-level rows.
+        let rowIDs = Set(rows.map(\.id))
+        let topLevelIDs = Set(rows.filter { row in
+            row.linkedParentID.map { $0 == row.id || rowIDs.contains($0) == false } ?? true
+        }.map(\.id))
+        let childrenByParentID = Dictionary(grouping: rows.filter { row in
+            row.linkedParentID.map(topLevelIDs.contains) == true && topLevelIDs.contains(row.id) == false
+        }, by: { $0.linkedParentID! })
+        guard childrenByParentID.isEmpty == false else { return rows }
+        let childIDs = Set(childrenByParentID.values.flatMap { $0.map(\.id) })
+        var result: [Row] = []
+        for row in rows where childIDs.contains(row.id) == false {
+            result.append(row)
+            for var child in childrenByParentID[row.id] ?? [] {
+                child.isLinkedChild = true
+                result.append(child)
+            }
+        }
+        return result
+    }
+
+    static func childProgressLabel(merged: Int, total: Int) -> String {
+        "\(merged)/\(total) merged"
+    }
+
     static func filteredRows(_ rows: [Row], spawningSessionID: String?) -> [Row] {
         guard let spawningSessionID else { return rows }
         return rows.filter { $0.spawningSessionID == spawningSessionID }
@@ -284,7 +363,8 @@ enum SidebarSubspacePresentation {
             case .ready: tally.ready += 1
             case .needsApproval: tally.needsApproval += 1
             case .error: tally.error += 1
-            case .working, .idle, .done: break
+            case .review: tally.review += 1
+            case .working, .idle, .toShip, .done: break
             }
         }
     }
@@ -347,8 +427,8 @@ enum SidebarSubspacePresentation {
     /// error mark is about the agent, not the task.
     static func showsDoneToggle(_ row: Row) -> Bool {
         switch row.status {
-        case .idle, .ready, .done: return true
-        case .needsApproval, .error, .working: return false
+        case .idle, .ready, .done, .review: return true
+        case .needsApproval, .error, .working, .toShip: return false
         }
     }
 
@@ -375,6 +455,7 @@ enum SidebarSubspacePresentation {
         if tally.ready > 0 { components.append("\(tally.ready) ready") }
         if tally.needsApproval > 0 { components.append("\(tally.needsApproval) need approval") }
         if tally.error > 0 { components.append("\(tally.error) with errors") }
+        if tally.review > 0 { components.append("\(tally.review) ready for review") }
         return components.joined(separator: ", ")
     }
 
@@ -385,8 +466,13 @@ enum SidebarSubspacePresentation {
         case .needsApproval: components.append("needs approval")
         case .error: components.append("error")
         case .working: components.append(row.isWaiting ? "waiting" : "working")
+        case .review: components.append("ready for review")
+        case .toShip: components.append("merged, to ship")
         case .done: components.append("done")
         case .idle: break
+        }
+        if let projectTag = row.projectTag {
+            components.append("in \(projectTag)")
         }
         if let rowAnnotation = row.rowAnnotation {
             components.append(rowAnnotation.annotation.text)

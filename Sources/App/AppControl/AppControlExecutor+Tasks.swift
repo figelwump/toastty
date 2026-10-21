@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskAdopt: true
         default: false
         }
     }
@@ -28,7 +28,7 @@ extension AppControlExecutor {
         case .taskRetry:
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.retry(taskID: record.id) }
-            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
         case .taskStartWork:
             let request = TaskStartWorkRequest(
                 branchPrefix: args.taskString("branchPrefix"),
@@ -48,7 +48,7 @@ extension AppControlExecutor {
             let choice = try taskWorkspaceChoice(args: args)
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
-            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map(Self.taskSnapshot))
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }
@@ -71,13 +71,24 @@ extension AppControlExecutor {
         }
     }
 
+    /// `task.adopt`, once the caller's access to the workspace is checked.
+    func runTaskAdopt(workspaceID: UUID) throws -> AppControlActionOutcome {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try perform { try coordinator.adopt(workspaceID: workspaceID) }
+        return .init(didMutateState: true, result: Self.taskSnapshot(record, stage: Self.stagesByTaskID(coordinator.board)[record.id]))
+    }
+
     func runTaskQuery(_ query: AppControlQueryID, args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
         let coordinator = try requiredTaskCoordinator()
         switch query {
         case .taskGet:
-            return Self.taskSnapshot(try visibleTask(args: args, coordinator: coordinator))
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            return Self.taskSnapshot(record, stage: Self.stagesByTaskID(coordinator.board)[record.id])
         case .taskList:
-            let tasks = coordinator.records.records.filter(callerMaySee).map { AutomationJSONValue.object(Self.taskSnapshot($0)) }
+            let stages = Self.stagesByTaskID(coordinator.board)
+            let tasks = coordinator.records.records.filter(callerMaySee).map {
+                AutomationJSONValue.object(Self.taskSnapshot($0, stage: stages[$0.id]))
+            }
             return ["tasks": .array(tasks)]
         case .taskWorkspaceChoices:
             return workspaceChoicesSnapshot(coordinator.workspaceChoices())
@@ -233,8 +244,39 @@ extension AppControlExecutor {
         }
     }
 
-    static func taskSnapshot(_ record: TaskRecord) -> [String: AutomationJSONValue] {
+    private static func stagesByTaskID(_ board: TaskBoardStore?) -> [UUID: TaskStage] {
+        guard let board else { return [:] }
+        return Dictionary(board.items().compactMap { item in item.taskID.map { ($0, item.stage) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// `stage` as `{group, attention?, reason?}`: the group the Tasks view
+    /// lists the task in, and why it needs the user.
+    static func stageSnapshot(_ stage: TaskStage) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = ["group": .string("\(stage.group)"), "needsUser": .bool(stage.needsUser)]
+        if case .needsYou(let attention) = stage {
+            switch attention {
+            case .pickWorkspace(let reason):
+                result["attention"] = .string("pickWorkspace")
+                result["reason"] = .string(reason)
+            case .setupFailed(let reason):
+                result["attention"] = .string("setupFailed")
+                result["reason"] = .string(reason)
+            case .moveFailed(let reason):
+                result["attention"] = .string("moveFailed")
+                result["reason"] = .string(reason)
+            case .taskSpaceClosed: result["attention"] = .string("taskSpaceClosed")
+            case .agentNeedsInput: result["attention"] = .string("agentNeedsInput")
+            case .agentError: result["attention"] = .string("agentError")
+            case .review: result["attention"] = .string("review")
+            case .readyForReview: result["attention"] = .string("readyForReview")
+            }
+        }
+        return result
+    }
+
+    static func taskSnapshot(_ record: TaskRecord, stage: TaskStage? = nil) -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        func date(_ value: Date?) -> AutomationJSONValue { optional(value.map { ISO8601DateFormatter().string(from: $0) }) }
         var setup: [String: AutomationJSONValue]
         switch record.setup {
         case .routing:
@@ -276,7 +318,13 @@ extension AppControlExecutor {
             "files": .array(record.attachments.map { .string($0.path) }),
             "setup": .object(setup),
             "sessionID": optional(record.currentSessionID),
+            "pullRequestURL": optional(record.pullRequestURL),
+            "mergedAt": date(record.mergedAt),
+            "mergeCommit": optional(record.mergeCommit),
         ]
+        if let stage {
+            snapshot["stage"] = .object(stageSnapshot(stage))
+        }
         if let startWork = record.startWork {
             snapshot["worktree"] = .object(worktreeSnapshot(record, startWork: startWork))
         }

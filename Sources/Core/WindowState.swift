@@ -1,5 +1,12 @@
 import Foundation
 
+/// How a window's sidebar groups its rows: by project, as workspace cards,
+/// or by task stage.
+public enum SidebarSegment: String, Codable, CaseIterable, Sendable {
+    case projects
+    case status
+}
+
 public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public static let defaultSidebarWidthBeforeAgentLaunch: Double = 180
     public static let defaultSidebarWidthAfterAgentLaunch: Double = 280
@@ -15,6 +22,10 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var sidebarWidthPointsOverride: Double?
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
+    public var sidebarSegment: SidebarSegment
+    /// Whether the Tasks view covers the workspace content. Not saved: a
+    /// relaunch opens the workspace the window had selected.
+    public var showsTasksView: Bool
 
     public init(
         id: UUID,
@@ -24,7 +35,9 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         sidebarVisible: Bool = true,
         sidebarWidthPointsOverride: Double? = nil,
         terminalFontSizePointsOverride: Double? = nil,
-        markdownTextScaleOverride: Double? = nil
+        markdownTextScaleOverride: Double? = nil,
+        sidebarSegment: SidebarSegment = .projects,
+        showsTasksView: Bool = false
     ) {
         self.id = id
         self.frame = frame
@@ -34,6 +47,8 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.sidebarWidthPointsOverride = Self.normalizedSidebarWidthOverride(sidebarWidthPointsOverride)
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
+        self.sidebarSegment = sidebarSegment
+        self.showsTasksView = showsTasksView
     }
 
     public static func clampedSidebarWidth(_ width: Double) -> Double {
@@ -69,6 +84,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case sidebarWidthPointsOverride
         case terminalFontSizePointsOverride
         case markdownTextScaleOverride
+        case sidebarSegment
     }
 
     public init(from decoder: Decoder) throws {
@@ -94,6 +110,9 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
                 forKey: .markdownTextScaleOverride
             )
         )
+        // An unknown segment from a newer version falls back to projects.
+        sidebarSegment = (try? container.decodeIfPresent(SidebarSegment.self, forKey: .sidebarSegment)) ?? .projects
+        showsTasksView = false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -106,5 +125,6 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(sidebarWidthPointsOverride, forKey: .sidebarWidthPointsOverride)
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
         try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
+        try container.encode(sidebarSegment, forKey: .sidebarSegment)
     }
 }

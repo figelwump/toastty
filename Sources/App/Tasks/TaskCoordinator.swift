@@ -197,6 +197,8 @@ final class TaskCoordinator {
     var flushLayout: () -> Void = {}
     /// Set once the session store exists. Without it, tasks cannot move.
     var sessions: (any TaskSessionProviding)?
+    /// The live view of every task's stage, for queries that report it.
+    weak var board: TaskBoardStore?
 
     init(
         records: TaskRecordStore,
