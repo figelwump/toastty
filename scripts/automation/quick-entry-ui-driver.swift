@@ -13,6 +13,12 @@
 //   windows <pid>                       prints the app's windows as JSON
 //   value <pid> <identifier>            prints an element's value or title
 //   press-menu <pid> <identifier> <item-title>
+//   activate-pid <pid>                  makes an app frontmost by process ID
+//   frontmost-pid                       prints the frontmost app's process ID
+//   frame <pid> <identifier>            prints an element's frame: x y width height
+//   drag <from-x> <from-y> <to-x> <to-y>
+//                                       drags with the mouse between two points
+//   pasteboard-text <text>              puts text on the general pasteboard
 //   pasteboard-png <path>               puts a PNG on the general pasteboard
 
 import AppKit
@@ -225,6 +231,71 @@ case "focused":
     ]
     let data = try JSONSerialization.data(withJSONObject: described)
     print(String(decoding: data, as: UTF8.self))
+
+case "activate-pid":
+    guard arguments.count == 2, let pid = pid_t(arguments[1]),
+          let app = NSRunningApplication(processIdentifier: pid) else {
+        fail("activate-pid <pid>")
+    }
+    app.activate(options: [])
+    AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+
+case "frontmost-pid":
+    print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+
+case "frame":
+    // An element's frame as "x y width height", in global coordinates with
+    // the origin at the top left, as CGEvent uses.
+    guard arguments.count == 3 else { fail("frame <pid> <identifier>") }
+    guard let found = element(in: application(arguments[1]), identifier: arguments[2]) else {
+        fail("no element \(arguments[2])")
+    }
+    var origin = CGPoint.zero, size = CGSize.zero
+    guard let position = attribute(found, kAXPositionAttribute), let extent = attribute(found, kAXSizeAttribute),
+          AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+          AXValueGetValue(extent as! AXValue, .cgSize, &size) else {
+        fail("no frame for \(arguments[2])")
+    }
+    print("\(origin.x) \(origin.y) \(size.width) \(size.height)")
+
+case "drag":
+    // Presses at one point, moves in steps to another, waits there so the
+    // destination sees the drag, and releases.
+    let values = arguments.dropFirst().compactMap(Double.init)
+    guard arguments.count == 5, values.count == 4 else {
+        fail("drag <from-x> <from-y> <to-x> <to-y>")
+    }
+    let from = CGPoint(x: values[0], y: values[1]), to = CGPoint(x: values[2], y: values[3])
+    let source = CGEventSource(stateID: .hidSystemState)
+    func mouse(_ type: CGEventType, _ point: CGPoint) {
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+            fail("could not make a mouse event")
+        }
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+    }
+    mouse(.mouseMoved, from)
+    usleep(200_000)
+    mouse(.leftMouseDown, from)
+    usleep(200_000)
+    let steps = 30
+    for index in 1...steps {
+        let t = Double(index) / Double(steps)
+        mouse(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+        usleep(25_000)
+    }
+    for offset in [1.0, 2.0, 1.0, 0.0] {
+        mouse(.leftMouseDragged, CGPoint(x: to.x + offset, y: to.y))
+        usleep(120_000)
+    }
+    mouse(.leftMouseUp, to)
+    usleep(300_000)
+
+case "pasteboard-text":
+    guard arguments.count == 2 else { fail("pasteboard-text <text>") }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(arguments[1], forType: .string)
 
 case "pasteboard-png":
     guard arguments.count == 2, let data = FileManager.default.contents(atPath: arguments[1]) else {
