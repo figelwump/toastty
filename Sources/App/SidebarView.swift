@@ -527,6 +527,16 @@ struct SessionStatusBadge: View {
 /// row holds. A plain reference rather than SwiftUI state: the group records
 /// it while computing its order, where state writes are not allowed, and the
 /// pin must be in place in the same update that reads the jumped-to row.
+/// The task board as of the sidebar's last body pass. Built once per pass
+/// and read by the header, the Status segment, card footers and rows, so a
+/// redraw does not rebuild the board for every card. A plain reference for
+/// the same reason as `SubspaceOrderMemory`.
+@MainActor
+private final class SidebarTaskBoardSnapshot {
+    var windowItems: [TaskBoardItem] = []
+    var allItems: [TaskBoardItem] = []
+}
+
 @MainActor
 private final class SubspaceOrderMemory {
     var displayedOrderByParentID: [UUID: [UUID]] = [:]
@@ -614,6 +624,7 @@ struct SidebarView: View {
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
+    @State private var taskBoardSnapshot = SidebarTaskBoardSnapshot()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
     @State private var optionKeyPressed = false
@@ -795,7 +806,8 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        refreshTaskBoardSnapshot()
+        return VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -998,13 +1010,24 @@ struct SidebarView: View {
         }
     }
 
+    private func refreshTaskBoardSnapshot() {
+        guard taskBoard.isEnabled else {
+            taskBoardSnapshot.windowItems = []
+            taskBoardSnapshot.allItems = []
+            return
+        }
+        let all = taskBoard.items()
+        taskBoardSnapshot.allItems = all
+        taskBoardSnapshot.windowItems = TaskBoard.items(all, in: windowID, state: store.state)
+    }
+
     private var sidebarSegment: SidebarSegment {
         store.window(id: windowID)?.sidebarSegment ?? .projects
     }
 
     private var tasksHeader: some View {
         SidebarTasksHeader(
-            needsYouCount: taskBoard.items(windowID: windowID).filter(\.stage.needsUser).count,
+            needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count,
             isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
             segment: sidebarSegment,
             openTasksView: { openTasksView(selecting: nil) },
@@ -1027,7 +1050,7 @@ struct SidebarView: View {
     /// Inbox the sidebar always shows.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let sections = SidebarStatusSections.make(taskBoard.items(windowID: windowID))
+        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems)
         return SidebarStatusSegment(sections: sections, openTasksView: openTasksView(selecting:)) { entry in
             if let workspaceID = entry.item.taskSpaceWorkspaceID,
                let workspace = store.state.workspacesByID[workspaceID] {
@@ -1053,7 +1076,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func finishedTasksFooter(projectWorkspaceID: UUID) -> some View {
         if taskBoard.isEnabled {
-            let items = taskBoard.items(windowID: windowID).filter { $0.projectWorkspaceID == projectWorkspaceID }
+            let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
             let toShip = items.filter { $0.stage == .toShip }.count
             let done = items.filter { $0.stage == .done }.count
             if toShip > 0 || done > 0 {
@@ -3547,7 +3570,7 @@ struct SidebarView: View {
     private func childProgressLabel(ofTaskID taskID: UUID) -> String? {
         guard let coordinator = taskCoordinator,
               coordinator.records.records.contains(where: { $0.parentTaskID == taskID }) else { return nil }
-        guard let progress = TaskBoard.childProgress(of: taskID, items: taskBoard.items()) else { return nil }
+        guard let progress = TaskBoard.childProgress(of: taskID, items: taskBoardSnapshot.allItems) else { return nil }
         return SidebarSubspacePresentation.childProgressLabel(merged: progress.merged, total: progress.total)
     }
 
