@@ -223,6 +223,8 @@ extension SessionRuntimeStoreTests {
         ).first?.children.first)
         #expect(child.displayName == "native_nav_sort")
         #expect(child.context == nil)
+        #if os(macOS)
+        // SidebarView (SwiftUI) builds the hover tip model.
         let hoverTip = SidebarView.sessionChildHoverTipModel(
             child: child,
             workspaceName: nil,
@@ -231,6 +233,7 @@ extension SessionRuntimeStoreTests {
         )
         #expect(hoverTip.name == "native_nav_sort")
         #expect(hoverTip.bodyText == nil)
+        #endif
 
         #expect(store.handleCodexHookEvent(
             sessionID: sessionID,

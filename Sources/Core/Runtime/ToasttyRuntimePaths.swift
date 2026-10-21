@@ -45,6 +45,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private let homeDirectoryPath: String
     private let temporaryDirectoryPath: String
     private let userSkillsRootOverridePath: String?
+    #if os(Linux)
+    /// `$XDG_STATE_HOME` (default `~/.local/state`); holds the user-home log.
+    private let stateHomeDirectoryPath: String
+    #endif
 
     private init(
         runtimeHomeURL: URL?,
@@ -53,7 +57,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         runtimeLabel: String?,
         homeDirectoryPath: String,
         temporaryDirectoryPath: String,
-        userSkillsRootOverridePath: String?
+        userSkillsRootOverridePath: String?,
+        stateHomeDirectoryPath: String
     ) {
         self.runtimeHomeURL = runtimeHomeURL
         self.runtimeHomeStrategy = runtimeHomeStrategy
@@ -62,6 +67,9 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         self.homeDirectoryPath = homeDirectoryPath
         self.temporaryDirectoryPath = temporaryDirectoryPath
         self.userSkillsRootOverridePath = userSkillsRootOverridePath
+        #if os(Linux)
+        self.stateHomeDirectoryPath = stateHomeDirectoryPath
+        #endif
     }
 
     public var isRuntimeHomeEnabled: Bool {
@@ -96,9 +104,15 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
                 .appending(path: Self.logFileName, directoryHint: .notDirectory)
         }
 
+        #if os(Linux)
+        return URL(filePath: stateHomeDirectoryPath)
+            .appending(path: "toastty", directoryHint: .isDirectory)
+            .appending(path: Self.logFileName, directoryHint: .notDirectory)
+        #else
         return URL(filePath: homeDirectoryPath)
             .appending(path: "Library/Logs/Toastty", directoryHint: .isDirectory)
             .appending(path: Self.logFileName, directoryHint: .notDirectory)
+        #endif
     }
 
     public var automationSocketFileURL: URL? {
@@ -267,9 +281,56 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             worktreeRootURL: worktreeRootURL,
             runtimeLabel: runtimeLabel,
             homeDirectoryPath: homeDirectoryPath,
-            temporaryDirectoryPath: environment["TMPDIR"] ?? NSTemporaryDirectory(),
-            userSkillsRootOverridePath: normalizedUserSkillsRootPath(environment: environment)
+            temporaryDirectoryPath: socketBaseDirectoryPath(environment: environment),
+            userSkillsRootOverridePath: normalizedUserSkillsRootPath(environment: environment),
+            stateHomeDirectoryPath: stateHomeDirectoryPath(homeDirectoryPath: homeDirectoryPath, environment: environment)
         )
+    }
+
+    /// Parent directory for automation sockets. macOS uses the per-user
+    /// `$TMPDIR`. Linux prefers `$XDG_RUNTIME_DIR`, which is private to the
+    /// user and short enough for `sun_path` (108 bytes), and otherwise falls
+    /// back to the temporary directory like macOS.
+    public static func socketBaseDirectoryPath(environment: [String: String]) -> String {
+        #if os(Linux)
+        if let runtimeDirectory = linuxXDGRuntimeDirectoryPath(environment: environment) {
+            return runtimeDirectory
+        }
+        #endif
+        return environment["TMPDIR"] ?? NSTemporaryDirectory()
+    }
+
+    #if os(Linux)
+    /// A usable `$XDG_RUNTIME_DIR`: set, absolute, and an existing directory.
+    public static func linuxXDGRuntimeDirectoryPath(environment: [String: String]) -> String? {
+        guard let rawValue = environment["XDG_RUNTIME_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.hasPrefix("/") else {
+            return nil
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: rawValue, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return rawValue
+    }
+    #endif
+
+    /// `$XDG_STATE_HOME`, or `~/.local/state`. Only Linux reads it.
+    private static func stateHomeDirectoryPath(
+        homeDirectoryPath: String,
+        environment: [String: String]
+    ) -> String {
+        // XDG Base Directory spec: relative values are invalid and ignored.
+        if let rawValue = environment["XDG_STATE_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           rawValue.hasPrefix("/") {
+            return rawValue
+        }
+        return URL(filePath: homeDirectoryPath)
+            .appending(path: ".local/state", directoryHint: .isDirectory)
+            .path
     }
 
     public func prepare(fileManager: FileManager = .default) throws {

@@ -297,7 +297,14 @@ enum LocalFileLinkResolver {
     }
 
     private static func isPackageDirectory(_ url: URL) -> Bool {
+        #if os(Linux)
+        // Linux has no bundle/package directories; corelibs reports any
+        // directory with an extension (docs/preview.html/) as a package.
+        _ = url
+        return false
+        #else
         (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) == true
+        #endif
     }
 
     // Applies the same punctuation/prose recovery pass to each local link type;

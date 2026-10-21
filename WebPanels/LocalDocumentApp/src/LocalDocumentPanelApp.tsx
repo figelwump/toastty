@@ -25,6 +25,12 @@ import {
 import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
+// The panel runs in WKWebView on macOS and WebKitGTK on Linux.
+const EDIT_SHORTCUT_LABEL =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+    ? "⌘E"
+    : "Ctrl+E";
+
 function normalizeLineEndings(content: string): string {
   return content.replace(/\r\n?/g, "\n");
 }
@@ -340,7 +346,7 @@ function Header(props: {
               disabled={!bootstrap.filePath}
             >
               <span>Edit</span>
-              <span className="local-document-action-button-shortcut" aria-hidden="true">⌘E</span>
+              <span className="local-document-action-button-shortcut" aria-hidden="true">{EDIT_SHORTCUT_LABEL}</span>
             </button>
           </>
         )}

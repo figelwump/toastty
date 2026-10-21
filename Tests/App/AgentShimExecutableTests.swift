@@ -313,7 +313,10 @@ private struct AgentShimExecutableFixture {
     }
 
     var expectedCodexProcessPath: String {
-        [realBinURL.path, "/usr/bin", "/bin"].joined(separator: ":")
+        // Merged-/usr systems symlink /bin to /usr/bin; PATH merging drops it.
+        let binIsUsrBin = URL(fileURLWithPath: "/bin").resolvingSymlinksInPath().path == "/usr/bin"
+        return (binIsUsrBin ? [realBinURL.path, "/usr/bin"] : [realBinURL.path, "/usr/bin", "/bin"])
+            .joined(separator: ":")
     }
 
     var fakeCLIPath: String {

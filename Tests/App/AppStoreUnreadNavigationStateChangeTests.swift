@@ -109,11 +109,14 @@ final class AppStoreUnreadNavigationStateChangeTests: AppStoreCommandTestCase {
             preferredWindowID: windowID,
             sessionRuntimeStore: sessionStore
         ))
+        #if os(macOS)
+        // ToasttyCommandMenus is the macOS menu layer (SwiftUI).
         XCTAssertFalse(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
             state: store.state,
             commandSelection: store.commandSelection(preferredWindowID: windowID),
             activePanelIDs: []
         ))
+        #endif
         XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: other.id, panelID: otherPanelID)))
 
         XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
@@ -130,12 +133,14 @@ final class AppStoreUnreadNavigationStateChangeTests: AppStoreCommandTestCase {
             at: startedAt.addingTimeInterval(4)
         )
         XCTAssertNotNil(store.state.workspacesByID[done.id]?.doneAt)
+        #if os(macOS)
         XCTAssertTrue(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
             state: store.state,
             commandSelection: store.commandSelection(preferredWindowID: windowID),
             activePanelIDs: [donePanelID],
             unreadPriorityPanelIDs: [donePanelID]
         ))
+        #endif
         XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
             preferredWindowID: windowID,
             sessionRuntimeStore: sessionStore

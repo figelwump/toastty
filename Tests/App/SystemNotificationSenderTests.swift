@@ -6,7 +6,12 @@ import XCTest
 @MainActor
 final class SystemNotificationSenderTests: XCTestCase {
     override func tearDown() {
+        #if os(Linux)
+        // corelibs XCTest calls tearDown outside the main actor's static view.
+        MainActor.assumeIsolated { SystemNotificationSender.resetForTesting() }
+        #else
         SystemNotificationSender.resetForTesting()
+        #endif
         super.tearDown()
     }
 

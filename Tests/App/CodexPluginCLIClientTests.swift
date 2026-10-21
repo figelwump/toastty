@@ -2,6 +2,12 @@ import Foundation
 import XCTest
 @testable import ToasttyApp
 
+/// Merged-/usr systems (current Linux distributions) symlink /bin to
+/// /usr/bin, so PATH merging drops /bin as a canonical duplicate there.
+private let mergedSystemBinPath = URL(fileURLWithPath: "/bin").resolvingSymlinksInPath().path == "/usr/bin"
+    ? "/usr/bin"
+    : "/usr/bin:/bin"
+
 final class CodexPluginCLIClientTests: XCTestCase {
     func testProcessExecutorDrainsLargeOutputWithoutTimingOut() throws {
         let runtime = CodexIntegrationRuntime(
@@ -108,7 +114,7 @@ final class CodexPluginCLIClientTests: XCTestCase {
         )
 
         XCTAssertEqual(runtime.executableURL.path, executableURL.path)
-        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):/usr/bin:/bin")
+        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):\(mergedSystemBinPath)")
         XCTAssertEqual(runtime.codexHomeURL.path, "/tmp/codex-home")
     }
 
@@ -131,7 +137,7 @@ final class CodexPluginCLIClientTests: XCTestCase {
         )
 
         XCTAssertEqual(runtime.executableURL.path, executableURL.path)
-        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):/usr/bin:/bin")
+        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):\(mergedSystemBinPath)")
     }
 
     func testDecodesMarketplaceAndInstalledPluginJSON() throws {

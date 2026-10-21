@@ -58,7 +58,14 @@ public actor RemoteMessageAttachmentStore {
     }
 
     public func discard(_ staged: Staged) {
-        guard staged.directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
+        #if os(Linux)
+        // corelibs URL equality is sensitive to a trailing slash on `root`.
+        let isRootChild = staged.directory.deletingLastPathComponent().standardizedFileURL.path
+            == root.standardizedFileURL.path
+        #else
+        let isRootChild = staged.directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL
+        #endif
+        guard isRootChild,
               UUID(uuidString: staged.directory.lastPathComponent) != nil,
               isOwnedDirectory(staged.directory) else { return }
         try? FileManager.default.removeItem(at: staged.directory)

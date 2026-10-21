@@ -72,6 +72,8 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Provisioned banner wording
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testProvisionedBannerTitleIdentifiesTheManagedAgent() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.title(for: .codex),
@@ -94,7 +96,10 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             "Toastty skills are now available in MiMo Code"
         )
     }
+    #endif
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testProvisionedBannerMessageForShippedOnlyLaunch() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -108,7 +113,10 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             "Toastty enabled 5 skills for managed Codex sessions. Global and project skill folders were not changed."
         )
     }
+    #endif
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testProvisionedBannerMessageIncludesDeliveredUserSkillCount() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -133,6 +141,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             "Toastty enabled 6 skills for managed Claude Code sessions (including 1 user skill). Global and project skill folders were not changed."
         )
     }
+    #endif
 
     @MainActor
     func testDeliveredUserSkillCountRequiresCodexDeliveredOutcome() {
@@ -174,6 +183,8 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Launch-provided delivery row (Claude Code, Pi, OpenCode, MiMo Code)
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testLaunchDeliveryStatusTitleForEachState() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
@@ -198,7 +209,10 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             "Checking"
         )
     }
+    #endif
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testDeliveredSkillsVersionPrefersStagedSkillsVersion() {
         let codexStatus = makeCodexStatus(bundledVersion: "0.3.0")
 
@@ -217,7 +231,10 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             "0.2.0-def"
         )
     }
+    #endif
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testDeliveredSkillsVersionFallsBackToCodexBundledVersion() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.deliveredSkillsVersion(
@@ -240,9 +257,12 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             )
         )
     }
+    #endif
 
     // MARK: - Duplicate-skills guidance copy
 
+    #if os(macOS)
+    // Banner and sheet copy live in the SwiftUI view file.
     func testDuplicateSkillsGuidanceStaysConciseAndNamesDeliveredHosts() {
         let guidance = ToasttySkillsManagementSheet.duplicateSkillsGuidanceText
 
@@ -257,6 +277,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         XCTAssertFalse(guidance.contains(".opencode/skills"))
         XCTAssertLessThan(guidance.count, 220)
     }
+    #endif
 
     // MARK: - User skills section model
 

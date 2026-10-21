@@ -36,8 +36,9 @@ for the session, change socket permissions, or pick a different socket path.
 
 Metadata first, text last. Do not read every pane.
 
-1. **The user named it.** Match "the left pane", "⌘3", "the dev server", or a
-   directory against `shortcutNumber`, `title`, and `cwd` from the snapshot.
+1. **The user named it.** Match "the left pane", "pane 3" (its Option+Shift+3
+   shortcut; Alt+Shift+3 on Linux), "the dev server", or a directory against
+   `shortcutNumber`, `title`, and `cwd` from the snapshot.
 2. **Pick from snapshot metadata.** A pane titled `npm run dev` whose
    `promptState` is `busy` is the dev server; no text read is needed to know.
 3. **Probe on ties.** With two or three candidates left, read `tail=5` from

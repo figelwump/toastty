@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:11:48 -0700
+Subject: [PATCH 1/6] build: install runtime resources for libghostty on Linux
+
+Embedders of libghostty on Linux (app-runtime=none) have no app bundle
+that provides terminfo, shell integration and themes, so install the
+same resources the GTK app installs alongside the library.
+
+diff --git a/build.zig b/build.zig
+index d09cc177d..0e6b0d604 100644
+--- a/build.zig
++++ b/build.zig
+@@ -236,6 +236,11 @@ pub fn build(b: *std.Build) !void {
+             } else {
+                 lib_shared.install("ghostty-internal.so");
+                 lib_static.install("ghostty-internal.a");
++
++                // Embedders on Linux need the same runtime resources as
++                // the GTK app (terminfo, shell integration, themes) since
++                // there is no app bundle to provide them.
++                resources.install();
+             }
+         }
+     }

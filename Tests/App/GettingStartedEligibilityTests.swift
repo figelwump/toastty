@@ -56,6 +56,8 @@ final class GettingStartedEligibilityTests: XCTestCase {
         )
     }
 
+    #if os(macOS)
+    // AppKitDefaultPreferences is macOS-only.
     func testAppKitDefaultPreferenceWritesDoNotCreateSetupFootprint() throws {
         let fixture = try makeFixture()
         AppKitDefaultPreferences.apply(to: fixture.userDefaults, standardDefaults: fixture.userDefaults)
@@ -70,6 +72,7 @@ final class GettingStartedEligibilityTests: XCTestCase {
         XCTAssertFalse(footprint.hasPersistedSettings)
         XCTAssertFalse(footprint.exists)
     }
+    #endif
 
     func testAutomationRunStillCreatesStartupSetupTemplates() throws {
         let fixture = try makeFixture()

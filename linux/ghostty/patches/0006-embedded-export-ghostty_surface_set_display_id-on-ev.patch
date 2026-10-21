@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:47:06 -0700
+Subject: [PATCH 6/6] embedded: export ghostty_surface_set_display_id on every
+ platform
+
+ghostty.h declares ghostty_surface_set_display_id unconditionally, but
+it was only exported on Darwin, so portable embedder code that calls it
+(Toastty's shared Swift terminal code) failed to link on Linux. Export a
+no-op off Darwin; display ids only drive the CoreVideo display link.
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 9aa2d20ee..34d1946b1 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1733,6 +1733,8 @@ pub const CAPI = struct {
+     comptime {
+         if (builtin.target.os.tag.isDarwin()) {
+             _ = Darwin;
++        } else {
++            _ = NonDarwin;
+         }
+     }
+ 
+@@ -2622,6 +2624,16 @@ pub const CAPI = struct {
+     extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32;
+     extern "c" fn CGSDefaultConnectionForThread() *anyopaque;
+ 
++    // C APIs that are meaningful on Darwin only but declared for every
++    // platform in ghostty.h. Export no-op versions elsewhere so portable
++    // embedder code links.
++    const NonDarwin = struct {
++        export fn ghostty_surface_set_display_id(ptr: *Surface, display_id: u32) void {
++            _ = ptr;
++            _ = display_id;
++        }
++    };
++
+     // Darwin-only C APIs.
+     const Darwin = struct {
+         export fn ghostty_surface_set_display_id(ptr: *Surface, display_id: u32) void {

@@ -516,7 +516,8 @@ body {
   resize: none;
   outline: none;
   background: transparent;
-  color: var(--text);
+  color: var(--pre-text);
+  caret-color: var(--pre-text);
   font:
     500
     calc(13px * var(--toastty-markdown-text-scale))

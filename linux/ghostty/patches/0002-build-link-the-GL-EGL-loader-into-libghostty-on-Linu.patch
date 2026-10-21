@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:15:55 -0700
+Subject: [PATCH 2/6] build: link the GL/EGL loader into libghostty on Linux
+
+The OpenGL renderer creates its own surfaceless EGL context on the
+render thread, so libghostty (app-runtime=none) on non-Darwin targets
+needs glad's GL and EGL loaders and libEGL, like the GTK executable.
+libEGL is linked by name because glad vendors the EGL headers and the
+pkg-config include path could shadow bundled dependency headers.
+
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index 7f777faa1..dfc39c22e 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -653,6 +653,32 @@ pub fn add(
+         }
+     }
+ 
++    // libghostty on non-Darwin targets embeds the OpenGL renderer, which
++    // creates its own surfaceless EGL context, so it needs the same GL/EGL
++    // loader as the GTK executable.
++    const lib_needs_egl = step.kind == .lib and
++        self.config.renderer == .opengl and
++        !target.result.os.tag.isDarwin();
++    if (lib_needs_egl) {
++        step.root_module.addIncludePath(b.path("vendor/glad/include/"));
++        step.root_module.addCSourceFile(.{
++            .file = b.path("vendor/glad/src/gl.c"),
++            .flags = &.{},
++        });
++        step.root_module.addCSourceFile(.{
++            .file = b.path("vendor/glad/src/glad_egl.c"),
++            .flags = &.{},
++        });
++        // Link libEGL by name rather than through pkg-config: glad
++        // vendors the EGL headers, and pkg-config's include path could
++        // shadow bundled dependency headers (e.g. simdutf).
++        step.root_module.linkSystemLibrary("EGL", .{
++            .use_pkg_config = .no,
++            .preferred_link_mode = .dynamic,
++            .search_strategy = .mode_first,
++        });
++    }
++
+     // If we're building an exe then we have additional dependencies.
+     if (step.kind != .lib) {
+         // We always statically compile glad

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.GiantThings.toastty</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Toastty</name>
+  <summary>Terminal workspaces for running and following coding agents</summary>
+  <developer id="com.giantthings">
+    <name>Giant Things</name>
+  </developer>
+  <description>
+    <p>
+      Toastty organizes Ghostty-powered terminals into workspaces, tabs and
+      splits, tracks managed coding agents (Claude Code, Codex and others)
+      through their hooks, and keeps a right panel for a browser, local
+      documents and Scratchpads. Remote Access lets the Toastty iOS app follow
+      and answer sessions over Tailscale.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.GiantThings.toastty.desktop</launchable>
+  <url type="homepage">https://github.com/figelwump/toastty</url>
+  <provides>
+    <binary>toastty-linux</binary>
+    <binary>toastty</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>

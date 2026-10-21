@@ -133,7 +133,14 @@ public enum AutomationSocketLocator {
             .appendingPathComponent(discoveryRecordFilename, isDirectory: false)
     }
 
-    static func socketDirectoryURL(environment: [String: String]) -> URL {
+    public static func socketDirectoryURL(environment: [String: String]) -> URL {
+        #if os(Linux)
+        // $XDG_RUNTIME_DIR is already per-user (0700), so no uid suffix.
+        if let runtimeDirectory = ToasttyRuntimePaths.linuxXDGRuntimeDirectoryPath(environment: environment) {
+            return URL(fileURLWithPath: runtimeDirectory, isDirectory: true)
+                .appendingPathComponent("toastty", isDirectory: true)
+        }
+        #endif
         let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
         return URL(fileURLWithPath: tempDirectory, isDirectory: true)
             .appendingPathComponent("toastty-\(getuid())", isDirectory: true)

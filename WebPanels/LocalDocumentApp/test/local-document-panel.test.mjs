@@ -241,14 +241,15 @@ test("edit mode uses a non-wrapping code textarea for all supported formats", as
   );
 });
 
-test("preview edit button shows the Cmd+E shortcut hint", async () => {
+test("preview edit button shows the platform's edit shortcut hint", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
     "utf8"
   );
 
   assert.match(source, /local-document-action-button-shortcut/);
-  assert.match(source, />⌘E<\/span>/);
+  assert.match(source, />\{EDIT_SHORTCUT_LABEL\}<\/span>/);
+  assert.match(source, /\? "⌘E"\s*: "Ctrl\+E"/);
 });
 
 test("editor mount focuses the textarea and moves the caret to the file start", async () => {

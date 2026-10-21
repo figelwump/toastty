@@ -29,10 +29,62 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.agentPluginsDirectoryURL.path == "/tmp/toastty-home/.toastty/agent-plugins")
         #expect(paths.managedAgentLaunchArtifactsDirectoryURL.path == "/tmp/toastty-home/.toastty/run/managed-agent-launches")
         #expect(paths.managedAgentHelperInstancesDirectoryURL.path == "/tmp/toastty-home/.toastty/run/managed-agent-helpers")
+        #if os(Linux)
+        #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/.local/state/toastty/toastty.log")
+        #else
         #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/Library/Logs/Toastty/toastty.log")
+        #endif
         #expect(paths.automationSocketFileURL == nil)
         #expect(paths.userDefaultsSuiteName == nil)
     }
+
+    #if os(Linux)
+    @Test
+    func linuxUsesXDGStateHomeForLogsAndXDGRuntimeDirForSockets() throws {
+        let runtimeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xdg-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runtimeDirectory) }
+
+        let userHome = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: [
+                "XDG_STATE_HOME": "/tmp/toastty-state",
+                "XDG_RUNTIME_DIR": runtimeDirectory.path,
+                "TMPDIR": "/tmp/ignored-tmp/",
+            ]
+        )
+        #expect(userHome.defaultLogFileURL.path == "/tmp/toastty-state/toastty/toastty.log")
+        // User config stays in ~/.toastty on Linux too.
+        #expect(userHome.configFileURL.path == "/tmp/toastty-home/.toastty/config")
+        #expect(
+            AutomationSocketLocator.socketDirectoryURL(environment: ["XDG_RUNTIME_DIR": runtimeDirectory.path]).path
+                == runtimeDirectory.appendingPathComponent("toastty").path)
+
+        let isolated = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: [
+                "TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/runtime-xdg",
+                "XDG_RUNTIME_DIR": runtimeDirectory.path,
+            ]
+        )
+        let socketPath = try #require(isolated.automationSocketFileURL?.path)
+        #expect(socketPath.hasPrefix(runtimeDirectory.path + "/toastty-runtime-"))
+        #expect(socketPath.hasSuffix("/events-v1.sock"))
+        #expect(isolated.defaultLogFileURL.path == "/tmp/toastty-runtime-home-tests/runtime-xdg/logs/toastty.log")
+
+        // A relative or missing XDG value is ignored (XDG Base Directory spec).
+        let fallback = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: ["XDG_STATE_HOME": "relative/state", "XDG_RUNTIME_DIR": "/nonexistent-xdg-runtime"]
+        )
+        #expect(fallback.defaultLogFileURL.path == "/tmp/toastty-home/.local/state/toastty/toastty.log")
+        #expect(
+            ToasttyRuntimePaths.socketBaseDirectoryPath(
+                environment: ["XDG_RUNTIME_DIR": "/nonexistent-xdg-runtime", "TMPDIR": "/tmp/fallback-tmp/"])
+                == "/tmp/fallback-tmp/")
+    }
+    #endif
 
     @Test
     func resolveRuntimeHomeUsesSandboxedLocationsAndStableSuite() throws {

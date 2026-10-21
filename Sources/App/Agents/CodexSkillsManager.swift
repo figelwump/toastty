@@ -290,8 +290,7 @@ final class CodexSkillsManager: @unchecked Sendable {
             ToasttyAgentPluginBundle.bundledPluginURL()
         },
         sourceMarketplaceURLProvider: @escaping @Sendable () -> URL? = {
-            Bundle.main.resourceURL?
-                .appendingPathComponent("ToasttyAgentPluginBundle", isDirectory: true)
+            ToasttyAgentPluginBundle.bundleRootURL()
         },
         fileManager: FileManager = .default,
         pluginClient: any CodexPluginCLIManaging = CodexPluginCLIClient()

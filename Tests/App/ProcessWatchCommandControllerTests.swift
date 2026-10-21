@@ -98,10 +98,13 @@ final class ProcessWatchCommandControllerTests: XCTestCase {
         )
 
         XCTAssertTrue(fixture.store.hasEverLaunchedAgent)
+        #if os(macOS)
+        // AppWindowView is the SwiftUI window; Linux's sidebar width lives in GTK.
         XCTAssertEqual(
             AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: fixture.store.hasEverLaunchedAgent),
             280
         )
+        #endif
     }
 }
 

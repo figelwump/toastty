@@ -281,6 +281,8 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    #if os(macOS)
+    // macOS app bundles open externally; Linux has no package directories (a Preview.app directory is a plain directory).
     func testResolveAppBundleAsExternalLocalItem() throws {
         let fixture = try makeFixture(
             fileName: "Preview.app",
@@ -298,7 +300,10 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             expectedExternalLocalItemTarget(path: fixture.markdownPath)
         )
     }
+    #endif
 
+    #if os(macOS)
+    // macOS app bundles open externally; Linux has no package directories (a Preview.app directory is a plain directory).
     func testResolveSymlinkedAppBundleAsExternalLocalItem() throws {
         let fixture = try makeSymlinkPackageFixture()
 
@@ -313,6 +318,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             expectedExternalLocalItemTarget(path: fixture.symlinkPath)
         )
     }
+    #endif
 
     func testResolveTreatsDirectoryNamedHTMLPathAsLocalDirectory() throws {
         let fixture = try makeFixture(

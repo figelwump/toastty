@@ -618,19 +618,25 @@ final class SidebarSessionPresentationTests: XCTestCase {
             "emptyos — development repo for a personal computer",
             "Emphasis markers should resolve rather than render literally"
         )
+        #if os(macOS)
+        // swift-foundation's AttributedString has no presentation intents.
         XCTAssertTrue(
             bold.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true },
             "The emphasized span should carry a strong presentation intent"
         )
+        #endif
 
         let code = SidebarSessionPresentation.sessionSummaryAttributedText(
             "The last commit is `77c2f8b` (`Prepare EmptyOS`)"
         )
         XCTAssertEqual(String(code.characters), "The last commit is 77c2f8b (Prepare EmptyOS)")
+        #if os(macOS)
+        // swift-foundation's AttributedString has no presentation intents.
         XCTAssertTrue(
             code.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true },
             "A backticked span should carry a code presentation intent"
         )
+        #endif
 
         XCTAssertEqual(
             SidebarSessionPresentation.sessionSummaryPlainText("They are in `/Users/vishal/Giant`"),
@@ -694,6 +700,8 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertFalse(label.contains("**"), label)
     }
 
+    #if os(macOS)
+    // SidebarView (SwiftUI) owns the elapsed-label template.
     /// The elapsed label reserves a width sized for this template so a tick
     /// cannot change what `ViewThatFits` measures on the tab line. Every
     /// realistic turn duration has to fit inside it.
@@ -714,6 +722,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
             template.count
         )
     }
+    #endif
 
     func testSessionRowTitleIsTheNameOrTheAgentUntilTheSessionIsNamed() {
         XCTAssertEqual(

@@ -471,6 +471,20 @@ public enum DiagnosticsCheckEvaluator {
     }
 
     private static func parentProcessID(of processID: Int32) -> Int32? {
+        #if os(Linux)
+        // /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may contain
+        // spaces or parentheses, so parse after the last ')'.
+        guard let stat = try? String(contentsOfFile: "/proc/\(processID)/stat", encoding: .utf8),
+              let commEnd = stat.lastIndex(of: ")")
+        else {
+            return nil
+        }
+        let fields = stat[stat.index(after: commEnd)...].split(separator: " ")
+        guard fields.count > 1, let parent = Int32(fields[1]), parent > 0 else {
+            return nil
+        }
+        return parent
+        #else
         var info = proc_bsdinfo()
         let result = withUnsafeMutablePointer(to: &info) { infoPointer in
             proc_pidinfo(
@@ -490,6 +504,7 @@ public enum DiagnosticsCheckEvaluator {
             return nil
         }
         return Int32(info.pbi_ppid)
+        #endif
     }
 
     private static func logCheck(_ logs: DiagnosticsLogsSection) -> DiagnosticsCheckResult {
