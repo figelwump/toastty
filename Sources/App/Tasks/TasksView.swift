@@ -107,6 +107,8 @@ struct TasksView: View {
             board.tasksViewDidOpen()
             isListFocused = true
         }
+        // A container's identifier would replace its children's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tasks.view")
         .background {
             // Esc leaves the Tasks view, back to the selected workspace.
@@ -416,6 +418,7 @@ private struct TasksViewDetail: View {
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tasks.view.detail")
     }
 

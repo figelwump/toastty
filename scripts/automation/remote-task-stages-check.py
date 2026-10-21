@@ -191,6 +191,9 @@ def main():
             (artifacts / 'tasks-view-ax.txt').write_text(run_tool(helper, 'dump', pid, check=False).stdout)
             raise
         open_and_close_quick_entry('tasks.view.new')
+        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
+        capture('tasks-view-without-sidebar')
+        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')
 
