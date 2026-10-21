@@ -27,6 +27,8 @@ struct TaskCoordinatorTests {
         /// Answers triage when a test turns it on with `[triage] command`.
         let triage = FakeTriageRunner()
         let recentWorkspaces = RecentWorkspacesStore.inMemory()
+        /// The coordinator's clock, when a test moves it; else the real time.
+        var clock: Date?
         private(set) var scopeGrants: [(sessionID: String, workspaceID: UUID)] = []
         private(set) var coordinator: TaskCoordinator!
 
@@ -97,6 +99,7 @@ struct TaskCoordinatorTests {
                 grantScope: { [unowned self] sessionID, workspaceID in
                     scopeGrants.append((sessionID, workspaceID))
                 },
+                now: { [unowned self] in clock ?? Date() },
                 terminalReadinessTimeout: readinessTimeout,
                 triageRunner: triage,
                 recentWorkspaces: recentWorkspaces
@@ -449,6 +452,41 @@ struct TaskCoordinatorTests {
         #expect(fixture.savedRecord(created.id) == nil)
         #expect(fixture.taskSpaceIDs.isEmpty)
         #expect(FileManager.default.fileExists(atPath: attachmentFolder.path) == false)
+    }
+
+    @Test func attachmentsGoAWeekAfterTheTaskFinishesAndItsTaskSpaceCloses() async throws {
+        let fixture = try Fixture()
+        let file = fixture.root.appendingPathComponent("repro.png")
+        try Data("png".utf8).write(to: file)
+        let created = try await fixture.coordinator.create(TaskCreateRequest(text: "x", files: [file.path], workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(created.id)
+        let attachmentFolder = fixture.attachmentsDirectory.appendingPathComponent(created.id.uuidString)
+        let taskSpaceID = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+
+        let doneAt = Date()
+        fixture.clock = doneAt
+        try fixture.coordinator.markDone(taskID: created.id)
+        // An open task space keeps the files, however long ago the task finished.
+        fixture.clock = doneAt.addingTimeInterval(30 * 24 * 60 * 60)
+        fixture.coordinator.removeExpiredAttachments()
+        #expect(FileManager.default.fileExists(atPath: attachmentFolder.path))
+
+        _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpaceID))
+        fixture.clock = doneAt.addingTimeInterval(TaskAttachmentRetention.keepAfterFinish - 60)
+        fixture.coordinator.removeExpiredAttachments()
+        #expect(FileManager.default.fileExists(atPath: attachmentFolder.path))
+        #expect(fixture.record(created.id)?.attachmentsRemovedAt == nil)
+
+        let sweptAt = doneAt.addingTimeInterval(TaskAttachmentRetention.keepAfterFinish)
+        fixture.clock = sweptAt
+        fixture.coordinator.removeExpiredAttachments()
+        #expect(FileManager.default.fileExists(atPath: attachmentFolder.path) == false)
+        fixture.coordinator.records.flushForTesting()
+        // The record stays, with the files' names and when they went.
+        let saved = try #require(fixture.savedRecord(created.id))
+        // Saved dates keep whole seconds.
+        #expect(abs((saved.attachmentsRemovedAt ?? .distantPast).timeIntervalSince(sweptAt)) < 1)
+        #expect(saved.attachments.map(\.displayName) == ["repro.png"])
     }
 
     @Test func deleteKeepsAUsedTaskSpaceButDropsItsTaskLink() async throws {

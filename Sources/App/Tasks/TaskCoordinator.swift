@@ -674,6 +674,41 @@ final class TaskCoordinator {
         ToasttyLog.info("Deleted a task", category: .tasks, metadata: ["task_id": taskID.uuidString])
     }
 
+    /// Removes the attached files of tasks that have been Done or Archived
+    /// for a week; see `TaskAttachmentRetention`. Runs at launch and with
+    /// the release monitor.
+    func removeExpiredAttachments() {
+        let config = try? configLoader()
+        let date = now()
+        for record in records.records {
+            let releaseTagsConfigured = record.projectRoot.flatMap {
+                config?.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
+            } != nil
+            let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
+            guard TaskAttachmentRetention.shouldRemove(
+                record,
+                releaseTagsConfigured: releaseTagsConfigured,
+                taskSpaceOpen: taskSpaceOpen,
+                now: date
+            ) else { continue }
+            let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+            do {
+                if fileManager.fileExists(atPath: directoryURL.path) {
+                    try fileManager.removeItem(at: directoryURL)
+                }
+            } catch {
+                ToasttyLog.warning(
+                    "Could not remove a finished task's attachments",
+                    category: .tasks,
+                    metadata: ["task_id": record.id.uuidString, "error": error.localizedDescription]
+                )
+                continue
+            }
+            records.update(id: record.id) { $0.attachmentsRemovedAt = date }
+            ToasttyLog.info("Removed a finished task's attachments", category: .tasks, metadata: ["task_id": record.id.uuidString])
+        }
+    }
+
     // MARK: - Launch reconciliation
 
     /// Brings records and workspaces back in line after a launch: a setup

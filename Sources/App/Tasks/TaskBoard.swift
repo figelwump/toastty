@@ -345,6 +345,7 @@ final class TaskBoardStore: ObservableObject {
         }
         reloadConfig()
         syncRecords(state: store.state)
+        coordinator.removeExpiredAttachments()
         if let refreshInterval {
             refreshLoop = Task { [weak self] in
                 while Task.isCancelled == false {
@@ -360,6 +361,7 @@ final class TaskBoardStore: ObservableObject {
                 while Task.isCancelled == false {
                     try? await Task.sleep(for: releaseCheckInterval)
                     await self?.coordinator?.checkReleases()
+                    self?.coordinator?.removeExpiredAttachments()
                 }
             }
         }
