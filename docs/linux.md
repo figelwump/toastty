@@ -560,8 +560,9 @@ Behavior:
 - **Close.** `panel.close`, the frame's close button and closing a one-panel
   tab go through `PanelHostRegistry.requestClose`; a terminal whose process
   is still running asks first ("Close this terminal?", with the detected
-  command from `/proc/<pid>/cmdline`). `exit` in the shell closes the pane
-  without asking.
+  command from `/proc/<pid>/cmdline`). `exit` or Ctrl+D in the shell closes
+  the pane without asking. As on macOS, Enter in the close, close-tab,
+  close-workspace and quit prompts picks Close/Quit (Escape cancels).
 - **Links.** Ghostty `open_url` (Ctrl+click): http(s) opens in the right
   panel browser; Shift held or other URLs go to the desktop handler
   (`g_app_info_launch_default_for_uri`).
@@ -622,8 +623,10 @@ notification), local input, configured font, link opening, panel close.
   `toastty-linux` on a private Broadway display with an isolated HOME and
   bash; types into real shells and reads the screen back, splits, title/cwd
   in state and header, font size, find, Ghostty keybind routing, bell/OSC 9
-  unread, close confirmation, `exit`, profile split + environment, file drop,
-  context menu. Screenshots: `artifacts/manual/linux-terminal/`.
+  unread, close confirmation (answered through the dialog's real buttons,
+  `dialog-click`), Ctrl+D and `exit`, profile split + environment, file drop,
+  context menu, and quitting through the window's close button.
+  Screenshots: `artifacts/manual/linux-terminal/`.
 - The gtk-shell `BroadwaySmokeTests` now run with Ghostty terminals.
 
 ## Right panel, desktop integration, Remote Access UI (panels-remote)

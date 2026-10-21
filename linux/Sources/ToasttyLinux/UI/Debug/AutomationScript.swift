@@ -14,6 +14,8 @@ import Foundation
 ///     expect panes=2 zoomed=false   # compare summary values (`_` = space); failures exit 1
 ///     palette split                 # open the command palette with a query
 ///     dialog-respond rename Notes   # answer the visible alert dialog
+///     dialog-click confirm          # press the response's button (the dialog's own `response` signal)
+///     window-close                  # close the selected window (title-bar close button, Alt+F4)
 ///     alt-hints on|off              # show sidebar shortcut hints
 ///     resize 1280 800
 ///     perform agent.run.claude      # run a window command by id (shortcut/button path)
@@ -148,6 +150,19 @@ public final class AutomationScript {
                 let pieces = argument.split(separator: " ", maxSplits: 1).map(String.init)
                 guard let dialog = Dialogs.current, let response = pieces.first else { fail("dialog-respond: no dialog"); continue }
                 dialog.respond(response, text: pieces.count > 1 ? pieces[1] : nil)
+            case "dialog-click":
+                // Presses the response button itself, so the choice arrives
+                // through the dialog's own `response` signal as a user's
+                // click does (`dialog-respond` calls the callback directly).
+                // The handle is not held across the click.
+                guard let dialog = Dialogs.current?.dialog else { fail("dialog-click: no dialog"); continue }
+                guard let button = Self.responseButton(argument, in: dialog) else {
+                    fail("dialog-click: no button for response \(argument)")
+                    continue
+                }
+                if gtk_widget_activate(button) == 0 { fail("dialog-click: \(argument) button did not activate") }
+                // No settle: a confirmed quit destroys the windows meanwhile.
+                MainLoop.spin(untilMilliseconds: 50)
             case "close-dialog":
                 if let window = app.selectedWindowController(), let dialog = window.visibleDialog {
                     adw_dialog_force_close(cast(dialog))
@@ -167,6 +182,11 @@ public final class AutomationScript {
                     if command == "sidebar-width" { window.resizeSidebar(to: width) } else { window.resizeRightPanel(to: width) }
                     settle(app: app)
                 }
+            case "window-close":
+                // The title bar's close button / Alt+F4: `close-request` on the selected window.
+                guard let window = app.selectedWindowController() else { fail("window-close: no window"); continue }
+                gtk_window_close(cast(window.window))
+                MainLoop.spin(untilMilliseconds: 10)
             case "color-scheme":
                 if let scheme = LinuxColorSchemePreference(rawValue: argument) { app.preferences.colorScheme = scheme }
             case "quit":
@@ -282,6 +302,14 @@ public final class AutomationScript {
         result["sidebarWidth"] = "\(gtk_widget_get_width(controller.sidebar.root))"
         result["rightPanelWidth"] = "\(gtk_widget_get_width(controller.rightPanel.root))"
         result["dialog"] = controller.visibleDialog.map { typeName($0) } ?? "none"
+        // The response Enter picks in the visible alert, and the focused widget.
+        result["dialogDefault"] = controller.visibleDialog
+            .flatMap { isInstance($0, of: adw_alert_dialog_get_type()) ? adw_alert_dialog_get_default_response(cast($0)) : nil }
+            .map { String(cString: $0) } ?? "none"
+        if let focus = gtk_root_get_focus(cast(controller.window)) {
+            let label = isInstance(focus, of: gtk_button_get_type()) ? gtk_button_get_label(cast(focus)).map { String(cString: $0) } : nil
+            result["focusWidget"] = typeName(focus) + (label.map { ":\($0)" } ?? "")
+        }
         // The window's icon (its own, else the default) and whether the icon
         // theme resolves it to Toastty's icon files.
         let windowIcon = gtk_window_get_icon_name(cast(controller.window)) ?? gtk_window_get_default_icon_name()
@@ -295,6 +323,22 @@ public final class AutomationScript {
             result["paletteTop"] = palette.resultIDs.first ?? ""
         }
         return result
+    }
+
+    /// The button libadwaita built for an alert dialog's `response`, by label.
+    private static func responseButton(_ response: String, in dialog: WidgetPtr) -> WidgetPtr? {
+        guard adw_alert_dialog_has_response(cast(dialog), response) != 0,
+              let label = adw_alert_dialog_get_response_label(cast(dialog), response).map({ String(cString: $0) }) else {
+            return nil
+        }
+        func search(_ root: WidgetPtr) -> WidgetPtr? {
+            if isInstance(root, of: gtk_button_get_type()),
+               let current = gtk_button_get_label(cast(root)), String(cString: current) == label {
+                return root
+            }
+            return Gtk.children(root).lazy.compactMap(search).first
+        }
+        return search(dialog)
     }
 
     private static func countWidgets(of type: GType, in root: WidgetPtr) -> Int {

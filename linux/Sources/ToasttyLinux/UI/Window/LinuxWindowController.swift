@@ -555,7 +555,8 @@ public final class LinuxWindowController {
                 parent: window,
                 heading: "Close “\(workspace.title)”?",
                 body: "Its \(workspace.tabIDs.count == 1 ? "tab" : "\(workspace.tabIDs.count) tabs") and \(panelCount) panels will close.",
-                confirmLabel: "_Close Workspace"
+                confirmLabel: "_Close Workspace",
+                confirmIsDefault: true
             ) { [weak self] in
                 self?.store.send(.closeWorkspace(workspaceID: workspaceID))
             }
@@ -576,7 +577,8 @@ public final class LinuxWindowController {
                 parent: window,
                 heading: "Close “\(tab.displayTitle)”?",
                 body: "\(tab.panels.count) panels in this tab will close.",
-                confirmLabel: "_Close Tab"
+                confirmLabel: "_Close Tab",
+                confirmIsDefault: true
             ) { [weak self] in
                 self?.store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
             }

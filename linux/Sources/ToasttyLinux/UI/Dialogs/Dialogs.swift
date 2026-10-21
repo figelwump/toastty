@@ -73,12 +73,17 @@ public enum Dialogs {
         gtk_editable_select_region(cast(entry), 0, -1)
     }
 
+    /// - Parameter confirmIsDefault: Enter picks the confirm button. The
+    ///   close and quit prompts set it, like their macOS alerts (Close/Quit
+    ///   is the default button), so Ctrl+Shift+W → Enter closes; otherwise
+    ///   Enter cancels. Escape always cancels.
     public static func confirm(
         parent: WidgetPtr,
         heading: String,
         body: String,
         confirmLabel: String,
         destructive: Bool = true,
+        confirmIsDefault: Bool = false,
         onConfirm: @escaping () -> Void
     ) {
         let dialog = widget(adw_alert_dialog_new(heading, body)!)
@@ -87,7 +92,7 @@ public enum Dialogs {
         adw_alert_dialog_set_response_appearance(
             cast(dialog), "confirm", destructive ? ADW_RESPONSE_DESTRUCTIVE : ADW_RESPONSE_SUGGESTED
         )
-        adw_alert_dialog_set_default_response(cast(dialog), "cancel")
+        adw_alert_dialog_set_default_response(cast(dialog), confirmIsDefault ? "confirm" : "cancel")
         adw_alert_dialog_set_close_response(cast(dialog), "cancel")
         let handle = AlertHandle(dialog: dialog, entry: nil) { response, _ in
             if response == "confirm" { onConfirm() }
@@ -97,11 +102,19 @@ public enum Dialogs {
 
     private static func present(_ handle: AlertHandle, parent: WidgetPtr) {
         current = handle
-        Signal.connectPointer(handle.dialog, "response") { [weak handle] responsePointer in
-            guard let handle, let responsePointer else { return }
+        // libadwaita emits `closed` before `response`: a clicked button or
+        // Enter closes the dialog first and reports the choice afterwards.
+        // `closed` releases `current` (the handle's last strong reference),
+        // so the response handler must not depend on the handle; it keeps
+        // only the entry and the callback. The dialog, and so its entry, is
+        // alive while it emits `response`.
+        let entry = handle.entry
+        let onResponse = handle.onResponse
+        Signal.connectPointer(handle.dialog, "response") { responsePointer in
+            guard let responsePointer else { return }
             let response = String(cString: responsePointer.assumingMemoryBound(to: CChar.self))
-            let text = handle.entry.map { String(cString: gtk_editable_get_text(cast($0))) }
-            handle.onResponse(response, text)
+            let text = entry.map { String(cString: gtk_editable_get_text(cast($0))) }
+            onResponse(response, text)
         }
         Signal.connect(handle.dialog, "closed") { [weak handle] in
             if let handle, current === handle { current = nil }
