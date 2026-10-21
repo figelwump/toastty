@@ -381,7 +381,8 @@ struct QuickEntryTests {
         try harness.pressCommandReturn()
         await harness.fixture.waitUntil("the create starts") { pending.continuation != nil }
         #expect(model.isSubmitting)
-        #expect(try harness.textView().isEditable == false)
+        // The text view follows the model on SwiftUI's next update.
+        await harness.fixture.waitUntil("the editor locks") { (try? harness.textView().isEditable) == false }
         model.attachText("second", named: "b.txt")
         model.removeAttachment(id: attachment.id)
         try harness.textView().cancelOperation(nil)
@@ -392,7 +393,7 @@ struct QuickEntryTests {
         pending.continuation?.resume(throwing: TaskError("Toastty could not save the task."))
         await harness.fixture.waitUntil("the create ends") { model.isSubmitting == false }
         #expect(model.isEditable)
-        #expect(try harness.textView().isEditable)
+        await harness.fixture.waitUntil("the editor unlocks") { (try? harness.textView().isEditable) == true }
         #expect(model.errorMessage == "Toastty could not save the task.")
         harness.controller.dismiss()
     }

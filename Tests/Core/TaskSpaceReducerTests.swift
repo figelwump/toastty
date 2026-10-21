@@ -141,3 +141,54 @@ struct TaskSpaceReducerTests {
         #expect(AppReducer.reduce(action: .setWorkspaceTaskID(workspaceID: taskSpace, taskID: nil), state: &fixture.state) == false)
     }
 }
+
+struct TaskWindowStateTests {
+    private func state() -> (AppState, UUID, [UUID]) {
+        let windowID = UUID()
+        let workspaces = (0..<2).map { WorkspaceState.bootstrap(title: "Workspace \($0 + 1)") }
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: workspaces[0].id
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+        return (state, windowID, workspaces.map(\.id))
+    }
+
+    @Test
+    func selectingAWorkspaceLeavesTheTasksView() {
+        var (state, windowID, workspaceIDs) = state()
+        #expect(AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state))
+        #expect(state.windows[0].showsTasksView)
+        #expect(AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state) == false)
+
+        #expect(AppReducer.reduce(action: .selectWorkspace(windowID: windowID, workspaceID: workspaceIDs[1]), state: &state))
+        #expect(state.windows[0].showsTasksView == false)
+    }
+
+    @Test
+    func theSidebarSegmentIsSavedButTheTasksViewIsNot() throws {
+        var (state, windowID, _) = state()
+        #expect(state.windows[0].sidebarSegment == .projects)
+        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state))
+        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state) == false)
+        _ = AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state)
+
+        let decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(state.windows[0]))
+        #expect(decoded.sidebarSegment == .status)
+        #expect(decoded.showsTasksView == false)
+
+        // Windows saved before segments existed open on Projects.
+        var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state.windows[0])) as? [String: Any])
+        object.removeValue(forKey: "sidebarSegment")
+        let older = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(older.sidebarSegment == .projects)
+    }
+}

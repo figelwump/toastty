@@ -43,6 +43,23 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var startWork: TaskStartWork?
     /// The steps setup and start-work finished, saved as each one happens.
     public var operation: TaskOperation
+    /// The task's pull request, copied from the task space's `github-pr`
+    /// annotation so it outlives the task space.
+    public var pullRequestURL: String?
+    /// Set by an agent whose work has no pull request, when it is ready for
+    /// the user to look at.
+    public var readyForReviewAt: Date?
+    /// When the pull request was seen merged, and the commit it made. The
+    /// commit is what a release tag must contain for the task to ship.
+    public var mergedAt: Date?
+    public var mergeCommit: String?
+    /// When a release tag first contained `mergeCommit`, and that tag.
+    public var shippedAt: Date?
+    public var releaseTag: String?
+    /// Closed without finishing.
+    public var archivedAt: Date?
+    /// Finished by hand, for work that does not merge or ship.
+    public var doneAt: Date?
     /// The task space, once setup made it.
     public var taskSpaceWorkspaceID: UUID? {
         operation.taskSpace?.workspaceID
@@ -260,12 +277,16 @@ public enum TaskSource: Codable, Equatable, Sendable {
     case quickEntry
     /// Rebuilt from a task space whose record was missing.
     case recovered
+    /// Made for a task space that existed before it had a record, when the
+    /// user or an agent chose to track it.
+    case adopted
 
     private enum Kind: String, Codable {
         case cli
         case agent
         case quickEntry
         case recovered
+        case adopted
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -286,6 +307,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
             self = .quickEntry
         case .recovered:
             self = .recovered
+        case .adopted:
+            self = .adopted
         }
     }
 
@@ -301,6 +324,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
             try container.encode(Kind.quickEntry, forKey: .kind)
         case .recovered:
             try container.encode(Kind.recovered, forKey: .kind)
+        case .adopted:
+            try container.encode(Kind.adopted, forKey: .kind)
         }
     }
 }

@@ -57,6 +57,15 @@ enum ToastyTheme {
     /// finished task does not read as an unread turn.
     static let sidebarSubspaceDoneMark = Color(hex: 0x7CC47F)
     static let sidebarSubspaceDoneMarkBackground = Color(hex: 0x7CC47F, alpha: 0.2)
+    /// A task whose pull request waits for the user's review. Blue, so it
+    /// reads apart from amber "the agent asked you something".
+    static let sidebarTaskReviewMark = Color(hex: 0x6E9FE6)
+    static let sidebarTaskReviewMarkBackground = Color(hex: 0x6E9FE6, alpha: 0.22)
+    /// A merged task waiting for a release.
+    static let sidebarTaskToShipMark = Color(hex: 0xB98CE0)
+    static let sidebarTaskToShipMarkBackground = Color(hex: 0xB98CE0, alpha: 0.22)
+    /// The dashed box of a task that has not started.
+    static let sidebarTaskInboxMark = Color(hex: 0x8F877D)
     /// A done subspace's title recedes next to open work.
     static let sidebarSubspaceDoneTitleText = Color(hex: 0x9A9189)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)

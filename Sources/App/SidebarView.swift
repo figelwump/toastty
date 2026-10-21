@@ -441,7 +441,8 @@ private struct SubspaceRailStatusIcon: View {
         switch status {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed:
+        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed,
+             .review where isDoneTogglePreviewed:
             RoundedRectangle(cornerRadius: 2)
                 .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
@@ -466,6 +467,25 @@ private struct SubspaceRailStatusIcon: View {
                 }
         case .error:
             filledMark(ToastyTheme.sessionErrorText)
+        case .review:
+            // A tinted box with a blue dot: the pull request waits for you.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskReviewMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay {
+                    Circle()
+                        .fill(ToastyTheme.sidebarTaskReviewMark)
+                        .frame(width: 4.5, height: 4.5)
+                }
+        case .toShip:
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 6.5, weight: .black))
+                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                }
         }
     }
 
@@ -507,6 +527,16 @@ struct SessionStatusBadge: View {
 /// row holds. A plain reference rather than SwiftUI state: the group records
 /// it while computing its order, where state writes are not allowed, and the
 /// pin must be in place in the same update that reads the jumped-to row.
+/// The task board as of the sidebar's last body pass. Built once per pass
+/// and read by the header, the Status segment, card footers and rows, so a
+/// redraw does not rebuild the board for every card. A plain reference for
+/// the same reason as `SubspaceOrderMemory`.
+@MainActor
+private final class SidebarTaskBoardSnapshot {
+    var windowItems: [TaskBoardItem] = []
+    var allItems: [TaskBoardItem] = []
+}
+
 @MainActor
 private final class SubspaceOrderMemory {
     var displayedOrderByParentID: [UUID: [UUID]] = [:]
@@ -550,6 +580,10 @@ struct SidebarView: View {
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     /// Not observed here: only the Inbox section redraws when tasks change.
     let taskCoordinator: TaskCoordinator?
+    /// Every task's stage. Observed: a stage change moves rows and marks.
+    @ObservedObject var taskBoard: TaskBoardStore
+    /// Opens the quick entry panel; `nil` hides the Tasks row's ＋.
+    let newTask: (@MainActor () -> Void)?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -590,6 +624,7 @@ struct SidebarView: View {
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
+    @State private var taskBoardSnapshot = SidebarTaskBoardSnapshot()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
     @State private var optionKeyPressed = false
@@ -603,6 +638,20 @@ struct SidebarView: View {
     private static let sessionRowTitleReservedWidth: CGFloat = 60
     private static let sessionParentTagMaximumWidth: CGFloat = 90
     private static let subspaceRowArrowWidth: CGFloat = 10
+    private static let linkedChildIndent: CGFloat = 14
+
+    /// A small tag on a task row's second line: its project, or how many of
+    /// the tasks it started have merged.
+    static func sidebarTaskTag(_ text: String) -> some View {
+        Text(text)
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+    }
 
     /// Space under a card's session list: room above the card's bottom edge,
     /// or a short step down to a Subspaces group, whose header adds its own.
@@ -717,6 +766,8 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
         taskCoordinator: TaskCoordinator? = nil,
+        taskBoard: TaskBoardStore = .disabled,
+        newTask: (@MainActor () -> Void)? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -731,6 +782,8 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
         self.taskCoordinator = taskCoordinator
+        self.taskBoard = taskBoard
+        self.newTask = newTask
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
@@ -753,7 +806,8 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        refreshTaskBoardSnapshot()
+        return VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -766,7 +820,9 @@ struct SidebarView: View {
                                 workspaceTitle: { store.state.workspacesByID[$0]?.title }
                             )
                         }
-                        if store.window(id: windowID) != nil {
+                        if taskBoard.isEnabled, sidebarSegment == .status {
+                            statusSegmentContent
+                        } else if store.window(id: windowID) != nil {
                             // Subspaces render inside their parent's card, so
                             // the card list, its numbering, and drag reordering
                             // all work on the top-level workspaces only.
@@ -838,7 +894,12 @@ struct SidebarView: View {
                 // Keep the titlebar region opaque while letting rows scroll
                 // underneath it instead of showing through the traffic-light area.
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    sidebarTitlebarCover
+                    VStack(spacing: 0) {
+                        sidebarTitlebarCover
+                        if taskBoard.isEnabled {
+                            tasksHeader
+                        }
+                    }
                 }
                 .overlay {
                     SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent) { pill in
@@ -949,6 +1010,116 @@ struct SidebarView: View {
         }
     }
 
+    private func refreshTaskBoardSnapshot() {
+        guard taskBoard.isEnabled else {
+            taskBoardSnapshot.windowItems = []
+            taskBoardSnapshot.allItems = []
+            return
+        }
+        let all = taskBoard.items()
+        taskBoardSnapshot.allItems = all
+        taskBoardSnapshot.windowItems = TaskBoard.items(all, in: windowID, state: store.state)
+    }
+
+    private var sidebarSegment: SidebarSegment {
+        store.window(id: windowID)?.sidebarSegment ?? .projects
+    }
+
+    private var tasksHeader: some View {
+        SidebarTasksHeader(
+            needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count,
+            isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
+            segment: sidebarSegment,
+            openTasksView: { openTasksView(selecting: nil) },
+            newTask: newTask.map { action in { action() } },
+            selectSegment: { segment in
+                _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
+            }
+        )
+    }
+
+    private func openTasksView(selecting subject: TaskBoardItem.Subject?) {
+        cancelWorkspaceRename()
+        if let subject {
+            taskBoard.selectionByWindowID[windowID] = subject
+        }
+        _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
+    }
+
+    /// The Status segment: Needs you, Running, To ship and Done, below the
+    /// Inbox the sidebar always shows.
+    private var statusSegmentContent: some View {
+        let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
+        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems)
+        return SidebarStatusSegment(sections: sections, openTasksView: openTasksView(selecting:)) { entry in
+            if let workspaceID = entry.item.taskSpaceWorkspaceID,
+               let workspace = store.state.workspacesByID[workspaceID] {
+                subspaceRow(
+                    subspaceRowModel(
+                        workspace: workspace,
+                        spawner: nil,
+                        windowWorkspaceIDs: windowWorkspaceIDs,
+                        projectTag: entry.item.projectTitle,
+                        isLinkedChild: entry.isLinkedChild
+                    ),
+                    parentWorkspaceID: workspace.parentWorkspaceID ?? workspace.id,
+                    showsSpawnerTag: false
+                )
+            } else {
+                SidebarTaskRecordRow(item: entry.item) { openTasksView(selecting: entry.item.id) }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    /// Under a project card: the tasks that left it because they finished.
+    @ViewBuilder
+    private func finishedTasksFooter(projectWorkspaceID: UUID) -> some View {
+        if taskBoard.isEnabled {
+            let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
+            let toShip = items.filter { $0.stage == .toShip }.count
+            let done = items.filter { $0.stage == .done }.count
+            if toShip > 0 || done > 0 {
+                Button {
+                    openTasksView(selecting: nil)
+                } label: {
+                    HStack(spacing: 12) {
+                        if toShip > 0 {
+                            Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                        }
+                        if done > 0 {
+                            Label("Done \(done)", systemImage: "checkmark.square")
+                                .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .labelStyle(.titleAndIcon)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 10)
+                .help("Show finished tasks in the Tasks view")
+                .accessibilityLabel(Self.finishedTasksFooterLabel(toShip: toShip, done: done))
+                .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(projectWorkspaceID.uuidString)")
+                .background {
+                    SidebarSemanticTextBridge(text: Self.finishedTasksFooterLabel(toShip: toShip, done: done))
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
+    static func finishedTasksFooterLabel(toShip: Int, done: Int) -> String {
+        var parts: [String] = []
+        if toShip > 0 { parts.append("\(toShip) to ship") }
+        if done > 0 { parts.append("\(done) done") }
+        return "Finished tasks: " + parts.joined(separator: ", ") + ". Opens the Tasks view."
+    }
+
     private var sidebarTitlebarCover: some View {
         Rectangle()
             .fill(ToastyTheme.chromeBackground)
@@ -960,6 +1131,11 @@ struct SidebarView: View {
     private var sidebarHiddenSessionContent: SidebarScrollGeometry.Content {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
             return SidebarScrollGeometry.Content(isDragging: true)
+        }
+        // The pills point at session rows in project cards, which the Status
+        // segment does not draw.
+        guard taskBoard.isEnabled == false || sidebarSegment == .projects else {
+            return SidebarScrollGeometry.Content()
         }
 
         var content = SidebarScrollGeometry.Content()
@@ -1191,6 +1367,7 @@ struct SidebarView: View {
                 }
 
                 subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
+                finishedTasksFooter(projectWorkspaceID: workspace.id)
             }
         }
     }
@@ -3316,48 +3493,90 @@ struct SidebarView: View {
         }
         return subspaceIDs.compactMap { subspaceID in
             guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
-            let spawner = workspace.spawningSessionID.flatMap(spawnerStatus)
-            let statuses = sidebarSessionStatuses(for: subspaceID)
-            let sessions = statuses.map { status in
-                SidebarSubspacePresentation.SessionLine(
-                    title: status.displayTitle,
-                    panelID: status.panelID,
-                    // An unnamed session's title is already the agent's name.
-                    agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
-                    statusKind: status.status.kind,
-                    isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
-                    showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
-                    summary: SidebarSessionPresentation.sessionWaitingSummary(for: status)?.rowText(.compact)
-                        ?? normalizedSessionDetail(status.status.detail)
-                        ?? normalizedSessionDetail(status.status.summary),
-                    turnStartedAt: status.turnStartedAt,
-                    statusUpdatedAt: status.statusUpdatedAt
-                )
+            let row = subspaceRowModel(
+                workspace: workspace,
+                spawner: workspace.spawningSessionID.flatMap(spawnerStatus),
+                windowWorkspaceIDs: windowWorkspaceIDs
+            )
+            // A finished task leaves its project's card; the card's footer
+            // counts it and the Tasks view lists it.
+            if taskBoard.isEnabled, SidebarSubspacePresentation.isHiddenAsFinished(row) {
+                return nil
             }
-            return SidebarSubspacePresentation.Row(
-                id: subspaceID,
-                title: workspace.title,
-                status: SidebarSubspacePresentation.rowStatus(
-                    sessionStatus: SidebarSubspacePresentation.rowStatus(
-                        sessionStatuses: sessions.map { session in
-                            (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
-                        }
-                    ),
-                    isDone: workspace.doneAt != nil
-                ),
-                doneAt: workspace.doneAt,
-                annotations: workspace.annotations,
-                primaryAnnotationKey: workspace.primaryAnnotationKey,
-                summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
-                spawningSessionID: workspace.spawningSessionID,
-                spawnerName: spawner?.displayTitle,
-                spawnerPanelID: spawner?.panelID,
-                spawnerWorkspaceID: spawner?.workspaceID,
-                sessions: sessions,
-                creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
-                path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
+            return row
+        }
+    }
+
+    /// One task space's row, with its task's stage when the task system is on.
+    func subspaceRowModel(
+        workspace: WorkspaceState,
+        spawner: WorkspaceSessionStatus?,
+        windowWorkspaceIDs: [UUID],
+        projectTag: String? = nil,
+        isLinkedChild: Bool = false
+    ) -> SidebarSubspacePresentation.Row {
+        let subspaceID = workspace.id
+        let statuses = sidebarSessionStatuses(for: subspaceID)
+        let boardItem = taskBoard.item(taskSpace: workspace, statuses: statuses)
+        let sessions = statuses.map { status in
+            SidebarSubspacePresentation.SessionLine(
+                title: status.displayTitle,
+                panelID: status.panelID,
+                // An unnamed session's title is already the agent's name.
+                agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
+                statusKind: status.status.kind,
+                isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
+                showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
+                summary: SidebarSessionPresentation.sessionWaitingSummary(for: status)?.rowText(.compact)
+                    ?? normalizedSessionDetail(status.status.detail)
+                    ?? normalizedSessionDetail(status.status.summary),
+                turnStartedAt: status.turnStartedAt,
+                statusUpdatedAt: status.statusUpdatedAt
             )
         }
+        return SidebarSubspacePresentation.Row(
+            id: subspaceID,
+            title: workspace.title,
+            status: SidebarSubspacePresentation.rowStatus(
+                sessionStatus: SidebarSubspacePresentation.rowStatus(
+                    sessionStatuses: sessions.map { session in
+                        (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
+                    }
+                ),
+                isDone: workspace.doneAt != nil,
+                stage: boardItem?.stage
+            ),
+            stage: boardItem?.stage,
+            projectTag: projectTag,
+            linkedParentID: linkedParentTaskSpaceID(of: boardItem),
+            isLinkedChild: isLinkedChild,
+            childProgressLabel: boardItem?.taskID.flatMap(childProgressLabel(ofTaskID:)),
+            doneAt: workspace.doneAt,
+            annotations: workspace.annotations,
+            primaryAnnotationKey: workspace.primaryAnnotationKey,
+            summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
+            spawningSessionID: workspace.spawningSessionID,
+            spawnerName: spawner?.displayTitle,
+            spawnerPanelID: spawner?.panelID,
+            spawnerWorkspaceID: spawner?.workspaceID,
+            sessions: sessions,
+            creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
+            path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
+        )
+    }
+
+    private func linkedParentTaskSpaceID(of item: TaskBoardItem?) -> UUID? {
+        guard let parentTaskID = item?.parentTaskID,
+              let parentSpace = taskCoordinator?.records.record(id: parentTaskID)?.taskSpaceWorkspaceID,
+              store.state.workspacesByID[parentSpace] != nil else { return nil }
+        return parentSpace
+    }
+
+    private func childProgressLabel(ofTaskID taskID: UUID) -> String? {
+        guard let coordinator = taskCoordinator,
+              coordinator.records.records.contains(where: { $0.parentTaskID == taskID }) else { return nil }
+        guard let progress = TaskBoard.childProgress(of: taskID, items: taskBoardSnapshot.allItems) else { return nil }
+        return SidebarSubspacePresentation.childProgressLabel(merged: progress.merged, total: progress.total)
     }
 
     @ViewBuilder
@@ -3387,7 +3606,9 @@ struct SidebarView: View {
             displayedOrder: subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID],
             unpinnedOrder: unpinnedRows.map(\.id)
         )
-        let orderedRows = SidebarSubspacePresentation.applyingPin(pin, to: unpinnedRows)
+        let orderedRows = SidebarSubspacePresentation.groupingLinkedChildren(
+            SidebarSubspacePresentation.applyingPin(pin, to: unpinnedRows)
+        )
         let tally = SidebarSubspacePresentation.tally(rows)
         let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
         let attentionRowIDs = Set(rows.filter { $0.status.needsAttention }.map(\.id))
@@ -3570,6 +3791,7 @@ struct SidebarView: View {
                     subspacesTallyItem(count: tally.ready, color: ToastyTheme.sessionReadyText)
                     subspacesTallyItem(count: tally.needsApproval, color: ToastyTheme.sessionNeedsApprovalText)
                     subspacesTallyItem(count: tally.error, color: ToastyTheme.sessionErrorText)
+                    subspacesTallyItem(count: tally.review, color: ToastyTheme.sidebarTaskReviewMark)
                 }
                 .accessibilityHidden(true)
             }
@@ -3660,7 +3882,9 @@ struct SidebarView: View {
             // in layout it takes whatever the chips leave.
             Self.styledSessionNameText(row.title, isEmphasized: isEmphasized, isItalic: row.status == .working)
                 .foregroundStyle(
-                    row.status == .done ? ToastyTheme.sidebarSubspaceDoneTitleText : ToastyTheme.sidebarSessionAgentText
+                    row.status == .done || row.status == .toShip
+                        ? ToastyTheme.sidebarSubspaceDoneTitleText
+                        : ToastyTheme.sidebarSessionAgentText
                 )
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -3778,7 +4002,8 @@ struct SidebarView: View {
                 }
                 .frame(minHeight: Self.sessionRowLineMinHeight)
 
-                if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil) {
+                if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil)
+                    || row.projectTag != nil || row.childProgressLabel != nil {
                     HStack(spacing: 6) {
                         if let summary = row.summary {
                             Self.styledSessionSummaryText(summary, isItalic: row.status == .working)
@@ -3787,6 +4012,12 @@ struct SidebarView: View {
                                 .truncationMode(.tail)
                         }
                         Spacer(minLength: 0)
+                        if let childProgressLabel = row.childProgressLabel {
+                            Self.sidebarTaskTag(childProgressLabel)
+                        }
+                        if let projectTag = row.projectTag {
+                            Self.sidebarTaskTag(projectTag)
+                        }
                         if showsSpawnerTag, let spawnerName = row.spawnerName {
                             SidebarCappedIntrinsicWidthLayout(maximumWidth: Self.subspaceSpawnerTagMaximumWidth) {
                                 spawnerTag(
@@ -3810,6 +4041,20 @@ struct SidebarView: View {
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A task an agent split off draws under the task that started it,
+        // on the same rail sub-agent rows use.
+        .padding(.leading, row.isLinkedChild ? Self.linkedChildIndent : 0)
+        .overlay(alignment: .leading) {
+            if row.isLinkedChild {
+                Rectangle()
+                    .fill(ToastyTheme.sidebarChildContextText.opacity(0.35))
+                    .frame(width: 1)
+                    .padding(.leading, Self.linkedChildIndent / 2 + 4)
+                    .padding(.vertical, 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         // Only a subspace row leaves the current workspace, so only it
         // carries the arrow.
         .overlay(alignment: .trailing) {
@@ -4024,7 +4269,7 @@ struct SidebarView: View {
         case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle, .done: return nil
+        case .working, .idle, .review, .toShip, .done: return nil
         }
     }
 
@@ -4036,7 +4281,7 @@ struct SidebarView: View {
         switch status {
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .ready, .working, .idle, .done: return nil
+        case .ready, .working, .idle, .review, .toShip, .done: return nil
         }
     }
 

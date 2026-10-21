@@ -595,6 +595,9 @@ struct WorkspaceView: View {
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleSeenUnreadPanelClearIfNeeded()
         }
+        .onChange(of: isCoveredByTasksView) { _, _ in
+            scheduleSeenUnreadPanelClearIfNeeded()
+        }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
             pruneTransientTabDragState()
@@ -1641,7 +1644,9 @@ struct WorkspaceView: View {
     private func scheduleSeenUnreadPanelClearIfNeeded() {
         cancelSeenUnreadClearTask()
 
-        guard let clearCandidate = Self.unreadClearCandidate(
+        // The Tasks view covers the workspace, so its output is not seen.
+        guard isCoveredByTasksView == false,
+              let clearCandidate = Self.unreadClearCandidate(
             workspace: selectedWorkspace,
             appIsActive: store.isAppActive
         ) else {
@@ -1651,7 +1656,7 @@ struct WorkspaceView: View {
         // The delay keeps panels the user only passes through on the way elsewhere unread.
         seenUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.seenUnreadClearDelayNanoseconds)
-            guard Task.isCancelled == false else { return }
+            guard Task.isCancelled == false, isCoveredByTasksView == false else { return }
             let panelIDs = Self.unreadPanelIDsToClear(
                 currentWorkspace: store.selectedWorkspace(in: windowID),
                 candidate: clearCandidate,
@@ -1666,6 +1671,10 @@ struct WorkspaceView: View {
                 )
             }
         }
+    }
+
+    private var isCoveredByTasksView: Bool {
+        store.window(id: windowID)?.showsTasksView == true
     }
 
     private func cancelSeenUnreadClearTask() {
