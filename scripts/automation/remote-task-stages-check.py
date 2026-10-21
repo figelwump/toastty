@@ -131,11 +131,22 @@ def main():
         listed = run_tool(driver, 'windows', pid, check=False)
         return listed.returncode == 0 and any(w['identifier'] == 'quick-entry.panel' for w in json.loads(listed.stdout))
 
+    def bring_to_front():
+        run_tool(helper, 'activate', pid)
+        wait_for('the instance in front', lambda: run_tool(helper, 'frontmost-pid').stdout.strip() == str(pid), timeout=15)
+
     def open_and_close_quick_entry(button):
+        # A user clicks the button in the active app.
+        bring_to_front()
         run_tool(helper, 'press', pid, button)
         wait_for(f'{button} to open quick entry', quick_entry_open, timeout=15)
         run_tool(driver, 'key', KEY_ESCAPE)
-        wait_for('quick entry to close', lambda: quick_entry_open() is False, timeout=15)
+        try:
+            wait_for('quick entry to close', lambda: quick_entry_open() is False, timeout=15)
+        except AssertionError:
+            step('quick entry stayed open', frontmost=run_tool(helper, 'frontmost-pid').stdout.strip(),
+                 windows=run_tool(driver, 'windows', pid, check=False).stdout)
+            raise
         step('quick entry opened and closed', button=button)
 
     try:
@@ -199,8 +210,7 @@ def main():
 
         # 4. Typing under the Tasks view does not reach the terminal; Esc
         # closes it, and typing then does.
-        run_tool(helper, 'activate', pid)
-        wait_for('the instance in front', lambda: run_tool(helper, 'frontmost-pid').stdout.strip() == str(pid), timeout=15)
+        bring_to_front()
         run_tool(driver, 'type', 'echo covered-marker')
         run_tool(driver, 'key', KEY_RETURN)
         time.sleep(1.5)
