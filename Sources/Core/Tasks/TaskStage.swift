@@ -1,0 +1,247 @@
+import Foundation
+
+/// Where a task stands: worked out from its record and from what Toastty
+/// sees now, never stored, so it cannot go stale. The rules are checked in
+/// order and the first match wins: Archived, Done, To ship, Needs you,
+/// Inbox, Running. Needs you comes before Inbox, so a task whose setup
+/// failed still counts toward the Needs you badge.
+public enum TaskStage: Equatable, Sendable {
+    case inbox
+    case needsYou(Attention)
+    case running
+    case toShip
+    case done
+    case archived
+
+    /// Why a task needs the user.
+    public enum Attention: Equatable, Sendable {
+        /// Triage could not place the task; the user picks a workspace.
+        case pickWorkspace(reason: String)
+        case setupFailed(reason: String)
+        /// The move into a worktree failed.
+        case moveFailed(reason: String)
+        /// The task space closed before the task finished.
+        case taskSpaceClosed
+        /// The agent asked a question or wants an approval.
+        case agentNeedsInput
+        case agentError
+        /// The pull request is open and the agent is idle.
+        case review
+        /// The agent marked work without a pull request ready.
+        case readyForReview
+
+        /// Whether the task has not reached its task space yet. Lists show
+        /// these with the Inbox, where the task already is.
+        public var isBeforeStart: Bool {
+            switch self {
+            case .pickWorkspace, .setupFailed, .moveFailed: true
+            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview: false
+            }
+        }
+    }
+
+    /// The groups lists show, in their order.
+    public enum Group: Int, CaseIterable, Comparable, Sendable {
+        case inbox
+        case needsYou
+        case running
+        case toShip
+        case done
+        case archived
+
+        public static func < (lhs: Group, rhs: Group) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    /// The group a list shows the task in. A task that needs the user
+    /// before it reaches its task space stays with the Inbox.
+    public var group: Group {
+        switch self {
+        case .inbox: .inbox
+        case .needsYou(let attention): attention.isBeforeStart ? .inbox : .needsYou
+        case .running: .running
+        case .toShip: .toShip
+        case .done: .done
+        case .archived: .archived
+        }
+    }
+
+    /// Whether the task counts toward the Needs you badge.
+    public var needsUser: Bool {
+        if case .needsYou = self { return true }
+        return false
+    }
+
+    /// Whether the task's work is over: it shipped, merged, finished, or
+    /// was archived. These task spaces leave the sidebar.
+    public var isFinished: Bool {
+        switch self {
+        case .toShip, .done, .archived: true
+        case .inbox, .needsYou, .running: false
+        }
+    }
+
+    public static func derive(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
+        if facts.archivedAt != nil {
+            return .archived
+        }
+        if facts.doneAt != nil || facts.shippedAt != nil {
+            return .done
+        }
+        if facts.mergedAt != nil || live.pullRequest?.state == .merged {
+            return releaseTagsConfigured ? .toShip : .done
+        }
+        switch facts.setup {
+        case .needsWorkspace(let reason):
+            return .needsYou(.pickWorkspace(reason: reason))
+        case .setupFailed(let reason):
+            return .needsYou(.setupFailed(reason: reason))
+        case .routing, .settingUp:
+            return .inbox
+        case .started:
+            break
+        }
+        switch facts.startWork {
+        case .failed(let reason)?:
+            return .needsYou(.moveFailed(reason: reason))
+        case .running?:
+            return .inbox
+        case .finished?, nil:
+            break
+        }
+        if facts.hasTaskSpace, live.taskSpaceOpen == false {
+            return .needsYou(.taskSpaceClosed)
+        }
+        switch live.agent {
+        case .needsInput:
+            return .needsYou(.agentNeedsInput)
+        case .error:
+            return .needsYou(.agentError)
+        case .working:
+            return .running
+        case .idle, .none:
+            break
+        }
+        if let pullRequest = live.pullRequest {
+            if pullRequest.state == .open, pullRequest.isDraft == false {
+                return .needsYou(.review)
+            }
+        } else if live.hasPullRequestLink {
+            // Without an answer from GitHub, a linked pull request and an
+            // idle agent are the best sign that the work waits for review.
+            return .needsYou(.review)
+        }
+        if facts.readyForReviewAt != nil {
+            return .needsYou(.readyForReview)
+        }
+        return .running
+    }
+}
+
+/// The parts of a task the stage depends on: its record, or for a task
+/// space without one, the little Toastty knows about it.
+public struct TaskStageFacts: Equatable, Sendable {
+    public var setup: TaskSetupState
+    public var startWork: TaskStartWorkState?
+    /// Whether setup made a task space, which may have closed since.
+    public var hasTaskSpace: Bool
+    public var readyForReviewAt: Date?
+    public var mergedAt: Date?
+    public var shippedAt: Date?
+    public var archivedAt: Date?
+    public var doneAt: Date?
+
+    public init(
+        setup: TaskSetupState,
+        startWork: TaskStartWorkState? = nil,
+        hasTaskSpace: Bool,
+        readyForReviewAt: Date? = nil,
+        mergedAt: Date? = nil,
+        shippedAt: Date? = nil,
+        archivedAt: Date? = nil,
+        doneAt: Date? = nil
+    ) {
+        self.setup = setup
+        self.startWork = startWork
+        self.hasTaskSpace = hasTaskSpace
+        self.readyForReviewAt = readyForReviewAt
+        self.mergedAt = mergedAt
+        self.shippedAt = shippedAt
+        self.archivedAt = archivedAt
+        self.doneAt = doneAt
+    }
+
+    public init(record: TaskRecord) {
+        self.init(
+            setup: record.setup,
+            startWork: record.startWork?.state,
+            hasTaskSpace: record.operation.taskSpace != nil,
+            readyForReviewAt: record.readyForReviewAt,
+            mergedAt: record.mergedAt,
+            shippedAt: record.shippedAt,
+            archivedAt: record.archivedAt,
+            doneAt: record.doneAt
+        )
+    }
+
+    /// A task space with no record. Toastty only watches it: its done mark
+    /// counts as done, and the mark clears when its work starts again.
+    public static func observed(doneAt: Date?) -> TaskStageFacts {
+        TaskStageFacts(setup: .started, hasTaskSpace: true, doneAt: doneAt)
+    }
+}
+
+/// What the agents in a task space are doing, the most urgent first.
+public enum TaskAgentActivity: Equatable, Sendable {
+    /// No agent session in the task space.
+    case none
+    case idle
+    case working
+    case needsInput
+    case error
+}
+
+/// GitHub's last answer about a pull request.
+public struct TaskPullRequestState: Equatable, Sendable {
+    public enum State: String, Equatable, Sendable {
+        case open
+        case closed
+        case merged
+    }
+
+    public var state: State
+    public var isDraft: Bool
+    public var headSHA: String?
+    public var mergeCommit: String?
+
+    public init(state: State, isDraft: Bool = false, headSHA: String? = nil, mergeCommit: String? = nil) {
+        self.state = state
+        self.isDraft = isDraft
+        self.headSHA = headSHA
+        self.mergeCommit = mergeCommit
+    }
+}
+
+/// What Toastty sees now, from caches only, so working out a stage never
+/// waits on `gh` or `git`.
+public struct TaskLiveFacts: Equatable, Sendable {
+    public var taskSpaceOpen: Bool
+    public var agent: TaskAgentActivity
+    /// `nil` until GitHub answered, or when `gh` is unavailable.
+    public var pullRequest: TaskPullRequestState?
+    /// Whether the task has a pull request link at all.
+    public var hasPullRequestLink: Bool
+
+    public init(
+        taskSpaceOpen: Bool,
+        agent: TaskAgentActivity = .none,
+        pullRequest: TaskPullRequestState? = nil,
+        hasPullRequestLink: Bool = false
+    ) {
+        self.taskSpaceOpen = taskSpaceOpen
+        self.agent = agent
+        self.pullRequest = pullRequest
+        self.hasPullRequestLink = hasPullRequestLink
+    }
+}

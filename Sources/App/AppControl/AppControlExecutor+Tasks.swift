@@ -255,6 +255,7 @@ extension AppControlExecutor {
         case .cli: source = "cli"
         case .agent: source = "agent"
         case .recovered: source = "recovered"
+        case .adopted: source = "adopted"
         }
         var snapshot: [String: AutomationJSONValue] = [
             "taskID": .string(record.id.uuidString),
