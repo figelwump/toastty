@@ -357,7 +357,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | To ship | it merged, and its project has `release_tags` |
 | Needs you | triage could not place it, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
 | Inbox | triage or setup is still running, or it is moving into a worktree |
-| Needs you | its agent finished a turn and waits for a prompt: "Claude finished · waiting for you". This holds after you read the answer too, until you send the next prompt |
+| Needs you | its agent finished a turn and waits for a prompt: "Claude finished · waiting for you". This holds after you read the answer, and for an agent restored after a relaunch, until you send the next prompt |
 | Running | anything else: an agent that works, waits on its sub-agents, or has not finished a turn yet; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
 
 The pull request comes from the task space's `github-pr` annotation. Toastty

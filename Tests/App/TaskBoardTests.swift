@@ -299,6 +299,19 @@ struct TaskBoardTests {
         )
         #expect(try item().stage == .needsYou(.agentFinished))
 
+        // After a relaunch the restored session starts idle, with no turn
+        // timing: it still waits for the user.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        fixture.sessionRuntimeStore.stopSession(sessionID: session, at: endedAt.addingTimeInterval(2))
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "restored-\(session)", agent: .codex, panelID: panel, windowID: windowID, workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, launchReason: .restore, at: endedAt.addingTimeInterval(3)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(3)
+        )
+        #expect(try item().stage == .needsYou(.agentFinished))
+
         // An agent that ended its turn to wait on another task is running.
         _ = try fixture.coordinator.addWatch(targetTaskID: other.id, condition: .idle, notifyTaskID: task.id)
         let waiting = try item()

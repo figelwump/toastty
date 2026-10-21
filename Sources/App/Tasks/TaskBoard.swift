@@ -105,17 +105,25 @@ enum TaskBoard {
     }
 
     /// The most urgent thing a task space's agents are doing. A session that
-    /// waits on its sub-agents or is resuming is working. An idle session
-    /// has finished a turn once it has ended one; before that it has only
-    /// started, as the close confirmation also reads it.
-    static func agentActivity(_ statuses: [WorkspaceSessionStatus]) -> TaskAgentActivity {
+    /// waits on its sub-agents or is resuming is working. An idle session has
+    /// finished and waits for a prompt once it has ended a turn. Without an
+    /// ended turn it waits too, since turn timing does not survive a relaunch
+    /// and a restored session starts idle, except for `launchedSessionID`: the
+    /// session the task started with its first prompt, which is only about to
+    /// begin its first turn. Without `launchedSessionID`, as for a task space
+    /// with no record, an idle session counts only after an ended turn.
+    static func agentActivity(_ statuses: [WorkspaceSessionStatus], launchedSessionID: String? = nil) -> TaskAgentActivity {
         guard statuses.isEmpty == false else { return .none }
         let kinds = Set(statuses.map(\.status.kind))
         if kinds.contains(.needsApproval) { return .needsInput }
         if kinds.contains(.error) { return .error }
         if kinds.contains(.working) || statuses.contains(where: { $0.projection != .none }) { return .working }
         let finished = statuses.contains { status in
-            status.status.kind == .ready || (status.status.kind == .idle && status.lastTurnDuration != nil)
+            switch status.status.kind {
+            case .ready: true
+            case .idle: status.lastTurnDuration != nil || (launchedSessionID != nil && status.sessionID != launchedSessionID)
+            case .working, .needsApproval, .error: false
+            }
         }
         return finished ? .finished : .idle
     }
@@ -149,7 +157,7 @@ enum TaskBoard {
         let annotationLink = taskSpace.flatMap(pullRequestLink)
         let link = annotationLink ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
         let pullRequestState = link.flatMap(inputs.pullRequestState)
-        let agent = agentActivity(statuses)
+        let agent = agentActivity(statuses, launchedSessionID: record.operation.agentLaunch?.sessionID)
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
