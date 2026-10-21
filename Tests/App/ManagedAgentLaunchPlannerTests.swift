@@ -1474,27 +1474,17 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         func activeStatus() -> SessionStatus? {
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
         }
-
-        // The resumed thread's earlier turn is already in the rollout. Replaying
-        // it must not end a turn: the session is idle, waiting for a prompt.
-        try appendCodexSessionLogLine(
-            """
-            {"timestamp":"2026-10-21T02:46:00.000Z","type":"turn_context","payload":{"turn_id":"turn-old","cwd":"/tmp/repo","approval_policy":"never"}}
-            {"timestamp":"2026-10-21T02:46:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"READY-A"}}
-            """,
-            to: rolloutURL
-        )
-        XCTAssertTrue(fixture.store.send(
-            .updateTerminalPanelResumeRecord(
-                panelID: fixture.panelID,
-                resumeRecord: codexResumeRecord(
-                    nativeSessionID: "thread-root",
-                    sessionFilePath: rolloutURL.path
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func stamp(_ offset: TimeInterval) -> String { formatter.string(from: Date().addingTimeInterval(offset)) }
+        func attachRollout() {
+            XCTAssertTrue(fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(nativeSessionID: "thread-root", sessionFilePath: rolloutURL.path)
                 )
-            )
-        ))
-        try await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertEqual(activeStatus()?.kind, .idle)
+            ))
+        }
 
         // A new prompt starts a turn, and Codex never runs `notify` for it.
         fixture.sessionRuntimeStore.updateStatus(
@@ -1502,10 +1492,40 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             status: SessionStatus(kind: .working, summary: "Working", detail: "Reply with DONE-A"),
             at: Date()
         )
+        // The resumed thread's earlier turn is in the rollout. The watcher reads
+        // it from the start once the session is known, while the new turn
+        // already works; that old completion must not end the new turn.
         try appendCodexSessionLogLine(
             """
-            {"timestamp":"2026-10-21T02:46:30.000Z","type":"turn_context","payload":{"turn_id":"turn-new","cwd":"/tmp/repo","approval_policy":"never"}}
-            {"timestamp":"2026-10-21T02:46:31.740Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-new","last_agent_message":"DONE-A"}}
+            {"timestamp":"\(stamp(-60))","type":"turn_context","payload":{"turn_id":"turn-old","cwd":"/tmp/repo","approval_policy":"never"}}
+            {"timestamp":"\(stamp(-55))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"READY-A"}}
+            """,
+            to: rolloutURL
+        )
+        attachRollout()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(0))","type":"turn_context","payload":{"turn_id":"turn-new","cwd":"/tmp/repo","approval_policy":"never"}}
+            """,
+            to: rolloutURL
+        )
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(activeStatus()?.kind, .working)
+
+        // A watcher that reattaches to the same rollout does not read the
+        // turn's `turn_context` again, but still knows the turn.
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)
+        ))
+        attachRollout()
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherTransitionCountForTesting == 0 &&
+                fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == rolloutURL.path
+        }
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(1))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-new","last_agent_message":"DONE-A"}}
             """,
             to: rolloutURL
         )

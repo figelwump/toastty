@@ -709,11 +709,18 @@ extension SessionRuntimeStoreTests {
             )
             return store
         }
-        func complete(_ store: SessionRuntimeStore, turnID: String?, latest: String?, error: String? = nil) -> Bool {
+        func complete(
+            _ store: SessionRuntimeStore,
+            turnID: String?,
+            latest: String?,
+            completedAt: Date = Date(timeIntervalSince1970: 1_700_000_009),
+            error: String? = nil
+        ) -> Bool {
             store.handleCodexRolloutTurnCompletion(
                 sessionID: "sess-codex",
                 turnID: turnID,
                 latestRolloutTurnID: latest,
+                completedAt: completedAt,
                 detail: "DONE",
                 turnError: error,
                 at: Date(timeIntervalSince1970: 1_700_000_010)
@@ -734,16 +741,31 @@ extension SessionRuntimeStoreTests {
         let fallback = makeStore(source: .sessionLogFallback(reason: "test"))
         #expect(complete(fallback, turnID: "turn-1", latest: "turn-1") == false)
 
-        // Only the rollout's newest turn ends the working turn.
+        // Only the rollout's newest turn ends the working turn, and only with a
+        // completion written after the turn started (5 s here).
         setWorking(fallback)
         #expect(complete(fallback, turnID: "turn-0", latest: "turn-1") == false)
         #expect(complete(fallback, turnID: nil, latest: "turn-1") == false)
+        #expect(complete(
+            fallback, turnID: "turn-1", latest: "turn-1",
+            completedAt: Date(timeIntervalSince1970: 1_699_999_990)
+        ) == false)
         #expect(kind(fallback) == .working)
         #expect(complete(fallback, turnID: "turn-1", latest: "turn-1"))
         #expect(kind(fallback) == .ready)
 
         // When `notify` already ended the turn, the rollout reports nothing more.
         #expect(complete(fallback, turnID: "turn-1", latest: "turn-1") == false)
+
+        // A turn that asked the user a question ends from Needs approval too.
+        setWorking(fallback)
+        fallback.updateStatus(
+            sessionID: "sess-codex",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs input", detail: "Which one?"),
+            at: Date(timeIntervalSince1970: 1_700_000_006)
+        )
+        #expect(complete(fallback, turnID: "turn-q", latest: "turn-q"))
+        #expect(kind(fallback) == .ready)
 
         // A failed turn shows as an error.
         setWorking(fallback)

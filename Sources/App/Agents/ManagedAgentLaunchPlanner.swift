@@ -1404,7 +1404,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             // Keep status/completion ownership with hooks; forward only the
             // approval fields needed to classify PermissionRequest events.
             if let turnID = normalizedNonEmpty(event.rootTurnID) {
-                codexRolloutWatchersBySessionID[sessionID]?.latestTurnID = turnID
+                codexSessionLogCursorStatesByKey[
+                    CodexSessionLogStreamKey(sessionID: sessionID, stream: .canonicalRollout)
+                ]?.latestTurnID = turnID
             }
             sessionRuntimeStore?.recordCodexCanonicalTurnContext(
                 sessionID: sessionID,
@@ -1435,7 +1437,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionRuntimeStore?.handleCodexRolloutTurnCompletion(
                 sessionID: sessionID,
                 turnID: event.completionTurnID,
-                latestRolloutTurnID: registration.latestTurnID,
+                latestRolloutTurnID: codexSessionLogCursorStatesByKey[
+                    CodexSessionLogStreamKey(sessionID: sessionID, stream: .canonicalRollout)
+                ]?.latestTurnID,
+                completedAt: event.occurredAt,
                 detail: event.detail,
                 turnError: event.turnError,
                 at: nowProvider()
@@ -1859,8 +1864,6 @@ private struct CodexRolloutSessionLogWatcherRegistration {
     let id: UUID
     let logURL: URL
     let watcher: CodexSessionLogWatcher
-    /// The turn of the newest `turn_context` this watcher has read.
-    var latestTurnID: String?
 }
 
 private struct CodexRolloutWatcherTransition {
@@ -1910,6 +1913,9 @@ private struct CodexSessionLogStreamKey: Hashable {
 private struct CodexSessionLogCursorStateRegistration {
     let standardizedPath: String
     let cursorState: CodexSessionLogCursorState
+    /// The turn of the newest `turn_context` read from a rollout. It lives
+    /// with the cursor: a reattached watcher does not read that line again.
+    var latestTurnID: String?
 }
 
 /// First resume wins: lets the snapshot build race a timeout without ever

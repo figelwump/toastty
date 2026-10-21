@@ -1843,14 +1843,20 @@ final class SessionRuntimeStore: ObservableObject {
     /// Without hooks, `notify` reports a finished turn, but a Codex session
     /// resumed after a relaunch may never run it, which left the session
     /// working forever. The rollout's `task_complete` backs it up. It applies
-    /// only to the rollout's newest turn and only while the session still
-    /// works, so a replayed older turn, or a turn `notify` already reported,
-    /// changes nothing.
+    /// only to the rollout's newest turn, only while the session is still in
+    /// a turn, and only when it was written after that turn started here: a
+    /// new watcher reads the rollout from its start, so older completions are
+    /// replayed while a newer turn may already be working.
+    /// Toastty sees a turn start a little after Codex writes it, so a short
+    /// turn can finish just before `turnStartedAt`.
+    static let codexRolloutCompletionClockTolerance: TimeInterval = 2
+
     @discardableResult
     func handleCodexRolloutTurnCompletion(
         sessionID: String,
         turnID: String?,
         latestRolloutTurnID: String?,
+        completedAt: Date?,
         detail: String,
         turnError: String?,
         at now: Date
@@ -1869,10 +1875,14 @@ final class SessionRuntimeStore: ObservableObject {
             ignoredReason = "status_source_not_session_log_fallback"
         } else if turnID == nil || turnID != latestRolloutTurnID {
             ignoredReason = "not_latest_rollout_turn"
-        } else if record?.status?.kind != .working {
-            ignoredReason = "not_working"
-        } else {
+        } else if record?.status?.kind != .working, record?.status?.kind != .needsApproval {
+            ignoredReason = "not_in_turn"
+        } else if let turnStartedAt = record?.turnStartedAt,
+                  let completedAt,
+                  completedAt >= turnStartedAt.addingTimeInterval(-Self.codexRolloutCompletionClockTolerance) {
             ignoredReason = nil
+        } else {
+            ignoredReason = "completed_before_turn_started"
         }
         let metadata = [
             "session_id": sessionID,
