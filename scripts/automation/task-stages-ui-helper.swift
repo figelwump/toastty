@@ -8,7 +8,7 @@
 //   activate <pid>               makes the app frontmost
 //   frontmost-pid                prints the frontmost app's process ID
 //   press <pid> <identifier>     presses the element with that
-//                                Accessibility identifier
+//                                Accessibility identifier, or clicks it
 
 import AppKit
 import CoreGraphics
@@ -71,8 +71,26 @@ case "press":
     guard let target = windows.lazy.compactMap({ find($0, depth: 0) }).first else {
         fail("no element \(arguments[2]) in pid \(pid)")
     }
-    let error = AXUIElementPerformAction(target, kAXPressAction as CFString)
-    guard error == .success else { fail("pressing \(arguments[2]) failed: \(error.rawValue)") }
+    if AXUIElementPerformAction(target, kAXPressAction as CFString) == .success { break }
+    // Some SwiftUI buttons refuse AXPress; click the middle of the element
+    // instead, with the app in front so the click reaches it.
+    guard let positionValue = value(target, kAXPositionAttribute), let sizeValue = value(target, kAXSizeAttribute) else {
+        fail("\(arguments[2]) has no frame to click")
+    }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin)
+    AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+    AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    usleep(300_000)
+    let point = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+        guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type,
+                                  mouseCursorPosition: point, mouseButton: .left) else { fail("could not make a click") }
+        event.post(tap: .cghidEventTap)
+        usleep(60_000)
+    }
 
 default:
     fail("unknown command \(arguments.first ?? "")")
