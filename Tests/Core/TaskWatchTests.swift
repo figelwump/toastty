@@ -42,6 +42,36 @@ struct TaskWatchTests {
     }
 
     @Test
+    func aStageConditionHoldsFromItsStageOnward() {
+        func conditions(_ stage: TaskStage, merged: Bool = false) -> Set<TaskWatchCondition> {
+            TaskWatchEvaluation.stageConditions(stage: stage, merged: merged)
+        }
+        #expect(conditions(.running).isEmpty)
+        #expect(conditions(.inbox).isEmpty)
+        #expect(conditions(.needsYou(.agentNeedsInput)).isEmpty)
+        #expect(conditions(.needsYou(.review)) == [.readyForReview])
+        #expect(conditions(.needsYou(.readyForReview)) == [.readyForReview])
+        #expect(conditions(.toShip, merged: true) == [.readyForReview, .merged, .toShip])
+        // A merge in a project without release tags is Done at once.
+        #expect(conditions(.done, merged: true) == [.readyForReview, .merged, .toShip, .done])
+        // Marked done by hand: nothing merged or waits to ship.
+        #expect(conditions(.done) == [.readyForReview, .done])
+        #expect(conditions(.archived, merged: true) == [.archived])
+    }
+
+    @Test
+    func aFiredStageWatchNamesTheStageTheTaskReached() {
+        let mergedAndDone = TaskWatchFacts(activity: .notRunning, activityChangedAt: nil, stages: [.readyForReview, .merged, .toShip, .done])
+        #expect(TaskWatchEvaluation.reason(.readyForReview, facts: mergedAndDone) == "is done")
+        #expect(TaskWatchEvaluation.reason(.toShip, facts: mergedAndDone) == "is done")
+        #expect(TaskWatchEvaluation.reason(.merged, facts: mergedAndDone) == "is merged")
+        let waitingToShip = TaskWatchFacts(activity: .notRunning, activityChangedAt: nil, stages: [.readyForReview, .merged, .toShip])
+        #expect(TaskWatchEvaluation.reason(.readyForReview, facts: waitingToShip) == "is waiting to ship")
+        let idle = TaskWatchFacts(activity: .idle, activityChangedAt: nil, stages: [.readyForReview])
+        #expect(TaskWatchEvaluation.reason(.idle, facts: idle) == "is idle")
+    }
+
+    @Test
     func recordsSavedBeforeWatchesExistedStillLoad() throws {
         let record = TaskRecord(createdAt: made, text: "Fix the dot", title: "Fix the dot", slug: "fix-the-dot", source: .cli)
         var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])

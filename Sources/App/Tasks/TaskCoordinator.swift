@@ -229,10 +229,8 @@ final class TaskCoordinator {
     var flushLayout: () -> Void = {}
     /// Set once the session store exists. Without it, tasks cannot move.
     var sessions: (any TaskSessionProviding)?
-    /// The stage conditions a task meets now, for watches. Empty until the
-    /// app derives task stages.
-    var stageConditions: (TaskRecord) -> Set<TaskWatchCondition> = { _ in [] }
-    /// The live view of every task's stage, for queries that report it.
+    /// The live view of every task's stage, for queries that report it and
+    /// for stage watches.
     weak var board: TaskBoardStore?
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]

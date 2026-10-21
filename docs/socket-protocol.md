@@ -397,8 +397,13 @@ Notable action-specific behavior:
     session's own task is notified, and a caller that is not a task's agent
     gets `INVALID_PAYLOAD`.
   - `idle` holds when the target's agent finished a turn after the watch was
-    made; `waiting` while it waits for an approval or an answer; the stage
-    conditions while the task is in that stage.
+    made; `waiting` while it waits for an approval or an answer. A stage
+    condition holds once the task reaches that stage and stays true after the
+    task moves past it, in the order `ready-for-review`, `merged`, `to-ship`,
+    `done`: a merged task also meets `ready-for-review`, and a merge in a
+    project without release tags, which goes straight to Done, also meets
+    `to-ship`. A task marked done by hand meets only `ready-for-review` and
+    `done`. `archived` holds only for an archived task.
   - a notifying watch is saved on the notified task's record and fires once:
     Toastty sends one line, `[Toastty watch <watchID>] Task "<title>"
     (<taskID>) <reason>...`, to that task's agent through `task.send`, and

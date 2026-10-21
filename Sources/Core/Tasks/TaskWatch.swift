@@ -140,8 +140,8 @@ public struct TaskWatchFacts: Equatable, Sendable {
     /// When the agent last finished a turn in this app run. A session
     /// restored after a relaunch has none until it finishes one.
     public var turnEndedAt: Date?
-    /// The stages the task is in now, as far as the app derives them. Empty
-    /// until stages exist; a stage condition then never holds.
+    /// The stage conditions the task meets now; see
+    /// `TaskWatchEvaluation.stageConditions(stage:merged:)`.
     public var stages: Set<TaskWatchCondition>
 
     public init(
@@ -172,6 +172,38 @@ public enum TaskWatchEvaluation {
         case .readyForReview, .merged, .toShip, .done, .archived:
             return facts.stages.contains(condition)
         }
+    }
+
+    /// The stage conditions a task in `stage` meets. A condition still holds
+    /// after the task moves past it, in the order ready-for-review, merged,
+    /// to-ship, done, so a watch fires even when the task skips a stage or
+    /// moves on between two checks: a pull request can merge before Toastty
+    /// sees it open, and a merge in a project without release tags goes
+    /// straight to Done. `merged` says whether the pull request merged, which
+    /// a Done stage alone does not tell.
+    public static func stageConditions(stage: TaskStage, merged: Bool) -> Set<TaskWatchCondition> {
+        switch stage {
+        case .archived:
+            return [.archived]
+        case .done:
+            return merged ? [.readyForReview, .merged, .toShip, .done] : [.readyForReview, .done]
+        case .toShip:
+            return [.readyForReview, .merged, .toShip]
+        case .needsYou(.review), .needsYou(.readyForReview):
+            return [.readyForReview]
+        case .inbox, .needsYou, .running:
+            return []
+        }
+    }
+
+    /// What a fired watch says about its task. For a stage condition it is
+    /// the furthest stage the task has reached, which can be past the one
+    /// watched for; `merged` stays "is merged", which is true at every later
+    /// stage.
+    public static func reason(_ condition: TaskWatchCondition, facts: TaskWatchFacts) -> String {
+        guard condition.isStageCondition, condition != .merged, condition != .archived else { return condition.phrase }
+        let furthest = [TaskWatchCondition.done, .toShip, .readyForReview].first { facts.stages.contains($0) }
+        return (furthest ?? condition).phrase
     }
 
     /// Why a watch can never fire now, if so: its task is archived and the

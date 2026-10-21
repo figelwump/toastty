@@ -19,7 +19,9 @@ It checks that:
 - `task send` by task ID reaches A's restored agent; when A finishes that turn,
   Toastty wakes B with a one-line message, and B answers it;
 - a cursor from before the relaunch gets `reset`, and a later cursor lists A;
-- `task watch --wait` blocks until A's next turn ends and exits 0.
+- `task watch --wait` blocks until A's next turn ends and exits 0;
+- a stage watch, `--until ready-for-review --wait`, returns once A's task space
+  links a pull request while its agent is idle.
 """
 
 import argparse
@@ -256,6 +258,19 @@ def main():
         out, err = waiter.communicate(timeout=360)
         require(waiter.returncode == 0 and 'is idle' in out, f'watch --wait failed ({waiter.returncode}): {out} {err}')
         step('watch --wait returned', output=out.strip())
+
+        # 6. A stage watch: a linked pull request that GitHub does not know,
+        # and an idle agent, wait for review.
+        waiter = subprocess.Popen([str(cli), 'task', 'watch', a['taskID'], '--until', 'ready-for-review', '--wait',
+                                   '--timeout', '120'],
+                                  env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(2)
+        cli_result('action', 'run', 'workspace.set-annotation', '--workspace', a['setup']['taskSpaceWorkspaceID'],
+                   'key=github-pr', 'text=PR #9', 'url=https://github.com/example/toastty/pull/9')
+        out, err = waiter.communicate(timeout=180)
+        require(waiter.returncode == 0 and 'is ready for review' in out,
+                f'the stage watch failed ({waiter.returncode}): {out} {err}')
+        step('stage watch returned', output=out.strip(), stage=cli_result('task', 'get', a['taskID']).get('stage'))
 
         evidence['status'] = 'passed'
     except Exception as error:  # Always keep the failure evidence.

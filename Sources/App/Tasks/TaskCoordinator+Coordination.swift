@@ -155,7 +155,7 @@ extension TaskCoordinator {
                 throw TaskError("A task cannot watch itself.")
             }
         }
-        if let reason = TaskWatchEvaluation.impossibility(condition, facts: watchFacts(target)) {
+        if let reason = TaskWatchEvaluation.impossibility(condition, facts: watchFacts(target, stages: [:])) {
             throw TaskError("Task \(target.title) \(reason), so it can never be \(condition.rawValue).")
         }
         let watch = TaskWatch(targetTaskID: targetTaskID, condition: condition, createdAt: now())
@@ -216,21 +216,41 @@ extension TaskCoordinator {
         }
     }
 
-    /// What a watch on `record` reads now.
-    func watchFacts(_ record: TaskRecord) -> TaskWatchFacts {
+    /// What a watch on `record` reads now. `stages` comes from
+    /// `stageConditionsByTaskID()`, read once per pass over the watches. The
+    /// archive is read from the record itself, so a watch of any condition
+    /// learns that its task was archived without building the board.
+    func watchFacts(_ record: TaskRecord, stages: [UUID: Set<TaskWatchCondition>]) -> TaskWatchFacts {
         let status = agentStatus(of: record)
         return TaskWatchFacts(
             activity: status.activity,
             activityChangedAt: status.changedAt,
             turnEndedAt: status.session?.lastTurnEndedAt,
-            stages: stageConditions(record)
+            stages: record.archivedAt != nil ? [.archived] : stages[record.id] ?? []
         )
+    }
+
+    /// The stage conditions each task meets now, from the stages the task
+    /// board works out. Empty without a board, so stage watches then wait.
+    func stageConditionsByTaskID() -> [UUID: Set<TaskWatchCondition>] {
+        guard let board else { return [:] }
+        var result: [UUID: Set<TaskWatchCondition>] = [:]
+        for item in board.items() {
+            guard let record = item.record else { continue }
+            let merged = record.mergedAt != nil || item.pullRequestState?.state == .merged
+            result[record.id] = TaskWatchEvaluation.stageConditions(stage: item.stage, merged: merged)
+        }
+        return result
     }
 
     /// Fires every pending watch whose condition holds or can no longer
     /// hold, and delivers fired messages that have not gone out yet.
     func evaluateWatches() {
         let at = now()
+        // Building the board walks every task, so only a pass with a pending
+        // stage watch does it, and only once.
+        let hasPendingStageWatch = allWatches().contains { $0.watch.isPending && $0.watch.condition.isStageCondition }
+        let stages = hasPendingStageWatch ? stageConditionsByTaskID() : [:]
         for holder in records.records where holder.watches?.isEmpty == false {
             guard holder.activeWatches.isEmpty == false else {
                 pruneFiredWatches(of: holder, at: at)
@@ -239,7 +259,7 @@ extension TaskCoordinator {
             var updated = holder.watches ?? []
             for index in updated.indices {
                 let watch = updated[index]
-                if watch.isPending, let fired = firing(watch, at: at) {
+                if watch.isPending, let fired = firing(watch, at: at, stages: stages) {
                     updated[index].state = fired
                     ToasttyLog.info("Fired a task watch", category: .tasks, metadata: [
                         "watch_id": watch.id.uuidString,
@@ -265,7 +285,7 @@ extension TaskCoordinator {
         for (id, wait) in waitWatches {
             if wait.watch.isPending, at.timeIntervalSince(wait.lastReadAt) > Self.unreadWaitWatchLifetime {
                 waitWatches[id] = nil
-            } else if wait.watch.isPending, let fired = firing(wait.watch, at: at) {
+            } else if wait.watch.isPending, let fired = firing(wait.watch, at: at, stages: stages) {
                 if case .fired(let firedAt, let reason, let impossible, _) = fired {
                     waitWatches[id]?.watch.state = .fired(at: firedAt, reason: reason, impossible: impossible, delivered: true)
                 }
@@ -284,13 +304,14 @@ extension TaskCoordinator {
         saveOrDefer(taskID: holder.id) { $0.pruneFiredWatches(now: at) }
     }
 
-    private func firing(_ watch: TaskWatch, at: Date) -> TaskWatchState? {
+    private func firing(_ watch: TaskWatch, at: Date, stages: [UUID: Set<TaskWatchCondition>]) -> TaskWatchState? {
         guard let target = records.record(id: watch.targetTaskID) else {
             return .fired(at: at, reason: "was deleted", impossible: true, delivered: false)
         }
-        let facts = watchFacts(target)
+        let facts = watchFacts(target, stages: stages)
         if TaskWatchEvaluation.holds(watch.condition, createdAt: watch.createdAt, facts: facts) {
-            return .fired(at: at, reason: watch.condition.phrase, impossible: false, delivered: false)
+            let reason = TaskWatchEvaluation.reason(watch.condition, facts: facts)
+            return .fired(at: at, reason: reason, impossible: false, delivered: false)
         }
         if let reason = TaskWatchEvaluation.impossibility(watch.condition, facts: facts) {
             return .fired(at: at, reason: reason, impossible: true, delivered: false)

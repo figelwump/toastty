@@ -245,23 +245,73 @@ struct TaskCoordinationTests {
         }
     }
 
-    @Test func stageWatchesReadTheStageSeamAndArchivingEndsThem() async throws {
+    @Test func stageWatchesFireOnceTheTaskBoardShowsTheStageOrALaterOne() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = TaskBoardTests.FakeGitHub()
+        fixture.coordinator.board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil
+        )
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "The unread dot stays on",
+            workspaceID: fixture.workspaceID,
+            agent: "codex",
+            model: "gpt-6.1-sol",
+            effort: "high",
+            prompt: "Fix it."
+        ))
+        await fixture.waitForSetup(created.id)
+        let task = try #require(fixture.record(created.id))
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        func watch(_ condition: TaskWatchCondition) throws -> UUID {
+            try fixture.coordinator.addWatch(targetTaskID: task.id, condition: condition, notifyTaskID: nil).id
+        }
+        func outcome(_ id: UUID) -> String? {
+            guard case .fired(_, let reason, _, _)? = fixture.coordinator.watch(id: id)?.watch.state else { return nil }
+            return reason
+        }
+        let review = try watch(.readyForReview)
+        let merged = try watch(.merged)
+        let toShip = try watch(.toShip)
+        let done = try watch(.done)
+        #expect([review, merged, toShip, done].allSatisfy { outcome($0) == nil })
+
+        // A linked pull request and no working agent: it waits for review.
+        let url = "https://github.com/example/toastty/pull/124"
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace, key: "github-pr", annotation: WorkspaceAnnotation(text: "PR #124", url: url)
+        ))
+        fixture.coordinator.evaluateWatches()
+        #expect(outcome(review) == "is ready for review")
+        #expect([merged, toShip, done].allSatisfy { outcome($0) == nil })
+
+        // Without release tags a merge goes straight to Done, past To ship.
+        gitHub.answer(url, state: "MERGED", mergeCommit: "abc123")
+        await fixture.coordinator.board?.pullRequests?.refresh(try #require(WorkspacePullRequestLink(annotationURL: url))).value
+        fixture.coordinator.evaluateWatches()
+        #expect(outcome(merged) == "is merged")
+        #expect(outcome(toShip) == "is done")
+        #expect(outcome(done) == "is done")
+        // A watch for a stage the task has passed fires as soon as it is made.
+        #expect(outcome(try watch(.readyForReview)) == "is done")
+    }
+
+    @Test func archivingATaskFiresItsWatchesAndRejectsNewOnes() async throws {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
         let watcher = try await fixture.startedTask()
-        var stages: Set<TaskWatchCondition> = []
-        fixture.coordinator.stageConditions = { $0.id == target.id ? stages : [] }
-        let merged = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .merged, notifyTaskID: watcher.id)
         let done = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)
+        let archived = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .archived, notifyTaskID: watcher.id)
 
-        stages = [.merged]
+        try fixture.coordinator.records.save(id: target.id) { $0.archivedAt = Date() }
         fixture.coordinator.evaluateWatches()
-        #expect(try messages(fixture, to: watcher).count == 1)
-        #expect(try messages(fixture, to: watcher).first?.contains(merged.id.uuidString) == true)
-
-        stages = [.archived]
-        fixture.coordinator.evaluateWatches()
-        #expect(try messages(fixture, to: watcher).last?.contains("\(done.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived, so your watch until done can never fire.") == true)
+        let sent = try messages(fixture, to: watcher)
+        #expect(sent.count == 2)
+        #expect(sent.contains("[Toastty watch \(done.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived, so your watch until done can never fire."))
+        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(archived.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) is archived.") })
         #expect(throws: TaskError("Task \(target.title) was archived, so it can never be done.")) {
             try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)
         }

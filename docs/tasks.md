@@ -290,7 +290,18 @@ Watch conditions:
 | --- | --- |
 | `idle` | The agent finished a turn after the watch was made. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
 | `waiting` | The agent waits for an approval or an answer. |
-| `ready-for-review`, `merged`, `to-ship`, `done`, `archived` | The task is in that stage. |
+| `ready-for-review` | The task's pull request waits for review, or its agent marked work without a pull request ready. |
+| `merged` | Its pull request merged. |
+| `to-ship` | It merged and waits for a release. |
+| `done` | It is in the Done stage. |
+| `archived` | It was archived. |
+
+The stage conditions follow the [stages](#stages), in the order
+`ready-for-review`, `merged`, `to-ship`, `done`. A condition still holds after
+the task moves past it, so a watch fires even when the task skips a stage. For
+example, a merged task also meets `ready-for-review`, and a merge in a project
+without `release_tags`, which goes straight to Done, also meets `to-ship`. A
+task marked done by hand meets only `ready-for-review` and `done`.
 
 A watch is saved with the record of the task it notifies, so it survives a
 relaunch, and it fires once. A watch whose task is deleted, or archived while
