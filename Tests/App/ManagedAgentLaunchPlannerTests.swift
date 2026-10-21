@@ -1530,8 +1530,10 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             to: rolloutURL
         )
 
-        await waitUntil { activeStatus()?.kind == .ready }
-        XCTAssertEqual(activeStatus()?.kind, .ready)
+        // Ready is stored as idle while the panel is focused in the active
+        // app, as it is on CI; either way the turn ended with the reply.
+        await waitUntil { activeStatus()?.detail == "DONE-A" }
+        XCTAssertTrue([.ready, .idle].contains(activeStatus()?.kind))
         XCTAssertEqual(activeStatus()?.detail, "DONE-A")
     }
 
