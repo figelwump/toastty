@@ -490,8 +490,6 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.commandDeliveryUncertain(panelID: preparation.target.panelID)
         }
-        store?.recordSuccessfulAgentLaunch()
-
         return AgentLaunchResult(
             agent: preparation.agent,
             displayName: preparation.displayName,

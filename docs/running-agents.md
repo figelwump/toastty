@@ -1130,9 +1130,7 @@ launch option disables hooks. A later accepted managed status takes priority
 again. A quiet agent does not cause a switch. Hook settings outside the supplied
 launch settings are not inspected. A manual process watch also keeps priority.
 
-The sidebar expands to its session width when the first program row appears
-in a window. Wider widths and later manual resizing are preserved. Explicit
-progress percentages use blue text.
+Explicit progress percentages use blue text.
 
 A shell prompt or terminal process exit clears working, blocked, and idle
 records. Programs should send `state=done` or `state=error` before exiting.

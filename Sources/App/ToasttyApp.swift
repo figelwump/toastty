@@ -776,7 +776,6 @@ struct ToasttyApp: App {
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
-            initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
