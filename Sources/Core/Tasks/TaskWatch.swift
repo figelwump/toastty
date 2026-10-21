@@ -191,6 +191,10 @@ public enum TaskWatchEvaluation {
             return [.readyForReview, .merged, .toShip]
         case .needsYou(.review), .needsYou(.readyForReview):
             return [.readyForReview]
+        case .needsYou(.cleanupStopped):
+            // "Merged · clean up?": the cleanup after the merge stopped, but
+            // the merge happened.
+            return merged ? [.readyForReview, .merged] : []
         case .inbox, .needsYou, .running:
             return []
         }

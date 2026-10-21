@@ -13,9 +13,12 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     @Test
     func taskMergeWaitsForTheAgentsTurnThenCleansUp() async throws {
         try await withScenario { scenario in
+            let merged = try scenario.watch(.merged)
+            let done = try scenario.watch(.done)
             // The merge skill calls task merge in the middle of its turn.
             scenario.reportAgent(.working)
             try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: .unmanaged)
+            #expect(scenario.fired(merged) == false)
 
             await scenario.waitUntil("GitHub merges it") { FileManager.default.fileExists(atPath: scenario.mergedMarker) }
             await scenario.waitUntil("the merge is recorded") { scenario.record?.mergedAt != nil }
@@ -32,6 +35,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
             // No release_tags: a merged task is done.
             #expect(scenario.boardItem?.stage == .done)
+            #expect(scenario.fired(merged))
+            #expect(scenario.fired(done))
         }
     }
 
@@ -48,6 +53,22 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: nil, caller: .unmanaged)
             await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+        }
+    }
+
+    @Test
+    func aMergeInAProjectThatReleasesWaitsToShip() async throws {
+        try await withScenario { scenario in
+            scenario.config.workspaces = [TasksConfig.Workspace(path: scenario.repo, releaseTags: "v*")]
+            scenario.board.reloadConfig()
+            let toShip = try scenario.watch(.toShip)
+            let done = try scenario.watch(.done)
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: nil, caller: .unmanaged)
+            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.boardItem?.stage == .toShip)
+            #expect(scenario.fired(toShip))
+            #expect(scenario.fired(done) == false)
         }
     }
 
@@ -115,6 +136,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
                 return
             }
             #expect(reason.contains("uncommitted changes"))
+            // A stopped cleanup still lets a merged watch fire.
+            #expect(scenario.fired(try scenario.watch(.merged)))
             #expect(FileManager.default.fileExists(atPath: scenario.worktree))
 
             // Keep As Is leaves the task space and drops the cleanup.
@@ -170,6 +193,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         let taskPanelID: UUID
         let windowID: UUID
         var taskID = UUID()
+        /// What tasks.toml says; tests may change it.
+        var config = TasksConfig()
         var tasks: TaskCoordinator!
         var merges: WorkspaceMergeCoordinator!
         var board: TaskBoardStore!
@@ -197,6 +222,16 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
 
         var record: TaskRecord? { tasks.records.record(id: taskID) }
+
+        /// A `--wait` watch on the task, as a caller outside Toastty makes.
+        func watch(_ condition: TaskWatchCondition) throws -> UUID {
+            try tasks.addWatch(targetTaskID: taskID, condition: condition, notifyTaskID: nil).id
+        }
+
+        func fired(_ watchID: UUID) -> Bool {
+            tasks.evaluateWatches()
+            return tasks.waitWatches[watchID]?.firedAt != nil
+        }
         var boardItem: TaskBoardItem? { board.items().first { $0.taskID == taskID } }
 
         func git(_ arguments: [String], in directory: String) throws -> String { try git(arguments, directory) }
@@ -325,7 +360,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             records: TaskRecordStore.inMemory(),
             store: store,
             launcher: nil,
-            configLoader: { TasksConfig() },
+            configLoader: { [unowned scenario] in scenario.config },
             attachmentsDirectoryURL: root.appendingPathComponent("attachments"),
             hasActiveSession: { _ in false },
             grantScope: { _, _ in }

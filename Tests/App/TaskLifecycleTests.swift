@@ -157,6 +157,7 @@ struct TaskLifecycleTests {
         try git(["push", "--quiet", "origin", "HEAD:refs/heads/\(worktree.branch)"], in: worktree.path)
         try git(["fetch", "--quiet", "origin"], in: fixture.repository.project)
 
+        let archivedWatch = try fixture.coordinator.addWatch(targetTaskID: task.id, condition: .archived, notifyTaskID: nil)
         let check = try await fixture.coordinator.archiveCheck(taskID: task.id)
         #expect(check.unpushedCommits == 0)
         #expect(check.branch == worktree.branch)
@@ -171,6 +172,9 @@ struct TaskLifecycleTests {
         #expect(FileManager.default.fileExists(atPath: worktree.path) == false)
         #expect(try git(["branch", "--list", worktree.branch], in: fixture.repository.project).isEmpty)
         #expect(try git(["ls-remote", "--heads", "origin", worktree.branch], in: fixture.repository.project).isEmpty == false)
+        // A watch for the archive fires; it reads the record, not the board.
+        fixture.coordinator.evaluateWatches()
+        #expect(fixture.coordinator.waitWatches[archivedWatch.id]?.firedAt != nil)
     }
 
     @Test func archiveKeepsABranchWithUnpushedCommitsAndAsksBeforeDiscardingChanges() async throws {
