@@ -2245,6 +2245,32 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-status")
     }
 
+    func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[harness.windowID] = .taskSpace(ids.annotatedIdleID)
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {},
+            newTaskShortcutLabel: "⌥⇧T"
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 640))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains("Task detail, qa-private-app-verification, Review"), "\(textValues)")
+        try attachSidebarRender(hostingView, name: "tasks-view")
+    }
+
     func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let recents = RecentWorkspacesStore.inMemory()

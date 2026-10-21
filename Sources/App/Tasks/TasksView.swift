@@ -385,6 +385,12 @@ private struct TasksViewDetail: View {
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(ToastyTheme.surfaceBackground)
+        .background {
+            SidebarSemanticTextBridge(text: "Task detail, \(item.title), \(TaskBoardPresentation.stageDescription(item).stage)")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
         .accessibilityIdentifier("tasks.view.detail")
     }
 

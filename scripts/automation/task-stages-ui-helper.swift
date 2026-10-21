@@ -61,7 +61,8 @@ case "press", "exists":
     }
     func find(_ element: AXUIElement, depth: Int) -> AXUIElement? {
         if value(element, "AXIdentifier") as? String == arguments[2] { return element }
-        guard depth < 40 else { return nil }
+        // SwiftUI nests the workspace content deeply.
+        guard depth < 120 else { return nil }
         for child in (value(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
             if let found = find(child, depth: depth + 1) { return found }
         }
