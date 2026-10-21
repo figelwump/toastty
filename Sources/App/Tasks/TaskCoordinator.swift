@@ -512,7 +512,10 @@ final class TaskCoordinator {
                 throw TaskError("No open workspace has ID \(requestedID.uuidString).")
             }
             workspaceID = store.state.subspaceParentIDsByWorkspaceID()[requestedID] ?? requestedID
+            let root = store.state.workspacesByID[workspaceID].flatMap { Self.rootDirectory(of: $0, fileManager: fileManager) }
+            try checkProjectUnchanged(record, newRoot: root)
         case .recent(let recentID):
+            try checkProjectUnchanged(record, newRoot: recentWorkspaces?.item(id: recentID)?.rootDirectory)
             workspaceID = try reopenRecentWorkspace(recentID)
         }
         do {
@@ -531,6 +534,21 @@ final class TaskCoordinator {
             "workspace_id": workspaceID.uuidString,
         ])
         startRouting(taskID: taskID)
+    }
+
+    /// A move into a worktree pins its base commit and reserves its
+    /// worktree in the task's project; another project cannot reuse them.
+    /// The same project, open again, is fine.
+    private func checkProjectUnchanged(_ record: TaskRecord, newRoot: String?) throws {
+        guard record.operation.base != nil || record.operation.worktree != nil,
+              let projectRoot = record.projectRoot else { return }
+        let same = newRoot.map {
+            TasksConfigFile.normalizedPath($0, homeDirectoryPath: homeDirectoryPath)
+                == TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: homeDirectoryPath)
+        } ?? false
+        guard same else {
+            throw TaskError("This task already has a worktree in \(projectRoot), so it stays in that project. Retry it there, or delete it and create it again.")
+        }
     }
 
     /// The workspaces a task can be placed in, for the picker: the open
@@ -799,13 +817,34 @@ final class TaskCoordinator {
             setupFailed(taskID: taskID, attempt: attempt, reason: "The agent launcher is not available.")
             return
         }
-        let prompt = TaskPrompt.compose(
-            firstPrompt: resolved.prompt,
+        let base = records.record(id: taskID)?.operation.base
+        var firstPrompt = resolved.prompt
+        var prompt = TaskPrompt.compose(
+            firstPrompt: firstPrompt,
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
             worktree: worktree,
-            base: records.record(id: taskID)?.operation.base
+            base: base
         )
+        // Routing checked the message without the worktree line, which is
+        // known only now. Triage's own prompt is the part that can go; the
+        // caller's message was checked when the task was made.
+        if prompt.utf8.count > AgentLaunchService.maximumInitialPromptUTF8Count,
+           firstPrompt != nil, record.pinned.prompt == nil {
+            firstPrompt = nil
+            prompt = TaskPrompt.compose(
+                firstPrompt: nil,
+                text: record.text,
+                attachmentPaths: record.attachments.map(\.path),
+                worktree: worktree,
+                base: base
+            )
+            let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
+            saveOrDefer(taskID: taskID) {
+                $0.resolved?.prompt = nil
+                $0.triageNote = [$0.triageNote, dropped].compactMap { $0 }.joined(separator: " ")
+            }
+        }
         let parentSessionID = creatorSessionID(of: record)
         let result: AgentLaunchResult
         do {
