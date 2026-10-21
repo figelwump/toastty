@@ -279,7 +279,12 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeGh.path)
 
         let socketPath = temporarySocketPath()
-        let (server, store, _, parentWorkspaceID, sessionRuntimeStore) = try makeServer(socketPath: socketPath)
+        // Status changes send no desktop notification: without notification
+        // access, as on CI, the access alert would block the test host.
+        let (server, store, _, parentWorkspaceID, sessionRuntimeStore) = try makeServer(
+            socketPath: socketPath,
+            sessionRuntimeStore: SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        )
         defer { withExtendedLifetime(server) {} }
         try waitForSocket(at: socketPath)
 
