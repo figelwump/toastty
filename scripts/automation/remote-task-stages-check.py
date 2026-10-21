@@ -20,14 +20,16 @@ directory is the project root), a fake agent, and a tasks.toml with
   entry panel;
 - while the Tasks view shows, typing does not reach the terminal under it;
   Esc closes the view, and typing then reaches the terminal again.
-Window captures of both sidebar segments and the Tasks view go to the
-artifacts directory.
+Captures of both sidebar segments and the Tasks view go to the artifacts
+directory when the app or the screen allows one; a missing capture is
+recorded, not failed.
 """
 
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -105,9 +107,20 @@ def main():
     pid = instance.process.pid
 
     def capture(name):
+        """Evidence only: a capture that cannot be made is recorded, not
+        failed. `automation.capture_screenshot` renders in the app, which
+        works over SSH, but needs automation mode; a window capture needs
+        Screen Recording."""
         path = artifacts / f'{name}.png'
         time.sleep(0.6)
-        run_tool(helper, 'capture', pid, path)
+        response = instance.request('automation.capture_screenshot', dict(step=name))
+        if response.get('ok'):
+            shutil.copyfile(response['result']['path'], path)
+        else:
+            result = run_tool(helper, 'capture', pid, path, check=False)
+            if result.returncode != 0:
+                step('capture unavailable', file=path.name, app=response.get('error'), window=result.stderr.strip())
+                return
         evidence['captures'].append(path.name)
         step('captured', file=path.name)
 
