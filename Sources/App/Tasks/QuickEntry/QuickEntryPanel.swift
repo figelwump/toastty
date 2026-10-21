@@ -10,8 +10,10 @@ import SwiftUI
 /// moves when you drag its background.
 @MainActor
 final class QuickEntryPanel: NSPanel {
-    nonisolated static let defaultSize = NSSize(width: 560, height: 300)
-    nonisolated static let cornerRadius: CGFloat = 12
+    nonisolated static let width: CGFloat = 600
+    /// Where the panel starts before its content sets the height.
+    nonisolated static let defaultSize = NSSize(width: width, height: 210)
+    nonisolated static let cornerRadius: CGFloat = 14
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -31,7 +33,10 @@ final class QuickEntryPanel: NSPanel {
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = false
         isMovableByWindowBackground = true
-        hasShadow = false
+        // The window server draws the shadow around the rounded content.
+        // A SwiftUI shadow would need a transparent margin, which would take
+        // clicks and drops meant for the apps around the panel.
+        hasShadow = true
         isOpaque = false
         backgroundColor = .clear
         animationBehavior = .utilityWindow
@@ -103,6 +108,17 @@ final class QuickEntryPanel: NSPanel {
         case ("z", [.command, .shift]): Selector(("redo:"))
         default: nil
         }
+    }
+
+    /// Sets the height to the content's, keeping the top edge in place.
+    func fitContentHeight(_ height: CGFloat) {
+        let height = height.rounded(.up)
+        guard height > 0, abs(frame.height - height) >= 0.5 else { return }
+        var resized = frame
+        resized.origin.y = frame.maxY - height
+        resized.size.height = height
+        setFrame(resized, display: true)
+        invalidateShadow()
     }
 
     /// The top third of the screen with the pointer, centred.
@@ -202,6 +218,10 @@ final class QuickEntryContentView: NSView {
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         dropTarget.performDrop(sender.draggingPasteboard)
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        dropTarget.dropExited()
     }
 }
 

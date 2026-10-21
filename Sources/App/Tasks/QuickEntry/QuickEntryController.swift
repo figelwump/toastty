@@ -29,8 +29,9 @@ final class QuickEntryController: ObservableObject {
     private var previousApplication: NSRunningApplication?
     private weak var previousKeyWindow: NSWindow?
     private weak var previousFirstResponder: NSResponder?
-    /// Kept so a second panel opened during a drag starts where this one was.
-    private var lastPanelOrigin: NSPoint?
+    /// The last panel's top-left corner, so the next one opens where the
+    /// user left it. The top stays put because the height follows the text.
+    private var lastPanelTopLeft: NSPoint?
     private var toastPanel: QuickEntryToastPanel?
     private var toastTask: Task<Void, Never>?
 
@@ -177,13 +178,18 @@ final class QuickEntryController: ObservableObject {
             rootView: QuickEntryView(
                 model: model,
                 dropTarget: dropTarget,
-                attachFiles: { [weak self] in self?.chooseFiles() }
+                attachFiles: { [weak self] in self?.chooseFiles() },
+                onHeightChange: { [weak panel] height in panel?.fitContentHeight(height) }
             ),
             dropTarget: dropTarget
         )
-        var frame = QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.screenWithPointer())
-        if let lastPanelOrigin {
-            frame.origin = lastPanelOrigin
+        var size = QuickEntryPanel.defaultSize
+        if let fittingHeight = panel.contentView?.fittingSize.height, fittingHeight > 0 {
+            size.height = fittingHeight.rounded(.up)
+        }
+        var frame = QuickEntryPanel.defaultFrame(size: size, screen: QuickEntryPanel.screenWithPointer())
+        if let lastPanelTopLeft {
+            frame.origin = NSPoint(x: lastPanelTopLeft.x, y: lastPanelTopLeft.y - size.height)
         }
         panel.setFrame(frame, display: false)
         self.panel = panel
@@ -216,7 +222,7 @@ final class QuickEntryController: ObservableObject {
     /// copies.
     private func close() {
         guard let panel else { return }
-        lastPanelOrigin = panel.frame.origin
+        lastPanelTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         panel.orderOut(nil)
         panel.contentView = nil
         self.panel = nil

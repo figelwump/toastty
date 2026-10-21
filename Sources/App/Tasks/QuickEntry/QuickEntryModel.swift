@@ -1,6 +1,7 @@
 import AppKit
 import CoreState
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 /// What an opener fills in before the quick entry panel shows.
@@ -26,6 +27,8 @@ final class QuickEntryModel: ObservableObject {
         let url: URL
         let displayName: String
         let isImage: Bool
+        /// A small preview for an image, made once when it is attached.
+        let thumbnail: NSImage?
     }
 
     struct Option: Identifiable, Equatable {
@@ -407,13 +410,32 @@ final class QuickEntryModel: ObservableObject {
         switch result {
         case .success(let url):
             let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
-            attachments.append(Attachment(url: url, displayName: displayName, isImage: isImage))
+            attachments.append(Attachment(
+                url: url,
+                displayName: displayName,
+                isImage: isImage,
+                thumbnail: isImage ? Self.thumbnail(of: url) : nil
+            ))
         case .failure(let error):
             if let reservedName {
                 usedFileNames.remove(reservedName)
             }
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// A preview sized for the attachment chip, read without decoding the
+    /// whole image, since a screenshot can be large.
+    private static func thumbnail(of url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 96,
+              ] as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     private func removeStagingDirectoryIfIdle() {
