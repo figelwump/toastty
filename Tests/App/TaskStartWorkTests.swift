@@ -659,12 +659,13 @@ struct TaskStartWorkTests {
         let fixture = try Fixture()
         try fixture.repository.pushToRemote("upstream")
         fixture.config = TasksConfig(triage: .init(command: "fake-triage"))
-        let triagePrompt = "Start with the composer views."
+        // Longer than the worktree line, so leaving it out makes room.
+        let triagePrompt = String(repeating: "Start with the composer views. ", count: 33)
         // Just under the limit with triage's prompt, so routing accepts it;
         // the worktree line added at launch pushes it over.
         let limit = AgentLaunchService.maximumInitialPromptUTF8Count
         let wrapper = "\n\nThe task, as written:\n\n"
-        let text = String(repeating: "x", count: limit - 40 - triagePrompt.utf8.count - wrapper.utf8.count)
+        let text = String(repeating: "x", count: limit - 10 - triagePrompt.utf8.count - wrapper.utf8.count)
         fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex", firstPrompt: triagePrompt)))
 
         let created = try await fixture.coordinator.create(TaskCreateRequest(
@@ -681,7 +682,7 @@ struct TaskStartWorkTests {
         let launch = try #require(fixture.launcher.calls.last)
         let worktree = try #require(record.worktree)
         #expect(launch.prompt.hasPrefix("You are in the git worktree \(worktree.path)"))
-        #expect(launch.prompt.contains(triagePrompt) == false)
+        #expect(launch.prompt.contains("Start with the composer views.") == false)
         #expect(launch.prompt.utf8.count <= limit)
     }
 
