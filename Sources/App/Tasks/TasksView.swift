@@ -442,7 +442,7 @@ private struct TasksViewDetail: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 Text(TaskBoardPresentation.originLine(item, now: Date()))
                     .font(.system(size: 11.5))
@@ -462,8 +462,8 @@ private struct TasksViewDetail: View {
                         Text(text)
                             .font(.system(size: 12))
                             .foregroundStyle(ToastyTheme.inactiveText)
+                            .lineLimit(14)
                             .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                     status
                     history
@@ -476,13 +476,12 @@ private struct TasksViewDetail: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 12)
+            .padding(.top, 40)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
         }
-        // Starts below the titlebar, like the list, so the scroll view gets
-        // no titlebar backdrop.
-        .padding(.top, 28)
+        // The detail is short; long task text is cut to 14 lines.
         .background(ToastyTheme.surfaceBackground)
         .background {
             SidebarSemanticTextBridge(text: "Task detail, \(item.title), \(TaskBoardPresentation.stageDescription(item).stage)")
