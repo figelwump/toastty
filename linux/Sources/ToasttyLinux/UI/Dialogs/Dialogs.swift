@@ -26,12 +26,56 @@ public enum Dialogs {
             String(cString: adw_alert_dialog_get_heading(cast(dialog)))
         }
 
-        /// Answers as if the user picked `response` (automation/tests).
-        public func respond(_ response: String, text: String? = nil) {
+        /// Answers as if the user clicked `response`'s button (automation/
+        /// tests): types `text` into the entry, then activates the real
+        /// button, so the answer travels the same `response` signal path as
+        /// a click. Returns false if the response has no enabled button.
+        @discardableResult
+        public func respond(_ response: String, text: String? = nil) -> Bool {
             if let text, let entry { gtk_editable_set_text(cast(entry), text) }
-            let entryText = entry.map { String(cString: gtk_editable_get_text(cast($0))) }
-            onResponse(response, entryText)
-            adw_dialog_force_close(cast(dialog))
+            guard let button = responseButton(response), gtk_widget_is_sensitive(button).bool else { return false }
+            return gtk_widget_activate(button).bool
+        }
+
+        /// Presses Enter in the entry (automation/tests): the entry's text
+        /// widget activates the dialog's default response, as typing a name
+        /// and hitting Return does. Returns false without an entry.
+        @discardableResult
+        public func submit(text: String? = nil) -> Bool {
+            guard let entry else { return false }
+            if let text { gtk_editable_set_text(cast(entry), text) }
+            // Enter in an entry with `activates-default` runs its text
+            // widget's `default.activate` action, which the dialog routes to
+            // the default response's button.
+            guard gtk_entry_get_activates_default(cast(entry)).bool else { return false }
+            let textWidget = Gtk.children(entry).first(where: { isInstance($0, of: gtk_text_get_type()) }) ?? entry
+            gtk_widget_activate_default(textWidget)
+            return true
+        }
+
+        /// Dismisses the dialog as Escape does (the close response), after
+        /// typing `text` into the entry.
+        public func dismiss(text: String? = nil) {
+            if let text, let entry { gtk_editable_set_text(cast(entry), text) }
+            adw_dialog_close(cast(dialog))
+        }
+
+        /// The button libadwaita built for `response`, found by its label.
+        func responseButton(_ response: String) -> WidgetPtr? {
+            guard adw_alert_dialog_has_response(cast(dialog), response).bool,
+                  let label = adw_alert_dialog_get_response_label(cast(dialog), response) else { return nil }
+            let wanted = String(cString: label)
+            func search(_ root: WidgetPtr) -> WidgetPtr? {
+                if isInstance(root, of: gtk_button_get_type()),
+                   let current = gtk_button_get_label(cast(root)), String(cString: current) == wanted {
+                    return root
+                }
+                for child in Gtk.children(root) {
+                    if let found = search(child) { return found }
+                }
+                return nil
+            }
+            return search(dialog)
         }
     }
 
@@ -41,6 +85,7 @@ public enum Dialogs {
         current: String,
         placeholder: String,
         allowsEmpty: Bool = false,
+        onFinish: (() -> Void)? = nil,
         onRename: @escaping (String) -> Void
     ) {
         let dialog = widget(adw_alert_dialog_new(heading, nil)!)
@@ -65,8 +110,8 @@ public enum Dialogs {
         }
 
         let handle = AlertHandle(dialog: dialog, entry: entry) { response, text in
-            guard response == "rename", let text else { return }
-            onRename(text)
+            if response == "rename", let text { onRename(text) }
+            onFinish?()
         }
         present(handle, parent: parent)
         gtk_widget_grab_focus(entry)

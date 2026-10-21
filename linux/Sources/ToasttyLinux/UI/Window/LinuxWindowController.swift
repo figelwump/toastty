@@ -532,14 +532,21 @@ public final class LinuxWindowController {
         switch command {
         case .renameWorkspace(let workspaceID):
             guard let workspace = store.state.workspacesByID[workspaceID] else { return }
-            Dialogs.rename(parent: window, heading: "Rename Workspace", current: workspace.title, placeholder: "Workspace name") { [weak self] title in
+            // Like macOS, keyboard focus returns to the workspace's panel
+            // whether the rename was committed or cancelled (the dialog may
+            // have been opened from the sidebar's context menu).
+            Dialogs.rename(
+                parent: window, heading: "Rename Workspace", current: workspace.title, placeholder: "Workspace name",
+                onFinish: { [weak self] in self?.content.refocus() }
+            ) { [weak self] title in
                 self?.store.send(.renameWorkspace(workspaceID: workspaceID, title: title))
             }
         case .renameTab(let workspaceID, let tabID):
             guard let tab = store.state.workspacesByID[workspaceID]?.tab(id: tabID) else { return }
             Dialogs.rename(
                 parent: window, heading: "Rename Tab", current: tab.customTitle ?? "",
-                placeholder: tab.displayTitle, allowsEmpty: true
+                placeholder: tab.displayTitle, allowsEmpty: true,
+                onFinish: { [weak self] in self?.content.refocus() }
             ) { [weak self] title in
                 let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
                 self?.store.send(.setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: trimmed.isEmpty ? nil : trimmed))

@@ -52,9 +52,22 @@ struct BroadwaySmokeTests {
     palette split
     expect dialog=AdwDialog paletteTop=layout.split.horizontal
     close-dialog
+    # Rename through the dialog's real response path: Enter in the entry,
+    # Escape, the Rename button, and the sidebar's double-click.
     action workspace.rename
-    dialog-respond rename Smoke Workspace
+    expect dialog=AdwAlertDialog
+    dialog-submit Smoke Workspace
+    expect workspace=Smoke_Workspace selectedSidebarTitle=Smoke_Workspace dialog=none
+    action workspace.rename
+    dialog-dismiss Discarded Name
     expect workspace=Smoke_Workspace dialog=none
+    sidebar-double-click 0
+    expect dialog=AdwAlertDialog
+    dialog-respond rename Renamed Workspace
+    expect workspace=Renamed_Workspace selectedSidebarTitle=Renamed_Workspace windowTitle=Renamed_Workspace_—_Toastty dialog=none
+    action workspace.tab.rename
+    dialog-submit Build Tab
+    expect tabTitle=Build_Tab dialog=none
     action layout.split.equalize
     action panel.close
     expect panes=2

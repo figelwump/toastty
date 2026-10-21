@@ -13,9 +13,12 @@ import Foundation
 ///     state out/state.json          # write a JSON summary of state + widgets
 ///     expect panes=2 zoomed=false   # compare summary values (`_` = space); failures exit 1
 ///     palette split                 # open the command palette with a query
-///     dialog-respond rename Notes   # answer the visible alert dialog
-///     dialog-click confirm          # press the response's button (the dialog's own `response` signal)
+///     dialog-respond rename Notes   # type into the alert's entry, click its "rename" button, wait for it to close
+///     dialog-submit Notes           # type into the alert's entry, press Enter, wait for it to close
+///     dialog-dismiss Draft          # type into the alert's entry, close it as Escape does
+///     dialog-click confirm          # press the response's button without waiting (a confirmed quit destroys the windows)
 ///     window-close                  # close the selected window (title-bar close button, Alt+F4)
+///     sidebar-double-click 0        # double-click sidebar row 0 (rename)
 ///     alt-hints on|off              # show sidebar shortcut hints
 ///     resize 1280 800
 ///     perform agent.run.claude      # run a window command by id (shortcut/button path)
@@ -148,15 +151,25 @@ public final class AutomationScript {
                 if argument.isEmpty == false { window.palette?.setQuery(argument) }
             case "dialog-respond":
                 let pieces = argument.split(separator: " ", maxSplits: 1).map(String.init)
-                guard let dialog = Dialogs.current, let response = pieces.first else { fail("dialog-respond: no dialog"); continue }
-                dialog.respond(response, text: pieces.count > 1 ? pieces[1] : nil)
+                let response = pieces.first ?? ""
+                answerDialog("dialog-respond", app: app) { dialog in
+                    dialog.respond(response, text: pieces.count > 1 ? pieces[1] : nil) ? nil : "no enabled \(response) button"
+                }
+            case "dialog-submit":
+                answerDialog("dialog-submit", app: app) { dialog in
+                    dialog.submit(text: argument.isEmpty ? nil : argument) ? nil : "no entry that activates the default response"
+                }
+            case "dialog-dismiss":
+                answerDialog("dialog-dismiss", app: app) { dialog in
+                    dialog.dismiss(text: argument.isEmpty ? nil : argument)
+                    return nil
+                }
             case "dialog-click":
                 // Presses the response button itself, so the choice arrives
                 // through the dialog's own `response` signal as a user's
-                // click does (`dialog-respond` calls the callback directly).
-                // The handle is not held across the click.
-                guard let dialog = Dialogs.current?.dialog else { fail("dialog-click: no dialog"); continue }
-                guard let button = Self.responseButton(argument, in: dialog) else {
+                // click does. The handle is not held across the click.
+                guard Dialogs.current != nil else { fail("dialog-click: no dialog"); continue }
+                guard let button = Dialogs.current?.responseButton(argument) else {
                     fail("dialog-click: no button for response \(argument)")
                     continue
                 }
@@ -167,6 +180,11 @@ public final class AutomationScript {
                 if let window = app.selectedWindowController(), let dialog = window.visibleDialog {
                     adw_dialog_force_close(cast(dialog))
                 }
+            case "sidebar-double-click":
+                // The sidebar's double-click handler for row N (rename).
+                guard let window = app.selectedWindowController(), let row = Int(argument),
+                      window.sidebar.renameWorkspace(atRow: row) else { fail("sidebar-double-click \(argument): no row"); continue }
+                settle(app: app)
             case "alt-hints":
                 app.selectedWindowController()?.sidebar.setShowsShortcutHints(argument == "on")
             case "resize":
@@ -201,6 +219,25 @@ public final class AutomationScript {
                 }
             }
         }
+    }
+
+    /// Runs `act` on the current alert (`nil` = done, else an error), then
+    /// waits for the dialog to close and report its response, which happens
+    /// on a later main-loop turn. Holds no reference to the alert while
+    /// waiting: in the app nothing but `Dialogs.current` owns it, and the
+    /// response must arrive without the script keeping it alive.
+    private func answerDialog(_ command: String, app: LinuxAppController, _ act: (Dialogs.AlertHandle) -> String?) {
+        let answered: ObjectIdentifier? = {
+            guard let dialog = Dialogs.current else { fail("\(command): no dialog"); return nil }
+            if let error = act(dialog) { fail("\(command): \(error)"); return nil }
+            return ObjectIdentifier(dialog)
+        }()
+        guard let answered else { return }
+        let closed = MainLoop.spin(untilMilliseconds: 5000) {
+            Dialogs.current.map { ObjectIdentifier($0) } != answered
+        }
+        if closed == false { fail("\(command): the dialog did not close") }
+        settle(app: app)
     }
 
     private func resolve(_ path: String) -> URL {
@@ -310,6 +347,10 @@ public final class AutomationScript {
             let label = isInstance(focus, of: gtk_button_get_type()) ? gtk_button_get_label(cast(focus)).map { String(cString: $0) } : nil
             result["focusWidget"] = typeName(focus) + (label.map { ":\($0)" } ?? "")
         }
+        // What the widgets show (not the model): the selected sidebar card's
+        // title label and the window title.
+        result["windowTitle"] = gtk_window_get_title(cast(controller.window)).map { String(cString: $0) } ?? ""
+        result["selectedSidebarTitle"] = selectedSidebarTitle(controller.sidebar)
         // The window's icon (its own, else the default) and whether the icon
         // theme resolves it to Toastty's icon files.
         let windowIcon = gtk_window_get_icon_name(cast(controller.window)) ?? gtk_window_get_default_icon_name()
@@ -325,20 +366,20 @@ public final class AutomationScript {
         return result
     }
 
-    /// The button libadwaita built for an alert dialog's `response`, by label.
-    private static func responseButton(_ response: String, in dialog: WidgetPtr) -> WidgetPtr? {
-        guard adw_alert_dialog_has_response(cast(dialog), response) != 0,
-              let label = adw_alert_dialog_get_response_label(cast(dialog), response).map({ String(cString: $0) }) else {
+    private static func selectedSidebarTitle(_ sidebar: SidebarController) -> String {
+        func titleLabel(in root: WidgetPtr) -> WidgetPtr? {
+            if Gtk.hasClass(root, "workspace-title") { return root }
+            for child in Gtk.children(root) {
+                if let found = titleLabel(in: child) { return found }
+            }
             return nil
         }
-        func search(_ root: WidgetPtr) -> WidgetPtr? {
-            if isInstance(root, of: gtk_button_get_type()),
-               let current = gtk_button_get_label(cast(root)), String(cString: current) == label {
-                return root
-            }
-            return Gtk.children(root).lazy.compactMap(search).first
+        for index in sidebar.rowModels.indices {
+            guard let card = Gtk.find(named: "workspace-card-\(index)", in: sidebar.root),
+                  Gtk.hasClass(card, "selected"), let label = titleLabel(in: card) else { continue }
+            return String(cString: gtk_label_get_text(cast(label)))
         }
-        return search(dialog)
+        return "none"
     }
 
     private static func countWidgets(of type: GType, in root: WidgetPtr) -> Int {

@@ -54,6 +54,18 @@ public final class SidebarController {
             guard self.rows.indices.contains(index) else { return }
             self.store.send(.selectWorkspace(windowID: self.windowID, workspaceID: self.rows[index].workspaceID))
         }
+        // Double-clicking a workspace renames it (macOS sidebar). The gesture
+        // lives on the list, which survives row rebuilds: the first click
+        // selects the workspace and rebuilds its card, so a gesture on the
+        // card would never count the second press.
+        let doubleClick = gtk_gesture_click_new()!
+        gtk_gesture_single_set_button(cast(doubleClick), guint(GDK_BUTTON_PRIMARY))
+        Signal.connectPress(doubleClick) { [weak self] nPress, _, y in
+            guard let self, nPress == 2,
+                  let row = gtk_list_box_get_row_at_y(cast(self.list), Int32(y)) else { return }
+            self.renameWorkspace(atRow: Int(gtk_list_box_row_get_index(row)))
+        }
+        gtk_widget_add_controller(list, cast(doubleClick))
 
         let scroller = gtk_scrolled_window_new()!
         gtk_scrolled_window_set_policy(cast(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
@@ -90,6 +102,15 @@ public final class SidebarController {
     }
 
     public var rowModels: [SidebarWorkspaceRowModel] { rows }
+
+    /// Starts renaming the workspace in sidebar row `index` (the double-click
+    /// path). Returns false when there is no such row.
+    @discardableResult
+    public func renameWorkspace(atRow index: Int) -> Bool {
+        guard rows.indices.contains(index) else { return false }
+        onRenameWorkspace?(rows[index].workspaceID)
+        return true
+    }
 
     private func rebuild() {
         gtk_list_box_remove_all(cast(list))
