@@ -314,7 +314,7 @@ private struct AddChipStyle: ButtonStyle {
             .font(.system(size: 12))
             .foregroundStyle(QuickEntryView.mutedText)
             .padding(.horizontal, 10)
-            .frame(height: 36)
+            .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.white.opacity(configuration.isPressed ? 0.06 : 0))
