@@ -297,6 +297,7 @@ extension AppControlExecutor {
         switch record.source {
         case .cli: source = "cli"
         case .agent: source = "agent"
+        case .quickEntry: source = "quickEntry"
         case .recovered: source = "recovered"
         case .adopted: source = "adopted"
         }

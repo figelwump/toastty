@@ -90,6 +90,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private weak var agentCatalogProvider: (any AgentCatalogProviding)?
     private var openExternalURL: @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    /// Opens the quick entry panel for "New Task from Selection…". Set by
+    /// the app at launch.
+    var presentQuickEntryFromSelection: (@MainActor (String, UUID) -> Void)?
     private var stateObservation: AnyCancellable?
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
@@ -1595,6 +1598,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
 
         return true
+    }
+
+    func newTaskFromSelection(_ selectionText: String, from panelID: UUID) {
+        presentQuickEntryFromSelection?(selectionText, panelID)
     }
 
     @discardableResult

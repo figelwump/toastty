@@ -91,6 +91,7 @@ struct AppWindowView: View {
                         annotationStyleStore: annotationStyleStore,
                         taskCoordinator: taskCoordinator,
                         taskBoard: taskBoard,
+                        newTask: taskBoard.newTask,
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
                         requestWorkspaceClose: requestWorkspaceClose,
@@ -135,7 +136,8 @@ struct AppWindowView: View {
                             store: store,
                             board: taskBoard,
                             sessionRuntimeStore: sessionRuntimeStore,
-                            newTask: nil
+                            newTask: taskBoard.newTask.map { action in { action() } },
+                            newTaskShortcutLabel: taskBoard.newTaskShortcutLabel()
                         )
                     }
                 }

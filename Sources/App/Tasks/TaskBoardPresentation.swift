@@ -98,6 +98,7 @@ enum TaskBoardPresentation {
         case .agent: source = "Created by an agent"
         case .recovered: source = "Rebuilt from its task space"
         case .adopted: source = "Tracked from an existing task space"
+        case .quickEntry: source = "Created from quick entry"
         }
         let age = TaskAge.label(since: record.createdAt, now: now)
         return [source, age == "now" ? "just now" : "\(age) ago", item.projectTitle].compactMap { $0 }.joined(separator: " · ")

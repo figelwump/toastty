@@ -214,6 +214,11 @@ final class TaskBoardStore: ObservableObject {
     @Published private(set) var configError: String?
     /// The task each window's Tasks view shows in its detail pane.
     @Published var selectionByWindowID: [UUID: TaskBoardItem.Subject] = [:]
+    /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
+    /// view's New Task. `nil` hides them.
+    var newTask: (@MainActor () -> Void)?
+    /// The quick entry shortcut, such as "⌥⇧T", shown on New Task.
+    var newTaskShortcutLabel: @MainActor () -> String? = { nil }
 
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?

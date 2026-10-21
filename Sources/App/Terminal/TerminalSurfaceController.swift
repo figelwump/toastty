@@ -224,6 +224,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.openSearchSelectionURL(url, from: self.panelID) ?? false
         }
+        terminalHostView.newTaskFromSelection = { [weak self] selectionText in
+            guard let self else { return }
+            self.delegate?.newTaskFromSelection(selectionText, from: self.panelID)
+        }
         terminalHostView.resolveFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareFileDrop(from: urls, targetPanelID: self.panelID)
@@ -770,6 +774,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalHostView.activatePanelIfNeeded = nil
         terminalHostView.openCommandClickLink = nil
         terminalHostView.openSearchSelectionURL = nil
+        terminalHostView.newTaskFromSelection = nil
         #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()

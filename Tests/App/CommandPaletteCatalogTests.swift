@@ -29,6 +29,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
         XCTAssertEqual(ToasttyBuiltInCommand.newScratchpad.id, "scratchpad.create")
         XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
+        XCTAssertEqual(ToasttyBuiltInCommand.newTask.id, "task.new")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
@@ -115,6 +116,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
                 ToasttyBuiltInCommand.newScratchpad.id,
                 ToasttyBuiltInCommand.showScratchpadForCurrentSession.id,
+                ToasttyBuiltInCommand.newTask.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleRightPanel.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
@@ -171,6 +173,20 @@ final class CommandPaletteCatalogTests: XCTestCase {
             commands.filter { $0.id.hasPrefix("local-document.") }.map(\.title),
             ["Open Local File", "Open Local File in Tab", "Open Local File in Split"]
         )
+    }
+
+    func testNewTaskShowsTheConfiguredGlobalShortcutAndOpensQuickEntry() throws {
+        let actions = CommandPaletteActionSpy()
+        actions.newTaskShortcutValue = PaletteShortcut(symbolLabel: "⌥⇧T")
+        let command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.newTask.id })
+
+        XCTAssertEqual(command.title, "New Task…")
+        XCTAssertEqual(command.shortcut?.symbolLabel, "⌥⇧T")
+        XCTAssertTrue(actions.execute(command.invocation, originWindowID: UUID()))
+        XCTAssertEqual(actions.createTaskCount, 1)
+
+        actions.canCreateTaskValue = false
+        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.newTask.id })
     }
 
     func testCatalogFiltersUnavailableCommands() {

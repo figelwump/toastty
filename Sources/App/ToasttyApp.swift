@@ -685,6 +685,7 @@ struct ToasttyApp: App {
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
     private let taskBoard: TaskBoardStore
+    private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
@@ -1078,6 +1079,30 @@ struct ToasttyApp: App {
         )
         taskCoordinator.board = taskBoard
         self.taskBoard = taskBoard
+        let quickEntryController = QuickEntryController(
+            store: store,
+            agentCatalogProvider: agentCatalogStore,
+            create: { [weak taskCoordinator] request in
+                guard let taskCoordinator else { throw TaskError("Toastty is quitting.") }
+                return try await taskCoordinator.create(request, caller: .quickEntry)
+            },
+            configLoader: { try TasksConfigFile.load() },
+            // A smoke run or a test host must not take the user's shortcut
+            // from the Toastty they are using.
+            registersGlobalHotKey: automationConfig == nil
+                && Self.isRunningUnderXCTest(processInfo.environment) == false
+        )
+        quickEntryController.reloadShortcut()
+        self.quickEntryController = quickEntryController
+        taskBoard.newTask = { [weak quickEntryController] in
+            quickEntryController?.present(prefill: .empty)
+        }
+        taskBoard.newTaskShortcutLabel = { [weak quickEntryController] in
+            quickEntryController?.shortcut?.symbolLabel
+        }
+        terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
+            quickEntryController?.presentFromSelection(text, panelID: panelID)
+        }
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1108,7 +1133,8 @@ struct ToasttyApp: App {
                     codexProcessPathStore: codexProcessPathStore,
                     managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    agentHookDispatcher: agentHookDispatcher
+                    agentHookDispatcher: agentHookDispatcher,
+                    quickEntryController: quickEntryController
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1131,6 +1157,16 @@ struct ToasttyApp: App {
                     sessionRuntimeStore: sessionRuntimeStore,
                     documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
                 )
+            },
+            createTaskAction: { [weak quickEntryController] in
+                // After the palette closes and gives focus back, so the
+                // panel opens as the key window.
+                DispatchQueue.main.async {
+                    quickEntryController?.present(prefill: .empty)
+                }
+            },
+            newTaskShortcutProvider: { [weak quickEntryController] in
+                quickEntryController?.shortcut
             },
             openManageConfigAction: { [store] originWindowID in
                 Self.openManageConfig(store: store, preferredWindowID: originWindowID)
@@ -1383,7 +1419,8 @@ struct ToasttyApp: App {
                         codexProcessPathStore: codexProcessPathStore,
                         managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        agentHookDispatcher: agentHookDispatcher
+                        agentHookDispatcher: agentHookDispatcher,
+                        quickEntryController: quickEntryController
                     )
                 }
             )
@@ -1716,6 +1753,7 @@ struct ToasttyApp: App {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                quickEntryController: quickEntryController,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 processWatchCommandController: processWatchCommandController,
@@ -1773,11 +1811,18 @@ struct ToasttyApp: App {
             codexProcessPathStore: codexProcessPathStore,
             managedAgentResolutionContextStore: managedAgentResolutionContextStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            agentHookDispatcher: agentHookDispatcher
+            agentHookDispatcher: agentHookDispatcher,
+            quickEntryController: quickEntryController
         )
     }
 
     @MainActor
+    private static func isRunningUnderXCTest(_ environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+    }
+
     private static func reloadConfiguration(
         store: AppStore,
         agentCatalogStore: AgentCatalogStore,
@@ -1789,10 +1834,15 @@ struct ToasttyApp: App {
         codexProcessPathStore: CodexProcessPathStore,
         managedAgentResolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        agentHookDispatcher: AgentHookDispatcher
+        agentHookDispatcher: AgentHookDispatcher,
+        quickEntryController: QuickEntryController
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
+
+        if let quickEntryMessage = quickEntryController.reloadShortcut() {
+            warningMessages.append(quickEntryMessage)
+        }
 
         switch agentCatalogStore.reload() {
         case .success:

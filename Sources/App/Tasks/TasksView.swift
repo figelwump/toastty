@@ -49,6 +49,7 @@ struct TasksView: View {
     /// Observed so agent activity redraws the list.
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let newTask: (() -> Void)?
+    var newTaskShortcutLabel: String? = nil
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
@@ -124,7 +125,15 @@ struct TasksView: View {
             Spacer(minLength: 0)
             if let newTask {
                 Button(action: newTask) {
-                    Label("New Task", systemImage: "plus")
+                    HStack(spacing: 7) {
+                        Label("New Task", systemImage: "plus")
+                        if let newTaskShortcutLabel {
+                            Text(newTaskShortcutLabel)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .padding(.horizontal, 4)
+                                .overlay { RoundedRectangle(cornerRadius: 3).stroke(Color(hex: 0x9A6208), lineWidth: 1) }
+                        }
+                    }
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color(hex: 0x1A1206))
                         .padding(.horizontal, 12)
