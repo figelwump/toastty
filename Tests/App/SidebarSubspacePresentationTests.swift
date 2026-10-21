@@ -664,6 +664,12 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertTrue(P.isHiddenAsFinished(row("done", status: .done, index: 0)))
         XCTAssertFalse(P.isHiddenAsFinished(row("review", status: .review, index: 0)))
         XCTAssertFalse(P.isHiddenAsFinished(row("working", status: .working, index: 0)))
+        // An unread finished turn sets the status, but another agent still works.
+        let mixed = row("mixed", status: .done, index: 0, sessions: [
+            session(.ready, reportedAt: 2, unread: true),
+            session(.working, reportedAt: 1),
+        ])
+        XCTAssertFalse(P.isHiddenAsFinished(mixed))
 
         XCTAssertEqual(P.tally([row("a", status: .review, index: 0), row("b", status: .review, index: 1)]).review, 2)
         XCTAssertTrue(P.showsDoneToggle(row("review", status: .review, index: 0)))

@@ -38,6 +38,7 @@ extension TaskCoordinator {
             operation: TaskOperation(taskSpace: TaskOperation.TaskSpace(workspaceID: workspaceID, panelID: panelID))
         )
         record.pullRequestURL = TaskBoard.pullRequestLink(workspace)?.url
+        record.doneAt = workspace.doneAt
         do {
             try records.insert(record)
         } catch {

@@ -318,11 +318,14 @@ branch_prefix = "feat"
   project directory). It may take up to 30 minutes. If it exits non-zero, the
   move fails with its last lines of output.
 - `branch_prefix` is the default first part of worktree branch names.
+- `release_tags` turns on the To ship stage for the project: a merged task
+  waits there until it ships, instead of going straight to Done. See
+  [Stages](#stages).
 
 Toastty also reads and checks these keys, which later features use:
 `[defaults]` `merge` and `merge_prompt`, `[quick_entry]` (`shortcut`), and
-`release_tags`, `release_prompt`, `merge` and `merge_prompt` in
-`[workspace."…"]`. They have no effect yet.
+`release_prompt`, `merge` and `merge_prompt` in `[workspace."…"]`. They have
+no effect yet.
 
 An error in the file names its line, and `task create` fails with that message
 until the file is fixed.

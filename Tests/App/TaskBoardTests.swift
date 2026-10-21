@@ -164,6 +164,72 @@ struct TaskBoardTests {
         #expect(gitHub.calls.allSatisfy { $0.suffix(2) == ["--json", "state,isDraft,headRefOid,mergeCommit"] })
     }
 
+    @Test func theRecordKeepsTheDoneMarkAndTheRightPullRequestsMerge() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+
+        // The task space's done mark counts while it is open, and stays on
+        // the record after it closes.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: Date()))
+        #expect(fixture.record(task.id)?.doneAt != nil)
+        #expect(board.items().first { $0.id == .task(task.id) }?.stage == .done)
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: nil))
+        #expect(fixture.record(task.id)?.doneAt == nil)
+
+        // A merge GitHub reported is recorded as soon as the task has the link.
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(link).value
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(fixture.record(task.id)?.mergeCommit == "abc123")
+
+        // A new pull request drops the old one's merge.
+        let replacement = "https://github.com/example/toastty/pull/131"
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #131", url: replacement)
+        ))
+        let replaced = try #require(fixture.record(task.id))
+        #expect(replaced.pullRequestURL == replacement)
+        #expect(replaced.mergedAt == nil)
+        #expect(replaced.mergeCommit == nil)
+
+        // A closed pull request is checked again, since it can reopen.
+        gitHub.answer(replacement, state: "CLOSED")
+        let replacementLink = try #require(WorkspacePullRequestLink(annotationURL: replacement))
+        await board.pullRequests?.refresh(replacementLink).value
+        let callsBefore = gitHub.calls.count
+        board.refreshOpenPullRequests()
+        await waitUntil { gitHub.calls.count > callsBefore }
+    }
+
+    @Test func adoptingATaskSpaceRecordsAMergeSeenBefore() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let untracked = try makeUntrackedTaskSpace(fixture, title: "qa-private-app-verification")
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: untracked,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))).value
+
+        let adopted = try fixture.coordinator.adopt(workspaceID: untracked)
+        #expect(fixture.record(adopted.id)?.mergeCommit == "abc123")
+        _ = fixture.store.send(.closeWorkspace(workspaceID: untracked))
+        #expect(board.items().first { $0.id == .task(adopted.id) }?.stage == .done)
+    }
+
     @Test func pullRequestRequestsAreMergedAndOlderAnswersDropped() async throws {
         let gitHub = FakeGitHub()
         var clock = Date(timeIntervalSince1970: 5)

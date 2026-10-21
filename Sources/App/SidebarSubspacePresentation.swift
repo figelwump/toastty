@@ -216,8 +216,14 @@ enum SidebarSubspacePresentation {
     /// The Tasks view still lists it.
     static func isHiddenAsFinished(_ row: Row) -> Bool {
         switch row.status {
-        case .done, .toShip: true
-        case .ready, .needsApproval, .error, .review, .working, .idle: false
+        case .done, .toShip:
+            // The row's status shows one session; any other agent that is
+            // working or waiting keeps the row too.
+            return row.sessions.contains { session in
+                session.statusKind == .working || session.statusKind == .needsApproval || session.statusKind == .error
+            } == false
+        case .ready, .needsApproval, .error, .review, .working, .idle:
+            return false
         }
     }
 

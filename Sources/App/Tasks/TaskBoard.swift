@@ -117,8 +117,14 @@ enum TaskBoard {
         let agent = agentActivity(statuses)
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
+        var facts = TaskStageFacts(record: record)
+        // While the task space is open, its done mark is the live answer;
+        // the record keeps a copy for after it closes.
+        if let taskSpace {
+            facts.doneAt = taskSpace.doneAt
+        }
         let stage = TaskStage.derive(
-            TaskStageFacts(record: record),
+            facts,
             live: TaskLiveFacts(
                 taskSpaceOpen: taskSpace != nil,
                 agent: agent,
@@ -257,10 +263,10 @@ final class TaskBoardStore: ObservableObject {
             self?.recordAnswer(link: link, state: state)
         }
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, _, nextState in
-            self?.copyPullRequestLinks(state: nextState)
+            self?.syncRecords(state: nextState)
         }
         reloadConfig()
-        copyPullRequestLinks(state: store.state)
+        syncRecords(state: store.state)
         if let refreshInterval {
             refreshLoop = Task { [weak self] in
                 while Task.isCancelled == false {
@@ -323,8 +329,9 @@ final class TaskBoardStore: ObservableObject {
     func refreshOpenPullRequests() {
         guard let pullRequests else { return }
         for item in items() where item.stage.isFinished == false {
-            guard let link = item.pullRequest else { continue }
-            if let state = item.pullRequestState, state.state != .open { continue }
+            // A closed pull request can be reopened, so only a merge stops
+            // the checks.
+            guard let link = item.pullRequest, item.pullRequestState?.state != .merged else { continue }
             pullRequests.refresh(link)
         }
     }
@@ -355,30 +362,39 @@ final class TaskBoardStore: ObservableObject {
         workingTaskSpaceIDs = working
     }
 
-    /// Copies each open task space's pull request link onto its record, so
-    /// the task keeps it after the task space closes.
-    private func copyPullRequestLinks(state: AppState) {
+    /// Copies what an open task space shows onto its record, so the task
+    /// keeps it after the task space closes: the pull request link, and the
+    /// done mark. A new link drops the old pull request's merge, and a merge
+    /// GitHub already reported for the link is recorded at once.
+    private func syncRecords(state: AppState) {
         guard let records = coordinator?.records else { return }
         for record in records.records {
-            guard let workspaceID = record.taskSpaceWorkspaceID,
-                  let workspace = state.workspacesByID[workspaceID],
-                  let link = TaskBoard.pullRequestLink(workspace),
-                  record.pullRequestURL != link.url else { continue }
-            _ = records.update(id: record.id) { $0.pullRequestURL = link.url }
+            var next = record
+            if let workspaceID = record.taskSpaceWorkspaceID,
+               let workspace = state.workspacesByID[workspaceID] {
+                if let link = TaskBoard.pullRequestLink(workspace), next.pullRequestURL != link.url {
+                    next.pullRequestURL = link.url
+                    next.mergedAt = nil
+                    next.mergeCommit = nil
+                }
+                next.doneAt = workspace.doneAt
+            }
+            if next.mergedAt == nil,
+               let link = WorkspacePullRequestLink(annotationURL: next.pullRequestURL),
+               let answer = pullRequests?.state(for: link), answer.state == .merged {
+                next.mergedAt = now()
+                next.mergeCommit = answer.mergeCommit
+            }
+            if next != record {
+                _ = records.update(id: record.id) { $0 = next }
+            }
         }
     }
 
     /// Records a merge on the tasks whose pull request it is. This states
     /// what GitHub reported; it starts no cleanup.
     private func recordAnswer(link: WorkspacePullRequestLink, state: TaskPullRequestState) {
-        guard state.state == .merged, let records = coordinator?.records else { return }
-        let mergedAt = now()
-        for record in records.records where record.mergedAt == nil {
-            guard WorkspacePullRequestLink(annotationURL: record.pullRequestURL) == link else { continue }
-            _ = records.update(id: record.id) {
-                $0.mergedAt = mergedAt
-                $0.mergeCommit = state.mergeCommit
-            }
-        }
+        guard state.state == .merged, let store else { return }
+        syncRecords(state: store.state)
     }
 }

@@ -247,10 +247,9 @@ struct AppWindowView: View {
             handleSlotFocusSignatureChange()
         }
         .onChange(of: showsTasksView) { _, isShown in
-            if isShown {
-                // Keys must not reach the terminal hidden under the view.
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            } else {
+            // While shown, the Tasks view holds focus in this window and
+            // focus restores skip the covered terminals.
+            if isShown == false {
                 scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
             }
         }

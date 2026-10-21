@@ -1132,6 +1132,11 @@ struct SidebarView: View {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
             return SidebarScrollGeometry.Content(isDragging: true)
         }
+        // The pills point at session rows in project cards, which the Status
+        // segment does not draw.
+        guard taskBoard.isEnabled == false || sidebarSegment == .projects else {
+            return SidebarScrollGeometry.Content()
+        }
 
         var content = SidebarScrollGeometry.Content()
         // Derive IDs and attention from the same status pass for both pills.

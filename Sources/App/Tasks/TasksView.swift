@@ -52,6 +52,8 @@ struct TasksView: View {
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
+    /// Taken on appear, so the terminal under the view loses keyboard focus.
+    @FocusState private var isListFocused: Bool
 
     private static let detailWidth: CGFloat = 360
 
@@ -69,6 +71,9 @@ struct TasksView: View {
                     list(sections, selectedID: selected?.id)
                         .padding(.bottom, 16)
                 }
+                .focusable()
+                .focusEffectDisabled()
+                .focused($isListFocused)
             }
             .frame(maxWidth: .infinity)
 
@@ -97,7 +102,10 @@ struct TasksView: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .background(ToastyTheme.surfaceBackground)
-        .onAppear { board.tasksViewDidOpen() }
+        .onAppear {
+            board.tasksViewDidOpen()
+            isListFocused = true
+        }
         .accessibilityIdentifier("tasks.view")
         .background {
             // Esc leaves the Tasks view, back to the selected workspace.

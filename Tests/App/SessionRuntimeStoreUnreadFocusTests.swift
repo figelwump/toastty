@@ -72,6 +72,40 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func aTurnThatEndsUnderTheTasksViewStaysUnread() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let focusedPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = appStore.send(.setTasksViewShown(windowID: selection.windowID, shown: true))
+
+        sessionStore.startSession(
+            sessionID: "sess-covered",
+            agent: .codex,
+            panelID: focusedPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-covered",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        // The focused panel is covered, so the finished turn is not seen.
+        #expect(sessionStore.panelStatus(for: focusedPanelID)?.status.kind == .ready)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [focusedPanelID])
+    }
+
+    @Test
     func updateStatusCollapsesReadyToIdleForFocusedPanelInActiveApp() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
