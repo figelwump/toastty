@@ -1843,6 +1843,68 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    /// Without hooks, `notify` reports a finished turn, but a Codex session
+    /// resumed after a relaunch may never run it, which left the session
+    /// working forever. The rollout's `task_complete` backs it up. It applies
+    /// only to the rollout's newest turn, only while the session is still in
+    /// a turn, and only when it was written after that turn started here: a
+    /// new watcher reads the rollout from its start, so older completions are
+    /// replayed while a newer turn may already be working.
+    /// Toastty sees a turn start a little after Codex writes it, so a short
+    /// turn can finish just before `turnStartedAt`.
+    static let codexRolloutCompletionClockTolerance: TimeInterval = 2
+
+    @discardableResult
+    func handleCodexRolloutTurnCompletion(
+        sessionID: String,
+        turnID: String?,
+        latestRolloutTurnID: String?,
+        completedAt: Date?,
+        detail: String,
+        turnError: String?,
+        at now: Date
+    ) -> Bool {
+        let ignoredReason: String?
+        let record = sessionRegistry.activeSession(sessionID: sessionID)
+        let usesSessionLogFallback: Bool
+        if case .sessionLogFallback? = codexStatusTrackingSourceBySessionID[sessionID] {
+            usesSessionLogFallback = true
+        } else {
+            usesSessionLogFallback = false
+        }
+        if record?.agent != .codex || record?.usesSessionStatusNotifications != true {
+            ignoredReason = "session_not_tracking_codex_status"
+        } else if usesSessionLogFallback == false {
+            ignoredReason = "status_source_not_session_log_fallback"
+        } else if turnID == nil || turnID != latestRolloutTurnID {
+            ignoredReason = "not_latest_rollout_turn"
+        } else if record?.status?.kind != .working, record?.status?.kind != .needsApproval {
+            ignoredReason = "not_in_turn"
+        } else if let turnStartedAt = record?.turnStartedAt,
+                  let completedAt,
+                  completedAt >= turnStartedAt.addingTimeInterval(-Self.codexRolloutCompletionClockTolerance) {
+            ignoredReason = nil
+        } else {
+            ignoredReason = "completed_before_turn_started"
+        }
+        let metadata = [
+            "session_id": sessionID,
+            "turn_id": turnID ?? "none",
+            "latest_rollout_turn_id": latestRolloutTurnID ?? "none",
+            "decision": ignoredReason == nil ? "accepted" : "ignored",
+            "reason": ignoredReason ?? "latest_rollout_turn",
+        ]
+        guard ignoredReason == nil else {
+            ToasttyLog.debug("Codex rollout turn completion decision", category: .terminal, metadata: metadata)
+            return false
+        }
+        ToasttyLog.info("Codex rollout turn completion decision", category: .terminal, metadata: metadata)
+        let status = turnError.map { SessionStatus(kind: .error, summary: "Error", detail: $0) }
+            ?? SessionStatus(kind: .ready, summary: "Ready", detail: detail)
+        updateStatus(sessionID: sessionID, status: status, at: now)
+        return true
+    }
+
     /// Codex fires neither `Stop` nor `notify` when a turn fails, for example
     /// when the model request is rejected, so a hook-tracked session would stay
     /// working. The rollout's `task_complete` records the error instead. It

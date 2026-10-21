@@ -1452,6 +1452,91 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(status?.detail, "401 Unauthorized: Incorrect API key provided")
     }
 
+    /// A Codex session resumed after a relaunch may never run `notify`, so
+    /// without hooks the rollout's `task_complete` must end its turn.
+    func testCodexRolloutTurnCompletionEndsAFallbackTurnThatNotifyNeverReported() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", "thread-root"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+        func activeStatus() -> SessionStatus? {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func stamp(_ offset: TimeInterval) -> String { formatter.string(from: Date().addingTimeInterval(offset)) }
+        func attachRollout() {
+            XCTAssertTrue(fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(nativeSessionID: "thread-root", sessionFilePath: rolloutURL.path)
+                )
+            ))
+        }
+
+        // A new prompt starts a turn, and Codex never runs `notify` for it.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reply with DONE-A"),
+            at: Date()
+        )
+        // The resumed thread's earlier turn is in the rollout. The watcher reads
+        // it from the start once the session is known, while the new turn
+        // already works; that old completion must not end the new turn.
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(-60))","type":"turn_context","payload":{"turn_id":"turn-old","cwd":"/tmp/repo","approval_policy":"never"}}
+            {"timestamp":"\(stamp(-55))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"READY-A"}}
+            """,
+            to: rolloutURL
+        )
+        attachRollout()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(0))","type":"turn_context","payload":{"turn_id":"turn-new","cwd":"/tmp/repo","approval_policy":"never"}}
+            """,
+            to: rolloutURL
+        )
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(activeStatus()?.kind, .working)
+
+        // A watcher that reattaches to the same rollout does not read the
+        // turn's `turn_context` again, but still knows the turn.
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)
+        ))
+        attachRollout()
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherTransitionCountForTesting == 0 &&
+                fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == rolloutURL.path
+        }
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(1))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-new","last_agent_message":"DONE-A"}}
+            """,
+            to: rolloutURL
+        )
+
+        // Ready is stored as idle while the panel is focused in the active
+        // app, as it is on CI; either way the turn ended with the reply.
+        await waitUntil { activeStatus()?.detail == "DONE-A" }
+        XCTAssertTrue([.ready, .idle].contains(activeStatus()?.kind))
+        XCTAssertEqual(activeStatus()?.detail, "DONE-A")
+    }
+
     func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
@@ -3149,7 +3234,7 @@ private func makePlannerFixture(
     }
 
     let store = AppStore(state: state, persistTerminalFontPreference: false)
-    let sessionRuntimeStore = SessionRuntimeStore()
+    let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
     sessionRuntimeStore.bind(store: store)
 
     let resolvedCodexSkillsResolver = codexSkillsResolver
