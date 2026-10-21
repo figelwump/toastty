@@ -185,7 +185,11 @@ def main():
         capture('sidebar-projects-done')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
         capture('tasks-view')
-        wait_for('the Tasks view', tasks_view_shown)
+        try:
+            wait_for('the Tasks view', tasks_view_shown, timeout=20)
+        except AssertionError:
+            (artifacts / 'tasks-view-ax.txt').write_text(run_tool(helper, 'dump', pid, check=False).stdout)
+            raise
         open_and_close_quick_entry('tasks.view.new')
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')

@@ -10,6 +10,8 @@
 //   press <pid> <identifier>     presses the element with that
 //                                Accessibility identifier, or clicks it
 //   exists <pid> <identifier>    exits 0 when the element is on screen
+//   dump <pid>                   prints each element's depth, role,
+//                                identifier and frame
 
 import AppKit
 import CoreGraphics
@@ -93,6 +95,30 @@ case "press", "exists":
                                   mouseCursorPosition: point, mouseButton: .left) else { fail("could not make a click") }
         event.post(tap: .cghidEventTap)
         usleep(60_000)
+    }
+
+case "dump":
+    guard arguments.count == 2, let pid = Int32(arguments[1]) else { fail("dump <pid>") }
+    func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
+        var result: AnyObject?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
+    }
+    func describe(_ element: AXUIElement, depth: Int) {
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        if let position = value(element, kAXPositionAttribute) { AXValueGetValue(position as! AXValue, .cgPoint, &origin) }
+        if let extent = value(element, kAXSizeAttribute) { AXValueGetValue(extent as! AXValue, .cgSize, &size) }
+        let role = value(element, kAXRoleAttribute) as? String ?? "?"
+        let identifier = value(element, "AXIdentifier") as? String ?? ""
+        let title = (value(element, kAXTitleAttribute) as? String) ?? (value(element, kAXDescriptionAttribute) as? String) ?? ""
+        print("\(depth) \(role) id=\(identifier) title=\(title.prefix(40)) frame=\(Int(origin.x)),\(Int(origin.y)) \(Int(size.width))x\(Int(size.height))")
+        guard depth < 150 else { return }
+        for child in (value(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+            describe(child, depth: depth + 1)
+        }
+    }
+    for window in (value(AXUIElementCreateApplication(pid), kAXWindowsAttribute) as? [AXUIElement]) ?? [] {
+        describe(window, depth: 0)
     }
 
 default:
