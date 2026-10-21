@@ -196,7 +196,9 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
         if let pid = entries[panelID]?.surface.foregroundPID, let command = Self.processName(pid: pid) {
             body += "\n\nDetected command: \(command)"
         }
-        Dialogs.confirm(parent: parent, heading: "Close this terminal?", body: body, confirmLabel: "_Close Terminal") {
+        Dialogs.confirm(
+            parent: parent, heading: "Close this terminal?", body: body, confirmLabel: "_Close Terminal", confirmIsDefault: true
+        ) {
             proceed()
         }
         return true

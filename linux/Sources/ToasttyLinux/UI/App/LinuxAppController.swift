@@ -186,7 +186,8 @@ public final class LinuxAppController {
             parent: controller.window,
             heading: "Quit Toastty?",
             body: "All terminals and running agents in every window will close.",
-            confirmLabel: "_Quit"
+            confirmLabel: "_Quit",
+            confirmIsDefault: true
         ) { quit() }
     }
 

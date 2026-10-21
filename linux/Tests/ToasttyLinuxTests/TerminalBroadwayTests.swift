@@ -7,7 +7,9 @@ import Testing
 /// types into real shells and reads the screen back, checks title/cwd
 /// propagation to state and the panel header, per-window font size, find in
 /// scrollback, Ghostty keybind routing (goto_split, toggle_split_zoom),
-/// close confirmation for a running process, `exit` closing a pane, a
+/// close confirmation for a running process (answered through the dialog's
+/// real buttons), Ctrl+D and `exit` closing a pane, quitting through the
+/// window's close button and the Quit prompt, a
 /// terminal-profile split with its startup command and environment, file
 /// drops, bell / OSC 9 unread marking, and the context menu.
 ///
@@ -78,18 +80,20 @@ struct TerminalBroadwayTests {
         terminal-wait-state 3000 unreadPanels=0
         action layout.split.navigate-right
 
-        # Closing a pane with a running process asks first.
+        # Closing a pane with a running process asks first; Enter picks
+        # Close (macOS default button). Answers go through the dialog's real
+        # buttons (`dialog-click`), as a click or Enter does.
         terminal-type sleep 300
         terminal-key Return
         terminal-wait-state 5000 focusedPrompt=busy focusedNeedsCloseConfirm=true focusedTerminalTitle=sleep_300
         action panel.close
-        expect dialog=AdwAlertDialog panes=2
+        expect dialog=AdwAlertDialog dialogDefault=confirm panes=2
         screenshot \(artifacts)/05-close-confirm.png
-        dialog-respond cancel
+        dialog-click cancel
         expect dialog=none panes=2
         action panel.close
-        dialog-respond confirm
-        expect panes=1 terminals=1
+        dialog-click confirm
+        expect dialog=none panes=1 terminals=1
 
         # Terminal profile split: startup command + TOASTTY_TERMINAL_PROFILE_ID.
         terminal-command terminal-profile.split-down.demo
@@ -103,13 +107,23 @@ struct TerminalBroadwayTests {
         terminal-key <Control>c
         terminal-context-menu
 
-        # `exit` closes the pane without asking.
+        # Ctrl+D and `exit` close their pane without asking.
+        action layout.split.horizontal
+        terminal-wait-prompt 15000
+        expect panes=3 terminals=3
+        terminal-key <Control>d
+        terminal-wait-state 5000 panes=2 terminals=2
         terminal-type exit
         terminal-key Return
         terminal-wait-state 5000 panes=1 terminals=1
         screenshot \(artifacts)/06-final.png
         state \(artifacts)/state.json
-        quit
+
+        # The window's close button asks before quitting; Quit (the default)
+        # must end the process (the harness waits for exit status 0).
+        window-close
+        expect dialog=AdwAlertDialog dialogDefault=confirm
+        dialog-click confirm
         """
     }
 
