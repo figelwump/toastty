@@ -307,9 +307,12 @@ private struct TasksViewRow: View {
                 }
             }
             Spacer(minLength: 0)
-            Text(TaskAge.label(since: item.activityAt, now: Date()))
-                .font(.system(size: 11.5))
-                .foregroundStyle(ToastyTheme.mutedText)
+            // A watched task space with no agent activity has no date.
+            if item.activityAt > .distantPast {
+                Text(TaskAge.label(since: item.activityAt, now: Date()))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ToastyTheme.mutedText)
+            }
         }
         .padding(.vertical, 9)
         .padding(.leading, entry.isLinkedChild ? 36 : 18)
@@ -332,6 +335,28 @@ private struct TasksViewRow: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
         .accessibilityIdentifier("tasks.view.row")
+    }
+}
+
+/// The detail pane's buttons: amber for the main action, outlined for the
+/// rest, as in the mockup.
+private struct TasksViewButtonStyle: ButtonStyle {
+    let isPrimary: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: isPrimary ? .semibold : .medium))
+            .foregroundStyle(isPrimary ? Color(hex: 0x1A1206) : ToastyTheme.primaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isPrimary ? ToastyTheme.accent : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                if isPrimary == false {
+                    RoundedRectangle(cornerRadius: 7).stroke(Color(hex: 0x383838), lineWidth: 1)
+                }
+            }
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Rectangle())
     }
 }
 
@@ -428,16 +453,19 @@ private struct TasksViewDetail: View {
         HStack(spacing: 8) {
             if let workspaceID = item.taskSpaceWorkspaceID {
                 Button("Open Task Space") { openTaskSpace(workspaceID) }
+                    .buttonStyle(TasksViewButtonStyle(isPrimary: true))
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("tasks.view.detail.open")
             }
             if let link = item.pullRequest, let url = URL(string: link.url) {
                 Button("Open PR") { NSWorkspace.shared.open(url) }
+                    .buttonStyle(TasksViewButtonStyle(isPrimary: false))
             }
             if case .taskSpace(let workspaceID) = item.id, let coordinator = board.coordinator {
                 Button("Track as Task") {
                     perform { _ = try coordinator.adopt(workspaceID: workspaceID) }
                 }
+                .buttonStyle(TasksViewButtonStyle(isPrimary: false))
                 .help("Give this task space a task record, so its history stays after it closes.")
                 .accessibilityIdentifier("tasks.view.detail.adopt")
             }
@@ -445,9 +473,9 @@ private struct TasksViewDetail: View {
                 Button("Delete", role: .destructive) {
                     perform { try coordinator.delete(taskID: record.id) }
                 }
+                .buttonStyle(TasksViewButtonStyle(isPrimary: false))
             }
         }
-        .controlSize(.small)
     }
 
     /// A titled box, as the mockup draws Status and History.
