@@ -125,10 +125,14 @@ struct TasksView: View {
             if let newTask {
                 Button(action: newTask) {
                     Label("New Task", systemImage: "plus")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0x1A1206))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(ToastyTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(ToastyTheme.inactiveText)
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("tasks.view.new")
             }
             Button {
@@ -275,8 +279,12 @@ private struct TasksViewRow: View {
                     }
                     if let link = item.pullRequest {
                         Text("PR #\(link.number)")
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Color(hex: 0x8FD18F))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color(hex: 0x1D2A1D), in: RoundedRectangle(cornerRadius: 4))
+                            .overlay { RoundedRectangle(cornerRadius: 4).stroke(Color(hex: 0x3C5C3C), lineWidth: 1) }
                     } else if let branch = item.branch {
                         Text(branch)
                             .font(.system(size: 10.5, design: .monospaced))
@@ -373,8 +381,7 @@ private struct TasksViewDetail: View {
 
     private var status: some View {
         let stage = TaskBoardPresentation.stageDescription(item)
-        return VStack(alignment: .leading, spacing: 7) {
-            sectionTitle("Status")
+        return card("Status") {
             keyValue("Stage", stage.stage, why: stage.why)
             if let pullRequest = TaskBoardPresentation.pullRequestLine(item) {
                 keyValue("PR", pullRequest)
@@ -392,8 +399,7 @@ private struct TasksViewDetail: View {
     private var history: some View {
         let lines = TaskBoardPresentation.history(item)
         if lines.isEmpty == false {
-            VStack(alignment: .leading, spacing: 5) {
-                sectionTitle("History")
+            card("History") {
                 ForEach(lines, id: \.self) { line in
                     Text(line)
                         .font(.system(size: 12))
@@ -429,11 +435,22 @@ private struct TasksViewDetail: View {
         .controlSize(.small)
     }
 
-    private func sectionTitle(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.8)
-            .foregroundStyle(ToastyTheme.mutedText)
+    /// A titled box, as the mockup draws Status and History.
+    private func card(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(ToastyTheme.mutedText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
+            VStack(alignment: .leading, spacing: 7, content: content)
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color(hex: 0x2A2A2A), lineWidth: 1) }
     }
 
     private func keyValue(_ key: String, _ value: String, why: String? = nil, monospaced: Bool = false) -> some View {
