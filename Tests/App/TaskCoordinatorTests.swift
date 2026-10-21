@@ -462,31 +462,54 @@ struct TaskCoordinatorTests {
         await fixture.waitForSetup(created.id)
         let attachmentFolder = fixture.attachmentsDirectory.appendingPathComponent(created.id.uuidString)
         let taskSpaceID = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+        let start = Date()
+        func sweep(after interval: TimeInterval) {
+            fixture.clock = start.addingTimeInterval(interval)
+            fixture.coordinator.removeExpiredAttachments()
+        }
 
-        let doneAt = Date()
-        fixture.clock = doneAt
+        fixture.clock = start
         try fixture.coordinator.markDone(taskID: created.id)
         // An open task space keeps the files, however long ago the task finished.
-        fixture.clock = doneAt.addingTimeInterval(30 * 24 * 60 * 60)
-        fixture.coordinator.removeExpiredAttachments()
+        sweep(after: 0)
+        sweep(after: 30 * 24 * 60 * 60)
         #expect(FileManager.default.fileExists(atPath: attachmentFolder.path))
+        #expect(fixture.record(created.id)?.attachmentsFinishedSeenAt == nil)
 
+        // The week starts when the sweep sees the task finished and closed.
         _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpaceID))
-        fixture.clock = doneAt.addingTimeInterval(TaskAttachmentRetention.keepAfterFinish - 60)
-        fixture.coordinator.removeExpiredAttachments()
+        sweep(after: 0)
+        #expect(fixture.record(created.id)?.attachmentsFinishedSeenAt == start)
+        // While tasks.toml cannot be read, nothing is removed.
+        fixture.configError = TaskError("tasks.toml:3: bad value")
+        sweep(after: TaskAttachmentRetention.keepAfterFinish)
         #expect(FileManager.default.fileExists(atPath: attachmentFolder.path))
-        #expect(fixture.record(created.id)?.attachmentsRemovedAt == nil)
+        fixture.configError = nil
+        sweep(after: TaskAttachmentRetention.keepAfterFinish - 60)
+        #expect(FileManager.default.fileExists(atPath: attachmentFolder.path))
 
-        let sweptAt = doneAt.addingTimeInterval(TaskAttachmentRetention.keepAfterFinish)
-        fixture.clock = sweptAt
-        fixture.coordinator.removeExpiredAttachments()
+        sweep(after: TaskAttachmentRetention.keepAfterFinish)
         #expect(FileManager.default.fileExists(atPath: attachmentFolder.path) == false)
         fixture.coordinator.records.flushForTesting()
         // The record stays, with the files' names and when they went.
         let saved = try #require(fixture.savedRecord(created.id))
         // Saved dates keep whole seconds.
-        #expect(abs((saved.attachmentsRemovedAt ?? .distantPast).timeIntervalSince(sweptAt)) < 1)
+        let removedAt = try #require(saved.attachmentsRemovedAt)
+        #expect(abs(removedAt.timeIntervalSince(start.addingTimeInterval(TaskAttachmentRetention.keepAfterFinish))) < 1)
         #expect(saved.attachments.map(\.displayName) == ["repro.png"])
+    }
+
+    @Test func aTaskWhoseFilesWereRemovedIsNotRetried() async throws {
+        let fixture = try Fixture()
+        let created = try await fixture.coordinator.create(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(created.id)
+        fixture.coordinator.records.update(id: created.id) {
+            $0.setup = .setupFailed(reason: "no agent")
+            $0.archivedAt = Date()
+            $0.attachmentsRemovedAt = Date()
+        }
+        #expect(throws: TaskError.self) { try fixture.coordinator.retry(taskID: created.id) }
+        #expect(fixture.record(created.id)?.setup == .setupFailed(reason: "no agent"))
     }
 
     @Test func deleteKeepsAUsedTaskSpaceButDropsItsTaskLink() async throws {

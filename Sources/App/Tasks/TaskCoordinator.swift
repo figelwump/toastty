@@ -504,6 +504,10 @@ final class TaskCoordinator {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
+        // The agent's first message names the attached files.
+        guard record.attachmentsRemovedAt == nil else {
+            throw TaskError("This task's attached files were removed a week after it finished. Create a new task instead.")
+        }
         switch record.setup {
         case .setupFailed, .needsWorkspace:
             break
@@ -676,36 +680,45 @@ final class TaskCoordinator {
 
     /// Removes the attached files of tasks that have been Done or Archived
     /// for a week; see `TaskAttachmentRetention`. Runs at launch and with
-    /// the release monitor.
+    /// the release monitor. Skipped while tasks.toml cannot be read, since
+    /// `release_tags` decides whether a merged task is finished.
     func removeExpiredAttachments() {
-        let config = try? configLoader()
+        guard let config = try? configLoader() else { return }
         let date = now()
         for record in records.records {
+            let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
             let releaseTagsConfigured = record.projectRoot.flatMap {
-                config?.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
+                config.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
             } != nil
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
-            guard TaskAttachmentRetention.shouldRemove(
+            let step = TaskAttachmentRetention.step(
                 record,
+                hasFiles: fileManager.fileExists(atPath: directoryURL.path),
                 releaseTagsConfigured: releaseTagsConfigured,
                 taskSpaceOpen: taskSpaceOpen,
                 now: date
-            ) else { continue }
-            let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
-            do {
-                if fileManager.fileExists(atPath: directoryURL.path) {
-                    try fileManager.removeItem(at: directoryURL)
-                }
-            } catch {
-                ToasttyLog.warning(
-                    "Could not remove a finished task's attachments",
-                    category: .tasks,
-                    metadata: ["task_id": record.id.uuidString, "error": error.localizedDescription]
-                )
+            )
+            switch step {
+            case .none:
                 continue
+            case .startClock:
+                records.update(id: record.id) { $0.attachmentsFinishedSeenAt = date }
+            case .resetClock:
+                records.update(id: record.id) { $0.attachmentsFinishedSeenAt = nil }
+            case .remove:
+                do {
+                    try fileManager.removeItem(at: directoryURL)
+                } catch {
+                    ToasttyLog.warning(
+                        "Could not remove a finished task's attachments",
+                        category: .tasks,
+                        metadata: ["task_id": record.id.uuidString, "error": error.localizedDescription]
+                    )
+                    continue
+                }
+                records.update(id: record.id) { $0.attachmentsRemovedAt = date }
+                ToasttyLog.info("Removed a finished task's attachments", category: .tasks, metadata: ["task_id": record.id.uuidString])
             }
-            records.update(id: record.id) { $0.attachmentsRemovedAt = date }
-            ToasttyLog.info("Removed a finished task's attachments", category: .tasks, metadata: ["task_id": record.id.uuidString])
         }
     }
 

@@ -13,6 +13,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// The task exactly as written. The agent always receives it unchanged.
     public var text: String
     public var attachments: [TaskAttachment]
+    /// When Toastty first saw the task finished with its task space closed;
+    /// its attached files go a week later. See `TaskAttachmentRetention`.
+    public var attachmentsFinishedSeenAt: Date?
     /// When Toastty removed its copies of the attached files, a week after
     /// the task finished. `attachments` keeps their names.
     public var attachmentsRemovedAt: Date?

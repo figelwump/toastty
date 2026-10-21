@@ -543,11 +543,12 @@ until the file is fixed.
 
 - `~/.toastty/task-records.json`: every task record.
 - `~/.toastty/task-attachments/<task-id>/`: Toastty's copies of attached files.
-  They are removed when the task is deleted, or a week after the task reached
-  Done or Archived, once its task space has closed. The record keeps the file
-  names, and its history says the files were removed. A task that leaves Done,
-  because work started again, counts its week from its next finish. Toastty
-  checks at launch and every 15 minutes.
+  They are removed when the task is deleted, or a week after Toastty first
+  saw the task Done or Archived with its task space closed. Toastty looks at
+  launch and every 15 minutes, and not while `tasks.toml` has an error. A task
+  that leaves Done, for example because work started again, starts a new week
+  at its next finish. The record keeps the file names, and its history says
+  the files were removed; such a task can no longer be retried.
 - `~/.toastty/recent-workspaces.json`: the last closed top-level workspaces,
   for the workspace picker.
 
