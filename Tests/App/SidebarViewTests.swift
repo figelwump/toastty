@@ -2442,10 +2442,17 @@ final class SidebarViewTests: XCTestCase {
         defer { anchorWindow.orderOut(nil) }
         pumpMainRunLoop(duration: 1.0)
         let popoverWindow = NSApp.windows.first { NSStringFromClass(type(of: $0)).contains("Popover") && $0.isVisible }
-        if let popoverWindow, let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"], directory.isEmpty == false,
+        // Window capture needs Screen Recording access, which a test host
+        // may lack; the card renders above are the evidence then.
+        if let popoverWindow,
            let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(popoverWindow.windowNumber), [.boundsIgnoreFraming, .bestResolution]) {
-            let data = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
-            try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("inbox-popover-live.png"))
+            let attachment = XCTAttachment(
+                data: try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png"
+            )
+            attachment.name = "inbox-popover-live"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
     }
 
