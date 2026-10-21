@@ -2,9 +2,9 @@ import Foundation
 
 /// Where a task stands: worked out from its record and from what Toastty
 /// sees now, never stored, so it cannot go stale. The rules are checked in
-/// order and the first match wins: Archived, Done, To ship, Needs you,
-/// Inbox, Running. Needs you comes before Inbox, so a task whose setup
-/// failed still counts toward the Needs you badge.
+/// order and the first match wins: a stopped cleanup, Archived, Done, To
+/// ship, Needs you, Inbox, Running. Needs you comes before Inbox, so a task
+/// whose setup failed still counts toward the Needs you badge.
 public enum TaskStage: Equatable, Sendable {
     case inbox
     case needsYou(Attention)
@@ -29,13 +29,16 @@ public enum TaskStage: Equatable, Sendable {
         case review
         /// The agent marked work without a pull request ready.
         case readyForReview
+        /// Closing the task space or removing the worktree stopped, after a
+        /// merge, an archive or a release: "Merged · clean up?".
+        case cleanupStopped(reason: String)
 
         /// Whether the task has not reached its task space yet. Lists show
         /// these with the Inbox, where the task already is.
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
-            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview: false
+            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview, .cleanupStopped: false
             }
         }
     }
@@ -83,6 +86,11 @@ public enum TaskStage: Equatable, Sendable {
     }
 
     public static func derive(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
+        // A cleanup that stopped leaves a task space or a worktree behind,
+        // whatever the task's stage would be without it.
+        if let problem = live.cleanupProblem ?? facts.cleanupProblem {
+            return .needsYou(.cleanupStopped(reason: problem))
+        }
         if facts.archivedAt != nil {
             return .archived
         }
@@ -123,6 +131,12 @@ public enum TaskStage: Equatable, Sendable {
         case .idle, .none:
             break
         }
+        // An accepted merge that is still under way is not waiting for a
+        // review. A merge skill that stopped on a blocker ended its turn, so
+        // its activity is gone and the task falls to Review below.
+        if live.merge != nil {
+            return .running
+        }
         if let pullRequest = live.pullRequest {
             if pullRequest.state == .open, pullRequest.isDraft == false {
                 return .needsYou(.review)
@@ -151,6 +165,8 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var shippedAt: Date?
     public var archivedAt: Date?
     public var doneAt: Date?
+    /// Why the record's cleanup stopped, if it did.
+    public var cleanupProblem: String?
 
     public init(
         setup: TaskSetupState,
@@ -160,7 +176,8 @@ public struct TaskStageFacts: Equatable, Sendable {
         mergedAt: Date? = nil,
         shippedAt: Date? = nil,
         archivedAt: Date? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        cleanupProblem: String? = nil
     ) {
         self.setup = setup
         self.startWork = startWork
@@ -170,6 +187,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.shippedAt = shippedAt
         self.archivedAt = archivedAt
         self.doneAt = doneAt
+        self.cleanupProblem = cleanupProblem
     }
 
     public init(record: TaskRecord) {
@@ -181,7 +199,8 @@ public struct TaskStageFacts: Equatable, Sendable {
             mergedAt: record.mergedAt,
             shippedAt: record.shippedAt,
             archivedAt: record.archivedAt,
-            doneAt: record.doneAt
+            doneAt: record.doneAt,
+            cleanupProblem: record.cleanup?.problem
         )
     }
 
@@ -200,6 +219,19 @@ public enum TaskAgentActivity: Equatable, Sendable {
     case working
     case needsInput
     case error
+}
+
+/// An accepted merge that has not finished.
+public enum TaskMergeActivity: Equatable, Sendable {
+    /// The agent is checking the pull request with the merge skill.
+    case checking
+    /// Toastty is merging it.
+    case merging
+    /// Toastty waits for GitHub's checks or a required review, then merges.
+    case waitingForChecks
+    /// The pull request merged; Toastty closes the task space and removes
+    /// the worktree.
+    case cleaningUp
 }
 
 /// GitHub's last answer about a pull request.
@@ -232,16 +264,23 @@ public struct TaskLiveFacts: Equatable, Sendable {
     public var pullRequest: TaskPullRequestState?
     /// Whether the task has a pull request link at all.
     public var hasPullRequestLink: Bool
+    public var merge: TaskMergeActivity?
+    /// Why the merge's cleanup stopped, while Toastty still holds it.
+    public var cleanupProblem: String?
 
     public init(
         taskSpaceOpen: Bool,
         agent: TaskAgentActivity = .none,
         pullRequest: TaskPullRequestState? = nil,
-        hasPullRequestLink: Bool = false
+        hasPullRequestLink: Bool = false,
+        merge: TaskMergeActivity? = nil,
+        cleanupProblem: String? = nil
     ) {
         self.taskSpaceOpen = taskSpaceOpen
         self.agent = agent
         self.pullRequest = pullRequest
         self.hasPullRequestLink = hasPullRequestLink
+        self.merge = merge
+        self.cleanupProblem = cleanupProblem
     }
 }

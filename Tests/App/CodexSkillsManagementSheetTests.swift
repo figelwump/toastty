@@ -13,6 +13,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 "toastty:toastty-read-terminal",
                 "toastty:toastty-scratchpad",
                 "toastty:toastty-send-diagnostics",
+                "toastty:toastty-task-merge",
                 "toastty:toastty-task-start",
             ]
         )

@@ -302,9 +302,16 @@ final class AppControlExecutor {
             )
 
         case .workspaceClose:
+            let workspaceID = try resolveWorkspaceID(args: args)
+            let store = try requiredStore()
+            // Checked here, in the same main-actor step as the close, so a
+            // turn that starts after a caller's last read still stops it.
+            if args.boolValue("requireDone") == true, store.state.workspacesByID[workspaceID]?.doneAt == nil {
+                throw AutomationSocketError.invalidPayload("the workspace is no longer marked done")
+            }
             return .init(
-                didMutateState: try requiredStore().send(
-                    .closeWorkspace(workspaceID: try resolveWorkspaceID(args: args)),
+                didMutateState: store.send(
+                    .closeWorkspace(workspaceID: workspaceID),
                     source: .appControl(actionID: action.rawValue)
                 ),
                 result: nil
@@ -804,8 +811,12 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
 
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch:
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive:
             return try runTaskAction(action, args: args)
+
+        case .taskRelease:
+            return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
 
         case .taskAdopt:
             return try runTaskAdopt(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
@@ -851,6 +862,12 @@ final class AppControlExecutor {
                 return try prepareTaskCreate(args: args)
             }
             return try await finishTaskCreate(coordinator, preparation)
+        }
+        if AppControlActionID.resolve(rawID) == .taskArchive {
+            let (coordinator, taskID, options) = try withRequestContext(context) {
+                try prepareTaskArchive(args: args)
+            }
+            return try await finishTaskArchive(coordinator, taskID: taskID, options: options)
         }
         guard AppControlActionID.resolve(rawID) == .agentLaunch else {
             return try runAction(id: rawID, args: args, context: context)

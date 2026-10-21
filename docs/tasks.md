@@ -351,19 +351,21 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 
 | Stage | When |
 | --- | --- |
+| Needs you | the cleanup after its merge, archive or release stopped: "Merged · clean up?" |
 | Archived | the task was closed without finishing |
 | Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
 | To ship | it merged, and its project has `release_tags` |
 | Needs you | triage could not place it, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
 | Inbox | triage or setup is still running, or it is moving into a worktree |
-| Running | anything else |
+| Running | anything else, including a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about it every two minutes while the task is open, when an agent's
 turn ends in the task space, and when the Tasks view opens, and copies the
 link and the merge onto the task record. Without `gh`, a linked pull request
-with no agent working counts as waiting for review. Seeing a merge only
-records it; merging and cleaning up stay with the Merge button.
+with no agent working counts as waiting for review. A merge made on GitHub
+also cleans up the task space when that is safe; see
+[Merge a task](#merge-a-task).
 
 Task spaces that an agent made with `workspace.create`, before they had a
 record, are only watched: their done mark counts as Done, and the mark clears
@@ -394,9 +396,82 @@ them, and that task shows how many of them have merged.
 The Tasks view covers the workspace while it shows; selecting a workspace or
 pressing Esc leaves it. It lists every task in the same groups, with Done and
 Archived collapsed, and a detail pane with the task's text, stage, pull
-request, branch, agent and history, and actions to open its task space or pull
-request. A task that has not started shows the Inbox's controls there. An
-error in `tasks.toml` shows as a banner at the top.
+request, branch, agent and history, and its actions: open its task space or
+pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
+and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
+**Release…** button when its project sets `release_prompt`; the sidebar's
+Status To ship lines have one too. A task that has not started shows the
+Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
+
+## Merge a task
+
+**Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
+menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
+
+1. Toastty sends the project's `merge_prompt` to the task's agent. The default
+   is `Use toastty-task-merge.`, a skill Toastty ships. A busy agent gets it
+   once its turn ends; with no agent in the task space, Toastty starts the
+   task's agent in a new tab there. The task shows "Merging…".
+2. The skill checks what you cannot see at a glance: unresolved review threads,
+   merge prerequisites in the description, tasks that must land first, and CI.
+   If something blocks, it says why and ends its turn, and the task is back in
+   Needs you. Otherwise it runs `toastty task merge --head <commit>`.
+3. Toastty merges at exactly that commit with GitHub's merge API. If checks
+   still run, the task shows "Waiting for checks" and Toastty merges when they
+   pass. It never turns on auto-merge, so commits pushed later are not merged.
+4. Toastty records the merge on the task first. Once the agent's turn ends, it
+   closes the task space, removes the worktree and deletes the branch, the same
+   way as the Merge button does for any task space.
+
+Saying "merge it" to the task's agent runs the same skill. **Merge Without
+Checks**, or `merge = "direct"` for the project, skips the agent and merges at
+once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
+checks: a `task merge` from the agent's turn that was checking is then refused.
+
+A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
+its task space when no agent there is working and the worktree is clean at the
+merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
+**Clean Up** tries again and **Keep As Is** leaves everything where it is.
+
+## Archive a task
+
+**Archive…** closes a task without merging. Toastty first says what it will
+do, then:
+
+- closes the pull request only if you tick **Close PR #N on GitHub**;
+- closes the task space, which ends its agents;
+- removes the worktree. Uncommitted changes need your OK first;
+- deletes the local branch when every commit on it is on the remote, and keeps
+  it otherwise unless you choose to delete the unpushed commits. The remote
+  branch always stays, so the pull request can be reopened.
+
+A task space with unsaved documents, or a merge under way, is not archived.
+Each step is saved as it finishes; if one stops, the task shows in Needs you
+with the reason, and **Clean Up** continues from there. `toastty task archive`
+does the same from the CLI.
+
+## Finish without a pull request
+
+For work that has no pull request, the agent runs `toastty task
+ready-for-review`, and the task waits in Needs you. **Mark Done**, or
+`toastty task mark-done`, finishes it.
+
+## Release
+
+With `release_tags` set, a merged task waits in To ship until a release tag
+contains its merge commit. **Release…** on a project's To ship line makes a
+release task: Toastty fetches the remote's default branch, and starts the
+release agent with `release_prompt` in a new worktree on no branch at exactly
+that commit, never in your project checkout. The fetch must succeed. The agent
+also gets the list of tasks waiting to ship. `toastty task release` does the
+same from the CLI.
+
+Toastty looks for release tags every 15 minutes and when the Tasks view opens:
+it fetches tags and counts only a tag the remote has at the same commit. A
+release made outside Toastty counts too. When a tag contains a task's merge
+commit, the task is Done, and the Tasks view shows the tag. A shipped release
+task closes its task space and removes its worktree once its agent is at rest,
+unless the worktree's commit is on no remote branch or tag.
 
 ## `~/.toastty/tasks.toml`
 
@@ -447,12 +522,19 @@ branch_prefix = "feat"
   move fails with its last lines of output.
 - `branch_prefix` is the default first part of worktree branch names.
 - `release_tags` turns on the To ship stage for the project: a merged task
-  waits there until it ships, instead of going straight to Done. See
-  [Stages](#stages).
+  waits there until a tag matching this pattern, such as `"v*"`, contains its
+  merge commit, instead of going straight to Done. See [Release](#release).
+- `release_prompt` is what a release task's agent gets first, such as
+  `"Use toastty-release, then toastty-publish."`. Without it, Toastty shows no
+  Release button for the project.
+- `merge` is `"agent"`, the default, or `"direct"`; see
+  [Merge a task](#merge-a-task).
+- `merge_prompt` is what Merge sends to the task's agent, such as
+  `"Use worktree-done."` for a skill of your own. The default is
+  `"Use toastty-task-merge."`.
 
-Toastty also reads and checks these keys, which later features use:
-`[defaults]` `merge` and `merge_prompt`, and `release_prompt`, `merge` and
-`merge_prompt` in `[workspace."…"]`. They have no effect yet.
+`merge` and `merge_prompt` can also go in `[defaults]`; a workspace's own
+value wins.
 
 An error in the file names its line, and `task create` fails with that message
 until the file is fixed.
@@ -465,7 +547,7 @@ until the file is fixed.
 - `~/.toastty/recent-workspaces.json`: the last closed top-level workspaces,
   for the workspace picker.
 
-Deleting a task does not remove its worktree or branch.
+Deleting a task does not remove its worktree or branch; archiving it does.
 
 Runtime-isolated runs keep both under their runtime home. See
 [Privacy and Local Data](privacy-and-local-data.md).

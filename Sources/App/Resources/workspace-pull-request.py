@@ -2,6 +2,7 @@
 """Merge, clean up, or close one task pull request for a Toastty subspace.
 
 Usage: workspace-pull-request.py ACTION --pr NUMBER --pr-url URL --workspace ID --repo PATH [--head SHA]
+       [--expect-head SHA]
 
 Toastty runs this for a subspace's Merge button; it is not a user command.
 ACTION is one of:
@@ -16,7 +17,9 @@ ACTION is one of:
             read first; the checkout must be the PR's worktree, clean at that
             commit, and the PR head must be that commit. With --head, the PR head
             must still be that commit, and the workspace must still be marked
-            done, which is how the user cancels a waiting merge. Either way it
+            done, which is how the user cancels a waiting merge. --expect-head,
+            without --head, also requires the checkout's HEAD to be that commit:
+            the version a merge skill checked. Either way it
             refuses, changing nothing, unless the PR targets the default branch,
             has no conflicts or failing checks, and its description lists no merge
             prerequisites: an "Activation order", "Merge order", "Rollout", or
@@ -155,6 +158,8 @@ class Context:
     checkout: str
     # The checkout's HEAD, read before any network call, for a merge click.
     clicked_head: str | None = None
+    # For a merge click: the commit the caller checked, which HEAD must be.
+    expected_head: str | None = None
 
 
 def real(path: str) -> str:
@@ -281,6 +286,9 @@ def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
         accepted = ctx.clicked_head
         if not accepted:
             raise Refusal("could not read the commit in this workspace's checkout")
+        if ctx.expected_head and accepted != ctx.expected_head:
+            raise Refusal(f"the checkout is at {accepted[:8]}, not the checked commit {ctx.expected_head[:8]}; "
+                          "check the new commits, then merge again")
         problem = worktree_problem(ctx.worktree, accepted)
         if problem:
             raise Refusal(problem + "; the merge would not be the version in this workspace")
@@ -497,8 +505,11 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     problem = worktree_problem(worktree, cleanup_head, head_label)
     if problem:
         return stop(f"{problem}; workspace kept")
+    # requireDone makes Toastty refuse in the same step as the close if new
+    # work cleared the done mark after the reread above.
     ok, output = succeeds([os.environ["TOASTTY_CLI_PATH"], "--json", "action", "run", "workspace.close",
-                           "--workspace", workspace.workspace_id])
+                           "--workspace", workspace.workspace_id,
+                           *([] if close_pr else ["requireDone=true"])])
     try:
         ok = ok and json.loads(output).get("ok") is True
     except json.JSONDecodeError:
@@ -590,7 +601,10 @@ def load(options: argparse.Namespace) -> Context:
         clicked_head = head if ok else ""
     if not options.head:
         # A merge that is waiting reads only GitHub; it runs every 30 seconds.
-        subprocess.run(["git", "fetch", "--quiet", "--prune", "origin"], cwd=repo, capture_output=True)
+        # FETCH_HEAD belongs to task start-work, which reads it under its own
+        # lock; this fetch only refreshes the remote-tracking refs.
+        subprocess.run(["git", "fetch", "--quiet", "--prune", "--no-write-fetch-head", "origin"], cwd=repo,
+                       capture_output=True)
     repo_info = json.loads(run(["gh", "repo", "view", "--json",
                                 "nameWithOwner,defaultBranchRef,mergeCommitAllowed,squashMergeAllowed,"
                                 "rebaseMergeAllowed"], cwd=repo))
@@ -615,7 +629,8 @@ def load(options: argparse.Namespace) -> Context:
         repo=repo, repo_slug=repo_info["nameWithOwner"], default_branch=repo_info["defaultBranchRef"]["name"],
         repo_info=repo_info, pr=pr, worktree=worktree,
         other_worktrees=[w.path for w in worktrees if worktree is None or w.path != worktree.path],
-        workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head)
+        workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head,
+        expected_head=options.expect_head)
 
 
 def main() -> None:
@@ -626,9 +641,12 @@ def main() -> None:
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--repo", required=True, help="any checkout of the repository")
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
+    parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
     options = parser.parse_args()
     if options.head and options.action != "merge":
         parser.error("--head is only for merge")
+    if options.expect_head and (options.action != "merge" or options.head):
+        parser.error("--expect-head is only for a merge without --head")
     report: dict = {}
     try:
         ctx = load(options)

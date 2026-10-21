@@ -24,6 +24,8 @@ struct TaskBoardItem: Identifiable, Equatable {
     var pullRequestState: TaskPullRequestState?
     var branch: String?
     var parentTaskID: UUID?
+    /// An accepted merge that is still under way.
+    var merge: TaskMergeActivity?
     /// The latest change Toastty knows of, for ordering within a group.
     var activityAt: Date
 
@@ -42,6 +44,8 @@ enum TaskBoard {
         var pullRequestState: (WorkspacePullRequestLink) -> TaskPullRequestState?
         var config: TasksConfig?
         var homeDirectory: String = NSHomeDirectory()
+        /// The merge Toastty runs for a task space, if any.
+        var mergeRequest: (UUID) -> WorkspaceMergeRequest? = { _ in nil }
     }
 
     static func items(_ inputs: Inputs) -> [TaskBoardItem] {
@@ -118,18 +122,33 @@ enum TaskBoard {
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
+        let request = taskSpaceID.flatMap(inputs.mergeRequest)
         // While the task space is open, its done mark is the live answer;
-        // the record keeps a copy for after it closes.
-        if let taskSpace {
+        // the record keeps a copy for after it closes. A merge sets the mark
+        // too, as the user's acceptance; that is not the work being done.
+        if let taskSpace, isInMergeFlow(record, request: request) == false {
             facts.doneAt = taskSpace.doneAt
         }
+        var cleanupProblem: String?
+        if case .failed(let reason)? = request?.phase {
+            cleanupProblem = reason
+        }
+        let merge = mergeActivity(
+            record: record,
+            request: request,
+            pullRequestState: pullRequestState,
+            agent: agent,
+            statuses: statuses
+        )
         let stage = TaskStage.derive(
             facts,
             live: TaskLiveFacts(
                 taskSpaceOpen: taskSpace != nil,
                 agent: agent,
                 pullRequest: pullRequestState,
-                hasPullRequestLink: link != nil
+                hasPullRequestLink: link != nil,
+                merge: merge,
+                cleanupProblem: cleanupProblem
             ),
             releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs)
         )
@@ -148,10 +167,50 @@ enum TaskBoard {
             agent: agent,
             pullRequest: link,
             pullRequestState: pullRequestState,
-            branch: record.worktree?.branch,
+            branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
             parentTaskID: record.parentTaskID,
+            merge: merge,
             activityAt: dates.max() ?? record.createdAt
         )
+    }
+
+    /// Whether the task's done mark records a merge's acceptance rather
+    /// than finished work.
+    static func isInMergeFlow(_ record: TaskRecord, request: WorkspaceMergeRequest?) -> Bool {
+        record.mergeRequestedAt != nil || record.mergedAt != nil || request != nil
+    }
+
+    /// Where an accepted merge stands. The merge coordinator's request says
+    /// what Toastty itself does. Before that, a task whose Merge sent the
+    /// merge prompt is checking while its agent works on it, or has not yet
+    /// reacted: its last status is older than the request. Once the agent
+    /// reports a status after the request and is idle, the skill stopped.
+    static func mergeActivity(
+        record: TaskRecord,
+        request: WorkspaceMergeRequest?,
+        pullRequestState: TaskPullRequestState?,
+        agent: TaskAgentActivity,
+        statuses: [WorkspaceSessionStatus]
+    ) -> TaskMergeActivity? {
+        switch request?.phase {
+        case .merging?, .closing?: return .merging
+        case .awaitingChecks?: return .waitingForChecks
+        case .awaitingMerge?, .cleaningUp?: return .cleaningUp
+        case .failed?: return nil
+        case nil: break
+        }
+        guard let requestedAt = record.mergeRequestedAt,
+              record.mergedAt == nil,
+              pullRequestState?.state != .merged else { return nil }
+        switch agent {
+        case .working:
+            return .checking
+        case .idle:
+            let lastStatus = statuses.compactMap(\.statusUpdatedAt).max() ?? .distantPast
+            return lastStatus < requestedAt ? .checking : nil
+        case .none, .needsInput, .error:
+            return nil
+        }
     }
 
     private static func observedItem(workspace: WorkspaceState, parentID: UUID, inputs: Inputs) -> TaskBoardItem {
@@ -184,6 +243,7 @@ enum TaskBoard {
             pullRequestState: pullRequestState,
             branch: nil,
             parentTaskID: nil,
+            merge: nil,
             activityAt: dates.max() ?? .distantPast
         )
     }
@@ -226,6 +286,7 @@ final class TaskBoardStore: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var storeObserverToken: UUID?
     private var refreshLoop: Task<Void, Never>?
+    private var releaseLoop: Task<Void, Never>?
     private var workingTaskSpaceIDs: Set<UUID> = []
     private var isTurnCheckScheduled = false
 
@@ -246,6 +307,7 @@ final class TaskBoardStore: ObservableObject {
         sessionRuntimeStore: SessionRuntimeStore,
         pullRequests: PullRequestStateCache,
         refreshInterval: Duration? = TaskBoardStore.pullRequestRefreshInterval,
+        releaseCheckInterval: Duration? = TaskCoordinator.releaseCheckInterval,
         now: @escaping () -> Date = Date.init
     ) {
         self.coordinator = coordinator
@@ -257,6 +319,10 @@ final class TaskBoardStore: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         pullRequests.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        sessionRuntimeStore.$workspaceMergeRequests
+            .removeDuplicates()
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         sessionRuntimeStore.$sessionRegistry
@@ -289,10 +355,19 @@ final class TaskBoardStore: ObservableObject {
                 }
             }
         }
+        if let releaseCheckInterval {
+            releaseLoop = Task { [weak self] in
+                while Task.isCancelled == false {
+                    try? await Task.sleep(for: releaseCheckInterval)
+                    await self?.coordinator?.checkReleases()
+                }
+            }
+        }
     }
 
     deinit {
         refreshLoop?.cancel()
+        releaseLoop?.cancel()
     }
 
     /// Every item, or those a window's sidebar shows.
@@ -305,7 +380,10 @@ final class TaskBoardStore: ObservableObject {
                 sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? []
             },
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
-            config: config
+            config: config,
+            mergeRequest: { [weak sessionRuntimeStore] workspaceID in
+                sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
+            }
         ))
         guard let windowID else { return all }
         return TaskBoard.items(all, in: windowID, state: store.state)
@@ -321,8 +399,29 @@ final class TaskBoardStore: ObservableObject {
             records: [],
             statuses: { _ in statuses },
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
-            config: config
+            config: config,
+            mergeRequest: { [weak sessionRuntimeStore] workspaceID in
+                sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
+            }
         ))
+    }
+
+    /// A task's merge that is under way. Only a task whose task space is
+    /// open can have one.
+    func mergeActivity(taskID: UUID) -> TaskMergeActivity? {
+        guard let coordinator, let store,
+              let workspaceID = coordinator.records.record(id: taskID)?.taskSpaceWorkspaceID,
+              let workspace = store.state.workspacesByID[workspaceID] else { return nil }
+        return item(taskSpace: workspace, statuses: sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? [])?.merge
+    }
+
+    /// Whether Release can start a release for the item's project: the
+    /// project is open and tasks.toml gives it a `release_prompt`.
+    func canRelease(_ item: TaskBoardItem) -> Bool {
+        guard item.projectWorkspaceID != nil,
+              let root = item.record?.projectRoot,
+              let config else { return false }
+        return config.workspace(forProjectRoot: root)?.releasePrompt != nil
     }
 
     func reloadConfig() {
@@ -348,10 +447,14 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
-    /// When the Tasks view opens: read tasks.toml again and ask GitHub.
+    /// When the Tasks view opens: read tasks.toml again, ask GitHub, and
+    /// look for release tags.
     func tasksViewDidOpen() {
         reloadConfig()
         refreshOpenPullRequests()
+        Task { [weak coordinator] in
+            await coordinator?.checkReleases()
+        }
     }
 
     private func refreshAfterTurnsEnded() {
@@ -388,8 +491,12 @@ final class TaskBoardStore: ObservableObject {
                     next.pullRequestURL = link.url
                     next.mergedAt = nil
                     next.mergeCommit = nil
+                    next.mergeRequestedAt = nil
                 }
-                next.doneAt = workspace.doneAt
+                let request = sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
+                if TaskBoard.isInMergeFlow(next, request: request) == false {
+                    next.doneAt = workspace.doneAt
+                }
             }
             if next.mergedAt == nil,
                let link = WorkspacePullRequestLink(annotationURL: next.pullRequestURL),
@@ -403,10 +510,34 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
-    /// Records a merge on the tasks whose pull request it is. This states
-    /// what GitHub reported; it starts no cleanup.
+    /// Records a merge on the tasks whose pull request it is, then has the
+    /// coordinator clean up those that merged on GitHub, where it is safe.
+    /// A merge Toastty ran cleans up through its own request.
     private func recordAnswer(link: WorkspacePullRequestLink, state: TaskPullRequestState) {
-        guard state.state == .merged, let store else { return }
+        guard state.state == .merged, let store, let coordinator else { return }
         syncRecords(state: store.state)
+        let merged = coordinator.records.records
+            .filter { $0.pullRequestURL == link.url }
+            .map(\.id)
+        coordinator.cleanUpMergedTasks(merged)
+    }
+}
+
+extension SessionRuntimeStore {
+    /// Whether a task space's task has a merge its agent is checking, which
+    /// the Merge button shows as under way.
+    func isCheckingTaskMerge(workspaceID: UUID) -> Bool {
+        guard let board = taskCoordinator?.board,
+              let workspace = taskCoordinator?.store.state.workspacesByID[workspaceID],
+              workspace.taskID != nil else { return false }
+        return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))?.merge == .checking
+    }
+
+    /// Whether the workspace is a task space with a task record, whose
+    /// Merge goes through the task.
+    func isTaskSpaceWithRecord(workspaceID: UUID) -> Bool {
+        guard let coordinator = taskCoordinator,
+              let taskID = coordinator.store.state.workspacesByID[workspaceID]?.taskID else { return false }
+        return coordinator.records.record(id: taskID) != nil
     }
 }

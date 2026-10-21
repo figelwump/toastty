@@ -78,12 +78,17 @@ struct TaskWorktreeCreator: Sendable {
     /// The commit to start from. With no `base`, the remote's default
     /// branch, fetched now. A `base` names a branch on the remote, fetched
     /// now, or a local commit. Call it under the checkout's lock: it reads
-    /// `FETCH_HEAD`.
-    func pinBase(_ checkout: TaskGitCheckout, base: String?) async throws -> TaskOperation.Base {
+    /// `FETCH_HEAD`. With `requireFetch`, the remote must answer: no cached
+    /// default branch or last fetched commit stands in, so a release never
+    /// builds from an old commit without saying so.
+    func pinBase(_ checkout: TaskGitCheckout, base: String?, requireFetch: Bool = false) async throws -> TaskOperation.Base {
         if let base {
             try Self.validateRefArgument(base, name: "base")
         }
         guard let remote = checkout.remote else {
+            if requireFetch {
+                throw TaskError("\(checkout.root) has no remote to fetch the latest commit from.")
+            }
             return try await localBase(checkout, base: base)
         }
         if let base, Self.looksLikeCommitID(base), let sha = try? await resolveCommit(base, in: checkout.root) {
@@ -93,7 +98,7 @@ struct TaskWorktreeCreator: Sendable {
         if let base {
             branch = base.hasPrefix("\(remote)/") ? String(base.dropFirst(remote.count + 1)) : base
         } else {
-            branch = try await defaultBranch(checkout, remote: remote)
+            branch = try await defaultBranch(checkout, remote: remote, requireAnswer: requireFetch)
         }
         // Only a valid branch name reaches the fetch: anything else, such as
         // `main:refs/heads/other`, would be read as a refspec that writes a
@@ -113,6 +118,9 @@ struct TaskWorktreeCreator: Sendable {
         if fetch.succeeded {
             let sha = try await resolveCommit("FETCH_HEAD", in: checkout.root)
             return TaskOperation.Base(sha: sha, ref: "\(remote)/\(branch)", fetched: true)
+        }
+        if requireFetch {
+            throw TaskError("Toastty could not fetch \(remote)/\(branch): \(fetch.summary)")
         }
         // Offline, or the remote refused: the last fetched commit still
         // works, and the record says it may be old.
@@ -146,7 +154,7 @@ struct TaskWorktreeCreator: Sendable {
 
     /// The branch the remote advertises as its HEAD now. Offline, the cached
     /// `<remote>/HEAD`, which can lag a changed default.
-    private func defaultBranch(_ checkout: TaskGitCheckout, remote: String) async throws -> String {
+    private func defaultBranch(_ checkout: TaskGitCheckout, remote: String, requireAnswer: Bool = false) async throws -> String {
         let advertised = try await git(["ls-remote", "--symref", remote, "HEAD"], in: checkout.root, allowFailure: true)
         if advertised.succeeded {
             for line in advertised.output.split(whereSeparator: \.isNewline) where line.hasPrefix("ref: refs/heads/") {
@@ -155,6 +163,9 @@ struct TaskWorktreeCreator: Sendable {
                     return String(ref[..<end])
                 }
             }
+        }
+        if requireAnswer {
+            throw TaskError("Toastty could not ask \(remote) for its default branch: \(advertised.summary)")
         }
         if let symbolic = try? await git(
             ["symbolic-ref", "--quiet", "--short", "refs/remotes/\(remote)/HEAD"],
@@ -220,13 +231,18 @@ struct TaskWorktreeCreator: Sendable {
         return Set(cached.output.split(whereSeparator: \.isNewline).map(String.init))
     }
 
-    func addWorktree(_ checkout: TaskGitCheckout, path: String, branch: String, sha: String) async throws {
-        _ = try await git(["worktree", "add", "--quiet", "-b", branch, path, sha], in: checkout.root)
+    func addWorktree(_ checkout: TaskGitCheckout, path: String, branch: String, sha: String, detached: Bool = false) async throws {
+        if detached {
+            _ = try await git(["worktree", "add", "--quiet", "--detach", path, sha], in: checkout.root)
+        } else {
+            _ = try await git(["worktree", "add", "--quiet", "-b", branch, path, sha], in: checkout.root)
+        }
     }
 
-    /// Whether `path` is a worktree of the repository on `branch`: what an
-    /// add that finished before a crash left behind.
-    func isWorktree(path: String, branch: String) async -> Bool {
+    /// Whether `path` is a worktree of the repository on `branch`, or on no
+    /// branch when `detached`: what an add that finished before a crash
+    /// left behind.
+    func isWorktree(path: String, branch: String, detached: Bool = false) async -> Bool {
         guard FileManager.default.fileExists(atPath: path),
               let result = try? await git(["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"], in: path) else {
             return false
@@ -235,7 +251,7 @@ struct TaskWorktreeCreator: Sendable {
         guard lines.count == 2 else { return false }
         let top = URL(filePath: lines[0]).resolvingSymlinksInPath().path(percentEncoded: false)
         let expected = URL(filePath: path).resolvingSymlinksInPath().path(percentEncoded: false)
-        return Self.trimmedDirectory(top) == Self.trimmedDirectory(expected) && lines[1] == branch
+        return Self.trimmedDirectory(top) == Self.trimmedDirectory(expected) && lines[1] == (detached ? "HEAD" : branch)
     }
 
     // MARK: - Hook

@@ -446,12 +446,14 @@ extension TaskCoordinator {
         if let pinned = record.operation.base {
             base = pinned
         } else {
-            base = try await worktreeCreator.pinBase(checkout, base: startWork.base)
+            // A release must build from the remote's latest commit.
+            base = try await worktreeCreator.pinBase(checkout, base: startWork.base, requireFetch: record.release != nil)
             guard isCurrent(job, taskID: taskID) else { throw CancellationError() }
             try save(taskID: taskID) { $0.operation.base = base }
         }
+        let detached = startWork.detached == true
         if var reserved = record.operation.worktree,
-           await worktreeCreator.isWorktree(path: reserved.path, branch: reserved.branch) {
+           await worktreeCreator.isWorktree(path: reserved.path, branch: reserved.branch, detached: detached) {
             reserved.added = true
             let added = reserved
             saveOrDefer(taskID: taskID) { $0.operation.worktree = added }
@@ -459,12 +461,18 @@ extension TaskCoordinator {
         }
         let names = try await worktreeCreator.freeNames(checkout, slug: record.slug, branchPrefix: startWork.branchPrefix)
         guard isCurrent(job, taskID: taskID) else { throw CancellationError() }
-        var worktree = TaskOperation.Worktree(path: names.path, branch: names.branch, checkoutRoot: checkout.root, added: false)
+        var worktree = TaskOperation.Worktree(
+            path: names.path,
+            branch: names.branch,
+            checkoutRoot: checkout.root,
+            added: false,
+            detached: detached ? true : nil
+        )
         let reserved = worktree
         // Saved first: after a crash, a retry finds this worktree instead of
         // making a second one.
         try save(taskID: taskID) { $0.operation.worktree = reserved }
-        try await worktreeCreator.addWorktree(checkout, path: worktree.path, branch: worktree.branch, sha: base.sha)
+        try await worktreeCreator.addWorktree(checkout, path: worktree.path, branch: worktree.branch, sha: base.sha, detached: detached)
         worktree.added = true
         let added = worktree
         saveOrDefer(taskID: taskID) { $0.operation.worktree = added }

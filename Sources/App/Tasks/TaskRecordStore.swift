@@ -83,8 +83,14 @@ final class TaskRecordStore: ObservableObject {
         try commit(records.filter { $0.id != id })
     }
 
+    /// Writes every record now, including changes `update` left for a
+    /// later write: before a step that must not run on unsaved state.
+    func flush() throws {
+        try commit(records)
+    }
+
     func flushForTesting() {
-        try? commit(records)
+        try? flush()
     }
 
     // MARK: - Persistence

@@ -935,7 +935,14 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id>)
-      toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply]
+      toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
+      toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
+      toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
+      toastty [--json] [--socket-path <path>] task clean-up <task-id>
+      toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
+      toastty [--json] [--socket-path <path>] task mark-done <task-id>
+      toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
+      toastty [--json] [--socket-path <path>] task release [--workspace <id>]
       toastty [--json] [--socket-path <path>] task workspace-choices
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>)
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
@@ -1946,11 +1953,17 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.adopt", args: args))
 
         case "list":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--changed-since"], flagOptions: ["--include-reply"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--changed-since", "--parent"], flagOptions: ["--include-reply"])
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("task list does not accept arguments\n\n\(usage)")
             }
             var args: [String: AutomationJSONValue] = [:]
+            if let parent = parsed.singleValue("--parent") {
+                guard UUID(uuidString: parent) != nil else {
+                    throw ToasttyCLIError.usage("--parent must be a task ID\n\n\(usage)")
+                }
+                args["parent"] = .string(parent)
+            }
             if let cursor = parsed.singleValue("--changed-since") {
                 args["changedSince"] = .string(cursor)
             }
@@ -1965,6 +1978,60 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("task workspace-choices does not accept arguments\n\n\(usage)")
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
+
+        case "merge", "cancel-merge", "ready-for-review":
+            let parsed = try parseCommandArguments(remaining, valueOptions: verb == "merge" ? ["--head"] : [])
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task \(verb) takes at most one task ID\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let taskID = parsed.positionals.first {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("task \(verb) takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            if let head = parsed.singleValue("--head") {
+                args["head"] = .string(head)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
+
+        case "clean-up", "mark-done":
+            let parsed = try parseCommandArguments(remaining, valueOptions: [])
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
+                throw ToasttyCLIError.usage("task \(verb) requires a task ID\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: ["taskID": .string(taskID)]))
+
+        case "archive":
+            let parsed = try parseCommandArguments(
+                remaining,
+                valueOptions: [],
+                flagOptions: ["--close-pr", "--delete-unpushed", "--discard-changes"]
+            )
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
+                throw ToasttyCLIError.usage("task archive requires a task ID\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.archive", args: [
+                "taskID": .string(taskID),
+                "closePullRequest": .bool(parsed.hasFlag("--close-pr")),
+                "deleteUnpushedCommits": .bool(parsed.hasFlag("--delete-unpushed")),
+                "discardChanges": .bool(parsed.hasFlag("--discard-changes")),
+            ]))
+
+        case "release":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace"])
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("task release takes --workspace, or releases the calling agent's project\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let workspace = parsed.singleValue("--workspace") {
+                guard UUID(uuidString: workspace) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
+                }
+                args["workspaceID"] = .string(workspace)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release", args: args))
 
         case "send":
             let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file"])

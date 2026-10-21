@@ -716,11 +716,13 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if store.isWorkspaceMergeEnabled,
+        // A task space always offers Merge: the task lifecycle finishes there.
+        if store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
            let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-            mode: store.workspaceMergeMode
+            mode: store.workspaceMergeMode,
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id)
         ) {
             // A pull request subspace gives the whole slot to its merge
             // control; the sidebar and tab dots still show unreads.
@@ -736,7 +738,16 @@ struct WorkspaceView: View {
                 cancelCleanup: {
                     sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
                 },
-                closeWithoutMerging: { requestWorkspaceClose(workspace.id) }
+                closeWithoutMerging: { requestWorkspaceClose(workspace.id) },
+                isTask: sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
+                mergeWithoutChecks: {
+                    TaskActions.mergeWithoutChecks(workspaceID: workspace.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
+                },
+                archiveTask: {
+                    guard let coordinator = sessionRuntimeStore.taskCoordinator,
+                          let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
             )
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show

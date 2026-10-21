@@ -58,7 +58,8 @@ struct TaskBoardTests {
             store: fixture.store,
             sessionRuntimeStore: fixture.sessionRuntimeStore,
             pullRequests: PullRequestStateCache(runner: gitHub),
-            refreshInterval: nil
+            refreshInterval: nil,
+            releaseCheckInterval: nil
         )
     }
 

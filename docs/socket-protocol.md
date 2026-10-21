@@ -252,6 +252,13 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.send`
 - `task.watch`
 - `task.unwatch`
+- `task.merge`
+- `task.cancel-merge`
+- `task.clean-up`
+- `task.ready-for-review`
+- `task.mark-done`
+- `task.archive`
+- `task.release`
 - `task.adopt`
 - `window.tasks.show`
 - `window.tasks.hide`
@@ -417,6 +424,50 @@ Notable action-specific behavior:
     reached, which can be later than `until`.
 - `task.unwatch`
   - requires `args.watchID` and cancels that watch.
+- `task.merge`
+  - what a merge skill calls once its checks pass. Takes optional `taskID`
+    (the calling managed session's own task when left out) and `head`.
+  - records the user's acceptance and hands the merge to the merge owner, then
+    returns the task object. The merge owner runs the bundled pull request
+    script: it merges at the checkout's commit with GitHub's merge API, never
+    turns on auto-merge, waits for checks that still run, and once GitHub
+    reports the merge and no agent in the task space is in a turn, closes the
+    task space, removes the worktree and deletes the branch.
+  - with `head`, the script refuses unless the checkout is at that commit.
+  - `INVALID_PAYLOAD` when the task is archived or merged, its task space is
+    closed, it has no pull request link, a merge is already under way, or the
+    user cancelled the merge during the caller's current turn.
+- `task.cancel-merge`
+  - takes optional `taskID`. Clears the acceptance and the task space's done
+    mark, which ends a wait for checks. `INVALID_PAYLOAD` while the script
+    merges, after the pull request merged, or when no merge is under way.
+- `task.clean-up`
+  - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
+    archive or a release.
+- `task.ready-for-review`, `task.mark-done`
+  - `task.ready-for-review` takes optional `taskID` and sets
+    `readyForReviewAt`. `task.mark-done` requires `taskID`, sets `doneAt`, and
+    marks the task space done.
+- `task.archive`
+  - requires `args.taskID`; takes booleans `closePullRequest`,
+    `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
+    returns and refuses with `INVALID_PAYLOAD` and the reason: unsaved documents
+    in the task space, a merge under way, uncommitted changes without
+    `discardChanges`, or a detached worktree whose commit is on no remote branch
+    or tag without `deleteUnpushedCommits`.
+  - then returns the task object with `archivedAt` set while the steps run in
+    the background: close the pull request (only with `closePullRequest`),
+    close the task space, remove the worktree, and delete the local branch when
+    the remote has its commits or with `deleteUnpushedCommits`. The remote
+    branch stays. Each step is saved in `cleanup.stepsDone`; a stop sets
+    `cleanup.problem`, and `task.archive` or `task.clean-up` continues.
+- `task.release`
+  - takes the `workspaceID` selector, or the calling managed session's
+    workspace; a task space resolves to its project. The project's tasks.toml
+    section must set `release_prompt`, and no other release of it may be
+    unfinished. Makes a task with `release.childTaskIDs` (the project's To ship
+    tasks), fetches the remote's default branch (the fetch must succeed), and
+    starts the default agent in a new worktree on no branch at that commit.
 - `task.adopt`
   - gives a task space without a task record one, with source `adopted`, and
     returns the task object with its `stage`. Targets the calling managed
@@ -636,11 +687,19 @@ Common query IDs include:
 `state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on
-the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, and `stage` with
+the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
+`mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
+`archivedAt`, and `stage` with
 `group` (`inbox`, `needsYou`, `running`, `toShip`, `done`, or `archived`),
-`needsUser`, and for Needs you `attention` and, for failures, `reason`. A task with a
+`needsUser`, and for Needs you `attention` and, for failures and a stopped
+cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
+(`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
+`cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,
+`finishedAt`) appears once a cleanup started, and `release` (`childTaskIDs`)
+on a release task. A task with a
 worktree request also has `worktree`: `state` (`running`, `failed` with
-`reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`,
+`reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`
+(`null` for a release's worktree, which is on no branch, with `detached`),
 `baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
 session that continues in the worktree, `conversationConfirmed`,
 `sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with

@@ -89,6 +89,12 @@ if "workspace.list" in args:
     print(json.dumps({"ok": True, "result": {"workspaces": workspaces or state["workspaces"],
                                              "callerIsScoped": state.get("scoped", False)}}))
 elif "workspace.close" in args:
+    # "undone_at_close" lists workspaces whose done mark new work cleared after
+    # the script's last read; Toastty refuses a close that requires the mark.
+    if "requireDone=true" in args and args[args.index("--workspace") + 1] in state.get("undone_at_close", []):
+        print(json.dumps({"ok": False, "error": {"code": "INVALID_PAYLOAD",
+                                                 "message": "the workspace is no longer marked done"}}))
+        sys.exit(0)
     # "dirty_on_close" maps a workspace to a path its dying command writes into.
     target = state.get("dirty_on_close", {}).get(args[args.index("--workspace") + 1])
     if target:
@@ -176,17 +182,18 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
         return branch, path
 
-    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None):
+    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None):
         """Runs the script as Toastty does, from the workspace's checkout: the
         task's worktree unless `repo` says otherwise. `head` is a waiting
-        merge's accepted commit."""
+        merge's accepted commit; `expect_head` the commit a merge skill checked."""
         self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
                                                **self.extra_state}))
         result = subprocess.run(
             [sys.executable, str(SCRIPT), action, "--pr", str(number),
              "--pr-url", url or f"https://github.com/test/repo/pull/{number}",
              "--workspace", workspace or workspace_id(number), "--repo", str(repo or self.root / f"task-{number}"),
-             *(["--head", head] if head else [])],
+             *(["--head", head] if head else []),
+             *(["--expect-head", expect_head] if expect_head else [])],
             env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -219,6 +226,19 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(result["head"], head)
         self.assertEqual(self.actions(), [self.merge_call(1, head)])
         self.assertTrue(path.exists())
+
+    def test_merge_refuses_when_the_checkout_moved_past_the_checked_commit(self):
+        _, path = self.task(1, state="OPEN")
+        checked = self.prs[0]["headRefOid"]
+        # The agent pushed another commit after its merge checks ran.
+        newer = self.commit(path, "after the checks")
+        self.git("push", "-q", "origin", "task-1", cwd=path)
+        self.prs[0]["headRefOid"] = newer
+        result = self.run_script("merge", 1, expect_head=checked)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("not the checked commit", result["detail"])
+        self.assertEqual(self.actions(), [])
+        self.assertEqual(self.run_script("merge", 1, expect_head=newer)["status"], "merged")
 
     def test_merge_waits_while_checks_run_then_merges_the_accepted_commit(self):
         _, path = self.task(1, state="OPEN")
@@ -649,6 +669,16 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertIn("unsaved document", result["detail"])
         self.assertTrue(path.exists())
         self.assertEqual(self.closed(), [])
+
+    def test_cleanup_keeps_everything_when_new_work_starts_before_the_close(self):
+        branch, path = self.task(1)
+        self.extra_state["undone_at_close"] = [workspace_id(1)]
+        result = self.run_script("clean-up", 1)
+        self.assertEqual(result["status"], "stopped", result)
+        self.assertIn("no longer marked done", result["detail"])
+        self.assertIn("requireDone=true", self.closed()[0])
+        self.assertTrue(path.exists())
+        self.assertNotEqual(self.git("branch", "--list", branch), "")
 
     def test_cleanup_needs_the_named_workspace_still_marked_done(self):
         _, path = self.task(1, done=False)

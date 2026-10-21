@@ -64,6 +64,13 @@ public enum TaskPrompt {
     }
 
     private static func worktreeLine(_ worktree: TaskOperation.Worktree, base: TaskOperation.Base?) -> String {
+        if worktree.isDetached {
+            var line = "You are in the git worktree \(worktree.path), on no branch"
+            if let base {
+                line += ", at \(base.ref) (\(base.sha.prefix(12)))"
+            }
+            return line + "."
+        }
         var line = "You are in the git worktree \(worktree.path), on branch \(worktree.branch)"
         if let base {
             line += ", which starts at \(base.ref) (\(base.sha.prefix(12)))"

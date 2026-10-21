@@ -57,6 +57,9 @@ struct TaskWatchTests {
         // Marked done by hand: nothing merged or waits to ship.
         #expect(conditions(.done) == [.readyForReview, .done])
         #expect(conditions(.archived, merged: true) == [.archived])
+        // "Merged · clean up?" hides the stage the merge reached, not the merge.
+        #expect(conditions(.needsYou(.cleanupStopped(reason: "dirty")), merged: true) == [.readyForReview, .merged])
+        #expect(conditions(.needsYou(.cleanupStopped(reason: "dirty"))).isEmpty)
     }
 
     @Test

@@ -76,6 +76,8 @@ struct TaskSessionInfo: Equatable {
     var status: SessionStatus? = nil
     var statusUpdatedAt: Date? = nil
     var lastTurnEndedAt: Date? = nil
+    /// When the current turn started, while the session works.
+    var turnStartedAt: Date? = nil
     /// The provider transcript Toastty confirmed for the session.
     var transcriptPath: String? = nil
 }
@@ -217,8 +219,8 @@ final class TaskCoordinator {
 
     /// One per running setup; a newer attempt or a delete makes an older
     /// one stop at its next check.
-    private var setupAttempts: [UUID: UUID] = [:]
-    private var setupTasks: [UUID: Task<Void, Never>] = [:]
+    var setupAttempts: [UUID: UUID] = [:]
+    var setupTasks: [UUID: Task<Void, Never>] = [:]
     /// The same for moves into a worktree.
     var startWorkAttempts: [UUID: UUID] = [:]
     var startWorkTasks: [UUID: Task<Void, Never>] = [:]
@@ -232,6 +234,15 @@ final class TaskCoordinator {
     /// The live view of every task's stage, for queries that report it and
     /// for stage watches.
     weak var board: TaskBoardStore?
+    /// The one owner of merges and their cleanup. Set once it exists.
+    weak var merges: WorkspaceMergeCoordinator?
+    /// Unsaved local documents in a workspace, which closing it would lose.
+    var unsavedDocumentCount: (UUID) -> Int = { _ in 0 }
+    /// Merge prompts waiting for a busy agent's turn to end.
+    var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
+    /// Archives and release cleanups running in the background.
+    var cleanupTasks: [UUID: Task<Void, Never>] = [:]
+    var isCheckingReleases = false
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]
     var watchMonitor: Task<Void, Never>?
@@ -670,6 +681,15 @@ final class TaskCoordinator {
     /// had already started, and a task space whose record is missing gets
     /// one rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
+        // An archive or a release cleanup that a quit interrupted shows as
+        // stopped, so Clean Up continues it from what is still there.
+        for record in records.records {
+            guard let cleanup = record.cleanup, cleanup.kind != .merge,
+                  cleanup.finishedAt == nil, cleanup.problem == nil else { continue }
+            records.update(id: record.id) {
+                $0.cleanup?.problem = "Toastty quit before the cleanup finished. Clean Up continues it."
+            }
+        }
         // Triage changes nothing outside the record, so a triage the last
         // run did not finish simply runs again.
         for record in records.records where record.setup == .routing && setupAttempts[record.id] == nil {
@@ -745,7 +765,7 @@ final class TaskCoordinator {
 
     // MARK: - Setup
 
-    private func startSetup(taskID: UUID) {
+    func startSetup(taskID: UUID) {
         let attempt = UUID()
         setupAttempts[taskID] = attempt
         setupTasks.removeValue(forKey: taskID)?.cancel()
@@ -1343,7 +1363,7 @@ final class TaskCoordinator {
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
     /// chosen agent is left out.
-    private func resolvedFields(pinned: TaskFields, workspaceID: UUID?, defaults: TasksConfig.Defaults) throws -> TaskFields {
+    func resolvedFields(pinned: TaskFields, workspaceID: UUID?, defaults: TasksConfig.Defaults) throws -> TaskFields {
         guard let agent = pinned.agent ?? defaults.agent else {
             throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
         }

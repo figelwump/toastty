@@ -515,29 +515,28 @@ session stays. An agent can also split agreed work into new tasks that start in
 their own worktrees with `toastty task create --start-work`. See
 [Tasks](tasks.md#work-in-a-git-worktree) for the commands and settings.
 
-The optional [personal workflow skills](../examples/skills/README.md)
-`worktree-done` and `worktree-cleanup` accept a task's pull request and clean
-up merged worktrees. Toastty bundles them with the app: ask an agent to set them
-up, during onboarding or later, and it reads
-`"$TOASTTY_CLI_PATH" setup guide --topic workflows`, then copies and adapts the
-packages into `~/.toastty/skills`. You can also copy them by hand. The same
-guide gives an agent ideas and rules for writing a workflow of your own.
-
 The task's agent completes required review and automated checks and publishes a
 PR for the user's testing. A ready PR does not authorize merging.
 
-The user's `worktree-done` request, made in the task workspace, accepts the
-reviewed version. The skill checks that the worktree is clean at exactly the PR
-head, then enables GitHub auto-merge so the PR lands when required checks pass,
-and marks the workspace done with `workspace.set-done`, which shows as a check
-on its task space row. New work in the workspace clears the check; new commits
-need the user's review and a new `worktree-done` request.
+The user accepts the reviewed version with **Merge** on the task. Toastty then
+sends the project's `merge_prompt` to the task's agent, `Use toastty-task-merge.`
+unless `~/.toastty/tasks.toml` names another skill. The shipped
+`toastty-task-merge` skill checks review threads, merge prerequisites, tasks that
+must land first, and CI, then runs `toastty task merge`, or reports what blocks
+the merge. Saying "merge it" in the session runs the same skill. See
+[Tasks](tasks.md#merge-a-task) for the whole flow.
 
 ### Merging a task's pull request
 
-The Merge button, its context menu items, and `Option+Shift+M` are off by
-default while task lifecycle hooks are built to replace them. To turn them on,
-run `defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
+A task space that has a task record always shows the Merge button. Its Merge
+goes through the task: the agent checks the pull request first unless the
+project sets `merge = "direct"`, Toastty always cleans up after the merge, and
+the arrow menu offers **Merge Without Checks** and **Archive Task…** instead of
+the modes below. See [Tasks](tasks.md#merge-a-task).
+
+For other subspaces, the Merge button, its context menu items, and
+`Option+Shift+M` are off by default. To turn them on, run
+`defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
 and relaunch Toastty.
 
 A task space with a `github-pr` annotation shows a **Merge PR #N** button under
@@ -600,8 +599,10 @@ moved. Toastty marks the workspace done when you click, so a Merge Only shows
 
 After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
 done, and **Cleaning Up PR #N…** while Toastty cleans up. Toastty confirms with `gh pr view` that the pull request
-merged, then closes the workspace, removes the worktree, and deletes the local
-and remote branch, and a notification reports the result.
+merged, waits until no agent in the workspace is in a turn, then closes the
+workspace, removes the worktree, and deletes the local and remote branch, and a
+notification reports the result. Waiting for the turn lets an agent that merged
+with `toastty task merge` finish its reply.
 
 - Toastty checks again before it cleans up. It skips the cleanup when the
   worktree has uncommitted changes or is not at the PR head, when the
@@ -621,7 +622,8 @@ and remote branch, and a notification reports the result.
   reports what it kept in a notification. A pull request that closes without
   merging, or three failed `gh` checks in a row, also stops the cleanup.
 - New work in the workspace clears its done mark and drops the cleanup, because
-  the merge is no longer the version you accepted.
+  the merge is no longer the version you accepted. Toastty checks the mark again
+  in the same step that closes the workspace.
 - A pending cleanup is kept across launches.
 
 To abandon a task instead, choose **Close Without Merging…** from the arrow
@@ -642,28 +644,24 @@ meanwhile.
 - A pull request that is already closed is cleaned up the same way. A merged
   pull request is refused.
 
-For pull requests merged another way, run `worktree-cleanup` from an outside
-project workspace. Its status script lists
-each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
-merges only PRs the user names. With `--cleanup-merged`, it closes the task
-workspace, removes the worktree and deletes the branches for merged PRs, using the
-`workspace.list` query to find each workspace. Closing a workspace ends its agent
-sessions and running terminal commands, and the cleanup report names what it
-ended; a workspace with unsaved documents is skipped. The same detached-worktree
-checks apply here. This cleans up release worktrees; it does not perform a release
-or deployment.
+A task's pull request merged on GitHub is your acceptance too. Toastty cleans up
+its task space the same way when its agent is at rest, and the worktree is
+clean at the merged head. Otherwise the task shows **Merged · clean up?** in
+Needs you, with **Clean Up** and **Keep As Is** in the Tasks view. Subspaces
+without a task record are never cleaned up on their own.
 
 ## User-created skills
 
-Alongside the six shipped skills, Toastty delivers your own skills to managed
+Alongside the seven shipped skills, Toastty delivers your own skills to managed
 Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi sessions.
 
-See [examples/skills/](../examples/skills/README.md) for the `worktree-done` and
-`worktree-cleanup` packages, installation instructions, and guidance on
-customizing them. Toastty bundles them with the app, and the workflow guide
-(`setup guide --topic workflows`) tells agents where they are. Starting a task
-in a worktree is built in, so the earlier `worktree-create` example is gone;
-personal copies of it keep working and are yours to keep or delete.
+Starting and merging a task are built in, through the shipped
+`toastty-task-start` and `toastty-task-merge` skills, so the earlier
+`worktree-create`, `worktree-done` and `worktree-cleanup` examples are gone.
+Personal copies of them keep working and are yours to keep or delete. To merge
+with your own skill, name it in the project's `merge_prompt`. The workflow guide
+(`setup guide --topic workflows`) gives an agent rules for writing a workflow
+of your own.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory
@@ -1086,7 +1084,8 @@ agent started, or since Toastty relaunched, also asks.
 When the session's tab is the only tab in its workspace, closing it also
 closes the workspace, so Toastty always asks first. One **Close Workspace**
 confirmation covers stopping a running agent too. Closing the workspace does
-not clean up an associated git worktree; use `worktree-cleanup` for that.
+not clean up an associated git worktree; archive the task instead, which also
+removes its worktree.
 
 Toastty refuses to close a session whose tab holds a right-panel document with
 unsaved changes. Save or close the document first.

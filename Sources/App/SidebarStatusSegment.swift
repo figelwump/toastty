@@ -14,12 +14,21 @@ struct SidebarStatusSections: Equatable {
     }
 
     struct Lane: Equatable, Identifiable {
+        /// See `laneKey(_:)`.
+        let id: String
         let projectTitle: String
         let count: Int
         /// When the oldest task in the lane merged.
         let oldestMergedAt: Date?
+        /// The project workspace Release starts a release in; `nil` when
+        /// the project has no `release_prompt` or is not open.
+        var releaseWorkspaceID: UUID? = nil
+    }
 
-        var id: String { projectTitle }
+    /// What a To ship lane groups by: the project's root directory, else its
+    /// title, so two projects with the same title keep separate lanes.
+    static func laneKey(_ item: TaskBoardItem) -> String {
+        item.record?.projectRoot ?? item.projectTitle ?? "Other"
     }
 
     var needsYou: [Entry] = []
@@ -34,7 +43,7 @@ struct SidebarStatusSections: Equatable {
     /// `items` newest activity first, as the board gives them. Needs you
     /// keeps that order, so the latest request is on top; Running sorts by
     /// project and title, so rows hold still while agents work.
-    static func make(_ items: [TaskBoardItem]) -> Self {
+    static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
         var sections = Self()
         sections.needsYou = grouped(items.filter { $0.stage.group == .needsYou })
         sections.running = grouped(items.filter { $0.stage.group == .running }.sorted { lhs, rhs in
@@ -44,9 +53,15 @@ struct SidebarStatusSections: Equatable {
                 ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
                 : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         })
-        let shipping = Dictionary(grouping: items.filter { $0.stage == .toShip }, by: { $0.projectTitle ?? "Other" })
-        sections.toShip = shipping.map { title, lane in
-            Lane(projectTitle: title, count: lane.count, oldestMergedAt: lane.compactMap { $0.record?.mergedAt }.min())
+        let shipping = Dictionary(grouping: items.filter { $0.stage == .toShip }, by: laneKey)
+        sections.toShip = shipping.map { key, lane in
+            Lane(
+                id: key,
+                projectTitle: lane.first?.projectTitle ?? "Other",
+                count: lane.count,
+                oldestMergedAt: lane.compactMap { $0.record?.mergedAt }.min(),
+                releaseWorkspaceID: lane.first(where: releasable)?.projectWorkspaceID
+            )
         }
         .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
         sections.doneCount = items.filter { $0.stage == .done }.count
@@ -102,6 +117,7 @@ enum TaskAge {
 struct SidebarStatusSegment<RowContent: View>: View {
     let sections: SidebarStatusSections
     let openTasksView: (TaskBoardItem.Subject?) -> Void
+    var release: (UUID) -> Void = { _ in }
     @ViewBuilder let row: (SidebarStatusSections.Entry) -> RowContent
 
     var body: some View {
@@ -156,6 +172,9 @@ struct SidebarStatusSegment<RowContent: View>: View {
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 10)
+        // A container's identifier would otherwise replace its rows' and
+        // buttons' own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar.status")
     }
 
@@ -201,6 +220,18 @@ struct SidebarStatusSegment<RowContent: View>: View {
     }
 
     private func laneRow(_ lane: SidebarStatusSections.Lane) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            laneButton(lane)
+            if let workspaceID = lane.releaseWorkspaceID {
+                TaskReleaseButton(title: "Release") { release(workspaceID) }
+                    .padding(.top, 4)
+                    .padding(.trailing, 8)
+                    .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle).release")
+            }
+        }
+    }
+
+    private func laneButton(_ lane: SidebarStatusSections.Lane) -> some View {
         Button {
             openTasksView(nil)
         } label: {
@@ -301,5 +332,32 @@ struct SidebarTaskRecordRow: View {
         .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+    }
+}
+
+/// The violet Release pill on a To ship project, as in the mockups.
+struct TaskReleaseButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                .padding(.horizontal, 7)
+                .frame(height: 17)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
+                        .brightness(isHovered ? 0.06 : 0)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Start a release task for this project's merged tasks")
+        .accessibilityLabel(title)
     }
 }

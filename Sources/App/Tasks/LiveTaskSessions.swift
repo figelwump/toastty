@@ -49,6 +49,7 @@ final class LiveTaskSessions: TaskSessionProviding {
             status: record.status,
             statusUpdatedAt: record.statusUpdatedAt,
             lastTurnEndedAt: record.lastTurnEndedAt,
+            turnStartedAt: record.turnStartedAt,
             transcriptPath: binding.flatMap { $0.sessionFilePath.isEmpty ? nil : $0.sessionFilePath }
         )
     }

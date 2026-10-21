@@ -1079,6 +1079,16 @@ struct ToasttyApp: App {
         )
         taskCoordinator.board = taskBoard
         self.taskBoard = taskBoard
+        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
+        sessionRuntimeStore.workspaceMergeCoordinator?.cleanupObserver = { [weak taskCoordinator] workspaceID, event in
+            taskCoordinator?.mergeCleanupEvent(workspaceID: workspaceID, event: event)
+        }
+        sessionRuntimeStore.taskCoordinator = taskCoordinator
+        taskCoordinator.unsavedDocumentCount = { [weak store, weak webPanelRuntimeRegistry] workspaceID in
+            guard let panelIDs = store?.state.workspacesByID[workspaceID]?.allPanelsByID.keys,
+                  let summary = webPanelRuntimeRegistry?.localDocumentCloseConfirmationSummary(panelIDs: panelIDs) else { return 0 }
+            return summary.dirtyDraftCount + summary.saveInProgressCount
+        }
         let quickEntryController = QuickEntryController(
             store: store,
             agentCatalogProvider: agentCatalogStore,

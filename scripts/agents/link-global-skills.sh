@@ -9,6 +9,7 @@ DEFAULT_SKILLS=(
   "toastty-read-terminal"
   "toastty-scratchpad"
   "toastty-send-diagnostics"
+  "toastty-task-merge"
   "toastty-task-start"
 )
 
