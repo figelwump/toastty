@@ -306,9 +306,9 @@ def main():
         # 4. Triage suggests a project that is not open; the user opens it.
         workspace_id = next(w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected'])
         waiting = suggest_closed_project('pricing page has a typo in the Team plan')
-        inputs = sorted((fake_bin / 'triage-inputs').iterdir())
-        pricing_input = next(json.loads(path.read_text().split('INPUT:\n', 1)[1]) for path in inputs
-                             if 'pricing' in path.read_text())
+        inputs = [json.loads(path.read_text().split('INPUT:\n', 1)[1])
+                  for path in sorted((fake_bin / 'triage-inputs').iterdir())]
+        pricing_input = next(data for data in inputs if 'pricing' in data['task']['text'])
         closed = {w['title']: w for w in pricing_input.get('closed_workspaces', [])}
         require(os.path.realpath(closed.get('website', {}).get('root', '')) == str(website)
                 and 'pricing page' in closed['website'].get('guidelines', ''), f'Closed projects: {pricing_input}')

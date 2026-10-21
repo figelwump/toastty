@@ -381,6 +381,20 @@ struct TaskRoutingTests {
         #expect(choices.suggested?.choice == .open(openedID))
         #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Start in control-plane")
         #expect(TaskInboxCard.startTitle(for: nil, choices: choices) == "Start")
+
+        // A suggestion that is only a directory now, such as a renamed
+        // workspace that left the recent list, keeps its saved title.
+        let renamed = fixture.root.appendingPathComponent("proj", isDirectory: true)
+        try FileManager.default.createDirectory(at: renamed, withIntermediateDirectories: true)
+        var record = TaskRecord(createdAt: Date(), text: "x", title: "x", slug: "x", source: .cli, setup: .needsWorkspace(reason: "Not open."))
+        record.suggestedWorkspace = TaskWorkspaceSuggestion(title: "My Project", rootDirectory: renamed.path)
+        try fixture.coordinator.records.insert(record)
+        choices = fixture.coordinator.workspaceChoices(taskID: record.id)
+        #expect(choices.suggested?.choice == .directory(renamed.path))
+        #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open My Project & Start")
+        try fixture.coordinator.setWorkspace(taskID: record.id, choice: .directory(renamed.path))
+        let opened = try #require(fixture.record(record.id)?.workspaceID)
+        #expect(fixture.store.state.workspacesByID[opened]?.title == "My Project")
     }
 
     @Test func deleteStopsARunningTriage() async throws {

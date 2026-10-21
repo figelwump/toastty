@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import ImageIO
 import SwiftUI
@@ -25,7 +26,48 @@ struct TaskInboxCard: View {
 
     @State private var errorMessage: String?
     @State private var choices: TaskWorkspaceChoices?
-    @State private var chosen: TaskWorkspaceChoice?
+    @State private var selection: Selection = .suggested
+
+    /// What the user chose. The suggestion is kept as such, not as the choice
+    /// it was when the card opened, since the project may open or close while
+    /// the card is shown.
+    private enum Selection: Equatable {
+        case suggested
+        case choice(TaskWorkspaceChoice)
+    }
+
+    /// The choice Start uses now; `nil` when the chosen workspace is gone.
+    private var chosen: TaskWorkspaceChoice? {
+        guard let choices else { return nil }
+        switch selection {
+        case .suggested:
+            return choices.suggested?.choice
+        case .choice(let choice):
+            return Self.isAvailable(choice, in: choices) ? choice : nil
+        }
+    }
+
+    private var chosenBinding: Binding<TaskWorkspaceChoice?> {
+        Binding(
+            get: { chosen },
+            set: { choice in
+                if let choice, choice == choices?.suggested?.choice {
+                    selection = .suggested
+                } else if let choice {
+                    selection = .choice(choice)
+                }
+            }
+        )
+    }
+
+    static func isAvailable(_ choice: TaskWorkspaceChoice, in choices: TaskWorkspaceChoices) -> Bool {
+        if choices.suggested?.choice == choice { return true }
+        switch choice {
+        case .open(let id): return choices.open.contains { $0.id == id }
+        case .recent(let id): return choices.recent.contains { $0.id == id }
+        case .directory: return false
+        }
+    }
 
     static let popoverWidth: CGFloat = 344
     // Colors from the design that the theme has no token for.
@@ -60,8 +102,12 @@ struct TaskInboxCard: View {
         .onAppear(perform: loadChoices)
         .onChange(of: records.record(id: taskID)?.setup) { _, _ in
             // Retry Triage may bring a new suggestion.
-            choices = nil
-            chosen = nil
+            selection = .suggested
+            loadChoices()
+        }
+        // Workspaces that open or close while the card is shown change the
+        // choices, and the IDs Start would use.
+        .onReceive(coordinator.store.$state.map { Set($0.workspacesByID.keys) }.removeDuplicates().dropFirst()) { _ in
             loadChoices()
         }
     }
@@ -240,7 +286,7 @@ struct TaskInboxCard: View {
                 .tracking(0.7)
                 .foregroundStyle(Self.faintText)
             Menu {
-                Picker("Workspace", selection: $chosen) {
+                Picker("Workspace", selection: chosenBinding) {
                     if let suggested = choices.suggested {
                         Section("Suggested") {
                             menuItem(
@@ -424,12 +470,8 @@ struct TaskInboxCard: View {
     }
 
     private func loadChoices() {
-        guard choices == nil, let record = records.record(id: taskID), isPickingWorkspace(record) else { return }
-        let loaded = coordinator.workspaceChoices(taskID: taskID)
-        choices = loaded
-        if chosen == nil {
-            chosen = loaded.suggested?.choice
-        }
+        guard let record = records.record(id: taskID), isPickingWorkspace(record) else { return }
+        choices = coordinator.workspaceChoices(taskID: taskID)
     }
 
     private func perform(_ action: () throws -> Void) {

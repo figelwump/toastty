@@ -640,8 +640,16 @@ final class TaskCoordinator {
             } else {
                 choice = .directory(suggestion.rootDirectory)
             }
+            // A reopened or open workspace keeps its own title; a directory
+            // opens under the suggestion's, as `projectTitle` names it.
+            let title: String
+            if case .directory = choice {
+                title = suggestion.title
+            } else {
+                title = choices.title(of: choice) ?? suggestion.title
+            }
             choices.suggested = TaskWorkspaceChoices.Suggested(
-                title: choices.title(of: choice) ?? suggestion.title,
+                title: title,
                 rootDirectory: suggestion.rootDirectory,
                 choice: choice
             )
@@ -667,13 +675,15 @@ final class TaskCoordinator {
 
     /// The projects that are not open, for triage to suggest: recently
     /// closed workspaces, then the `[workspace."<root>"]` roots in
-    /// tasks.toml, one per root directory, each still a directory.
+    /// tasks.toml, one per root directory, each still a directory. `open`
+    /// holds the open workspaces' git roots, so a terminal inside a nested
+    /// repository does not hide the project around it.
     private func closedWorkspaces(config: TasksConfig, open: [TaskTriage.Workspace]) -> [TaskTriage.ClosedWorkspace] {
         var seen = Set(open.map { TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) })
         var result: [TaskTriage.ClosedWorkspace] = []
         func add(title: String?, root: String) {
             let normalized = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
-            guard seen.insert(normalized).inserted, openWorkspace(onRoot: normalized) == nil, isDirectory(normalized) else { return }
+            guard seen.insert(normalized).inserted, isDirectory(normalized) else { return }
             result.append(TaskTriage.ClosedWorkspace(
                 title: title ?? URL(filePath: normalized).lastPathComponent,
                 rootDirectory: normalized,
