@@ -227,6 +227,7 @@ final class TaskBoardStore: ObservableObject {
     private var storeObserverToken: UUID?
     private var refreshLoop: Task<Void, Never>?
     private var workingTaskSpaceIDs: Set<UUID> = []
+    private var isTurnCheckScheduled = false
 
     /// A board with no task system, for windows and tests without one.
     static let disabled = TaskBoardStore()
@@ -260,8 +261,14 @@ final class TaskBoardStore: ObservableObject {
             .store(in: &cancellables)
         sessionRuntimeStore.$sessionRegistry
             .sink { [weak self] _ in
-                // The registry publishes before it changes; read it after.
-                Task { @MainActor [weak self] in self?.refreshAfterTurnsEnded() }
+                // The registry publishes before it changes; read it after,
+                // once for a burst of changes.
+                guard let self, self.isTurnCheckScheduled == false else { return }
+                self.isTurnCheckScheduled = true
+                Task { @MainActor [weak self] in
+                    self?.isTurnCheckScheduled = false
+                    self?.refreshAfterTurnsEnded()
+                }
             }
             .store(in: &cancellables)
         pullRequests.answerObserver = { [weak self] link, state in
