@@ -92,6 +92,7 @@ Each patch is a self-contained commit meant to be upstreamed to the fork.
 | `0004-embedded-accept-an-explicit-key-for-remapped-key-eve` | GTK's apprt remaps the physical key through the keyval (XKB options like `caps:escape`, keypad navigation keys that have no physical code). The embedded key event only carries a native keycode, so this adds `ghostty_surface_key_ex` / `ghostty_surface_key_is_binding_ex` taking a `ghostty_input_key_e`. |
 | `0005-embedded-serve-the-primary-selection-on-Linux` | The embedded apprt hard-coded the primary clipboard as unsupported. On Linux the selection clipboard is the X11/Wayland primary selection, which the GTK apprt also uses for OSC 52 `p`. |
 | `0006-embedded-export-ghostty_surface_set_display_id-on-ev` | `ghostty.h` declares `ghostty_surface_set_display_id` for every platform, but it was only exported on Darwin. Toastty's shared Swift terminal code calls it, so it would not link on Linux. It is a no-op off Darwin. Every other `ghostty_*` function Toastty's Swift sources use is exported. |
+| `0007-termio-Surface-do-not-redraw-for-a-keystroke-before-` | Every typed key woke the renderer before the child echoed it: the termio thread redrew after any mailbox message, including the pty write carrying the key, and `Surface.keyCallback` queued a render. The renderer redraws on every wakeup, so each keystroke first produced a frame identical to the previous one a few milliseconds before the echo frame; the host painted it and showed the echo one paint later. Pty writes no longer trigger a redraw, and the key wakes the renderer only when it cleared a selection or scrolled the viewport; the echo brings its own render. |
 
 ### Why there is no GtkGLArea
 
@@ -131,6 +132,15 @@ Frames are bottom-up (OpenGL origin); the widget flips them in `snapshot()`.
 - Ghostty logs to stderr. Debug builds are verbose.
 - Everything runs on the GTK main thread. `wakeup` may fire on any thread;
   the runtime helper coalesces it into one idle `ghostty_app_tick`.
+- `TOASTTY_GHOSTTY_LATENCY_TRACE=1` prints one line per key press to
+  stderr: milliseconds from the key reaching the widget to
+  `ghostty_surface_key` returning, the first wakeup, the tick, the `RENDER`
+  action, the snapshot that pulled a changed frame, and the frame clock's
+  `after-paint`, plus main-loop iterations busy for 8 ms or more. CPU
+  (offscreen) frames are hashed so frames identical to the one on screen
+  at the key are skipped and counted (`unchanged_frames`); DMA-BUF frames
+  cannot be compared, so the first one counts. Off by default; when unset
+  the hot paths only test a static int.
 
 ## C API (`toastty-ghostty-gtk.h`)
 

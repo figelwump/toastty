@@ -591,6 +591,12 @@ Behavior:
   back/forward buttons run `navigation.back`/`forward`.
 - **Context menu.** Copy, Paste, Select All, Split Right/Down, Find, Clear,
   Close Panel.
+- **Keystroke latency.** libghostty patch `0007` stops a keystroke from
+  rendering a frame identical to the previous one before the echo arrives
+  (termio redrew after every pty write, and `keyCallback` queued a render);
+  that frame was painted first and delayed every echoed character by one
+  paint. Measure with `TOASTTY_GHOSTTY_LATENCY_TRACE=1` (see
+  `linux/ghostty/README.md`).
 - `TOASTTY_LINUX_TERMINAL=placeholder` keeps the placeholder host;
   `TOASTTY_LINUX_TERMINAL_DEBUG=1` logs Ghostty actions and bridge events.
 
