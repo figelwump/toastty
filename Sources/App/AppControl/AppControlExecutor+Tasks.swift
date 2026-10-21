@@ -565,6 +565,7 @@ extension AppControlExecutor {
             "prompt": optional(record.resolved?.prompt),
             "triageNote": optional(record.triageNote),
             "files": .array(record.attachments.map { .string($0.path) }),
+            "filesRemovedAt": date(record.attachmentsRemovedAt),
             "setup": .object(setup),
             "sessionID": optional(record.currentSessionID),
             "pullRequestURL": optional(record.pullRequestURL),

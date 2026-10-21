@@ -683,7 +683,9 @@ Common query IDs include:
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
-`agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, and `setup` with
+`agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, `filesRemovedAt`
+(when Toastty removed its copies of the files, a week after the task finished),
+and `setup` with
 `state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on

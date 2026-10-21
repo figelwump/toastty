@@ -64,7 +64,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
     IDs of its task space and agent session. Deleting a task removes its record.
 - `~/.toastty/task-attachments/<task-id>/`
   - Toastty's copies of files attached to a task. They are removed when the
-    task is deleted.
+    task is deleted, or a week after Toastty first sees the task Done or
+    Archived with its task space closed. The task record keeps the file names.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.

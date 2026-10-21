@@ -226,6 +226,7 @@ enum TaskBoardPresentation {
         if let tag = record.releaseTag { lines.append("Shipped in \(tag)") }
         if record.doneAt != nil { lines.append("Marked done") }
         if record.archivedAt != nil { lines.append("Archived") }
+        if record.attachmentsRemovedAt != nil { lines.append("Attached files removed a week after it finished") }
         if let cleanup = record.cleanup {
             lines.append(contentsOf: cleanup.stepsDone.map { $0.prefix(1).uppercased() + $0.dropFirst() })
         }
