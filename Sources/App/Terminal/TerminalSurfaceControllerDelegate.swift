@@ -14,6 +14,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     @discardableResult
     func openSearchSelectionURL(_ url: URL, from panelID: UUID) -> Bool
 
+    func newTaskFromSelection(_ selectionText: String, from panelID: UUID)
+
     func prepareFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedFileDrop?
 
     @discardableResult
@@ -66,6 +68,11 @@ extension TerminalSurfaceControllerDelegate {
         _ = url
         _ = panelID
         return false
+    }
+
+    func newTaskFromSelection(_ selectionText: String, from panelID: UUID) {
+        _ = selectionText
+        _ = panelID
     }
 }
 

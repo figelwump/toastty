@@ -256,12 +256,15 @@ public enum TaskSource: Codable, Equatable, Sendable {
     case cli
     /// A managed agent session, through the CLI.
     case agent(sessionID: String)
+    /// The quick entry panel in the Mac app.
+    case quickEntry
     /// Rebuilt from a task space whose record was missing.
     case recovered
 
     private enum Kind: String, Codable {
         case cli
         case agent
+        case quickEntry
         case recovered
     }
 
@@ -279,6 +282,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
             self = .cli
         case .agent:
             self = .agent(sessionID: try container.decode(String.self, forKey: .sessionID))
+        case .quickEntry:
+            self = .quickEntry
         case .recovered:
             self = .recovered
         }
@@ -292,6 +297,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
         case .agent(let sessionID):
             try container.encode(Kind.agent, forKey: .kind)
             try container.encode(sessionID, forKey: .sessionID)
+        case .quickEntry:
+            try container.encode(Kind.quickEntry, forKey: .kind)
         case .recovered:
             try container.encode(Kind.recovered, forKey: .kind)
         }

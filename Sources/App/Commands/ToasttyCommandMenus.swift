@@ -126,6 +126,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    @ObservedObject var quickEntryController: QuickEntryController
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let processWatchCommandController: ProcessWatchCommandController
@@ -363,6 +364,13 @@ struct ToasttyCommandMenus: Commands {
                 ToasttyBuiltInCommand.newWindow.requiredShortcut.key,
                 modifiers: ToasttyBuiltInCommand.newWindow.requiredShortcut.modifiers
             )
+
+            Divider()
+
+            Button(ToasttyBuiltInCommand.newTask.title) {
+                quickEntryController.present(prefill: .empty)
+            }
+            .keyboardShortcut(quickEntryController.shortcut?.keyboardShortcut)
         }
 
         CommandGroup(replacing: .saveItem) {
