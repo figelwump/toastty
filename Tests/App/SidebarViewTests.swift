@@ -2227,6 +2227,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
         XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
 
         _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
         pumpMainRunLoop(duration: 0.6)
@@ -2241,6 +2242,7 @@ final class SidebarViewTests: XCTestCase {
         // Top-level workspaces show only in Projects.
         XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-status")
     }
 
     func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
@@ -3178,6 +3180,18 @@ final class SidebarViewTests: XCTestCase {
     /// Writes a PNG of the hosted sidebar when the runner sets
     /// `TOASTTY_SIDEBAR_EVIDENCE_DIR` (pass it as `TEST_RUNNER_…` to
     /// xcodebuild), so a review can see the rendered rows.
+    /// Keeps a render in the test result, for comparing with the mockups.
+    private func attachSidebarRender(_ view: NSView, name: String) throws {
+        let bitmap = try renderedBitmap(for: view)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func writeSidebarEvidence(_ view: NSView, name: String) throws {
         guard let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"],
               directory.isEmpty == false else {
