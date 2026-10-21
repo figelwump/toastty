@@ -107,34 +107,43 @@ struct QuickEntryView: View {
         .frame(height: 14)
     }
 
+    private static let attachChipID = "attach"
+
     private var attachmentsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(model.attachments) { attachment in
-                    AttachmentChip(attachment: attachment) {
-                        model.removeAttachment(id: attachment.id)
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.attachments) { attachment in
+                        AttachmentChip(attachment: attachment) {
+                            model.removeAttachment(id: attachment.id)
+                        }
+                        .disabled(model.isEditable == false)
                     }
-                    .disabled(model.isEditable == false)
-                }
-                if model.pendingAttachmentCount > 0 {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.horizontal, 4)
-                }
-                Button(action: attachFiles) {
-                    HStack(spacing: 6) {
-                        Text("＋ Attach")
-                        KeyCap(text: "⌘V")
+                    if model.pendingAttachmentCount > 0 {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 4)
                     }
+                    Button(action: attachFiles) {
+                        HStack(spacing: 6) {
+                            Text("＋ Attach")
+                            KeyCap(text: "⌘V")
+                        }
+                    }
+                    .buttonStyle(AddChipStyle())
+                    .disabled(model.canAttachMore == false || model.isEditable == false)
+                    .help("Attach files. You can also paste an image with ⌘V or drop files on the panel.")
+                    .accessibilityIdentifier("quick-entry.attach")
+                    .id(Self.attachChipID)
                 }
-                .buttonStyle(AddChipStyle())
-                .disabled(model.canAttachMore == false || model.isEditable == false)
-                .help("Attach files. You can also paste an image with ⌘V or drop files on the panel.")
-                .accessibilityIdentifier("quick-entry.attach")
+                .padding(.vertical, 1)
             }
-            .padding(.vertical, 1)
+            .frame(height: 38)
+            // Keeps Attach in view once the files fill the row.
+            .onChange(of: model.attachments.count + model.pendingAttachmentCount) {
+                scroller.scrollTo(Self.attachChipID, anchor: .trailing)
+            }
         }
-        .frame(height: 38)
     }
 
     private var footer: some View {

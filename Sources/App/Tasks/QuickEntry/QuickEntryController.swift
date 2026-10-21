@@ -179,7 +179,11 @@ final class QuickEntryController: ObservableObject {
                 model: model,
                 dropTarget: dropTarget,
                 attachFiles: { [weak self] in self?.chooseFiles() },
-                onHeightChange: { [weak panel] height in panel?.fitContentHeight(height) }
+                onHeightChange: { [weak panel] height in
+                    // Called during SwiftUI layout; resizing the window there
+                    // would start a layout pass inside the current one.
+                    DispatchQueue.main.async { panel?.fitContentHeight(height) }
+                }
             ),
             dropTarget: dropTarget
         )

@@ -3,11 +3,12 @@
 // Finder or a screenshot thumbnail does. The check then moves the mouse with
 // quick-entry-ui-driver.swift's `drag` command.
 //
-// Usage: quick-entry-drag-source <file|promise|image> <path> <x> <y>
+// Usage: quick-entry-drag-source <file|promise|image|text> <path> <x> <y>
 //   file     drags the file's URL, as Finder does
 //   promise  drags a promise of a PNG, written from <path> when the
 //            receiver asks, as screenshot thumbnails do
 //   image    drags PNG data with no file
+//   text     drags the text "Dropped words"; <path> is not read
 // <x> <y> is the window's top-left corner in global screen coordinates with
 // the origin at the top left, as Accessibility and CGEvent use. The process
 // prints "ready" once the window is up and exits when the drag ends.
@@ -17,7 +18,7 @@ import UniformTypeIdentifiers
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard arguments.count == 4, let x = Double(arguments[2]), let y = Double(arguments[3]) else {
-    FileHandle.standardError.write(Data("usage: quick-entry-drag-source <file|promise|image> <path> <x> <y>\n".utf8))
+    FileHandle.standardError.write(Data("usage: quick-entry-drag-source <file|promise|image|text> <path> <x> <y>\n".utf8))
     exit(2)
 }
 let mode = arguments[0]
@@ -66,6 +67,8 @@ final class SourceView: NSView, NSDraggingSource {
             let item = NSPasteboardItem()
             item.setData((try? Data(contentsOf: sourceURL)) ?? Data(), forType: .png)
             writer = item
+        case "text":
+            writer = "Dropped words" as NSString
         default:
             FileHandle.standardError.write(Data("unknown mode \(mode)\n".utf8))
             exit(2)

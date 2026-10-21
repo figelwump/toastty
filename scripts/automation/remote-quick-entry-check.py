@@ -23,12 +23,14 @@ Finder in front, it checks that:
   panel opens no tab in Toastty;
 - Command+W closes the panel without closing the terminal behind it;
 - a file, a file promise and PNG data dragged from another process attach,
-  dropped on the text or on the footer;
+  dropped on the text or on the footer, and dragged text joins the text;
+  the drop highlight is gone after each drop;
 - Command+V pastes text, with Finder in front and with Toastty in front.
 """
 
 import json
 import os
+import select
 import shutil
 from pathlib import Path
 import subprocess
@@ -279,7 +281,7 @@ def main():
                 time.sleep(1)
                 if panel_closed():
                     break
-            listed = [t for t in run_cli('task', 'list')['tasks'] if t['text'] == text]
+            listed = [t for t in run_cli('task', 'list')['tasks'] if t['text'].startswith(text)]
             return run_cli('task', 'get', listed[0]['taskID']) if listed else None
 
         def drop_case(name, mode, path, target):
@@ -297,10 +299,15 @@ def main():
             source = subprocess.Popen([str(drag_source), mode, str(path), str(source_x), str(py + 20)],
                                       stdout=subprocess.PIPE, text=True)
             try:
-                require(source.stdout.readline().strip() == 'ready', f'The {mode} drag source did not start')
+                started, _, _ = select.select([source.stdout], [], [], 20)
+                require(started and source.stdout.readline().strip() == 'ready', f'The {mode} drag source did not start')
                 time.sleep(0.5)
                 drive('drag', source_x + 60, py + 60, *point)
                 time.sleep(2)
+                # The drop highlight must be gone once the drag ends.
+                hint = subprocess.run([str(driver), 'value', str(pid), 'quick-entry.drop-hint'],
+                                      capture_output=True, text=True, timeout=60)
+                highlight_cleared = hint.returncode != 0
             finally:
                 try:
                     source.wait(timeout=10)
@@ -308,9 +315,14 @@ def main():
                     source.kill()
             task = submit_and_find(name)
             files = task['files'] if task else None
-            ok = bool(files) and len(files) == 1 and Path(files[0]).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
-            outcomes[name] = dict(ok=ok, mode=mode, target=target, point=point, files=files,
-                                  task=task and task['taskID'])
+            if mode == 'text':
+                # Dropped text goes into the text, not into a file.
+                ok = task is not None and 'Dropped words' in task['text'] and files == []
+            else:
+                ok = bool(files) and len(files) == 1 and Path(files[0]).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+            outcomes[name] = dict(ok=ok and highlight_cleared, mode=mode, target=target, point=point, files=files,
+                                  highlight_cleared=highlight_cleared, task=task and task['taskID'],
+                                  text=task and task['text'])
             step(f'drop {name}', **outcomes[name])
 
         dragged = root / 'dragged.png'
@@ -319,6 +331,7 @@ def main():
         drop_case('drop file on footer', 'file', dragged, 'footer')
         drop_case('drop promise on text', 'promise', image, 'text')
         drop_case('drop image data on text', 'image', image, 'text')
+        drop_case('drop text on text', 'text', image, 'text')
 
         def paste_case(name, front):
             if front == 'toastty':

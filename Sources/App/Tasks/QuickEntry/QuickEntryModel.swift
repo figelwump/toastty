@@ -340,7 +340,11 @@ final class QuickEntryModel: ObservableObject {
                 atDestination: directoryURL,
                 options: [:],
                 operationQueue: Self.promiseQueue
-            ) { url, error in
+            ) { @Sendable url, error in
+                // Runs on promiseQueue. Without @Sendable, Swift 6 takes this
+                // closure as main-actor isolated, from the method it is
+                // written in, and traps when AppKit calls it off the main
+                // thread.
                 Task { @MainActor in
                     let result: Result<URL, any Error> = error.map { .failure($0) } ?? .success(url)
                     if tracker.takeReservedSlot() {

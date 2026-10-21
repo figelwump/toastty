@@ -110,14 +110,18 @@ final class QuickEntryPanel: NSPanel {
         }
     }
 
-    /// Sets the height to the content's, keeping the top edge in place.
+    /// Sets the height to the content's, keeping the top edge in place
+    /// unless the taller panel would then run off the bottom of the screen.
     func fitContentHeight(_ height: CGFloat) {
         let height = height.rounded(.up)
         guard height > 0, abs(frame.height - height) >= 0.5 else { return }
         var resized = frame
         resized.origin.y = frame.maxY - height
         resized.size.height = height
-        setFrame(resized, display: true)
+        if let visible = screen?.visibleFrame, resized.minY < visible.minY {
+            resized.origin.y = min(visible.minY, visible.maxY - height)
+        }
+        setFrame(resized, display: false)
         invalidateShadow()
     }
 

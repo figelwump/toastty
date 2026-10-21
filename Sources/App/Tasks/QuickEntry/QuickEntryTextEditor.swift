@@ -64,13 +64,18 @@ struct QuickEntryTextEditor: NSViewRepresentable {
     static let maximumHeight: CGFloat = 260
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width.isFinite,
-              let textView = context.coordinator.textView,
-              let layoutManager = textView.layoutManager,
-              let container = textView.textContainer else {
+        guard let width = proposal.width, width.isFinite, width > 0,
+              let textView = context.coordinator.textView else {
             return nil
         }
-        container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        // Measured on a copy: SwiftUI may propose sizes it then discards, and
+        // the text on screen must keep wrapping at its real width.
+        let storage = NSTextStorage(attributedString: textView.attributedString())
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
         return CGSize(width: width, height: min(max(used, Self.minimumHeight), Self.maximumHeight))
