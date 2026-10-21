@@ -506,6 +506,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
+    /// `sendText` that also reports a submit that may not have gone
+    /// through, so callers do not retry and type the text twice.
+    func sendTextResult(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        noteLocalInput(panelID: panelID)
+        return sendRemoteText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
+    }
+
     /// Delivers Toastty's own managed-agent launch or resume command. This is
     /// lifecycle control input, not a user draft, so it must not close remote
     /// prompt authority for the session the command is starting.

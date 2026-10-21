@@ -97,7 +97,7 @@ struct ToasttyCLITaskTests {
         ["task", "create", "a", "--timeout", "5"],
         ["task", "create", "a", "--wait", "--timeout", "0"],
         ["task", "create", "a", "--workspace", "toastty"],
-        ["task", "get"],
+        ["task", "retry"],
         ["task", "get", "not-a-uuid"],
         ["task", "list", "extra"],
         ["task", "archive", "x"],
@@ -155,6 +155,63 @@ struct ToasttyCLITaskTests {
             ["task", "set-workspace", taskID, "--workspace", "toastty"],
         ] {
             #expect(throws: ToasttyCLIError.self) {
+                _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+            }
+        }
+    }
+
+    @Test
+    func sendWatchAndListMapToTheirCommands() throws {
+        let taskID = UUID().uuidString
+        let other = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-send-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "Rebase on main.\nThen push.".write(to: directory.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
+
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "status?"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string("status?")]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--text-file", "note.md"], environment: ["PWD": directory.path]).command
+            == .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string("Rebase on main.\nThen push.")]))
+
+        let notify = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--notify", other], environment: [:])
+        #expect(notify.command == .appControlRun(kind: .action, id: "task.watch", args: [
+            "taskID": .string(taskID), "until": .string("idle"), "notifyTaskID": .string(other),
+        ]))
+        #expect(notify.watchWait == nil)
+
+        let wait = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "merged", "--wait", "--timeout", "30"], environment: [:])
+        #expect(wait.command == .appControlRun(kind: .action, id: "task.watch", args: [
+            "taskID": .string(taskID), "until": .string("merged"), "wait": .bool(true),
+        ]))
+        #expect(wait.watchWait == CLIWatchWait(timeout: 30))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--wait"], environment: [:]).watchWait
+            == CLIWatchWait(timeout: nil))
+
+        #expect(try ToasttyCLI.parse(arguments: ["task", "list", "--changed-since", "ab12.7", "--include-reply"], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.list", args: ["changedSince": .string("ab12.7"), "includeReply": .bool(true)]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "watches", "--notify", other], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.watches", args: ["notifyTaskID": .string(other)]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "get"], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.get", args: [:]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "unwatch", other], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.unwatch", args: ["watchID": .string(other)]))
+    }
+
+    @Test
+    func sendAndWatchRejectAmbiguousArguments() {
+        let taskID = UUID().uuidString
+        for arguments in [
+            ["task", "send", taskID],
+            ["task", "send", taskID, "one", "--text", "two"],
+            ["task", "send", "not-an-id", "hi"],
+            ["task", "watch", taskID],
+            ["task", "watch", taskID, "--until", "idle", "--notify", taskID, "--wait"],
+            ["task", "watch", taskID, "--until", "idle", "--timeout", "5"],
+            ["task", "watches", "--task", "nope"],
+        ] {
+            #expect(throws: ToasttyCLIError.self, "\(arguments)") {
                 _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
             }
         }

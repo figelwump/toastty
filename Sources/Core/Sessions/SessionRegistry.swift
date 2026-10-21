@@ -143,6 +143,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     private static func endTurnIfNeeded(for record: inout SessionRecord, at now: Date) {
         guard let turnStartedAt = record.turnStartedAt else { return }
         record.lastTurnDuration = max(0, now.timeIntervalSince(turnStartedAt))
+        record.lastTurnEndedAt = now
         record.turnStartedAt = nil
     }
 

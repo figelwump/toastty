@@ -713,7 +713,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
-- `task.get`, `task.list`, `task.workspace-choices` (see [`task`](#task))
+- `task.get`, `task.list`, `task.workspace-choices`, `task.watches` (see [`task`](#task))
 
 `agent.profile.state` requires `profileID` and reports the executable that
 profile would run in Toastty's launch environment, skipping Toastty's command
@@ -869,9 +869,15 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 ```
 toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
-toastty task get|retry|delete <task-id>
+toastty task get [<task-id>]
+toastty task retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id>)
-toastty task list|workspace-choices
+toastty task list [--changed-since <cursor>] [--include-reply]
+toastty task workspace-choices
+toastty task send <task-id> (<text> | --text-file <path>)
+toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
+toastty task unwatch <watch-id>
+toastty task watches [--task <task-id>] [--notify <task-id>]
 toastty task adopt [--workspace <id>]
 ```
 
@@ -899,11 +905,18 @@ Needs you the `attention` and `reason`. See [Stages](tasks.md#stages).
 `task adopt` gives a task space without a record one; it defaults to the
 calling agent's task space.
 
+`task send`, `task watch` and `task list --changed-since` let an agent follow
+and talk to other tasks by task ID; see
+[Coordinate tasks](tasks.md#coordinate-tasks). `task watch` tells the calling
+agent's own task, or the `--notify` task, once with a one-line message when the
+condition holds. With `--wait`, it blocks instead and exits 0 when the condition
+held, or 1 when it can never hold or `--timeout` ran out.
+
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt`
-and `query run task.get|task.list|task.workspace-choices`. The Tasks view and
-the sidebar segment have actions too: `window.tasks.show`, `window.tasks.hide`,
-and `window.sidebar.set-segment segment=projects|status`.
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch`
+and `query run task.get|task.list|task.workspace-choices|task.watches`. The
+Tasks view and the sidebar segment have actions too: `window.tasks.show`,
+`window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

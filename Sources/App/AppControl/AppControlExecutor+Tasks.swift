@@ -4,8 +4,8 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskAdopt,
-             .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+             .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -14,7 +14,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isTaskQuery: Bool {
         switch self {
-        case .taskGet, .taskList, .taskWorkspaceChoices: true
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches: true
         default: false
         }
     }
@@ -50,6 +50,53 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskSend:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            guard let text = args.taskString("text") else {
+                throw AutomationSocketError.invalidPayload("text is required")
+            }
+            let session = try perform { try coordinator.send(taskID: record.id, text: text) }
+            return .init(didMutateState: false, result: [
+                "taskID": .string(record.id.uuidString),
+                "sessionID": .string(session.sessionID),
+                "panelID": .string(session.panelID.uuidString),
+                "delivered": .bool(true),
+            ])
+        case .taskWatch:
+            let target = try visibleTask(args: args, coordinator: coordinator)
+            guard let rawCondition = args.taskString("until"), let condition = TaskWatchCondition(rawValue: rawCondition) else {
+                throw AutomationSocketError.invalidPayload(
+                    "until must be one of: \(TaskWatchCondition.allCases.map(\.rawValue).joined(separator: ", "))"
+                )
+            }
+            let wait = try args.taskBool("wait") ?? false
+            var notifyTaskID: UUID?
+            if let raw = args.taskString("notifyTaskID") {
+                guard wait == false else {
+                    throw AutomationSocketError.invalidPayload("pass notifyTaskID or wait=true, not both")
+                }
+                notifyTaskID = try visibleTask(args: ["taskID": .string(raw)], coordinator: coordinator).id
+            } else if wait == false {
+                guard let own = coordinator.task(inWorkspace: callerManagedSession()?.workspaceID) else {
+                    throw AutomationSocketError.invalidPayload(
+                        "the caller is not a task's agent; name the task to notify with notifyTaskID, or pass wait=true and poll task.watches"
+                    )
+                }
+                notifyTaskID = own.id
+            }
+            let watch = try perform {
+                try coordinator.addWatch(targetTaskID: target.id, condition: condition, notifyTaskID: notifyTaskID)
+            }
+            return .init(didMutateState: true, result: Self.watchSnapshot(watch, notifyTaskID: notifyTaskID))
+        case .taskUnwatch:
+            guard let raw = args.taskString("watchID"), let watchID = UUID(uuidString: raw) else {
+                throw AutomationSocketError.invalidPayload("watchID must be a watch ID")
+            }
+            guard let found = coordinator.watch(id: watchID), watchIsVisible(found, coordinator: coordinator) else {
+                throw AutomationSocketError.invalidPayload("No watch has ID \(watchID.uuidString).")
+            }
+            try perform { try coordinator.cancelWatch(id: watchID) }
+            return .init(didMutateState: true, result: ["watchID": .string(watchID.uuidString), "cancelled": .bool(true)])
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }
@@ -83,19 +130,134 @@ extension AppControlExecutor {
         let coordinator = try requiredTaskCoordinator()
         switch query {
         case .taskGet:
-            let record = try visibleTask(args: args, coordinator: coordinator)
-            return Self.taskSnapshot(record, stage: Self.stagesByTaskID(coordinator.board)[record.id])
-        case .taskList:
-            let stages = Self.stagesByTaskID(coordinator.board)
-            let tasks = coordinator.records.records.filter(callerMaySee).map {
-                AutomationJSONValue.object(Self.taskSnapshot($0, stage: stages[$0.id]))
+            // Without a taskID, a task's agent reads its own task.
+            let record: TaskRecord
+            if args.taskString("taskID") == nil {
+                guard let own = coordinator.task(inWorkspace: callerManagedSession()?.workspaceID) else {
+                    throw AutomationSocketError.invalidPayload("taskID is required outside a task's agent session")
+                }
+                record = own
+            } else {
+                record = try visibleTask(args: args, coordinator: coordinator)
             }
-            return ["tasks": .array(tasks)]
+            return liveTaskSnapshot(
+                record, coordinator: coordinator, stage: Self.stagesByTaskID(coordinator.board)[record.id], includeReply: true
+            )
+        case .taskList:
+            let includeReply = try args.taskBool("includeReply") ?? false
+            let stages = Self.stagesByTaskID(coordinator.board)
+            // Every task's snapshot goes to the change feed, so one caller's
+            // poll never hides a change from another. The reply is left out
+            // of what the feed compares: it changes only with agentState.
+            let records = coordinator.records.records
+            let snapshots = Dictionary(uniqueKeysWithValues: records.map {
+                ($0.id, liveTaskSnapshot($0, coordinator: coordinator, stage: stages[$0.id], includeReply: false))
+            })
+            let entries = Dictionary(uniqueKeysWithValues: records.map { record in
+                (record.id, TaskChangeFeed.Entry(snapshot: .object(snapshots[record.id] ?? [:]), visibility: Self.visibility(of: record)))
+            })
+            let changes = coordinator.changeFeed.observe(entries, since: args.taskString("changedSince"))
+            let listed = records.filter { record in
+                callerMaySee(record) && (args.taskString("changedSince") == nil || changes.changedTaskIDs.contains(record.id))
+            }
+            let tasks = listed.map { record -> AutomationJSONValue in
+                guard includeReply else { return .object(snapshots[record.id] ?? [:]) }
+                return .object(liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true))
+            }
+            return [
+                "tasks": .array(tasks),
+                "cursor": .string(changes.cursor),
+                "deletedTaskIDs": .array(changes.deletedTasks.filter { callerMaySee($0.visibility) }.map { .string($0.id.uuidString) }),
+                "reset": .bool(args.taskString("changedSince") != nil && changes.reset),
+            ]
         case .taskWorkspaceChoices:
             return workspaceChoicesSnapshot(coordinator.workspaceChoices())
+        case .taskWatches:
+            let watchID = try args.taskString("watchID").map { raw -> UUID in
+                guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("watchID must be a watch ID") }
+                return id
+            }
+            let targetID = try args.taskString("taskID").map { raw -> UUID in
+                guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("taskID must be a task ID") }
+                return id
+            }
+            let notifyID = try args.taskString("notifyTaskID").map { raw -> UUID in
+                guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("notifyTaskID must be a task ID") }
+                return id
+            }
+            if let watchID { coordinator.noteWaitWatchRead(id: watchID) }
+            let watches = coordinator.allWatches().filter { entry in
+                (watchID == nil || entry.watch.id == watchID)
+                    && (targetID == nil || entry.watch.targetTaskID == targetID)
+                    && (notifyID == nil || entry.notifyTaskID == notifyID)
+                    && watchIsVisible(entry, coordinator: coordinator)
+            }
+            return ["watches": .array(watches.map { .object(Self.watchSnapshot($0.watch, notifyTaskID: $0.notifyTaskID)) })]
         default:
             throw AutomationSocketError.invalidPayload("unsupported task query: \(query.rawValue)")
         }
+    }
+
+    /// The record snapshot plus what only the running app knows: the agent's
+    /// state and, when asked, its last reply.
+    private func liveTaskSnapshot(
+        _ record: TaskRecord,
+        coordinator: TaskCoordinator,
+        stage: TaskStage?,
+        includeReply: Bool
+    ) -> [String: AutomationJSONValue] {
+        var snapshot = Self.taskSnapshot(record, stage: stage)
+        let status = coordinator.agentStatus(of: record)
+        func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        snapshot["agentState"] = .object([
+            "state": .string(status.activity.rawValue),
+            "sessionID": optional(status.session?.sessionID),
+            "panelID": optional(status.session?.panelID.uuidString),
+            "summary": optional(status.session?.status?.summary),
+            "changedAt": optional(status.changedAt.map { ISO8601DateFormatter().string(from: $0) }),
+            "lastTurnEndedAt": optional(status.session?.lastTurnEndedAt.map { ISO8601DateFormatter().string(from: $0) }),
+        ])
+        if includeReply {
+            snapshot["lastReply"] = coordinator.lastReply(of: record).map { reply in
+                .object([
+                    "text": .string(reply.text),
+                    "truncated": .bool(reply.truncated),
+                    "at": optional(reply.at.map { ISO8601DateFormatter().string(from: $0) }),
+                ])
+            } ?? .null
+        }
+        return snapshot
+    }
+
+    /// A watch is visible when the caller may see the task it notifies, or,
+    /// for a `--wait` watch, the task it watches.
+    private func watchIsVisible(_ entry: (watch: TaskWatch, notifyTaskID: UUID?), coordinator: TaskCoordinator) -> Bool {
+        let ownerID = entry.notifyTaskID ?? entry.watch.targetTaskID
+        guard let owner = coordinator.records.record(id: ownerID) else {
+            // The watched task of a --wait watch was deleted.
+            return requestContext().callerSessionID.map(callerIsWorkspaceScoped(sessionID:)) != true
+        }
+        return callerMaySee(owner)
+    }
+
+    static func watchSnapshot(_ watch: TaskWatch, notifyTaskID: UUID?) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "watchID": .string(watch.id.uuidString),
+            "taskID": .string(watch.targetTaskID.uuidString),
+            "until": .string(watch.condition.rawValue),
+            "notifyTaskID": notifyTaskID.map { .string($0.uuidString) } ?? .null,
+            "createdAt": .string(ISO8601DateFormatter().string(from: watch.createdAt)),
+        ]
+        switch watch.state {
+        case .pending:
+            result["state"] = .string("pending")
+        case .fired(let at, let reason, let impossible, let delivered):
+            result["state"] = .string(impossible ? "impossible" : "fired")
+            result["firedAt"] = .string(ISO8601DateFormatter().string(from: at))
+            result["reason"] = .string(reason)
+            result["delivered"] = .bool(delivered)
+        }
+        return result
     }
 
     private func requiredTaskCoordinator() throws -> TaskCoordinator {
@@ -215,16 +377,24 @@ extension AppControlExecutor {
     /// the tasks it created and those whose workspace or task space is in
     /// its scope.
     private func callerMaySee(_ record: TaskRecord) -> Bool {
+        callerMaySee(Self.visibility(of: record))
+    }
+
+    private func callerMaySee(_ visibility: TaskChangeFeed.Visibility) -> Bool {
         guard let callerSessionID = requestContext().callerSessionID,
               callerIsWorkspaceScoped(sessionID: callerSessionID) else {
             return true
         }
-        if case .agent(let creatorSessionID) = record.source, creatorSessionID == callerSessionID {
+        if visibility.creatorSessionID == callerSessionID {
             return true
         }
-        return [record.workspaceID, record.taskSpaceWorkspaceID]
-            .compactMap { $0 }
-            .contains { callerMayAutomateWorkspace($0) }
+        return visibility.workspaceIDs.contains { callerMayAutomateWorkspace($0) }
+    }
+
+    private static func visibility(of record: TaskRecord) -> TaskChangeFeed.Visibility {
+        var creator: String?
+        if case .agent(let sessionID) = record.source { creator = sessionID }
+        return .init(workspaceIDs: [record.workspaceID, record.taskSpaceWorkspaceID].compactMap { $0 }, creatorSessionID: creator)
     }
 
     private static func taskStrings(_ key: String, args: [String: AutomationJSONValue]) throws -> [String] {

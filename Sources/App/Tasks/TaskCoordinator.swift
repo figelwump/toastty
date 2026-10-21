@@ -9,8 +9,9 @@ import RemoteProtocol
 protocol TaskAgentLaunching: AnyObject {
     func launchProfileSummaries() -> [AgentLaunchProfileSummary]
     /// Launches into the given terminal without moving focus. The session
-    /// is scoped to its own task space. With `forkFromSessionID`, the new
-    /// session continues a copy of that session's conversation.
+    /// gets `scopedWorkspaceIDs` as its workspace scope; `nil` leaves it
+    /// unscoped. With `forkFromSessionID`, the new session continues a copy
+    /// of that session's conversation.
     /// `beforeDispatch` runs directly before the command is sent; a throw
     /// there cancels the launch.
     func launchTask(
@@ -23,6 +24,7 @@ protocol TaskAgentLaunching: AnyObject {
         initialPrompt: String,
         parentSessionID: String?,
         forkFromSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult
 }
@@ -38,6 +40,7 @@ extension AgentLaunchService: TaskAgentLaunching {
         initialPrompt: String,
         parentSessionID: String?,
         forkFromSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult {
         try await launchAsync(
@@ -49,8 +52,7 @@ extension AgentLaunchService: TaskAgentLaunching {
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
             forkFromSessionID: forkFromSessionID,
-            // An empty set scopes the session to its own task space.
-            inheritedScopedWorkspaceIDs: [],
+            inheritedScopedWorkspaceIDs: scopedWorkspaceIDs,
             parentSessionID: parentSessionID,
             focusPolicy: .preserveFirstResponder,
             beforeDispatch: beforeDispatch
@@ -71,6 +73,11 @@ struct TaskSessionInfo: Equatable {
     /// The provider conversation Toastty confirmed for the session.
     var nativeConversationID: String?
     var title: String?
+    var status: SessionStatus? = nil
+    var statusUpdatedAt: Date? = nil
+    var lastTurnEndedAt: Date? = nil
+    /// The provider transcript Toastty confirmed for the session.
+    var transcriptPath: String? = nil
 }
 
 /// The session side of moving a task into its worktree. A protocol so tests
@@ -87,6 +94,23 @@ protocol TaskSessionProviding: AnyObject {
     /// is its workspace's last, types the agent's native exit instead, so
     /// the workspace and its shell stay.
     func closeMovedSessionPane(panelID: UUID, agent: AgentKind) -> TaskOperation.SourceOutcome
+    /// The managed agent sessions running in a workspace now.
+    func activeSessions(workspaceID: UUID) -> [TaskSessionInfo]
+    /// Types `text` into the panel and submits it, as `terminal.send-text`
+    /// does. A busy agent queues it as typed input.
+    func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
+    /// The session's latest agent message, read from its transcript.
+    func lastReply(sessionID: String) -> TaskAgentReply?
+    /// The managed session's workspace scope; `nil` when it is unscoped or
+    /// not a running managed session.
+    func scope(sessionID: String) -> Set<UUID>?
+}
+
+extension TaskSessionProviding {
+    func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
+    func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
+    func lastReply(sessionID: String) -> TaskAgentReply? { nil }
+    func scope(sessionID: String) -> Set<UUID>? { nil }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -205,8 +229,14 @@ final class TaskCoordinator {
     var flushLayout: () -> Void = {}
     /// Set once the session store exists. Without it, tasks cannot move.
     var sessions: (any TaskSessionProviding)?
-    /// The live view of every task's stage, for queries that report it.
+    /// The live view of every task's stage, for queries that report it and
+    /// for stage watches.
     weak var board: TaskBoardStore?
+    /// `toastty task watch --wait` watches, which only last while the app runs.
+    var waitWatches: [UUID: TaskWaitWatch] = [:]
+    var watchMonitor: Task<Void, Never>?
+    /// The change cursor behind `task.list changedSince`.
+    let changeFeed = TaskChangeFeed()
 
     init(
         records: TaskRecordStore,
@@ -383,8 +413,10 @@ final class TaskCoordinator {
             parentTaskID: caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID },
             startWork: startWork
         )
+        var prepared = record
+        prepared.creatorScope = caller.sessionID.flatMap { sessions?.scope(sessionID: $0) }
         return TaskCreatePreparation(
-            record: record,
+            record: prepared,
             copies: copies,
             saveRootDirectory: projectRoot?.isNew == true,
             existing: nil
@@ -706,6 +738,9 @@ final class TaskCoordinator {
                 "workspace_id": workspace.id.uuidString,
             ])
         }
+        // Saved watches keep waiting across a relaunch; old fired ones go.
+        evaluateWatches()
+        startWatchMonitorIfNeeded()
     }
 
     // MARK: - Setup
@@ -867,6 +902,10 @@ final class TaskCoordinator {
                     initialPrompt: prompt,
                     parentSessionID: parentSessionID,
                     forkFromSessionID: nil,
+                    // A task session is unscoped unless the session that
+                    // made the task was scoped; then it keeps that scope,
+                    // with this task space added.
+                    scopedWorkspaceIDs: record.creatorScope.map { $0.union([taskSpace.workspaceID]) },
                     beforeDispatch: { [weak self] in
                         guard let self, self.isCurrent(taskID: taskID, attempt: attempt) else {
                             throw CancellationError()

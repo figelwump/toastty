@@ -122,8 +122,11 @@ struct TaskAppControlTests {
         let parent = try await fixture.coordinator.create(TaskCreateRequest(text: "parent", workspaceID: fixture.workspaceID, agent: "codex"))
         await fixture.waitForSetup(unrelated.id)
         await fixture.waitForSetup(parent.id)
-        // The parent's agent is scoped to its own task space.
+        // Task sessions start unscoped; the user scopes the parent's agent to
+        // its own task space.
         let agentSessionID = try #require(fixture.record(parent.id)?.operation.agentLaunch?.sessionID)
+        #expect(fixture.sessionRuntimeStore.isWorkspaceScoped(sessionID: agentSessionID) == false)
+        #expect(fixture.sessionRuntimeStore.setScope(sessionID: agentSessionID, workspaceIDs: []))
         #expect(fixture.sessionRuntimeStore.isWorkspaceScoped(sessionID: agentSessionID))
 
         // It may add a task to its own project without naming a workspace.
@@ -242,6 +245,7 @@ struct TaskAppControlTests {
         // A scoped session cannot reopen a closed workspace: that makes a
         // top-level workspace no scope covers.
         let scopedSessionID = try #require(fixture.record(id)?.operation.agentLaunch?.sessionID)
+        #expect(fixture.sessionRuntimeStore.setScope(sessionID: scopedSessionID, workspaceIDs: []))
         #expect(fixture.sessionRuntimeStore.isWorkspaceScoped(sessionID: scopedSessionID))
         let second = try await executor.runActionAsync(
             id: "task.create",
@@ -253,6 +257,168 @@ struct TaskAppControlTests {
                 id: "task.set-workspace",
                 args: ["taskID": .string(try taskID(second.result).uuidString), "recentWorkspace": .string(UUID().uuidString)],
                 context: context(scopedSessionID)
+            )
+        }
+    }
+
+    /// Text typed through `LiveTaskSessions`, in order.
+    @MainActor
+    final class TypedText {
+        var entries: [(text: String, panelID: UUID)] = []
+    }
+
+    private func useLiveSessions(_ fixture: TaskCoordinatorTests.Fixture) -> TypedText {
+        let typed = TypedText()
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        fixture.coordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            closeController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: terminalRuntimeRegistry,
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil },
+                shouldBypassConfirmation: true
+            ),
+            exitController: nil,
+            sendText: { text, panelID in
+                typed.entries.append((text, panelID))
+                return true
+            }
+        )
+        return typed
+    }
+
+    private func agentState(_ task: [String: AutomationJSONValue]) -> String? {
+        guard case .object(let state)? = task["agentState"], case .string(let value)? = state["state"] else { return nil }
+        return value
+    }
+
+    @Test func aCoordinatorOutsideToasttyPollsSendsAndWakesATaskWithAWatch() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let typed = useLiveSessions(fixture)
+        func create(_ text: String) async throws -> TaskRecord {
+            let outcome = try await executor.runActionAsync(
+                id: "task.create",
+                args: ["text": .string(text), "workspace": .string(fixture.workspaceID.uuidString), "agent": .string("claude")],
+                context: context()
+            )
+            let id = try taskID(outcome.result)
+            await fixture.waitForSetup(id)
+            return try #require(fixture.record(id))
+        }
+        let producer = try await create("Define the API")
+        let consumer = try await create("Build the client on the API")
+        let producerSession = try #require(producer.operation.agentLaunch?.sessionID)
+        let consumerSession = try #require(consumer.operation.agentLaunch?.sessionID)
+        let producerPanel = try #require(producer.operation.taskSpace?.panelID)
+        let consumerPanel = try #require(consumer.operation.taskSpace?.panelID)
+
+        // A first poll lists every task with its agent's state and a cursor.
+        let first = try executor.runQuery(id: "task.list", args: [:])
+        guard case .array(let all)? = first["tasks"], case .string(let cursor)? = first["cursor"] else {
+            Issue.record("task.list has no tasks or cursor: \(first)")
+            return
+        }
+        #expect(all.count == 2)
+        #expect(all.compactMap { task -> String? in
+            guard case .object(let object) = task else { return nil }
+            return agentState(object)
+        } == ["idle", "idle"])
+        let quiet = try executor.runQuery(id: "task.list", args: ["changedSince": .string(cursor)])
+        #expect(quiet["tasks"] == .array([]))
+
+        // The producer starts a turn: only it is listed as changed.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: producerSession, status: SessionStatus(kind: .working, summary: "Working"), at: Date()
+        )
+        let changed = try executor.runQuery(id: "task.list", args: ["changedSince": .string(cursor)])
+        guard case .array(let changedTasks)? = changed["tasks"], case .object(let busy)? = changedTasks.first else {
+            Issue.record("expected one changed task: \(changed)")
+            return
+        }
+        #expect(changedTasks.count == 1)
+        #expect(busy["taskID"] == .string(producer.id.uuidString))
+        #expect(agentState(busy) == "busy")
+
+        // A follow-up by task ID reaches the producer's terminal.
+        let sent = try executor.runAction(
+            id: "task.send",
+            args: ["taskID": .string(producer.id.uuidString), "text": .string("Also document the errors")],
+            context: context()
+        )
+        #expect(sent.result?["sessionID"] == .string(producerSession))
+        #expect(typed.entries.map(\.panelID) == [producerPanel])
+
+        // The consumer's agent waits for the producer instead of polling;
+        // the watch notifies the caller's own task by default.
+        let watch = try executor.runAction(
+            id: "task.watch",
+            args: ["taskID": .string(producer.id.uuidString), "until": .string("idle")],
+            context: context(consumerSession)
+        )
+        #expect(watch.result?["notifyTaskID"] == .string(consumer.id.uuidString))
+        #expect(watch.result?["state"] == .string("pending"))
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: producerSession, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date().addingTimeInterval(1)
+        )
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.last?.panelID == consumerPanel)
+        #expect(typed.entries.last?.text.contains("is idle. Read it with: toastty task get \(producer.id.uuidString)") == true)
+
+        let watches = try executor.runQuery(id: "task.watches", args: ["notifyTaskID": .string(consumer.id.uuidString)])
+        guard case .array(let listed)? = watches["watches"], case .object(let fired)? = listed.first else {
+            Issue.record("no watches listed: \(watches)")
+            return
+        }
+        #expect(fired["state"] == .string("fired"))
+        #expect(fired["delivered"] == .bool(true))
+
+        // task.get reports the agent and its reply, which is null until a
+        // transcript is confirmed.
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(producer.id.uuidString)])
+        #expect(agentState(got) == "idle")
+        #expect(got["lastReply"] == .null)
+
+        // A caller that is not a task's agent must say whom to notify.
+        await expectInvalidPayload("the caller is not a task's agent; name the task to notify with notifyTaskID, or pass wait=true and poll task.watches") {
+            _ = try executor.runAction(
+                id: "task.watch",
+                args: ["taskID": .string(producer.id.uuidString), "until": .string("idle")],
+                context: context()
+            )
+        }
+        await expectInvalidPayload("until must be one of: idle, waiting, ready-for-review, merged, to-ship, done, archived") {
+            _ = try executor.runAction(
+                id: "task.watch",
+                args: ["taskID": .string(producer.id.uuidString), "until": .string("soon"), "wait": .bool(true)],
+                context: context()
+            )
+        }
+    }
+
+    @Test func aScopedSessionCanSendOnlyToTasksItMaySee() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        _ = useLiveSessions(fixture)
+        let mine = try await fixture.coordinator.create(TaskCreateRequest(text: "mine", workspaceID: fixture.workspaceID, agent: "codex"))
+        let other = try await fixture.coordinator.create(TaskCreateRequest(text: "other", workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(mine.id)
+        await fixture.waitForSetup(other.id)
+        let scoped = try #require(fixture.record(mine.id)?.operation.agentLaunch?.sessionID)
+        #expect(fixture.sessionRuntimeStore.setScope(sessionID: scoped, workspaceIDs: []))
+
+        _ = try executor.runAction(
+            id: "task.send", args: ["taskID": .string(mine.id.uuidString), "text": .string("hi")], context: context(scoped)
+        )
+        await expectInvalidPayload("No task has ID \(other.id.uuidString).") {
+            _ = try executor.runAction(
+                id: "task.send", args: ["taskID": .string(other.id.uuidString), "text": .string("hi")], context: context(scoped)
             )
         }
     }

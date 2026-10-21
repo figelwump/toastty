@@ -79,6 +79,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskDelete = "task.delete"
     case taskSetWorkspace = "task.set-workspace"
     case taskStartWork = "task.start-work"
+    case taskSend = "task.send"
+    case taskWatch = "task.watch"
+    case taskUnwatch = "task.unwatch"
     case taskAdopt = "task.adopt"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
@@ -535,6 +538,30 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskRecentWorkspace(required: false),
                 ]
             )
+        case .taskSend:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. A busy agent queues the message as typed input. Fails when the task has no running agent. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
+                selectors: [],
+                parameters: [.taskID(required: true), .taskMessage(required: true)]
+            )
+        case .taskWatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Be told once when a task reaches a condition. When it holds, Toastty sends a one-line message to the notified task's agent, as task.send does, so a waiting agent can end its turn instead of polling. idle means the agent finished a turn after the watch was made; waiting means it waits for an approval or an answer; a stage condition (ready-for-review, merged, to-ship, done) holds once task.get's stage reaches it and stays true after the task moves past it; archived holds only for an archived task. notifyTaskID defaults to the calling agent's own task. With wait=true, nothing is notified: the watch is kept in memory for a caller that polls task.watches, as toastty task watch --wait does. Saved watches survive a relaunch. A watch whose task is deleted or archived fires with that reason.",
+                selectors: [],
+                parameters: [.taskID(required: true), .taskWatchCondition(required: true), .taskNotifyTaskID(required: false), .taskWatchWait(required: false)]
+            )
+        case .taskUnwatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Cancel a watch made with task.watch.",
+                selectors: [],
+                parameters: [.taskWatchID(required: true)]
+            )
         case .taskAdopt:
             return .init(
                 id: rawValue,
@@ -590,6 +617,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskGet = "task.get"
     case taskList = "task.list"
     case taskWorkspaceChoices = "task.workspace-choices"
+    case taskWatches = "task.watches"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -672,16 +700,17 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while triage runs, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, and task space.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while triage runs, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session and when its status last changed), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
                 selectors: [],
-                parameters: [.taskID(required: true)]
+                parameters: [.taskID(required: false)]
             )
         case .taskList:
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "List tasks, oldest first, in the task.get shape. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
-                selectors: []
+                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage or agentState changed since are listed, deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                selectors: [],
+                parameters: [.taskChangedSince(required: false), .taskIncludeReply(required: false)]
             )
         case .taskWorkspaceChoices:
             return .init(
@@ -689,6 +718,14 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 kind: .query,
                 summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. A workspace-scoped session sees only open workspaces in its scope.",
                 selectors: []
+            )
+        case .taskWatches:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List watches from task.watch: pending ones, and fired ones for a while after they fire, with the reason and whether the message was delivered. Filter by watchID, by the watched taskID, or by notifyTaskID.",
+                selectors: [],
+                parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
             )
         }
     }
@@ -907,6 +944,40 @@ private extension AppControlParameterDescriptor {
 
     static func taskBranchPrefix(required: Bool) -> Self {
         .init(name: "branchPrefix", summary: "First part of the worktree's branch name, before /<slug>. Defaults to the workspace's branch_prefix in tasks.toml, else task.", valueType: .string, required: required)
+    }
+
+    static func taskMessage(required: Bool) -> Self {
+        .init(name: "text", summary: "The message, typed into the agent and submitted.", valueType: .string, required: required)
+    }
+
+    static func taskWatchCondition(required: Bool) -> Self {
+        .init(
+            name: "until",
+            summary: "What to wait for: idle, waiting, or a stage.",
+            valueType: .string,
+            required: required,
+            allowedValues: TaskWatchCondition.allCases.map(\.rawValue)
+        )
+    }
+
+    static func taskNotifyTaskID(required: Bool) -> Self {
+        .init(name: "notifyTaskID", summary: "Task whose agent gets the message.", valueType: .uuid, required: required)
+    }
+
+    static func taskWatchWait(required: Bool) -> Self {
+        .init(name: "wait", summary: "true keeps the watch in memory for polling instead of notifying a task.", valueType: .boolean, required: required)
+    }
+
+    static func taskWatchID(required: Bool) -> Self {
+        .init(name: "watchID", summary: "Watch ID from task.watch.", valueType: .uuid, required: required)
+    }
+
+    static func taskChangedSince(required: Bool) -> Self {
+        .init(name: "changedSince", summary: "Cursor from an earlier task.list.", valueType: .string, required: required)
+    }
+
+    static func taskIncludeReply(required: Bool) -> Self {
+        .init(name: "includeReply", summary: "true adds each task's lastReply.", valueType: .boolean, required: required)
     }
 
     static func taskID(required: Bool) -> Self {

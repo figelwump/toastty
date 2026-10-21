@@ -40,6 +40,9 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var turnStartedAt: Date?
     /// How long the previous turn took, for rows that are now at rest.
     public var lastTurnDuration: TimeInterval?
+    /// When the previous turn ended. Like the other turn timing, it is
+    /// runtime-only: a restored session has not finished a turn yet.
+    public var lastTurnEndedAt: Date?
     public var displayTitleOverride: String?
     /// The short name the provider CLI generated for this session (Claude's
     /// `ai-title`, Codex's `thread_name`). Kept separate from
@@ -71,6 +74,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         lastActivityFinishedAt: Date? = nil,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        lastTurnEndedAt: Date? = nil,
         displayTitleOverride: String? = nil,
         providerSessionName: String? = nil,
         repoRoot: String? = nil,
@@ -97,6 +101,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.lastActivityFinishedAt = lastActivityFinishedAt
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
+        self.lastTurnEndedAt = lastTurnEndedAt
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
         self.repoRoot = repoRoot
@@ -145,6 +150,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         // it were still counting up.
         turnStartedAt = nil
         lastTurnDuration = nil
+        lastTurnEndedAt = nil
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
         )
