@@ -110,6 +110,12 @@ public final class LinuxAppLogic {
     /// `true` when launched with `--automation` / TOASTTY_AUTOMATION (smoke runs).
     public var isAutomationMode: Bool { automationLifecycle != nil }
     public var runtimeHomePath: String? { runtimePaths.runtimeHomeURL?.path }
+    /// Desktop notifications this runtime delivered and has not withdrawn
+    /// (the GTK frontend withdraws a crashed run's leftovers at startup).
+    /// Per runtime home, so isolated runs never touch another run's list.
+    public var desktopNotificationLedgerURL: URL {
+        runtimePaths.configDirectoryURL.appendingPathComponent("linux-desktop-notifications.json")
+    }
 
     private var isShutDown = false
 

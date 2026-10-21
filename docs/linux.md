@@ -353,6 +353,18 @@ when a notification is clicked (routes to the panel exactly like macOS),
 `LinuxPlatform.postApplicationActivationChange(isActive:)`,
 `postScreenParametersChanged()`, `postApplicationWillTerminate()`.
 
+Dock badge: nothing calls `setApplicationBadgeCount` (macOS shows no Dock
+badge). The number Ubuntu Dock shows is its own count of Toastty's
+notifications in GNOME's message tray, which outlive the app. So the GTK
+frontend withdraws a notification once its panel (or workspace) is no
+longer unread, withdraws all of them at quit, and at startup withdraws
+whatever a crashed run left (`UI/Desktop/UnreadAttention.swift`; the ledger
+is `linux-desktop-notifications.json` in the runtime's config directory).
+`SeenUnreadClearScheduler` there ports macOS `WorkspaceView`'s seen-unread
+clear (the focused unread panel of a shown workspace is marked read 300 ms
+after it is on screen while Toastty is active); `WorkspaceView.swift` is
+not part of the Linux build.
+
 `HeadlessLinuxPlatformServices` is the default: `xdg-open`, alerts answered
 with their cancel button (`LinuxAlertRequest.safeDefaultButtonIndex`) and
 logged to stderr, notifications recorded and logged, a process-local

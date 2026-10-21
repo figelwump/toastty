@@ -33,7 +33,7 @@ public final class GtkPlatformServices: LinuxPlatformServices {
     private var windowControllers: [LinuxWindowController] { app?.orderedWindows ?? [] }
 
     public var isApplicationActive: Bool {
-        windowControllers.contains { gtk_window_is_active(cast($0.window)).bool }
+        app?.isApplicationActive ?? false
     }
 
     public func activateApplication() {
@@ -211,6 +211,11 @@ public final class GtkPlatformServices: LinuxPlatformServices {
             body: notification.body,
             userInfo: notification.userInfo
         )
+        // Delivery is asynchronous (authorization, Task hops): the panel may
+        // have been read meanwhile, with no state change left to notice it.
+        if let state = app?.store.state {
+            notifications.withdrawObsolete(in: state)
+        }
     }
 
     public func removeNotifications(identifiers: [String]) {

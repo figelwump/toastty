@@ -18,6 +18,15 @@ public final class LinuxAppController {
     private var sessionObservation: LinuxObservation?
     private var hasActivated = false
     public var automation: AutomationScript?
+    /// Marks unread panels read once seen (macOS WorkspaceView behavior).
+    public private(set) lazy var seenUnreadClearer = SeenUnreadClearScheduler(store: store) { [weak self] in
+        self?.isApplicationActive ?? false
+    }
+
+    /// Whether a Toastty window has focus (`NSApp.isActive`).
+    public var isApplicationActive: Bool {
+        windows.values.contains { gtk_window_is_active(cast($0.window)).bool }
+    }
 
     public init(store: any LinuxStoreBinding, hosts: PanelHostRegistry = PanelHostRegistry(), nonUnique: Bool) {
         self.store = store
@@ -55,6 +64,7 @@ public final class LinuxAppController {
             self?.windows.values.forEach { $0.scheduleRender() }
         }
         reconcileWindows(store.state)
+        reconcileUnreadAttention(store.state)
         automation?.start(app: self)
     }
 
@@ -91,9 +101,18 @@ public final class LinuxAppController {
         reconcileWindows(state)
         for controller in windows.values { controller.scheduleRender() }
         collectClosedPanels(state)
+        reconcileUnreadAttention(state)
         if state.windows.isEmpty, hasActivated {
             g_application_quit(cast(application))
         }
+    }
+
+    /// Seen panels become read (after the macOS delay), and desktop
+    /// notifications for panels that are no longer unread are withdrawn so
+    /// the dock's notification count follows the unread marks down to zero.
+    func reconcileUnreadAttention(_ state: AppState) {
+        seenUnreadClearer.refresh(state)
+        existingDesktopNotifications?.withdrawObsolete(in: state)
     }
 
     private func reconcileWindows(_ state: AppState) {
@@ -107,6 +126,12 @@ public final class LinuxAppController {
                 preferences: preferences
             )
             controller.onAppCommand = { [weak self] id, windowID in self?.performAppCommand(id, windowID: windowID) }
+            // Toastty gaining focus makes the focused unread panels seen
+            // (macOS reschedules on didBecomeActive / didResignActive).
+            Signal.notify(controller.window, "is-active") { [weak self] in
+                guard let self else { return }
+                self.seenUnreadClearer.refresh(self.store.state)
+            }
             windows[windowID] = controller
             windowOrder.append(windowID)
             controller.present()

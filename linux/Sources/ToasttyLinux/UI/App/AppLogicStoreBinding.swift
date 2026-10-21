@@ -149,7 +149,9 @@ extension ToasttyLinuxMain {
         app.automation = automation
         // Real desktop services once the application exists (alerts, URLs,
         // clipboard, notifications, dock badge, windows).
-        LinuxPlatform.install(GtkPlatformServices(app: app))
+        let platformServices = GtkPlatformServices(app: app)
+        platformServices.notifications.adoptLedgerFile(at: logic.desktopNotificationLedgerURL)
+        LinuxPlatform.install(platformServices)
         let webPanels = app.installWebPanels()
         webPanels.attach(logic: logic)
         logic.setBrowserHostMaterializer { [weak app] panelID in app?.materializeWebPanel(panelID: panelID) }

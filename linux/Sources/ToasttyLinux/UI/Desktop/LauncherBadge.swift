@@ -6,6 +6,13 @@ import Foundation
 /// session bus naming `application://com.GiantThings.toastty.desktop` with
 /// `count` / `count-visible`. Docks only match the signal to an icon when the
 /// desktop file is installed (scripts/linux/install.sh).
+///
+/// Nothing in the app sets this count (macOS shows no Dock badge either);
+/// the badge users see on Ubuntu Dock is its own count of Toastty's
+/// notifications in the message tray, which `DesktopNotifications` keeps
+/// in step with the unread marks by withdrawing read ones. Ubuntu Dock
+/// adds this count to that one unless `application-counter-overrides-
+/// notifications` is set, so driving both would double-count.
 @MainActor
 public final class LauncherBadge {
     public static let shared = LauncherBadge()
