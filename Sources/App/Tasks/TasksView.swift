@@ -476,10 +476,13 @@ private struct TasksViewDetail: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 40)
+            .padding(.top, 12)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Starts below the titlebar, like the list, so the scroll view gets
+        // no titlebar backdrop.
+        .padding(.top, 28)
         .background(ToastyTheme.surfaceBackground)
         .background {
             SidebarSemanticTextBridge(text: "Task detail, \(item.title), \(TaskBoardPresentation.stageDescription(item).stage)")
