@@ -9,6 +9,7 @@
 //   frontmost-pid                prints the frontmost app's process ID
 //   press <pid> <identifier>     presses the element with that
 //                                Accessibility identifier, or clicks it
+//   exists <pid> <identifier>    exits 0 when the element is on screen
 
 import AppKit
 import CoreGraphics
@@ -52,8 +53,8 @@ case "activate":
 case "frontmost-pid":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
 
-case "press":
-    guard arguments.count == 3, let pid = Int32(arguments[1]) else { fail("press <pid> <identifier>") }
+case "press", "exists":
+    guard arguments.count == 3, let pid = Int32(arguments[1]) else { fail("\(arguments[0]) <pid> <identifier>") }
     func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
         var result: AnyObject?
         return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
@@ -71,6 +72,7 @@ case "press":
     guard let target = windows.lazy.compactMap({ find($0, depth: 0) }).first else {
         fail("no element \(arguments[2]) in pid \(pid)")
     }
+    if arguments[0] == "exists" { break }
     if AXUIElementPerformAction(target, kAXPressAction as CFString) == .success { break }
     // Some SwiftUI buttons refuse AXPress; click the middle of the element
     // instead, with the app in front so the click reaches it.

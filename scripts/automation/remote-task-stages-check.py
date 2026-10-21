@@ -125,7 +125,7 @@ def main():
         step('captured', file=path.name)
 
     def tasks_view_shown():
-        return run_tool(driver, 'value', pid, 'tasks.view.close', check=False).returncode == 0
+        return run_tool(helper, 'exists', pid, 'tasks.view.close', check=False).returncode == 0
 
     def quick_entry_open():
         listed = run_tool(driver, 'windows', pid, check=False)
@@ -184,8 +184,8 @@ def main():
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
         capture('sidebar-projects-done')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
-        wait_for('the Tasks view', tasks_view_shown)
         capture('tasks-view')
+        wait_for('the Tasks view', tasks_view_shown)
         open_and_close_quick_entry('tasks.view.new')
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')
