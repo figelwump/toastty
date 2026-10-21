@@ -26,10 +26,15 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: 14)
+        textView.font = .systemFont(ofSize: Self.fontSize)
         textView.textColor = NSColor(ToastyTheme.primaryText)
         textView.insertionPointColor = NSColor(ToastyTheme.accent)
-        textView.textContainerInset = NSSize(width: 0, height: 4)
+        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.textContainer?.lineFragmentPadding = 0
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = Self.lineSpacing
+        textView.defaultParagraphStyle = paragraph
+        textView.typingAttributes[.paragraphStyle] = paragraph
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isVerticallyResizable = true
@@ -49,6 +54,31 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         context.coordinator.textView = textView
         configure(textView)
         return scrollView
+    }
+
+    /// The design's 15.5 pt text at 1.5 line height.
+    static let fontSize: CGFloat = 15.5
+    static let lineSpacing: CGFloat = 4.5
+    /// The text area grows with the text between these heights, then scrolls.
+    static let minimumHeight: CGFloat = 66
+    static let maximumHeight: CGFloat = 260
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0,
+              let textView = context.coordinator.textView else {
+            return nil
+        }
+        // Measured on a copy: SwiftUI may propose sizes it then discards, and
+        // the text on screen must keep wrapping at its real width.
+        let storage = NSTextStorage(attributedString: textView.attributedString())
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: container)
+        let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
+        return CGSize(width: width, height: min(max(used, Self.minimumHeight), Self.maximumHeight))
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -126,15 +156,14 @@ final class QuickEntryNSTextView: NSTextView {
         onCancel()
     }
 
+    // Files and images attach; anything else pastes as plain text. Do not
+    // narrow readablePasteboardTypes to get plain text: pasteAsPlainText(_:)
+    // then inserts nothing.
     override func paste(_ sender: Any?) {
         if onPasteAttachments(.general) {
             return
         }
         pasteAsPlainText(sender)
-    }
-
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [.string]
     }
 
     // Files and images dropped on the text attach, as they do anywhere else
@@ -159,12 +188,29 @@ final class QuickEntryNSTextView: NSTextView {
         super.draggingExited(sender)
     }
 
+    // NSTextView agrees to a drop only for types it reads as text, so a
+    // promised file or image data would end here, before
+    // performDragOperation(_:), and attach nothing.
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if QuickEntryDropTarget.carriesAttachments(sender.draggingPasteboard) {
+            return true
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         if let dropTarget, QuickEntryDropTarget.carriesAttachments(sender.draggingPasteboard) {
             return dropTarget.performDrop(sender.draggingPasteboard)
         }
         dropTarget?.dropExited()
         return super.performDragOperation(sender)
+    }
+
+    // A drag can end without an exit or a drop, for example when it is
+    // cancelled over the panel; the highlight must not stay on.
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        dropTarget?.dropExited()
+        super.draggingEnded(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -176,7 +222,7 @@ final class QuickEntryNSTextView: NSTextView {
         )
         (placeholder as NSString).draw(at: origin, withAttributes: [
             .font: font ?? .systemFont(ofSize: 14),
-            .foregroundColor: NSColor(ToastyTheme.inactiveText).withAlphaComponent(0.55),
+            .foregroundColor: NSColor(QuickEntryView.mutedText),
         ])
     }
 

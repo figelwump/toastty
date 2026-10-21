@@ -21,11 +21,16 @@ Finder in front, it checks that:
   open workspace) places the task and it starts;
 - Esc closes a second panel without creating a task, and Command+T in the
   panel opens no tab in Toastty;
-- Command+W closes the panel without closing the terminal behind it.
+- Command+W closes the panel without closing the terminal behind it;
+- a file, a file promise and PNG data dragged from another process attach,
+  dropped on the text or on the footer, and dragged text joins the text;
+  the drop highlight is gone after each drop;
+- Command+V pastes text, with Finder in front and with Toastty in front.
 """
 
 import json
 import os
+import select
 import shutil
 from pathlib import Path
 import subprocess
@@ -42,6 +47,7 @@ Instance, require, wait_for, FAKE_AGENT = task_check.Instance, task_check.requir
 
 TASK_LINES = ['Unread dot stays on after reading', 'Seen on the phone first.']
 AUTO_TEXT = 'Placed by triage'
+PASTE_TEXT = 'Pasted words from the clipboard'
 
 # Answers triage with the first open workspace in the JSON Toastty writes.
 FAKE_TRIAGE = r'''import json, re, sys
@@ -65,6 +71,8 @@ def main():
     root = Path(tempfile.mkdtemp(prefix='toastty-quick-entry-check-', dir='/tmp')).resolve()
     driver = root / 'quick-entry-ui-driver'
     subprocess.run(['swiftc', '-O', str(HERE / 'quick-entry-ui-driver.swift'), '-o', str(driver)], check=True)
+    drag_source = root / 'quick-entry-drag-source'
+    subprocess.run(['swiftc', '-O', str(HERE / 'quick-entry-drag-source.swift'), '-o', str(drag_source)], check=True)
 
     def drive(*arguments, check=True):
         result = subprocess.run([str(driver), *map(str, arguments)], capture_output=True, text=True, timeout=60)
@@ -254,6 +262,102 @@ def main():
         require(terminal_count() == terminals, f'Command+W closed a terminal: {terminal_count()} of {terminals}')
         require(len(run_cli('task', 'list')['tasks']) == 2, 'Command+W created a task')
         step('command-w closed the panel only', terminals=terminal_count())
+
+        # 4. Real drags from another process, and Command+V with text. Each
+        # case records its outcome and the check fails at the end, so one
+        # run shows every case.
+        outcomes = {}
+
+        def frame(identifier):
+            return tuple(map(float, drive('frame', pid, identifier).split()))
+
+        def submit_and_find(text):
+            # The drag source's click can take key status from the panel;
+            # the shortcut gives it back to the open panel.
+            drive('key', KEY_T, 'ctrl,opt,shift')
+            time.sleep(0.5)
+            for _ in range(10):
+                drive('key', KEY_RETURN, 'cmd')
+                time.sleep(1)
+                if panel_closed():
+                    break
+            listed = [t for t in run_cli('task', 'list')['tasks'] if t['text'].startswith(text)]
+            return run_cli('task', 'get', listed[0]['taskID']) if listed else None
+
+        def drop_case(name, mode, path, target):
+            open_panel_from_finder()
+            drive('type', name)
+            wait_for_text(name)
+            px, py, pw, ph = frame(PANEL)
+            if target == 'text':
+                tx, ty, tw, th = frame('quick-entry.text')
+                point = (tx + tw / 2, ty + min(th / 2, 24))
+            else:
+                # The panel's bottom padding, below the footer's controls.
+                point = (px + pw / 2, py + ph - 5)
+            source_x = px - 180 if px > 200 else px + pw + 40
+            source = subprocess.Popen([str(drag_source), mode, str(path), str(source_x), str(py + 20)],
+                                      stdout=subprocess.PIPE, text=True)
+            try:
+                started, _, _ = select.select([source.stdout], [], [], 20)
+                require(started and source.stdout.readline().strip() == 'ready', f'The {mode} drag source did not start')
+                time.sleep(0.5)
+                drive('drag', source_x + 60, py + 60, *point)
+                time.sleep(2)
+                # The drop highlight must be gone once the drag ends.
+                hint = subprocess.run([str(driver), 'value', str(pid), 'quick-entry.drop-hint'],
+                                      capture_output=True, text=True, timeout=60)
+                highlight_cleared = hint.returncode != 0
+            finally:
+                try:
+                    source.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    source.kill()
+            task = submit_and_find(name)
+            files = task['files'] if task else None
+            if mode == 'text':
+                # Dropped text goes into the text, not into a file.
+                ok = task is not None and 'Dropped words' in task['text'] and files == []
+            else:
+                ok = bool(files) and len(files) == 1 and Path(files[0]).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+            outcomes[name] = dict(ok=ok and highlight_cleared, mode=mode, target=target, point=point, files=files,
+                                  highlight_cleared=highlight_cleared, task=task and task['taskID'],
+                                  text=task and task['text'])
+            step(f'drop {name}', **outcomes[name])
+
+        dragged = root / 'dragged.png'
+        shutil.copyfile(image, dragged)
+        drop_case('drop file on text', 'file', dragged, 'text')
+        drop_case('drop file on footer', 'file', dragged, 'footer')
+        drop_case('drop promise on text', 'promise', image, 'text')
+        drop_case('drop image data on text', 'image', image, 'text')
+        drop_case('drop text on text', 'text', image, 'text')
+
+        def paste_case(name, front):
+            if front == 'toastty':
+                drive('activate-pid', pid)
+                wait_for('Toastty in front', lambda: drive('frontmost-pid') == str(pid), timeout=15)
+            else:
+                drive('activate', FINDER)
+                wait_for('Finder in front', lambda: drive('frontmost') == FINDER, timeout=15)
+            drive('key', KEY_T, 'ctrl,opt,shift')
+            wait_for('the quick entry panel', panel_windows, timeout=15)
+            time.sleep(0.5)
+            drive('pasteboard-text', PASTE_TEXT)
+            drive('key', KEY_V, 'cmd')
+            time.sleep(1)
+            value = drive('value', pid, 'quick-entry.text')
+            outcomes[name] = dict(ok=value == PASTE_TEXT, value=value, focused=drive('focused', pid),
+                                  frontmost=drive('frontmost'))
+            step(name, **outcomes[name])
+            drive('key', KEY_ESCAPE)
+            wait_for('the panel to close', panel_closed, timeout=10)
+
+        paste_case('paste text with Finder in front', 'finder')
+        paste_case('paste text with Toastty in front', 'toastty')
+
+        failed = {name: outcome for name, outcome in outcomes.items() if not outcome['ok']}
+        require(not failed, f'Cases failed: {json.dumps(failed, default=str)}')
 
         evidence['status'] = 'passed'
     finally:
