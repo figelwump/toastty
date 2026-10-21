@@ -126,6 +126,8 @@ struct TaskStartWorkTests {
         let recordsFile: URL
         let workspaceID: UUID
         var config = TasksConfig()
+        let triage = FakeTriageRunner()
+        let recentWorkspaces = RecentWorkspacesStore.inMemory()
         private(set) var coordinator: TaskCoordinator!
 
         init() throws {
@@ -157,7 +159,9 @@ struct TaskStartWorkTests {
                     sourceTurnTimeout: .seconds(3),
                     forkConfirmationTimeout: .milliseconds(600),
                     pollInterval: .milliseconds(20)
-                )
+                ),
+                triageRunner: triage,
+                recentWorkspaces: recentWorkspaces
             )
             coordinator.sessions = sessions
             return coordinator
@@ -590,6 +594,95 @@ struct TaskStartWorkTests {
         await #expect(throws: TaskError.self) {
             try await fixture.coordinator.create(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "codex", base: "main"))
         }
+    }
+
+    // MARK: - With triage
+
+    @Test func aTaskWhoseWorktreeWasMadeCannotMoveToAnotherProject() async throws {
+        let fixture = try Fixture()
+        try fixture.repository.pushToRemote("upstream")
+        fixture.config = TasksConfig(
+            triage: .init(command: "fake-triage"),
+            workspaces: [TasksConfig.Workspace(
+                path: fixture.repository.project,
+                createHook: "test -f ready || { echo 'bootstrap: run setup first' >&2; exit 4; }"
+            )]
+        )
+        // Another project, open in its own workspace.
+        let other = try TaskGitTestRepository()
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: "other", activate: false))
+        let otherWorkspace = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "other" })
+        _ = fixture.store.send(.setWorkspaceRootDirectory(workspaceID: otherWorkspace.id, rootDirectory: other.project))
+
+        fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex", firstPrompt: "Start with the composer.")))
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the composer", workspaceID: fixture.workspaceID, startWork: true
+        ))
+        #expect(created.setup == .routing)
+        await fixture.waitUntil("setup fails on the hook") {
+            if case .setupFailed? = fixture.record(created.id)?.setup { return true }
+            return false
+        }
+        let failed = try #require(fixture.record(created.id))
+        let worktree = try #require(failed.worktree)
+        #expect(failed.operation.base != nil)
+        // The worktree comes before the task space, so only the new check
+        // stands between this task and another project.
+        #expect(failed.operation.taskSpace == nil)
+
+        // Another project cannot take over the first one's worktree.
+        do {
+            try fixture.coordinator.setWorkspace(taskID: created.id, choice: .open(otherWorkspace.id))
+            Issue.record("the task moved to another project")
+        } catch {
+            #expect(error.localizedDescription.contains("already has a worktree in \(fixture.repository.project)"))
+        }
+        #expect(fixture.record(created.id)?.workspaceID == fixture.workspaceID)
+        let recent = RecentWorkspace(id: UUID(), title: "other-closed", rootDirectory: other.project, closedAt: Date())
+        fixture.recentWorkspaces.record(recent)
+        #expect(throws: TaskError.self) {
+            try fixture.coordinator.setWorkspace(taskID: created.id, choice: .recent(recent.id))
+        }
+
+        // The same project is fine: setup continues in the same worktree.
+        FileManager.default.createFile(atPath: "\(worktree.path)/ready", contents: Data())
+        fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex")))
+        try fixture.coordinator.setWorkspace(taskID: created.id, choice: .open(fixture.workspaceID))
+        await fixture.waitUntil("the task starts") { fixture.record(created.id)?.setup == .started }
+        let started = try #require(fixture.record(created.id))
+        #expect(started.worktree == worktree)
+        #expect(fixture.launcher.calls.last?.cwd == worktree.path)
+    }
+
+    @Test func triagesPromptIsLeftOutWhenTheWorktreeLineMakesTheMessageTooLong() async throws {
+        let fixture = try Fixture()
+        try fixture.repository.pushToRemote("upstream")
+        fixture.config = TasksConfig(triage: .init(command: "fake-triage"))
+        let triagePrompt = "Start with the composer views."
+        // Just under the limit with triage's prompt, so routing accepts it;
+        // the worktree line added at launch pushes it over.
+        let limit = AgentLaunchService.maximumInitialPromptUTF8Count
+        let wrapper = "\n\nThe task, as written:\n\n"
+        let text = String(repeating: "x", count: limit - 40 - triagePrompt.utf8.count - wrapper.utf8.count)
+        fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex", firstPrompt: triagePrompt)))
+
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: text, workspaceID: fixture.workspaceID, startWork: true
+        ))
+        await fixture.waitUntil("setup ends") {
+            let setup = fixture.record(created.id)?.setup
+            return setup != .routing && setup != .settingUp
+        }
+        let record = try #require(fixture.record(created.id))
+        #expect(record.setup == .started)
+        #expect(record.resolved?.prompt == nil)
+        #expect(record.triageNote == "Toastty left out triage's first prompt, which made the agent's first message longer than 64 KB.")
+        let launch = try #require(fixture.launcher.calls.last)
+        let worktree = try #require(record.worktree)
+        #expect(launch.prompt.hasPrefix("You are in the git worktree \(worktree.path)"))
+        #expect(launch.prompt.contains(triagePrompt) == false)
+        #expect(launch.prompt.utf8.count <= limit)
     }
 
     @Test func relaunchFailsAnUnfinishedMoveUnlessTheForkWasConfirmed() async throws {
