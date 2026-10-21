@@ -16,6 +16,8 @@ directory is the project root), a fake agent, and a tasks.toml with
 - `task adopt` gives a task space made by `workspace.create` a record;
 - `window.sidebar.set-segment` and `window.tasks.show` work without changing
   the selected workspace;
+- the sidebar Tasks row's + and the Tasks view's New Task open the quick
+  entry panel;
 - while the Tasks view shows, typing does not reach the terminal under it;
   Esc closes the view, and typing then reaches the terminal again.
 Window captures of both sidebar segments and the Tasks view go to the
@@ -112,6 +114,17 @@ def main():
     def tasks_view_shown():
         return run_tool(driver, 'value', pid, 'tasks.view.close', check=False).returncode == 0
 
+    def quick_entry_open():
+        listed = run_tool(driver, 'windows', pid, check=False)
+        return listed.returncode == 0 and any(w['identifier'] == 'quick-entry.panel' for w in json.loads(listed.stdout))
+
+    def open_and_close_quick_entry(button):
+        run_tool(helper, 'press', pid, button)
+        wait_for(f'{button} to open quick entry', quick_entry_open, timeout=15)
+        run_tool(driver, 'key', KEY_ESCAPE)
+        wait_for('quick entry to close', lambda: quick_entry_open() is False, timeout=15)
+        step('quick entry opened and closed', button=button)
+
     try:
         workspaces = instance.wait_until_ready()
         workspace_id, window_id = workspaces[0]['workspaceID'], workspaces[0]['windowID']
@@ -148,8 +161,9 @@ def main():
         step('adopted', taskID=adopted['taskID'], stage=adopted.get('stage'))
 
         # 3. Both sidebar segments, then the Tasks view; none changes the
-        # selected workspace.
+        # selected workspace. The + opens quick entry.
         capture('sidebar-projects-review')
+        open_and_close_quick_entry('sidebar.tasks.new')
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
         capture('sidebar-status')
         cli_json('action', 'run', 'workspace.set-done', '--workspace', task_space)
@@ -159,6 +173,7 @@ def main():
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
         wait_for('the Tasks view', tasks_view_shown)
         capture('tasks-view')
+        open_and_close_quick_entry('tasks.view.new')
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')
 

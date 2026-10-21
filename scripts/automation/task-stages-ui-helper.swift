@@ -7,6 +7,8 @@
 //   capture <pid> <output.png>   captures the app's largest window, unfocused
 //   activate <pid>               makes the app frontmost
 //   frontmost-pid                prints the frontmost app's process ID
+//   press <pid> <identifier>     presses the element with that
+//                                Accessibility identifier
 
 import AppKit
 import CoreGraphics
@@ -49,6 +51,28 @@ case "activate":
 
 case "frontmost-pid":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+
+case "press":
+    guard arguments.count == 3, let pid = Int32(arguments[1]) else { fail("press <pid> <identifier>") }
+    func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
+        var result: AnyObject?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
+    }
+    func find(_ element: AXUIElement, depth: Int) -> AXUIElement? {
+        if value(element, "AXIdentifier") as? String == arguments[2] { return element }
+        guard depth < 40 else { return nil }
+        for child in (value(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+            if let found = find(child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+    let app = AXUIElementCreateApplication(pid)
+    let windows = (value(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+    guard let target = windows.lazy.compactMap({ find($0, depth: 0) }).first else {
+        fail("no element \(arguments[2]) in pid \(pid)")
+    }
+    let error = AXUIElementPerformAction(target, kAXPressAction as CFString)
+    guard error == .success else { fail("pressing \(arguments[2]) failed: \(error.rawValue)") }
 
 default:
     fail("unknown command \(arguments.first ?? "")")
