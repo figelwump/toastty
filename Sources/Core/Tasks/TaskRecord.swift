@@ -22,8 +22,12 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var source: TaskSource
     /// The fields the caller set. Nothing Toastty decides overrides them.
     public var pinned: TaskFields
-    /// The fields setup used: `pinned`, completed from `[defaults]`.
+    /// The fields setup used: `pinned`, completed by triage and from
+    /// `[defaults]`.
     public var resolved: TaskFields?
+    /// What happened to triage when it did not answer in full: why it
+    /// failed, or which of its choices Toastty could not use.
+    public var triageNote: String?
     /// The top-level workspace the task belongs to; its task space nests
     /// under it.
     public var workspaceID: UUID?
@@ -209,19 +213,26 @@ public struct TaskFields: Codable, Equatable, Sendable {
     public var effort: String?
     /// The first prompt, sent before the task text.
     public var prompt: String?
+    /// A title and slug the caller chose. Triage does not replace them.
+    public var title: String?
+    public var slug: String?
 
     public init(
         workspaceID: UUID? = nil,
         agent: String? = nil,
         model: String? = nil,
         effort: String? = nil,
-        prompt: String? = nil
+        prompt: String? = nil,
+        title: String? = nil,
+        slug: String? = nil
     ) {
         self.workspaceID = workspaceID
         self.agent = agent
         self.model = model
         self.effort = effort
         self.prompt = prompt
+        self.title = title
+        self.slug = slug
     }
 }
 
@@ -289,6 +300,10 @@ public enum TaskSource: Codable, Equatable, Sendable {
 
 /// How far setup got. A task is in the Inbox until it has started.
 public enum TaskSetupState: Codable, Equatable, Sendable {
+    /// Triage is choosing what the caller left out.
+    case routing
+    /// No open workspace was chosen; the user picks one.
+    case needsWorkspace(reason: String)
     case settingUp
     case setupFailed(reason: String)
     case started
@@ -298,6 +313,8 @@ public enum TaskSetupState: Codable, Equatable, Sendable {
     }
 
     private enum Kind: String, Codable {
+        case routing
+        case needsWorkspace
         case settingUp
         case setupFailed
         case started
@@ -311,6 +328,10 @@ public enum TaskSetupState: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
+        case .routing:
+            self = .routing
+        case .needsWorkspace:
+            self = .needsWorkspace(reason: try container.decode(String.self, forKey: .reason))
         case .settingUp:
             self = .settingUp
         case .setupFailed:
@@ -323,6 +344,11 @@ public enum TaskSetupState: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .routing:
+            try container.encode(Kind.routing, forKey: .kind)
+        case .needsWorkspace(let reason):
+            try container.encode(Kind.needsWorkspace, forKey: .kind)
+            try container.encode(reason, forKey: .reason)
         case .settingUp:
             try container.encode(Kind.settingUp, forKey: .kind)
         case .setupFailed(let reason):

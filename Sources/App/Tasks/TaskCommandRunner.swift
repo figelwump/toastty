@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-/// One run of an external command for a task: git, or the workspace's
-/// `create_hook`.
+/// One run of an external command for a task: git, the workspace's
+/// `create_hook`, or the `[triage] command`.
 struct TaskCommand: Sendable, Equatable {
     var executablePath: String
     /// Arguments after the executable name.
@@ -10,6 +10,9 @@ struct TaskCommand: Sendable, Equatable {
     var directory: String
     var environment: [String: String]
     var timeout: TimeInterval
+    /// Written to the command's stdin, which then closes. `nil` connects
+    /// stdin to /dev/null.
+    var standardInput: Data? = nil
 }
 
 struct TaskCommandResult: Sendable, Equatable {
@@ -33,9 +36,9 @@ protocol TaskCommandRunning: Sendable {
     func run(_ command: TaskCommand) async -> TaskCommandResult
 }
 
-/// Runs a command in a new process group, with stdin from /dev/null, so a
-/// timeout or a cancel stops the whole tree it started, not only its first
-/// process. A descendant that leaves the group (for example with `setsid`)
+/// Runs a command in a new process group, with stdin from
+/// `standardInput` or /dev/null, so a timeout or a cancel stops the whole
+/// tree it started, not only its first process. A descendant that leaves the group (for example with `setsid`)
 /// is not stopped. Only the last `outputLimit` bytes of each stream are
 /// kept, so a chatty command can never stall on a full pipe, and a failure
 /// at the end of long output stays visible.
@@ -70,12 +73,14 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         }
         var stdoutPipe: [Int32] = [-1, -1]
         var stderrPipe: [Int32] = [-1, -1]
+        var stdinPipe: [Int32] = [-1, -1]
         defer {
-            for descriptor in stdoutPipe + stderrPipe where descriptor >= 0 {
+            for descriptor in stdoutPipe + stderrPipe + stdinPipe where descriptor >= 0 {
                 close(descriptor)
             }
         }
-        guard pipe(&stdoutPipe) == 0, pipe(&stderrPipe) == 0 else {
+        guard pipe(&stdoutPipe) == 0, pipe(&stderrPipe) == 0,
+              command.standardInput == nil || pipe(&stdinPipe) == 0 else {
             return launchFailure("Could not create pipes: \(String(cString: strerror(errno)))")
         }
 
@@ -87,7 +92,11 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
             posix_spawn_file_actions_destroy(&actions)
             posix_spawnattr_destroy(&attributes)
         }
-        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        if command.standardInput != nil {
+            posix_spawn_file_actions_adddup2(&actions, stdinPipe[0], STDIN_FILENO)
+        } else {
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        }
         posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO)
         if #available(macOS 26.0, *) {
@@ -119,10 +128,26 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         groups.insert(processID)
         defer { groups.remove(processID) }
 
-        // Only the child keeps the write ends of the output pipes, so EOF
-        // arrives when the child's tree is done.
+        // Only the child keeps the write ends of the output pipes and the
+        // read end of stdin, so EOF arrives when the child's tree is done.
         close(stdoutPipe[1]); stdoutPipe[1] = -1
         close(stderrPipe[1]); stderrPipe[1] = -1
+        let writerDone = DispatchSemaphore(value: 0)
+        if let input = command.standardInput {
+            close(stdinPipe[0]); stdinPipe[0] = -1
+            let writeDescriptor = stdinPipe[1]
+            stdinPipe[1] = -1
+            // A command that exits without reading stdin must not raise
+            // SIGPIPE in the app.
+            _ = fcntl(writeDescriptor, F_SETNOSIGPIPE, 1)
+            DispatchQueue.global(qos: .utility).async {
+                Self.writeAll(input, to: writeDescriptor)
+                close(writeDescriptor)
+                writerDone.signal()
+            }
+        } else {
+            writerDone.signal()
+        }
 
         var stdout = BoundedBuffer(limit: outputLimit)
         var stderr = BoundedBuffer(limit: outputLimit)
@@ -176,6 +201,7 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         if exitedAt == nil {
             _ = waitpid(processID, &waitStatus, 0)
         }
+        _ = writerDone.wait(timeout: .now() + terminationGracePeriod)
 
         let termination: TaskCommandResult.Termination
         if let stopReason {
@@ -190,6 +216,22 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
 
     private func launchFailure(_ message: String) -> TaskCommandResult {
         TaskCommandResult(termination: .launchFailed(message), stdout: Data(), stderr: Data())
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) {
+        data.withUnsafeBytes { buffer in
+            guard var pointer = buffer.baseAddress else { return }
+            var remaining = buffer.count
+            while remaining > 0 {
+                let written = write(descriptor, pointer, remaining)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                remaining -= written
+                pointer = pointer.advanced(by: written)
+            }
+        }
     }
 
     /// Waits up to 100 ms for output, then reads what is there. A closed

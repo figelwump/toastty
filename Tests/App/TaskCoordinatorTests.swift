@@ -22,6 +22,9 @@ struct TaskCoordinatorTests {
         let workspaceID: UUID
         var config = TasksConfig()
         var configError: (any Error)?
+        /// Answers triage when a test turns it on with `[triage] command`.
+        let triage = FakeTriageRunner()
+        let recentWorkspaces = RecentWorkspacesStore.inMemory()
         private(set) var scopeGrants: [(sessionID: String, workspaceID: UUID)] = []
         private(set) var coordinator: TaskCoordinator!
 
@@ -92,7 +95,9 @@ struct TaskCoordinatorTests {
                 grantScope: { [unowned self] sessionID, workspaceID in
                     scopeGrants.append((sessionID, workspaceID))
                 },
-                terminalReadinessTimeout: readinessTimeout
+                terminalReadinessTimeout: readinessTimeout,
+                triageRunner: triage,
+                recentWorkspaces: recentWorkspaces
             )
         }
 
@@ -226,7 +231,6 @@ struct TaskCoordinatorTests {
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID), mentioning: "[defaults]")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "gemini"), mentioning: "available: claude, codex")
         await expectFailure(TaskCreateRequest(text: "  ", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "needs text or a prompt")
-        await expectFailure(TaskCreateRequest(text: "x", agent: "codex"), mentioning: "--workspace")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: UUID(), agent: "codex"), mentioning: "No open workspace")
         await expectFailure(TaskCreateRequest(text: "x", slug: "Bad Slug", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "slug")
         await expectFailure(TaskCreateRequest(text: "x", title: "two\nlines", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "one line")

@@ -43,6 +43,10 @@ public enum AppAction: Equatable, Sendable {
     case moveWorkspaceTab(workspaceID: UUID, fromIndex: Int, toIndex: Int)
     case moveSidebarSession(workspaceID: UUID, panelID: UUID, targetPanelID: UUID, placeAfter: Bool, visiblePanelIDs: [UUID])
     case createWorkspace(windowID: UUID, title: String?, activate: Bool)
+    /// Opens a top-level workspace again for a closed project: one terminal
+    /// in `rootDirectory`, which it keeps as its root, without selecting it.
+    /// The caller chooses the IDs so it can place a task there next.
+    case reopenWorkspace(windowID: UUID, workspaceID: UUID, panelID: UUID, title: String, rootDirectory: String)
     case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?, activate: Bool = true)
     /// Appends a tab holding one plain terminal, without selecting it. The
     /// caller chooses the IDs so it can address the terminal afterward. The
@@ -186,6 +190,8 @@ public extension AppAction {
             return "moveWorkspaceTab"
         case .createWorkspace:
             return "createWorkspace"
+        case .reopenWorkspace:
+            return "reopenWorkspace"
         case .createWorkspaceTab:
             return "createWorkspaceTab"
         case .createBackgroundTerminalTab:
