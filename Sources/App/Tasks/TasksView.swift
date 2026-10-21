@@ -110,12 +110,11 @@ struct TasksView: View {
         // A container's identifier would replace its children's.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tasks.view")
-        .background {
-            // Esc leaves the Tasks view, back to the selected workspace.
-            Button("Close Tasks") { _ = store.send(.setTasksViewShown(windowID: windowID, shown: false)) }
-                .keyboardShortcut(.cancelAction)
-                .opacity(0)
-                .accessibilityHidden(true)
+        // Esc leaves the Tasks view, back to the selected workspace. Not a
+        // keyboard shortcut: AppKit offers those to the main window too, so
+        // one would take Esc from a panel open over it, such as quick entry.
+        .onExitCommand {
+            _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
         }
     }
 
@@ -457,7 +456,6 @@ private struct TasksViewDetail: View {
             if let workspaceID = item.taskSpaceWorkspaceID {
                 Button("Open Task Space") { openTaskSpace(workspaceID) }
                     .buttonStyle(TasksViewButtonStyle(isPrimary: true))
-                    .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("tasks.view.detail.open")
             }
             if let link = item.pullRequest, let url = URL(string: link.url) {
