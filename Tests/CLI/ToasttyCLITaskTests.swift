@@ -131,7 +131,7 @@ struct ToasttyCLITaskTests {
     }
 
     @Test
-    func taskSetWorkspaceTakesAnOpenOrARecentWorkspace() throws {
+    func taskSetWorkspaceTakesAnOpenOrARecentWorkspaceOrADirectory() throws {
         let taskID = UUID().uuidString
         let workspaceID = UUID().uuidString
         let open = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--workspace", workspaceID], environment: [:])
@@ -146,13 +146,23 @@ struct ToasttyCLITaskTests {
             id: "task.set-workspace",
             args: ["taskID": .string(taskID), "recentWorkspace": .string(workspaceID)]
         ))
+        let root = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--root", "~/repos/website"], environment: [:])
+        #expect(root.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "rootDirectory": .string("~/repos/website")]
+        ))
         let choices = try ToasttyCLI.parse(arguments: ["task", "workspace-choices"], environment: [:])
         #expect(choices.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
+        let forTask = try ToasttyCLI.parse(arguments: ["task", "workspace-choices", taskID], environment: [:])
+        #expect(forTask.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: ["taskID": .string(taskID)]))
 
         for arguments in [
             ["task", "set-workspace", taskID],
             ["task", "set-workspace", taskID, "--workspace", workspaceID, "--recent", workspaceID],
+            ["task", "set-workspace", taskID, "--workspace", workspaceID, "--root", "/tmp"],
             ["task", "set-workspace", taskID, "--workspace", "toastty"],
+            ["task", "workspace-choices", "toastty"],
         ] {
             #expect(throws: ToasttyCLIError.self) {
                 _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])

@@ -487,10 +487,9 @@ private struct TasksViewDetail: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let record = item.record, let coordinator = board.coordinator, item.stage.group == .inbox {
-                    // Setup has not finished: the Inbox's own controls, with
+                    // Setup has not finished: the Inbox card's controls, with
                     // the workspace picker when triage could not place it.
-                    TaskInboxPopover(taskID: record.id, records: coordinator.records, coordinator: coordinator) {}
-                        .padding(-12)
+                    TaskInboxCard(taskID: record.id, records: coordinator.records, coordinator: coordinator, layout: .pane) {}
                 } else {
                     if let text = item.record?.text, text.isEmpty == false, text != item.title {
                         Text(text)

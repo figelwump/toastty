@@ -2160,7 +2160,10 @@ final class SidebarViewTests: XCTestCase {
             )
         }
         let started = record("Already running", setup: .started)
+        var suggested = record("Why artifacts files are missing from file search", setup: .needsWorkspace(reason: "Toastty's workspace is not open."))
+        suggested.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: "/tmp/toastty")
         let (harness, ids) = try makeSubspacesHarness(taskRecords: [
+            suggested,
             record("Flaky scratchpad unread test", setup: .settingUp),
             record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
             record("Billing page shows the old plan", setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")),
@@ -2176,7 +2179,8 @@ final class SidebarViewTests: XCTestCase {
         let textValues = renderedTextValues(in: harness.hostingView)
 
         // Started tasks leave the Inbox; the others show their state.
-        XCTAssertTrue(textValues.contains("Inbox, 5 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Inbox, 6 tasks"), "Inbox header missing: \(textValues)")
+        XCTAssertTrue(textValues.contains("Why artifacts files are missing from file search, Inbox task, pick a workspace, suggests toastty. Toastty's workspace is not open."), "\(textValues)")
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, Inbox task, pick a workspace, None of the open workspaces has a billing page."), "\(textValues)")
         XCTAssertTrue(textValues.contains("Composer keeps a blank line, Inbox task, routing…, choosing a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Inbox task, setting up, → closed workspace · codex"), "\(textValues)")
@@ -2271,67 +2275,178 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(hostingView, name: "tasks-view")
     }
 
-    func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
+    func testTasksViewDetailShowsAnInboxTaskOnceWithThePicker() throws {
+        var waiting = TaskRecord(
+            createdAt: Date().addingTimeInterval(-120),
+            text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
+            title: "Why artifacts/ files are missing from @ file search",
+            slug: "artifacts-missing-from-file-search",
+            source: .quickEntry,
+            setup: .needsWorkspace(reason: "It's about Toastty's command palette file search. Toastty's workspace is not open.")
+        )
+        waiting.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: NSTemporaryDirectory())
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [waiting], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[harness.windowID] = .task(waiting.id)
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {},
+            newTaskShortcutLabel: "⌥⇧T"
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 560))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Why artifacts/ files are missing from @ file search") }, "\(textValues)")
+        try writeSidebarEvidence(hostingView, name: "tasks-view-inbox-picker")
+        try attachSidebarRender(hostingView, name: "tasks-view-inbox-picker")
+    }
+
+    func testInboxCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {
         let store = AppStore(persistTerminalFontPreference: false)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-picker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let toastty = root.appendingPathComponent("toastty", isDirectory: true)
+        try FileManager.default.createDirectory(at: toastty, withIntermediateDirectories: true)
         let recents = RecentWorkspacesStore.inMemory()
         recents.record(RecentWorkspace(
             id: UUID(),
             title: "control-plane",
-            rootDirectory: "/tmp/toastty-picker-test/control-plane",
+            rootDirectory: root.appendingPathComponent("control-plane").path,
             closedAt: Date().addingTimeInterval(-3 * 86_400)
         ))
+        // A real image, so the chip shows its thumbnail.
+        let screenshot = root.appendingPathComponent("CleanShot 2026-10-21 at 9.57.01 AM@2x.png")
+        let image = NSImage(size: NSSize(width: 120, height: 80), flipped: false) { rect in
+            NSGradient(starting: NSColor(calibratedRed: 0.23, green: 0.27, blue: 0.32, alpha: 1),
+                       ending: NSColor(calibratedRed: 0.12, green: 0.15, blue: 0.18, alpha: 1))?.draw(in: rect, angle: -45)
+            NSColor(calibratedRed: 0.91, green: 0.58, blue: 0.05, alpha: 1).setFill()
+            NSRect(x: 12, y: 20, width: 70, height: 8).fill()
+            return true
+        }
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])).write(to: screenshot)
+
         let recordStore = TaskRecordStore.inMemory()
-        let record = TaskRecord(
-            createdAt: Date(),
-            text: "billing page shows the old plan after upgrade",
-            attachments: [TaskAttachment(path: "/tmp/IMG_2231.png", displayName: "IMG_2231.png")],
-            title: "Billing page shows the old plan",
+        var suggested = TaskRecord(
+            createdAt: Date().addingTimeInterval(-120),
+            text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
+            attachments: [TaskAttachment(path: screenshot.path, displayName: screenshot.lastPathComponent)],
+            title: "Why artifacts/ files are missing from @ file search",
+            slug: "artifacts-missing-from-file-search",
+            source: .quickEntry,
+            setup: .needsWorkspace(reason: "It's about Toastty's command palette file search. Toastty's workspace is not open.")
+        )
+        suggested.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: toastty.path)
+        let unplaced = TaskRecord(
+            createdAt: Date().addingTimeInterval(-240),
+            text: "After upgrading, the billing page still shows the Starter plan until a reload.",
+            title: "Billing page shows the old plan after upgrade",
             slug: "billing-old-plan",
             source: .cli,
-            setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")
+            setup: .needsWorkspace(reason: "None of the open workspaces has the billing page.")
         )
-        try recordStore.insert(record)
+        let failed = TaskRecord(
+            createdAt: Date().addingTimeInterval(-600),
+            text: "Fix the unread dot",
+            title: "Fix the unread dot",
+            slug: "unread-dot",
+            source: .cli,
+            resolved: TaskFields(agent: "codex"),
+            setup: .setupFailed(reason: "The agent did not start: the codex profile is missing from agents.toml.")
+        )
+        for record in [suggested, unplaced, failed] {
+            try recordStore.insert(record)
+        }
         let coordinator = TaskCoordinator(
             records: recordStore,
             store: store,
             launcher: nil,
             configLoader: { .empty },
-            attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+            attachmentsDirectoryURL: root,
             hasActiveSession: { _ in false },
             grantScope: { _, _ in },
             recentWorkspaces: recents
         )
-        let size = NSSize(width: 320, height: 300)
-        let hostingView = NSHostingView(
-            rootView: ZStack(alignment: .topLeading) {
-                Color(red: 0.16, green: 0.16, blue: 0.17)
-                TaskInboxPopover(taskID: record.id, records: recordStore, coordinator: coordinator, dismiss: {})
-            }
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
-        )
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = hostingView
-        window.orderFront(nil)
-        defer { window.orderOut(nil) }
-        pumpMainRunLoop(duration: 0.2)
-        hostingView.layoutSubtreeIfNeeded()
 
-        // SwiftUI labels are not in the text scan; the menu and the task
-        // text are. The attached PNG shows the reason and the buttons.
-        let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(textValues.contains("Choose…"), "\(textValues)")
+        // The picker chooses the suggestion: a project that is not open.
+        let choices = coordinator.workspaceChoices(taskID: suggested.id)
+        XCTAssertEqual(choices.suggested?.choice, .directory(toastty.path))
+        XCTAssertEqual(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices), "Open toastty & Start")
+        XCTAssertNil(coordinator.workspaceChoices(taskID: unplaced.id).suggested)
         XCTAssertEqual(coordinator.workspaceChoices().recent.map(\.title), ["control-plane"])
 
-        try writeSidebarEvidence(hostingView, name: "inbox-workspace-picker")
-        let bitmap = try renderedBitmap(for: hostingView)
-        let attachment = XCTAttachment(
-            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
-            uniformTypeIdentifier: "public.png"
+        // The sidebar row puts the tag first and names the suggestion.
+        let row = SidebarInboxRowPresentation.make(suggested) { _ in nil }
+        XCTAssertEqual(row.tag, "⚠ pick a workspace")
+        XCTAssertEqual(row.hint, "suggests toastty")
+        XCTAssertNil(SidebarInboxRowPresentation.make(unplaced) { _ in nil }.hint)
+        XCTAssertNil(SidebarInboxRowPresentation.make(failed) { _ in nil }.hint)
+
+        func render(_ record: TaskRecord, name: String) throws {
+            let card = TaskInboxCard(taskID: record.id, records: recordStore, coordinator: coordinator, dismiss: {})
+            let hostingView = NSHostingView(
+                rootView: ZStack(alignment: .topLeading) {
+                    ToastyTheme.surfaceBackground
+                    card
+                        .background(TaskInboxCard.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(hex: 0x343434), lineWidth: 1))
+                        .padding(24)
+                }
+                .environment(\.colorScheme, .dark)
+                .fixedSize()
+            )
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: hostingView.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = hostingView
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            pumpMainRunLoop(duration: 0.3)
+            hostingView.setFrameSize(hostingView.fittingSize)
+            hostingView.layoutSubtreeIfNeeded()
+            try writeSidebarEvidence(hostingView, name: name)
+            try attachSidebarRender(hostingView, name: name)
+        }
+        try render(suggested, name: "inbox-card-suggested")
+        try render(unplaced, name: "inbox-card-no-suggestion")
+        try render(failed, name: "inbox-card-setup-failed")
+
+        // The real popover, with its arrow, from an anchor in a window.
+        let anchorView = NSHostingView(
+            rootView: Color(hex: 0x111111)
+                .frame(width: 260, height: 520)
+                .overlay(alignment: .topLeading) {
+                    Color.clear
+                        .frame(width: 240, height: 34)
+                        .popover(isPresented: .constant(true), arrowEdge: .trailing) {
+                            TaskInboxCard(taskID: suggested.id, records: recordStore, coordinator: coordinator, dismiss: {})
+                                .inboxPopoverChrome()
+                        }
+                        .padding(.top, 60)
+                }
         )
-        attachment.name = "inbox-workspace-picker"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        let anchorWindow = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 260, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
+        anchorWindow.contentView = anchorView
+        anchorWindow.appearance = NSAppearance(named: .darkAqua)
+        anchorWindow.orderFrontRegardless()
+        defer { anchorWindow.orderOut(nil) }
+        pumpMainRunLoop(duration: 1.0)
+        let popoverWindow = NSApp.windows.first { NSStringFromClass(type(of: $0)).contains("Popover") && $0.isVisible }
+        if let popoverWindow, let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"], directory.isEmpty == false,
+           let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(popoverWindow.windowNumber), [.boundsIgnoreFraming, .bestResolution]) {
+            let data = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("inbox-popover-live.png"))
+        }
     }
 
     func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {

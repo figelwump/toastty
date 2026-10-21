@@ -377,12 +377,14 @@ Notable action-specific behavior:
     created or whose workspace or task space is in its scope. `task.retry`
     runs triage again for a task without a workspace or agent.
 - `task.set-workspace`
-  - requires `args.taskID` and one of `workspace` (an open workspace ID) or
+  - requires `args.taskID` and one of `workspace` (an open workspace ID),
     `recentWorkspace` (an ID from `task.workspace-choices`, which Toastty opens
-    again). The task must not have started or have a task space. Triage runs
-    again with the workspace fixed, then setup starts.
+    again) or `rootDirectory` (a project directory, absolute or under `~`,
+    which Toastty opens as a new workspace unless the project is open). The
+    task must not have started or have a task space. Triage runs again with
+    the workspace fixed, then setup starts.
   - a workspace-scoped session may choose only workspaces in its scope, and
-    cannot reopen a closed workspace.
+    cannot reopen a closed workspace or open a directory.
 - `task.send`
   - requires `args.taskID` and `args.text`. Toastty resolves the task's current
     agent session at delivery: the session in the worktree after a move, else
@@ -722,9 +724,13 @@ with `firedAt`, `reason`, and `delivered`). Fired watches stay listed for up to
 a day; Toastty removes older ones when it next checks watches or relaunches. A
 watch whose message may have been typed without being submitted counts as
 delivered and is not sent again. It takes optional `watchID`, `taskID`, and `notifyTaskID` filters. `task.workspace-choices` returns `open`
-(`workspaceID`, `title`) and `recent` (`recentWorkspace`, `title`,
-`rootDirectory`, `closedAt`) for `task.set-workspace`; a workspace-scoped
-session sees only open workspaces in its scope.
+(`workspaceID`, `title`, `rootDirectory` when known) and `recent`
+(`recentWorkspace`, `title`, `rootDirectory`, `closedAt`) for
+`task.set-workspace`. With `taskID`, it also returns `suggested` when triage
+suggested a project that is not open: its `title` and `rootDirectory`, and the
+`task.set-workspace` argument that places the task there (`workspace`,
+`recentWorkspace` or `rootDirectory`). A workspace-scoped session sees only
+open workspaces in its scope.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

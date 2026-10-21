@@ -934,7 +934,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
-      toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id>)
+      toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
       toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
@@ -943,7 +943,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
-      toastty [--json] [--socket-path <path>] task workspace-choices
+      toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>)
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
@@ -1917,11 +1917,23 @@ public enum ToasttyCLI {
             )
 
         case "set-workspace":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace", "--recent"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace", "--recent", "--root"])
             guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task set-workspace requires one task ID\n\n\(usage)")
             }
             var args: [String: AutomationJSONValue] = ["taskID": .string(taskID)]
+            if let root = parsed.singleValue("--root") {
+                guard parsed.singleValue("--workspace") == nil, parsed.singleValue("--recent") == nil else {
+                    throw ToasttyCLIError.usage("task set-workspace takes one of --workspace, --recent or --root\n\n\(usage)")
+                }
+                // Relative to where the command runs, as a shell user expects.
+                let path = root.hasPrefix("/") || root.hasPrefix("~")
+                    ? root
+                    : URL(filePath: root, relativeTo: URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory))
+                        .standardizedFileURL.path(percentEncoded: false)
+                args["rootDirectory"] = .string(path)
+                return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-workspace", args: args))
+            }
             switch (parsed.singleValue("--workspace"), parsed.singleValue("--recent")) {
             case (let workspace?, nil):
                 guard UUID(uuidString: workspace) != nil else {
@@ -1934,7 +1946,7 @@ public enum ToasttyCLI {
                 }
                 args["recentWorkspace"] = .string(recent)
             default:
-                throw ToasttyCLIError.usage("task set-workspace takes --workspace or --recent\n\n\(usage)")
+                throw ToasttyCLIError.usage("task set-workspace takes one of --workspace, --recent or --root\n\n\(usage)")
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-workspace", args: args))
 
@@ -1974,10 +1986,17 @@ public enum ToasttyCLI {
 
         case "workspace-choices":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
-            guard parsed.positionals.isEmpty else {
-                throw ToasttyCLIError.usage("task workspace-choices does not accept arguments\n\n\(usage)")
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task workspace-choices takes at most one task ID\n\n\(usage)")
             }
-            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
+            var args: [String: AutomationJSONValue] = [:]
+            if let taskID = parsed.positionals.first {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("task workspace-choices takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.workspace-choices", args: args))
 
         case "merge", "cancel-merge", "ready-for-review":
             let parsed = try parseCommandArguments(remaining, valueOptions: verb == "merge" ? ["--head"] : [])

@@ -226,10 +226,12 @@ struct TaskAppControlTests {
         #expect(choices["open"] == .array([.object([
             "workspaceID": .string(fixture.workspaceID.uuidString),
             "title": .string("toastty"),
+            "rootDirectory": .string(fixture.projectRoot),
         ])]))
         #expect(choices["recent"] == .array([]))
+        #expect(choices["suggested"] == nil)
 
-        await expectInvalidPayload("pass either workspace or recentWorkspace") {
+        await expectInvalidPayload("pass one of workspace, recentWorkspace or rootDirectory") {
             _ = try executor.runAction(id: "task.set-workspace", args: ["taskID": .string(id.uuidString)], context: context())
         }
         let placed = try executor.runAction(
@@ -259,6 +261,57 @@ struct TaskAppControlTests {
                 context: context(scopedSessionID)
             )
         }
+        await expectInvalidPayload("a workspace-scoped session cannot open a workspace") {
+            _ = try executor.runAction(
+                id: "task.set-workspace",
+                args: ["taskID": .string(try taskID(second.result).uuidString), "rootDirectory": .string(fixture.root.path)],
+                context: context(scopedSessionID)
+            )
+        }
+    }
+
+    @Test func triagesSuggestionIsInTheChoicesAndRootDirectoryOpensIt() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config.triage = TasksConfig.Triage(command: "fake-triage")
+        let website = fixture.root.appendingPathComponent("website", isDirectory: true)
+        try FileManager.default.createDirectory(at: website.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        fixture.config.workspaces = [TasksConfig.Workspace(path: website.path)]
+        let websiteRoot = TasksConfigFile.normalizedPath(website.path)
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        fixture.triage.answer(.success(TaskTriage.Answer(workspace: website.path, reason: "The website is not open.")))
+        let outcome = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("pricing typo"), "agent": .string("codex"), "model": .string("gpt-6.1-sol"), "effort": .string("high"), "prompt": .string("Fix it.")],
+            context: context()
+        )
+        let id = try taskID(outcome.result)
+        await fixture.waitUntil("triage ends") { fixture.record(id)?.setup != .routing }
+
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(id.uuidString)])
+        #expect(got["suggestedWorkspace"] == .object(["title": .string("website"), "rootDirectory": .string(websiteRoot)]))
+        let choices = try executor.runQuery(id: "task.workspace-choices", args: ["taskID": .string(id.uuidString)])
+        // For a directory, rootDirectory is also the task.set-workspace argument.
+        #expect(choices["suggested"] == .object([
+            "title": .string("website"),
+            "rootDirectory": .string(websiteRoot),
+        ]))
+
+        await expectInvalidPayload("rootDirectory must be an absolute path or start with ~") {
+            _ = try executor.runAction(
+                id: "task.set-workspace",
+                args: ["taskID": .string(id.uuidString), "rootDirectory": .string("website")],
+                context: context()
+            )
+        }
+        _ = try executor.runAction(
+            id: "task.set-workspace",
+            args: ["taskID": .string(id.uuidString), "rootDirectory": .string(websiteRoot)],
+            context: context()
+        )
+        await fixture.waitUntil("the task starts") { fixture.record(id)?.setup == .started }
+        let openedID = try #require(fixture.record(id)?.workspaceID)
+        #expect(fixture.store.state.workspacesByID[openedID]?.rootDirectory == websiteRoot)
+        #expect(fixture.store.state.workspacesByID[openedID]?.title == "website")
     }
 
     /// Text typed through `LiveTaskSessions`, in order.

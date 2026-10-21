@@ -216,6 +216,58 @@ struct TaskTriageTests {
     }
 
     @Test
+    func aProjectThatIsNotOpenIsListedAndCanBeSuggested() throws {
+        let controlPlane = TaskTriage.ClosedWorkspace(
+            title: "control-plane",
+            rootDirectory: "/Users/tester/repos/control-plane",
+            guidelines: "Go service."
+        )
+        func input(fixedWorkspace: TaskTriage.Workspace?) throws -> [String: Any] {
+            let prompt = TaskTriage.prompt(for: TaskTriage.Input(
+                text: "x",
+                fileNames: [],
+                fixed: TaskFields(),
+                fixedWorkspace: fixedWorkspace,
+                workspaces: [toastty],
+                closedWorkspaces: [controlPlane],
+                agents: [codex],
+                guidelines: nil
+            ))
+            let json = try #require(prompt.components(separatedBy: "INPUT:\n").last)
+            return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        }
+        #expect(try input(fixedWorkspace: nil)["closed_workspaces"] as? [[String: String]] == [
+            ["title": "control-plane", "root": "/Users/tester/repos/control-plane", "guidelines": "Go service."],
+        ])
+        // With the workspace chosen, there is nothing to suggest.
+        #expect(try input(fixedWorkspace: toastty)["closed_workspaces"] == nil)
+
+        func resolve(_ answer: TaskTriage.Answer) -> TaskTriage.Resolution {
+            TaskTriage.resolve(
+                pinned: TaskFields(),
+                workspaceID: nil,
+                answer: answer,
+                workspaces: [toastty, website],
+                closedWorkspaces: [controlPlane],
+                agents: [codex],
+                homeDirectoryPath: home
+            )
+        }
+        let suggested = resolve(TaskTriage.Answer(workspace: "~/repos/control-plane", agent: "codex", reason: "A control-plane bug; it is not open."))
+        #expect(suggested.workspaceID == nil)
+        #expect(suggested.suggestedWorkspace == controlPlane)
+        #expect(suggested.workspaceReason == "A control-plane bug; it is not open.")
+        #expect(suggested.agent == "codex")
+        #expect(suggested.rejected.isEmpty)
+
+        // An open workspace on the root wins; an unknown root is still refused.
+        #expect(resolve(TaskTriage.Answer(workspace: website.rootDirectory)).workspaceID == website.id)
+        let unknown = resolve(TaskTriage.Answer(workspace: "/Users/tester/repos/billing"))
+        #expect(unknown.suggestedWorkspace == nil)
+        #expect(unknown.rejected == ["workspace /Users/tester/repos/billing, which is not an open workspace"])
+    }
+
+    @Test
     func unusableChoicesAreDroppedAndNamed() {
         let resolution = resolve(
             workspaceID: toastty.id,

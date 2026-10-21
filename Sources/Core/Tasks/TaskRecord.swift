@@ -42,6 +42,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// is set, so later moves of the work keep the same config.
     public var projectRoot: String?
     public var setup: TaskSetupState
+    /// While the task waits for a workspace: the project that is not open
+    /// which triage suggested. The picker chooses it first.
+    public var suggestedWorkspace: TaskWorkspaceSuggestion?
     /// The task whose agent created this one, when an agent split its work.
     /// Shown as "started from"; it does not nest task spaces.
     public var parentTaskID: UUID?
@@ -319,6 +322,17 @@ public enum TaskStartWorkState: Codable, Equatable, Sendable {
 
 /// The choices that place and start a task. Each one is optional: the
 /// caller may set some, and setup fills the rest.
+/// A project that is not open, by its title and root directory.
+public struct TaskWorkspaceSuggestion: Codable, Equatable, Sendable {
+    public var title: String
+    public var rootDirectory: String
+
+    public init(title: String, rootDirectory: String) {
+        self.title = title
+        self.rootDirectory = rootDirectory
+    }
+}
+
 public struct TaskFields: Codable, Equatable, Sendable {
     public var workspaceID: UUID?
     /// An agent profile ID from agents.toml.

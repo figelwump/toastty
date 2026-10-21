@@ -548,12 +548,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Place a task that has not started in a workspace: an open one (workspace) or a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again. Triage then runs for anything else the task still needs, and setup starts.",
+                summary: "Place a task that has not started in a workspace: an open one (workspace), a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again, or a project directory (rootDirectory), such as the one triage suggested, which Toastty opens as a new workspace unless the project is open. Triage then runs for anything else the task still needs, and setup starts.",
                 selectors: [],
                 parameters: [
                     .taskID(required: true),
                     .taskWorkspace(required: false),
                     .taskRecentWorkspace(required: false),
+                    .taskRootDirectory(required: false),
                 ]
             )
         case .taskSend:
@@ -798,8 +799,11 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. A workspace-scoped session sees only open workspaces in its scope.",
-                selectors: []
+                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task, under suggested, with the choice that places it there. A workspace-scoped session sees only open workspaces in its scope.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                ]
             )
         case .taskWatches:
             return .init(
@@ -1010,6 +1014,10 @@ private extension AppControlParameterDescriptor {
 
     static func taskRecentWorkspace(required: Bool) -> Self {
         .init(name: "recentWorkspace", summary: "ID of a recently closed workspace from task.workspace-choices. Toastty opens it again.", valueType: .uuid, required: required)
+    }
+
+    static func taskRootDirectory(required: Bool) -> Self {
+        .init(name: "rootDirectory", summary: "A project directory that is not open, such as triage's suggestion. Toastty opens a workspace there.", valueType: .string, required: required)
     }
 
     static func taskPrompt(required: Bool) -> Self {

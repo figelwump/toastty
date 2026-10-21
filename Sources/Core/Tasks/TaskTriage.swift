@@ -37,6 +37,21 @@ public enum TaskTriage {
         }
     }
 
+    /// A project that is not open: a recently closed workspace, or a
+    /// `[workspace."<root>"]` section in tasks.toml. Triage may suggest one;
+    /// Toastty never opens it without the user.
+    public struct ClosedWorkspace: Equatable, Sendable {
+        public var title: String
+        public var rootDirectory: String
+        public var guidelines: String?
+
+        public init(title: String, rootDirectory: String, guidelines: String? = nil) {
+            self.title = title
+            self.rootDirectory = rootDirectory
+            self.guidelines = guidelines
+        }
+    }
+
     /// An agent profile that can take a task as its first message.
     public struct Agent: Equatable, Sendable {
         public var id: String
@@ -81,6 +96,8 @@ public enum TaskTriage {
         public var fixed: TaskFields
         public var fixedWorkspace: Workspace?
         public var workspaces: [Workspace]
+        /// Projects that are not open, which triage may suggest.
+        public var closedWorkspaces: [ClosedWorkspace]
         public var agents: [Agent]
         /// `[triage] guidelines`, or the contents of `guidelines_file`.
         public var guidelines: String?
@@ -91,6 +108,7 @@ public enum TaskTriage {
             fixed: TaskFields,
             fixedWorkspace: Workspace?,
             workspaces: [Workspace],
+            closedWorkspaces: [ClosedWorkspace] = [],
             agents: [Agent],
             guidelines: String?
         ) {
@@ -99,6 +117,7 @@ public enum TaskTriage {
             self.fixed = fixed
             self.fixedWorkspace = fixedWorkspace
             self.workspaces = workspaces
+            self.closedWorkspaces = closedWorkspaces
             self.agents = agents
             self.guidelines = guidelines
         }
@@ -107,12 +126,14 @@ public enum TaskTriage {
     public static let instructions = """
     You triage one task for Toastty, a Mac terminal app that runs coding agents. INPUT below is JSON. \
     Choose the values listed in "choose" and answer with one JSON object and nothing else, in this shape:
-    {"workspace": "<id from workspaces, or null>", "agent": "<id from agents>", "model": "<model, or null>", \
+    {"workspace": "<id from workspaces, a root from closed_workspaces, or null>", "agent": "<id from agents>", "model": "<model, or null>", \
     "effort": "<effort, or null>", "first_prompt": "<text, or null>", "title": "<title>", "slug": "<slug>", \
     "reason": "<one sentence>"}
     Rules:
     - Choose a workspace only when the task clearly belongs to it. When none fits, set workspace to null \
     and say why in reason.
+    - closed_workspaces are projects that are not open. When no open workspace fits and the task clearly \
+    belongs to one of them, set workspace to its root. Toastty suggests it to the user and does not open it.
     - Choose the agent from agents. Use null for model or effort to keep the agent's default; give them only \
     for an agent that accepts them.
     - first_prompt is sent to the agent before the task text, which Toastty always adds unchanged after it. \
@@ -156,6 +177,15 @@ public enum TaskTriage {
             if let guidelines = workspace.guidelines { object["guidelines"] = guidelines }
             return object
         }
+        // Only while the workspace is still to choose.
+        let closedWorkspaces = input.fixedWorkspace != nil ? [] : input.closedWorkspaces.map { workspace -> [String: Any] in
+            var object: [String: Any] = [
+                "title": workspace.title,
+                "root": workspace.rootDirectory,
+            ]
+            if let guidelines = workspace.guidelines { object["guidelines"] = guidelines }
+            return object
+        }
         let agents = input.agents.map { agent -> [String: Any] in
             [
                 "id": agent.id,
@@ -171,6 +201,7 @@ public enum TaskTriage {
             "workspaces": workspaces,
             "agents": agents,
         ]
+        if closedWorkspaces.isEmpty == false { object["closed_workspaces"] = closedWorkspaces }
         if let guidelines = input.guidelines { object["guidelines"] = guidelines }
         guard let data = try? JSONSerialization.data(
             withJSONObject: object,
@@ -311,6 +342,9 @@ public enum TaskTriage {
         public var slug: String?
         /// Why there is no workspace, when there is none.
         public var workspaceReason: String?
+        /// A project that is not open, which triage chose when no open
+        /// workspace fit. The task waits for the user, who may open it.
+        public var suggestedWorkspace: ClosedWorkspace?
         /// Choices from triage that Toastty could not use.
         public var rejected: [String]
 
@@ -323,6 +357,7 @@ public enum TaskTriage {
             title: String? = nil,
             slug: String? = nil,
             workspaceReason: String? = nil,
+            suggestedWorkspace: ClosedWorkspace? = nil,
             rejected: [String] = []
         ) {
             self.workspaceID = workspaceID
@@ -333,6 +368,7 @@ public enum TaskTriage {
             self.title = title
             self.slug = slug
             self.workspaceReason = workspaceReason
+            self.suggestedWorkspace = suggestedWorkspace
             self.rejected = rejected
         }
     }
@@ -341,12 +377,15 @@ public enum TaskTriage {
     ///   - workspaceID: the workspace already chosen by the caller, if any.
     ///   - answer: `nil` when triage did not run or failed.
     ///   - workspaces: the open workspaces triage could choose from.
+    ///   - closedWorkspaces: the projects that are not open, which triage
+    ///     could suggest.
     ///   - agents: the agents triage could choose from.
     public static func resolve(
         pinned: TaskFields,
         workspaceID: UUID?,
         answer: Answer?,
         workspaces: [Workspace],
+        closedWorkspaces: [ClosedWorkspace] = [],
         agents: [Agent],
         homeDirectoryPath: String = NSHomeDirectory()
     ) -> Resolution {
@@ -365,6 +404,8 @@ public enum TaskTriage {
             if let chosen = answer.workspace {
                 if let match = workspace(matching: chosen, in: workspaces, homeDirectoryPath: homeDirectoryPath) {
                     resolution.workspaceID = match.id
+                } else if let suggestion = closedWorkspace(matching: chosen, in: closedWorkspaces, homeDirectoryPath: homeDirectoryPath) {
+                    resolution.suggestedWorkspace = suggestion
                 } else {
                     resolution.rejected.append("workspace \(chosen), which is not an open workspace")
                 }
@@ -424,5 +465,14 @@ public enum TaskTriage {
             TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) == target
         }
         return matches.count == 1 ? matches[0] : nil
+    }
+
+    /// The closed project an answer names by its root directory.
+    static func closedWorkspace(matching value: String, in workspaces: [ClosedWorkspace], homeDirectoryPath: String) -> ClosedWorkspace? {
+        guard value.hasPrefix("/") || value.hasPrefix("~") else { return nil }
+        let target = TasksConfigFile.normalizedPath(value, homeDirectoryPath: homeDirectoryPath)
+        return workspaces.first {
+            TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) == target
+        }
     }
 }
