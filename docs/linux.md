@@ -119,7 +119,11 @@ to the macOS layout under `$TMPDIR` (or `/tmp`). Callers that pass an explicit
 environment without `XDG_RUNTIME_DIR` (most tests) therefore keep the macOS
 `TMPDIR` behavior. A relative `XDG_STATE_HOME` is ignored per the XDG spec.
 Note `UserDefaults.standard` on Linux uses the executable name as its domain
-(`$XDG_CONFIG_HOME/<executable>.plist`).
+(`$XDG_CONFIG_HOME/<executable>.plist`, e.g. `toastty-linux.plist`).
+swift-corelibs-foundation writes that plist only on `synchronize()` (no
+background flush, nothing at exit), so `ToasttyAppDefaults` on Linux writes
+every change through; anything that bypasses `ToasttyAppDefaults.current`
+must call `synchronize()` itself.
 
 Nothing in the shared modules uses Application Support or Caches, so no XDG
 data/cache mapping is needed there yet.
@@ -884,8 +888,12 @@ Scripted runs (`TOASTTY_LINUX_SMOKE_SCRIPT`) can drive pairing without the
 real tailnet: `TOASTTY_LINUX_FAKE_TAILNET_ORIGIN` replaces the Tailscale
 Serve step with that origin (`LinuxAppLogic.Options.simulateTailnet`) and
 `TOASTTY_LINUX_FAKE_TAILNET_PORT` picks the gateway port. Script commands
-`remote-access enable|pair`; summary keys `remoteAccess`, `remotePairing`,
-`remoteQRCode`. `scripts/linux/e2e-app-logic.sh` runs this path.
+`remote-access enable|pair`, and through the open window's widgets
+`remote-access switch on|off` and `remote-access origin <origin>`; summary
+keys `remoteAccess`, `remotePairing`, `remoteQRCode`, `remoteEnabled`,
+`remoteOrigin`. `scripts/linux/e2e-app-logic.sh` runs this path;
+`RemoteAccessPersistenceTests` (panels tests) checks that the enable switch
+and tailnet origin survive a window-close / Quit restart.
 
 ### gtk-shell files edited by panels-remote
 
@@ -927,6 +935,7 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/App/Persistence/WorkspaceLayoutPersistence.swift` | no `#selector` on Linux: the display-change observer uses a block observer (no target queue, see `SystemNotificationSender.swift`) |
 | `Sources/App/Notifications/SystemNotificationSender.swift` | the notification-guidance `didBecomeActive` observer has no target queue on Linux: corelibs `NotificationCenter` enqueues a queue-targeted observer and waits for it, which deadlocks a main-actor poster that is not `OperationQueue.current` (Swift Testing's main actor under `dispatchMain`); the handler already hops to the main actor |
 | `Sources/App/RemoteAccess/TailscaleTailnetOriginDetector.swift` | Linux `tailscale` CLI locations |
+| `Sources/App/Preferences/ToasttyAppDefaults.swift` | the app defaults are a `LinuxWriteThroughUserDefaults` that calls `synchronize()` after every `set`/`removeObject`: corelibs only writes the plist on `synchronize()`, so every preference was lost on restart |
 | `Sources/App/Routing/LocalFileLinkResolver.swift` | `isPackageDirectory` is false on Linux (corelibs reports any directory with an extension as a package) |
 | Mechanical splits (no behavior change; new files need `tuist generate` on macOS) | `TerminalAutomationInputDelivery.swift` (from `TerminalSurfaceController.swift`), `WebPanels/BrowserPanelModels.swift`, `LocalDocumentPanelModels.swift`, `ScratchpadPanelModels.swift` (from the three WebKit runtimes), `HoverTipModels.swift` (from `HoverTipPresenter.swift`; the SwiftUI `color` mapping stays there as an extension), `Agents/ToasttySkillsManagementModels.swift` (from `ToasttySkillsManagementSheet.swift`), `DiagnosticsSkillHandoffGenerator.swift` (from `DiagnosticsPresenter.swift`), `RemoteAccess/RemoteAccessConnectionStatusPresentation.swift` (from `RemoteAccessSettingsView.swift`), `WebPanels/BrowserAnnotationPayloadBuilder.swift` (`BrowserAnnotationRenderedSection`, `BrowserAnnotationPayloadBuilder`, `BrowserAnnotationScreenshotWriter` from `BrowserAnnotatedScreenshotRenderer.swift`), `WebPanels/BrowserAnnotationSendFlow.swift` (`BrowserAnnotationSendAvailability`, `BrowserAnnotationSendGate`, `BrowserAnnotationCopy`, `BrowserAnnotationSendFlow` from `BrowserAnnotationModeToolbar.swift`), `WebPanels/ScratchpadAgentBindCandidates.swift` (`ScratchpadAgentBindCandidate` + `ScratchpadAgentBindCandidateBuilder` from `WorkspaceView.swift`; adds `import RemoteProtocol` for `AgentKind`), `Tests/App/BrowserAnnotationModelTests.swift` (send gate, draft state, display geometry, coordinate mapper, annotation session, payload builder test classes from `BrowserAnnotationTests.swift`; `BrowserAnnotationTestImage` stays there on macOS, Linux defines its own) |
 | `Tests/App/CodexManagedLaunchIntegrationResolverTests.swift`, `CodexPluginCLIClientTests.swift`, `AgentShimExecutableTests.swift` | (unguarded, platform-neutral) merged-/usr PATH expectations |

@@ -122,6 +122,11 @@ const char *toastty_value_get_string(const GValue *value) {
     return g_value_get_string(value);
 }
 
+void toastty_signal_emit_void(gpointer instance, const char *signal_name) {
+    g_return_if_fail(G_IS_OBJECT(instance));
+    g_signal_emit_by_name(instance, signal_name);
+}
+
 void toastty_window_force_layout(GtkWindow *window, int width, int height) {
     g_return_if_fail(GTK_IS_WINDOW(window));
     GtkWidget *child = gtk_window_get_child(window);

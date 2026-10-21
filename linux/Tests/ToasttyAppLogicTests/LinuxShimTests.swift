@@ -200,6 +200,44 @@ struct LinuxShimTests {
         _ = LinuxMainLoopIntegration.serviceRunLoop()
     }
 
+    // MARK: UserDefaults
+
+    /// corelibs `UserDefaults` only reaches disk on `synchronize()`; the app's
+    /// defaults write every change through, so preferences survive a restart.
+    /// Checked on the plist file: a new `UserDefaults` in this process would
+    /// read the in-memory cache.
+    @Test func appDefaultsWriteSettingsThroughToTheirPlist() throws {
+        var environment = ProcessInfo.processInfo.environment
+        environment["TOASTTY_RUNTIME_HOME"] = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-defaults-\(UUID().uuidString)").path
+        let suiteName = try #require(
+            ToasttyRuntimePaths.resolve(homeDirectoryPath: NSHomeDirectory(), environment: environment).userDefaultsSuiteName
+        )
+        let configHome = environment["XDG_CONFIG_HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil }
+            ?? NSHomeDirectory() + "/.config"
+        let plist = URL(fileURLWithPath: configHome).appendingPathComponent("\(suiteName).plist")
+        defer { try? FileManager.default.removeItem(at: plist) }
+        let defaults = ToasttyAppDefaults.make(environment: environment)
+        func onDisk() throws -> [String: Any] {
+            let data = try Data(contentsOf: plist)
+            return try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        }
+
+        RemoteAccessPreferences.persistEnabled(true, userDefaults: defaults)
+        RemoteAccessPreferences.persistTailnetOrigin("https://host.example.ts.net", userDefaults: defaults)
+        ToasttySettingsStore.persistAskBeforeQuitting(false, userDefaults: defaults)
+        var stored = try onDisk()
+        #expect(stored["toastty.remoteAccess.enabled"] as? Bool == true)
+        #expect(stored["toastty.remoteAccess.tailnetOrigin"] as? String == "https://host.example.ts.net")
+        #expect(stored["toastty.askBeforeQuitting"] as? Bool == false)
+
+        RemoteAccessPreferences.persistEnabled(false, userDefaults: defaults)
+        RemoteAccessPreferences.persistTailnetOrigin(nil, userDefaults: defaults)
+        stored = try onDisk()
+        #expect(stored["toastty.remoteAccess.enabled"] as? Bool == false)
+        #expect(stored["toastty.remoteAccess.tailnetOrigin"] == nil)
+    }
+
     @Test func screenAndWindowProxiesReflectPlatformSnapshots() {
         let services = HeadlessLinuxPlatformServices()
         let previous = LinuxPlatform.services

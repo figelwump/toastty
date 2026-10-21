@@ -1,5 +1,6 @@
 #if TOASTTY_LINUX_APP_LOGIC
 import CGtk
+import CGtkShim
 import CoreState
 import Foundation
 import RemoteProtocol
@@ -88,6 +89,7 @@ public final class RemoteAccessDialog {
         let enable = adw_switch_row_new()!
         adw_preferences_row_set_title(cast(enable), "Enable Remote Access")
         adw_switch_row_set_active(cast(enable), status.isEnabled.gboolean)
+        Gtk.setName(enable, "remote-access-enable")
         Signal.notify(enable, "active") { [weak self] in
             self?.logic.setRemoteAccessEnabled(adw_switch_row_get_active(cast(enable)).bool)
         }
@@ -133,6 +135,7 @@ public final class RemoteAccessDialog {
             Signal.connect(origin, "apply") { [weak self] in
                 self?.logic.setRemoteAccessTailnetOrigin(String(cString: gtk_editable_get_text(cast(origin))))
             }
+            Gtk.setName(origin, "remote-access-origin")
             originEntry = origin
             adw_preferences_group_add(cast(group), origin)
 
@@ -305,10 +308,44 @@ extension LinuxAppController {
     ///     remote-access enable    # turn the gateway on, wait until it can pair
     ///     remote-access pair      # issue a pairing offer (QR + fallback code)
     ///     expect remoteAccess=ready remotePairing=true
+    ///
+    /// Through the open Remote Access window's widgets, as a user would:
+    ///
+    ///     remote-access switch on|off       # toggle "Enable Remote Access"
+    ///     remote-access origin <origin>     # type a tailnet origin and apply it
+    ///     expect remoteEnabled=true remoteOrigin=https://host.example.ts.net
     private func installRemoteAccessAutomation(logic: LinuxAppLogic) {
-        AutomationScript.extensionCommands["remote-access"] = { [weak logic] _, argument, script in
+        AutomationScript.extensionCommands["remote-access"] = { [weak logic] app, argument, script in
             guard let logic, logic.isRemoteAccessAvailable else { script.reportFailure("remote-access: unavailable"); return }
-            switch argument {
+            let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+            switch parts.first ?? "" {
+            case "switch":
+                let wantsOn = parts.count > 1 && parts[1] == "on"
+                guard let dialog = RemoteAccessDialog.current,
+                      let row = Gtk.find(named: "remote-access-enable", in: dialog.dialog) else {
+                    script.reportFailure("remote-access switch: the Remote Access window is not open")
+                    return
+                }
+                // Activating the row toggles its switch, as a click does.
+                if adw_switch_row_get_active(cast(row)).bool != wantsOn { gtk_widget_activate(row) }
+                guard MainLoop.spin(untilMilliseconds: 10_000, {
+                    logic.remoteAccessStatus.map { wantsOn ? $0.isReady : $0.isEnabled == false } ?? false
+                }) else {
+                    script.reportFailure("remote-access switch \(wantsOn ? "on" : "off"): not applied (\(logic.remoteAccessStatus?.detail ?? "no status"))")
+                    return
+                }
+                script.settleWindows(app)
+            case "origin":
+                guard parts.count > 1, let dialog = RemoteAccessDialog.current,
+                      let entry = Gtk.find(named: "remote-access-origin", in: dialog.dialog) else {
+                    script.reportFailure("remote-access origin: no tailnet origin entry (enable Remote Access first)")
+                    return
+                }
+                gtk_editable_set_text(cast(entry), parts[1])
+                // The entry row's apply button / Enter.
+                toastty_signal_emit_void(UnsafeMutableRawPointer(entry), "apply")
+                MainLoop.spin(untilMilliseconds: 50)
+                script.settleWindows(app)
             case "enable":
                 if let origin = ProcessInfo.processInfo.environment["TOASTTY_LINUX_FAKE_TAILNET_ORIGIN"] {
                     logic.setRemoteAccessTailnetOrigin(origin)
@@ -339,6 +376,8 @@ extension LinuxAppController {
                 "remoteAccess": state,
                 "remotePairing": String(status.pairingFallbackCode != nil),
                 "remoteQRCode": String(logic?.remoteAccessPairingQRCodePNG != nil),
+                "remoteEnabled": String(status.isEnabled),
+                "remoteOrigin": status.tailnetOrigin.isEmpty ? "none" : status.tailnetOrigin,
             ]
         }
     }

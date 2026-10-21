@@ -54,4 +54,9 @@ GdkContentProvider *toastty_content_provider_new_string(const char *value);
 // String payload of a GValue, or NULL when it does not hold a string.
 const char *toastty_value_get_string(const GValue *value);
 
+// g_signal_emit_by_name for a signal with no arguments and no return value
+// (g_signal_emit_by_name is variadic). Automation uses it to emit what a
+// user gesture would, e.g. AdwEntryRow "apply".
+void toastty_signal_emit_void(gpointer instance, const char *signal_name);
+
 G_END_DECLS
