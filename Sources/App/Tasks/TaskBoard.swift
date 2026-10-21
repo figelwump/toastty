@@ -20,6 +20,10 @@ struct TaskBoardItem: Identifiable, Equatable {
     var projectTitle: String?
     var stage: TaskStage
     var agent: TaskAgentActivity
+    /// A finished turn the user has not looked at yet, as the sidebar marks.
+    var hasUnreadTurn = false
+    /// The task this one's agent waits on through a pending watch.
+    var waitingOnTitle: String?
     var pullRequest: WorkspacePullRequestLink?
     var pullRequestState: TaskPullRequestState?
     var branch: String?
@@ -100,18 +104,45 @@ enum TaskBoard {
         return (merged, children.count)
     }
 
-    /// The most urgent thing a task space's agents are doing.
+    /// The most urgent thing a task space's agents are doing. A session that
+    /// waits on its sub-agents or is resuming is working. An idle session
+    /// has finished a turn once it has ended one; before that it has only
+    /// started, as the close confirmation also reads it.
     static func agentActivity(_ statuses: [WorkspaceSessionStatus]) -> TaskAgentActivity {
         guard statuses.isEmpty == false else { return .none }
         let kinds = Set(statuses.map(\.status.kind))
         if kinds.contains(.needsApproval) { return .needsInput }
         if kinds.contains(.error) { return .error }
-        if kinds.contains(.working) { return .working }
-        return .idle
+        if kinds.contains(.working) || statuses.contains(where: { $0.projection != .none }) { return .working }
+        let finished = statuses.contains { status in
+            status.status.kind == .ready || (status.status.kind == .idle && status.lastTurnDuration != nil)
+        }
+        return finished ? .finished : .idle
+    }
+
+    /// Whether a session in the task space ended a turn whose panel is still
+    /// unread.
+    static func hasUnreadTurn(_ statuses: [WorkspaceSessionStatus], in workspace: WorkspaceState?) -> Bool {
+        guard let workspace else { return false }
+        return statuses.contains { status in
+            guard status.status.kind == .ready, let tabID = workspace.tabID(containingPanelID: status.panelID) else {
+                return false
+            }
+            return workspace.tab(id: tabID)?.unreadPanelIDs.contains(status.panelID) == true
+        }
+    }
+
+    /// The title of the first task `record` waits on through a pending watch.
+    /// A watch made with `--wait` holds the agent's turn open, so the agent
+    /// shows as working instead and needs no entry here.
+    static func waitingOnTitle(_ record: TaskRecord, records: [TaskRecord]) -> String? {
+        guard let watch = record.watches?.first(where: \.isPending) else { return nil }
+        return records.first { $0.id == watch.targetTaskID }?.title ?? "another task"
     }
 
     private static func item(for record: TaskRecord, inputs: Inputs) -> TaskBoardItem {
         let state = inputs.state
+        let waitingOn = waitingOnTitle(record, records: inputs.records)
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { state.workspacesByID[$0] == nil ? nil : $0 }
         let taskSpace = taskSpaceID.flatMap { state.workspacesByID[$0] }
         let statuses = taskSpaceID.map(inputs.statuses) ?? []
@@ -148,7 +179,8 @@ enum TaskBoard {
                 pullRequest: pullRequestState,
                 hasPullRequestLink: link != nil,
                 merge: merge,
-                cleanupProblem: cleanupProblem
+                cleanupProblem: cleanupProblem,
+                waitsOnTask: waitingOn != nil
             ),
             releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs)
         )
@@ -165,6 +197,8 @@ enum TaskBoard {
             projectTitle: project?.title ?? root.map { ($0 as NSString).lastPathComponent },
             stage: stage,
             agent: agent,
+            hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
+            waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,
             branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
@@ -205,7 +239,7 @@ enum TaskBoard {
         switch agent {
         case .working:
             return .checking
-        case .idle:
+        case .idle, .finished:
             let lastStatus = statuses.compactMap(\.statusUpdatedAt).max() ?? .distantPast
             return lastStatus < requestedAt ? .checking : nil
         case .none, .needsInput, .error:
@@ -239,6 +273,7 @@ enum TaskBoard {
             projectTitle: project?.title,
             stage: stage,
             agent: agent,
+            hasUnreadTurn: hasUnreadTurn(statuses, in: workspace),
             pullRequest: link,
             pullRequestState: pullRequestState,
             branch: nil,

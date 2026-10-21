@@ -141,6 +141,27 @@ struct TaskStageTests {
     }
 
     @Test
+    func aFinishedTurnNeedsTheUserAfterTheReviewReasons() {
+        let finished = TaskLiveFacts(taskSpaceOpen: true, agent: .finished)
+        #expect(stage(started(), finished) == .needsYou(.agentFinished))
+        #expect(stage(started(), finished).group == .needsYou)
+        // An agent that has not finished a turn yet is still running.
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .running)
+        // One that waits on another task through a watch is running too.
+        var waiting = finished
+        waiting.waitsOnTask = true
+        #expect(stage(started(), waiting) == .running)
+        // Review reasons say more, so they come first.
+        let review = TaskLiveFacts(taskSpaceOpen: true, agent: .finished, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(started(), review) == .needsYou(.review))
+        #expect(stage(started(readyForReviewAt: date), finished) == .needsYou(.readyForReview))
+        // A merge under way stays running.
+        var merging = review
+        merging.merge = .checking
+        #expect(stage(started(), merging) == .running)
+    }
+
+    @Test
     func aClosedTaskSpaceWithUnfinishedWorkNeedsTheUser() {
         let result = stage(started(), TaskLiveFacts(taskSpaceOpen: false))
         #expect(result == .needsYou(.taskSpaceClosed))

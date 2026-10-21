@@ -29,6 +29,8 @@ public enum TaskStage: Equatable, Sendable {
         case review
         /// The agent marked work without a pull request ready.
         case readyForReview
+        /// The agent finished a turn and waits for the user's next prompt.
+        case agentFinished
         /// Closing the task space or removing the worktree stopped, after a
         /// merge, an archive or a release: "Merged · clean up?".
         case cleanupStopped(reason: String)
@@ -38,7 +40,7 @@ public enum TaskStage: Equatable, Sendable {
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
-            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview, .cleanupStopped: false
+            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview, .agentFinished, .cleanupStopped: false
             }
         }
     }
@@ -128,7 +130,7 @@ public enum TaskStage: Equatable, Sendable {
             return .needsYou(.agentError)
         case .working:
             return .running
-        case .idle, .none:
+        case .finished, .idle, .none:
             break
         }
         // An accepted merge that is still under way is not waiting for a
@@ -148,6 +150,11 @@ public enum TaskStage: Equatable, Sendable {
         }
         if facts.readyForReviewAt != nil {
             return .needsYou(.readyForReview)
+        }
+        // The agent's turn is over, so the next step is the user's, unless
+        // the agent ended its turn to wait for another task.
+        if live.agent == .finished, live.waitsOnTask == false {
+            return .needsYou(.agentFinished)
         }
         return .running
     }
@@ -215,7 +222,11 @@ public struct TaskStageFacts: Equatable, Sendable {
 public enum TaskAgentActivity: Equatable, Sendable {
     /// No agent session in the task space.
     case none
+    /// At the prompt without a finished turn: just started, or its only
+    /// turn was interrupted before it began.
     case idle
+    /// Finished a turn and waits for a prompt.
+    case finished
     case working
     case needsInput
     case error
@@ -267,6 +278,9 @@ public struct TaskLiveFacts: Equatable, Sendable {
     public var merge: TaskMergeActivity?
     /// Why the merge's cleanup stopped, while Toastty still holds it.
     public var cleanupProblem: String?
+    /// Whether the task holds a pending watch on another task: its agent
+    /// ended its turn to wait, so the task is still running.
+    public var waitsOnTask: Bool
 
     public init(
         taskSpaceOpen: Bool,
@@ -274,7 +288,8 @@ public struct TaskLiveFacts: Equatable, Sendable {
         pullRequest: TaskPullRequestState? = nil,
         hasPullRequestLink: Bool = false,
         merge: TaskMergeActivity? = nil,
-        cleanupProblem: String? = nil
+        cleanupProblem: String? = nil,
+        waitsOnTask: Bool = false
     ) {
         self.taskSpaceOpen = taskSpaceOpen
         self.agent = agent
@@ -282,5 +297,6 @@ public struct TaskLiveFacts: Equatable, Sendable {
         self.hasPullRequestLink = hasPullRequestLink
         self.merge = merge
         self.cleanupProblem = cleanupProblem
+        self.waitsOnTask = waitsOnTask
     }
 }

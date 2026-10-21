@@ -41,6 +41,7 @@ enum TaskBoardPresentation {
             case .agentNeedsInput: return "\(agentName(item)) is waiting for your input"
             case .agentError: return "\(agentName(item)) stopped with an error"
             case .review, .readyForReview: return "Ready for your review"
+            case .agentFinished: return "\(agentName(item)) finished · waiting for you"
             case .cleanupStopped:
                 switch item.record?.cleanup?.kind {
                 case .archive?: return "⚠ archive stopped"
@@ -58,7 +59,11 @@ enum TaskBoardPresentation {
             switch item.agent {
             case .working: return "\(agentName(item)) · working"
             case .none: return "No agent running"
-            case .idle, .needsInput, .error: return "\(agentName(item)) · idle"
+            case .finished, .idle, .needsInput, .error:
+                if let waitingOn = item.waitingOnTitle {
+                    return "\(agentName(item)) · waiting for \(waitingOn)"
+                }
+                return "\(agentName(item)) · idle"
             }
         case .toShip: return "Merged · waiting for a release"
         case .done: return item.record?.shippedAt != nil ? "Shipped" : "Done"
@@ -80,6 +85,7 @@ enum TaskBoardPresentation {
             case .review:
                 return ("Review", item.pullRequestState == nil ? "PR linked, agent idle" : "PR open, agent idle")
             case .readyForReview: return ("Review", "marked ready, agent idle")
+            case .agentFinished: return ("Needs you", "the agent finished its turn")
             case .cleanupStopped(let reason): return ("Needs you", reason)
             }
         case .running: return ("Running", statusLine(item))
@@ -257,6 +263,16 @@ struct TaskStageMark: View {
                         .frame(width: 9, height: 9)
                 case .agentError:
                     RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
+                case .agentFinished:
+                    // The sidebar's ready square: filled while the turn is
+                    // unread, an outline once the user has looked.
+                    if item.hasUnreadTurn {
+                        RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
+                    } else {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .strokeBorder(ToastyTheme.sessionReadyText, lineWidth: 1.2)
+                            .frame(width: 7, height: 7)
+                    }
                 case .agentNeedsInput, .taskSpaceClosed, .cleanupStopped:
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(ToastyTheme.sessionNeedsApprovalText)
