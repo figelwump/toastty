@@ -804,7 +804,7 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
 
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork:
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch:
             return try runTaskAction(action, args: args)
         }
         }
@@ -992,7 +992,7 @@ final class AppControlExecutor {
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
 
-        case .taskGet, .taskList, .taskWorkspaceChoices:
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
             return try runTaskQuery(query, args: args)
         }
         }

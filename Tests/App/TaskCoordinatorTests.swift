@@ -181,11 +181,11 @@ struct TaskCoordinatorTests {
         #expect(sent.contains("task-attachments/\(created.id.uuidString)/repro"))
         #expect(fixture.router.focusPolicyByPanelID[panelID] == .preserveFirstResponder)
 
-        // The session runs in the task space, scoped to it, and the journal
-        // saved it to disk.
+        // The session runs in the task space, unscoped so it can reach other
+        // tasks, and the journal saved it to disk.
         let session = try #require(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         #expect(session.workspaceID == taskSpaceID)
-        #expect(fixture.sessionRuntimeStore.effectiveWorkspaceScope(sessionID: session.sessionID) == [taskSpaceID])
+        #expect(fixture.sessionRuntimeStore.isWorkspaceScoped(sessionID: session.sessionID) == false)
         #expect(record.operation.agentLaunch?.sessionID == session.sessionID)
         #expect(fixture.savedRecord(created.id)?.setup == .started)
     }

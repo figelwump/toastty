@@ -43,6 +43,14 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var startWork: TaskStartWork?
     /// The steps setup and start-work finished, saved as each one happens.
     public var operation: TaskOperation
+    /// This task's requests to be told when other tasks reach a condition.
+    /// Optional so records saved before watches existed still load.
+    public var watches: [TaskWatch]?
+    /// The workspace scope of the session that created the task, saved
+    /// when it was created; `nil` when that session was unscoped. The
+    /// task's agent gets this scope, plus its task space, even when setup
+    /// runs after the creator ended.
+    public var creatorScope: Set<UUID>?
     /// The task space, once setup made it.
     public var taskSpaceWorkspaceID: UUID? {
         operation.taskSpace?.workspaceID

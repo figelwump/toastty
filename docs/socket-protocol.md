@@ -249,6 +249,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.retry`
 - `task.delete`
 - `task.set-workspace`
+- `task.send`
+- `task.watch`
+- `task.unwatch`
 
 Notable action-specific behavior:
 
@@ -369,6 +372,40 @@ Notable action-specific behavior:
     again with the workspace fixed, then setup starts.
   - a workspace-scoped session may choose only workspaces in its scope, and
     cannot reopen a closed workspace.
+- `task.send`
+  - requires `args.taskID` and `args.text`. Toastty resolves the task's current
+    agent session at delivery: the session in the worktree after a move, else
+    the session setup started, else the session restored in that session's
+    pane after a relaunch, else the most recently active agent in the task
+    space. It types the text and submits it, as `terminal.send-text` with
+    `submit=true` does; a busy agent queues it as typed input.
+  - returns `taskID`, `sessionID`, `panelID`, and `delivered`. A task with no
+    running agent, empty text, or a message that was typed but may not have
+    been submitted returns `INVALID_PAYLOAD`; Toastty does not retry the last
+    case, which could type the message twice.
+  - workspace scope applies to the task, not the panel: an unscoped caller
+    reaches any task, and a workspace-scoped session reaches only the tasks it
+    may see in `task.list`.
+- `task.watch`
+  - requires `args.taskID` and `args.until` (`idle`, `waiting`,
+    `ready-for-review`, `merged`, `to-ship`, `done`, or `archived`). Takes
+    either `notifyTaskID` or `wait=true`; with neither, the calling managed
+    session's own task is notified, and a caller that is not a task's agent
+    gets `INVALID_PAYLOAD`.
+  - `idle` holds when the target's agent finished a turn after the watch was
+    made; `waiting` while it waits for an approval or an answer; the stage
+    conditions while the task is in that stage.
+  - a notifying watch is saved on the notified task's record and fires once:
+    Toastty sends one line, `[Toastty watch <watchID>] Task "<title>"
+    (<taskID>) <reason>...`, to that task's agent through `task.send`, and
+    retries while its agent is not running. A deleted target, or one archived
+    while the watch waits for another condition, fires it with that reason. A
+    `wait=true` watch lives in memory, notifies nobody, and is dropped when no
+    `task.watches` read of it arrives for 60 seconds.
+  - returns the watch object (see `task.watches`). A target that is already
+    archived returns `INVALID_PAYLOAD`.
+- `task.unwatch`
+  - requires `args.watchID` and cancels that watch.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -569,8 +606,9 @@ Common query IDs include:
 - `task.get`
 - `task.list`
 - `task.workspace-choices`
+- `task.watches`
 
-`task.get` requires `args.taskID` and returns `taskID`, `title`, `slug`,
+`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
 `agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, and `setup` with
 `state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
@@ -582,8 +620,23 @@ worktree request also has `worktree`: `state` (`running`, `failed` with
 `baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
 session that continues in the worktree, `conversationConfirmed`,
 `sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with
-`sourceKeptReason`). `task.list` returns `tasks`, oldest first, with the same
-scope rule as `task.retry`. `task.workspace-choices` returns `open`
+`sourceKeptReason`). `task.get` also has `agentState` (`state`: `notRunning`,
+`busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`, and
+`changedAt`, when the status last changed) and `lastReply` (`text`, cut at
+16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the
+session's transcript. `task.list` returns `tasks`, oldest first, with the same
+scope rule as `task.retry`, with `agentState` but without `lastReply` unless
+`args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, and
+`reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
+the tasks whose record or `agentState` changed since, and `deletedTaskIDs` the
+tasks deleted since; a cursor from another launch, or one Toastty cannot read,
+returns every task with `reset: true`. `task.watches` returns `watches`, each
+with `watchID`, `taskID` (the watched task), `until`, `notifyTaskID` (`null` for
+`wait=true`), `createdAt`, and `state` (`pending`, `fired`, or `impossible`,
+with `firedAt`, `reason`, and `delivered`). Fired watches stay listed for up to
+a day; Toastty removes older ones when it next checks watches or relaunches. A
+watch whose message may have been typed without being submitted counts as
+delivered and is not sent again. It takes optional `watchID`, `taskID`, and `notifyTaskID` filters. `task.workspace-choices` returns `open`
 (`workspaceID`, `title`) and `recent` (`recentWorkspace`, `title`,
 `rootDirectory`, `closedAt`) for `task.set-workspace`; a workspace-scoped
 session sees only open workspaces in its scope.

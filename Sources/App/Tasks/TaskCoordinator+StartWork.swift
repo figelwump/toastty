@@ -304,6 +304,9 @@ extension TaskCoordinator {
                             initialPrompt: prompt,
                             parentSessionID: forked ? nil : forkSourceID,
                             forkFromSessionID: forked ? forkSourceID : nil,
+                            // The continuing session keeps the moving
+                            // session's scope: none, unless the user scoped it.
+                            scopedWorkspaceIDs: forkSourceID.flatMap { sessions.scope(sessionID: $0) },
                             beforeDispatch: { [weak self] in
                                 guard let self, self.isCurrent(job, taskID: taskID) else {
                                     throw CancellationError()

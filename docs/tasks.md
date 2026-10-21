@@ -176,14 +176,18 @@ directory, one per root directory.
    selected, so your focus stays where it is.
 3. It starts the agent in that terminal. The agent's first message is the first
    prompt, then the task text exactly as written, then the paths of the
-   attached files. The agent session is scoped to its task space.
+   attached files. The agent session is not workspace-scoped, so it can read
+   and message other tasks (see [Coordinate tasks](#coordinate-tasks)). It is
+   scoped only when the session that created the task was scoped; then it
+   keeps that scope.
 
 Toastty saves each step to disk as it happens. If setup fails, or Toastty quits
 before setup ends, the task shows as failed, and Retry continues from the last
 step that finished: it reuses the task space instead of making a second one.
 
 When an agent creates a task, the new task space joins that agent's workspace
-scope, and the agent session is recorded as the one that spawned it. A task
+scope if the agent is scoped, and the agent session is recorded as the one that
+spawned it. A task
 created from an agent in another task's task space records that task as its
 parent (`parentTaskID`).
 
@@ -250,6 +254,63 @@ toastty task create "Split the parser" --start-work --base feat/parser \
 Setup makes the worktree before the task space, so the task space's terminal
 and the agent both start in it. The agent's first message names the worktree
 and branch, then gives the prompt and the task text.
+
+## Coordinate tasks
+
+An agent, inside Toastty or outside it, can follow other tasks and talk to
+their agents by task ID. Toastty finds a task's current agent session each
+time, so the ID keeps working after a relaunch, a fork, or a move into a
+worktree.
+
+- `toastty task get <task-id>` reports `agentState` (`notRunning`, `busy`,
+  `waiting` for an approval or an answer, `idle`, or `error`, with the session
+  and when its status last changed) and `lastReply`, the agent's latest
+  message. Toastty reads the reply from the Claude Code or Codex transcript, or
+  from the history other agents publish through Toastty's extension, and cuts it
+  at 16 KB. It is `null` until Toastty has confirmed the session's transcript.
+- `toastty task list` reports `agentState` for every task and returns a
+  `cursor`. With `--changed-since <cursor>`, it lists only the tasks whose
+  record or agent state changed since that answer, and the IDs of deleted tasks
+  in `deletedTaskIDs`. A cursor from before a relaunch gets every task back with
+  `reset: true`. `--include-reply` adds each task's `lastReply`.
+- `toastty task send <task-id> "<message>"` types the message into the task's
+  agent and submits it. A busy agent queues it as typed input. It fails when the
+  task has no running agent, and says so when the message was typed but may not
+  have been submitted; check that terminal before you send it again.
+- `toastty task watch <task-id> --until <condition>` tells the calling agent's
+  own task once, by a one-line message, when the other task reaches the
+  condition. A waiting agent can then end its turn instead of polling in a
+  shell. `--notify <task-id>` names another task to tell.
+
+Watch conditions:
+
+| Condition | Holds when |
+| --- | --- |
+| `idle` | The agent finished a turn after the watch was made. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
+| `waiting` | The agent waits for an approval or an answer. |
+| `ready-for-review`, `merged`, `to-ship`, `done`, `archived` | The task is in that stage. |
+
+A watch is saved with the record of the task it notifies, so it survives a
+relaunch, and it fires once. A watch whose task is deleted, or archived while
+it waits for something else, fires with that reason. If the notified task's
+agent is not running when a watch fires, the message goes out once it runs
+again. `toastty task watches` lists watches, with `--task` or `--notify` to
+filter them, and `toastty task unwatch <watch-id>` cancels one. Fired watches
+stay listed for up to a day.
+
+Outside Toastty, where there is no task to tell, `toastty task watch <task-id>
+--until <condition> --wait` blocks until the watch fires, prints the outcome,
+and exits 0, or 1 when the condition can never hold. `--timeout <seconds>`
+bounds the wait and cancels the watch when it runs out. A `--wait` watch lasts
+only while Toastty runs and while the command keeps polling it.
+
+A milestone that is not a stage, such as "the API is defined", is a `task send`
+from the task that reaches it. A task's agent finds its own task ID with
+`toastty task get`, with no ID.
+
+Any unscoped caller may read, message and watch any task. A workspace-scoped
+session, which you set up on purpose, reaches only the tasks it may see in
+`task list`.
 
 ## The Inbox
 

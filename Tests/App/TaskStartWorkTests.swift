@@ -22,6 +22,7 @@ struct TaskStartWorkTests {
             var model: String?
             var prompt: String
             var forkFromSessionID: String?
+            var scopedWorkspaceIDs: Set<UUID>? = nil
         }
 
         private(set) var calls: [Call] = []
@@ -52,6 +53,7 @@ struct TaskStartWorkTests {
             initialPrompt: String,
             parentSessionID: String?,
             forkFromSessionID: String?,
+            scopedWorkspaceIDs: Set<UUID>?,
             beforeDispatch: @escaping @MainActor () throws -> Void
         ) async throws -> AgentLaunchResult {
             try beforeDispatch()
@@ -62,7 +64,8 @@ struct TaskStartWorkTests {
                 cwd: cwd,
                 model: model,
                 prompt: initialPrompt,
-                forkFromSessionID: forkFromSessionID
+                forkFromSessionID: forkFromSessionID,
+                scopedWorkspaceIDs: scopedWorkspaceIDs
             ))
             let sessionID = "launched-\(calls.count)"
             let agent = AgentKind(rawValue: profileID)!
@@ -110,6 +113,41 @@ struct TaskStartWorkTests {
         func closeMovedSessionPane(panelID: UUID, agent: AgentKind) -> TaskOperation.SourceOutcome {
             closedPanels.append(panelID)
             return closeOutcome
+        }
+
+        /// Text typed into each panel, in order.
+        private(set) var delivered: [(panelID: UUID, text: String)] = []
+        var replies: [String: TaskAgentReply] = [:]
+        var scopes: [String: Set<UUID>] = [:]
+
+        func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] {
+            sessions.values.filter { $0.workspaceID == workspaceID && $0.isActive }
+        }
+
+        /// What the next deliveries report; a typed text counts as delivered
+        /// for `.delivered` and `.uncertain`.
+        var deliveryResult: TerminalInputDeliveryResult = .delivered
+
+        func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult {
+            guard activeSession(panelID: panelID) != nil, deliveryResult != .unavailable else { return .unavailable }
+            delivered.append((panelID, text))
+            return deliveryResult
+        }
+
+        func lastReply(sessionID: String) -> TaskAgentReply? { replies[sessionID] }
+
+        func scope(sessionID: String) -> Set<UUID>? { scopes[sessionID] }
+
+        /// Reports a status, as the agent's hooks do.
+        /// A turn that was running ends at `.idle`, `.ready` or `.error`.
+        func report(_ sessionID: String, _ kind: SessionStatusKind, at date: Date = Date()) {
+            let wasInTurn = sessions[sessionID]?.isInTurn == true
+            sessions[sessionID]?.status = SessionStatus(kind: kind, summary: kind.rawValue)
+            sessions[sessionID]?.statusUpdatedAt = date
+            sessions[sessionID]?.isInTurn = [.working, .needsApproval].contains(kind)
+            if wasInTurn, [.idle, .ready, .error].contains(kind) {
+                sessions[sessionID]?.lastTurnEndedAt = date
+            }
         }
 
         func endTurn(_ sessionID: String) { sessions[sessionID]?.isInTurn = false }

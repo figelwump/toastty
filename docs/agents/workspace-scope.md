@@ -24,7 +24,9 @@ When a scoped parent launches a child session, the child inherits a snapshot of 
 
 If a scoped session creates a workspace through `workspace.create`, Toastty binds the new workspace into that session's explicit scope before returning success. A managed session's `workspace.create` also nests the new workspace under the caller's workspace as a task space (see `workspace.create` and `workspace.set-parent` in `docs/cli-reference.md`); pass `parent=none` to opt out. Agent launches into existing workspaces require access to the target workspace.
 
-A delegation that requires a terminal reply to the parent must retain the parent workspace in the child's assigned scope when narrowing after launch. The worktree-create helper does this for its default managed launch and supplies the parent panel and session IDs in the launch prompt. This grants automation access to the entire parent workspace; there is no reply-only permission. `expectedSessionID` prevents delivery to a replacement session but does not bypass workspace scope. Explicit `--no-scope-parent` launches retain child-only scope and do not establish this return route.
+A delegation that requires a terminal reply to the parent must retain the parent workspace in the child's assigned scope when narrowing after launch: `terminal.send-text` to the parent's panel is a workspace automation like any other, and `expectedSessionID` prevents delivery to a replacement session but does not bypass scope. This grants automation access to the entire parent workspace. A session ID also changes when Toastty relaunches and restores the session, so a reply route that names one breaks after a relaunch.
+
+Tasks avoid both problems. Toastty starts task-space sessions unscoped, unless the session that created the task was scoped; then the task saves that session's effective scope when it is created, and its agent gets that scope plus its own task space. `task.send` addresses an agent by task ID, resolved at delivery. Prefer `task.send` and `task.watch` over panel and session IDs for replies between agents; see `docs/tasks.md`.
 
 ## CLI
 

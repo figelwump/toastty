@@ -1308,6 +1308,14 @@ struct ToasttyApp: App {
                     panelID: panelID,
                     focusPolicy: .preserveFirstResponder
                 ) ?? false
+            },
+            deliverText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendTextResult(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? .unavailable
             }
         )
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(

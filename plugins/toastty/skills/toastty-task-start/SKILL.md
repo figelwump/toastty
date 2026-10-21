@@ -56,6 +56,25 @@ each part its own task:
 - Each call returns a task ID while setup continues. Check one with
   `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
 - The new tasks record this one as their parent. Coordinate them from here.
+- Tell each new task how to report back: `toastty task send <this task's ID>
+  "<message>"`. `toastty task get`, with no ID, shows this task and its
+  `taskID`. Task IDs keep working after a relaunch; panel and session IDs do
+  not.
+
+## Wait for other tasks
+
+Do not poll in a shell loop. To continue when another task reaches a point,
+run `"$TOASTTY_CLI_PATH" task watch <task-id> --until <condition>` and end your
+turn. Toastty sends you one line, starting `[Toastty watch`, when the condition
+holds or can never hold. Conditions: `idle` (its agent finished a turn after
+you started watching), `waiting` (it waits for an approval or an answer),
+`ready-for-review`, `merged`, `to-ship`, `done`, or `archived`.
+
+To ask another task's agent something, run `toastty task send <task-id>
+"<question>"`, then watch it `--until idle` and read the answer with
+`toastty task get <task-id>`, under `lastReply`. A milestone that is not a
+stage, such as "the API is defined", is a `task send` from the task that
+reaches it.
 
 ## Pull requests
 
