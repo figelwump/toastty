@@ -34,6 +34,12 @@ protocol CommandPaletteActionHandling: AnyObject {
     /// The global quick entry shortcut, if one is set.
     func newTaskShortcut() -> PaletteShortcut?
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
+    func canToggleTasksView(originWindowID: UUID) -> Bool
+    func toggleTasksView(originWindowID: UUID) -> Bool
+    func tasksViewTitle(originWindowID: UUID) -> String
+    /// The task "Task: <action>" commands act on, if any.
+    func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask?
+    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption]
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
@@ -115,6 +121,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openRemoteAccessAction: @MainActor (UUID) -> Void
     private let presentDiagnosticsAction: @MainActor () -> Void
+    private let taskActions: CommandPaletteTaskActions
 
     init(
         store: AppStore,
@@ -142,7 +149,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             )
         },
         presentDiagnosticsAction: @escaping @MainActor () -> Void = { DiagnosticsPresenter.present() },
-        processWatchCommandController: ProcessWatchCommandController? = nil
+        processWatchCommandController: ProcessWatchCommandController? = nil,
+        taskActions: CommandPaletteTaskActions? = nil
     ) {
         self.store = store
         self.fileManager = fileManager
@@ -169,6 +177,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
         self.openRemoteAccessAction = openRemoteAccessAction
         self.presentDiagnosticsAction = presentDiagnosticsAction
+        self.taskActions = taskActions ?? CommandPaletteTaskActions(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -352,6 +364,26 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return false
         }
         return showScratchpadForCurrentSessionAction(originWindowID)
+    }
+
+    func canToggleTasksView(originWindowID: UUID) -> Bool {
+        taskActions.canToggleTasksView(originWindowID: originWindowID)
+    }
+
+    func toggleTasksView(originWindowID: UUID) -> Bool {
+        taskActions.toggleTasksView(originWindowID: originWindowID)
+    }
+
+    func tasksViewTitle(originWindowID: UUID) -> String {
+        taskActions.tasksViewTitle(originWindowID: originWindowID)
+    }
+
+    func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
+        taskActions.currentTask(originWindowID: originWindowID)
+    }
+
+    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
+        taskActions.releaseOptions(originWindowID: originWindowID)
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
@@ -733,6 +765,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 direction: direction,
                 originWindowID: originWindowID
             )
+        case .task(let command):
+            return taskActions.execute(command, originWindowID: originWindowID)
         }
     }
 
@@ -804,6 +838,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .newTask:
             return createTask()
+        case .toggleTasksView:
+            return toggleTasksView(originWindowID: originWindowID)
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
         case .toggleRightPanel:

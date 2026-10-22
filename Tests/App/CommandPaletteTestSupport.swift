@@ -52,6 +52,12 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenRemoteAccessValue = true
     var canSendDiagnosticsValue = true
     var canReloadValue = true
+    var canToggleTasksViewValue = true
+    var tasksViewTitleValue = ToasttyBuiltInCommand.toggleTasksView.title
+    var toggledTasksViewWindowIDs: [UUID] = []
+    var currentTaskValue: TaskBoardCurrentTask?
+    var taskReleaseOptionsValue: [PaletteTaskReleaseOption] = []
+    var executedTaskCommands: [PaletteTaskCommand] = []
 
     var createWindowResult = true
     var createWorkspaceResult = true
@@ -271,6 +277,31 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
         shownScratchpadWindowIDs.append(originWindowID)
         return showScratchpadForCurrentSessionResult
+    }
+
+    func canToggleTasksView(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canToggleTasksViewValue
+    }
+
+    func toggleTasksView(originWindowID: UUID) -> Bool {
+        toggledTasksViewWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func tasksViewTitle(originWindowID: UUID) -> String {
+        _ = originWindowID
+        return tasksViewTitleValue
+    }
+
+    func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
+        _ = originWindowID
+        return currentTaskValue
+    }
+
+    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
+        _ = originWindowID
+        return taskReleaseOptionsValue
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
@@ -632,6 +663,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return showScratchpadForCurrentSession(originWindowID: originWindowID)
             case .newTask:
                 return createTask()
+            case .toggleTasksView:
+                return toggleTasksView(originWindowID: originWindowID)
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:
@@ -695,6 +728,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 direction: direction,
                 originWindowID: originWindowID
             )
+        case .task(let command):
+            executedTaskCommands.append(command)
+            return true
         }
     }
 }

@@ -79,12 +79,15 @@ enum PaletteCommandInvocation: Equatable, Sendable {
     case workspaceSwitch(workspaceID: UUID)
     case agentProfileLaunch(profileID: String)
     case terminalProfileSplit(profileID: String, direction: SlotSplitDirection)
+    case task(PaletteTaskCommand)
 }
 
 struct PaletteCommandDescriptor: Identifiable, Equatable, Sendable {
     let id: String
     let usageKey: String?
     let title: String
+    /// A second line under the title, such as the task a command acts on.
+    var subtitle: String? = nil
     let keywords: [String]
     let shortcut: PaletteShortcut?
     let invocation: PaletteCommandInvocation
@@ -133,8 +136,8 @@ enum PaletteResult: Identifiable, Equatable, Sendable {
 
     var subtitle: String? {
         switch self {
-        case .command:
-            return nil
+        case .command(let result):
+            return result.command.subtitle
         case .file(let result):
             return result.subtitle
         }
