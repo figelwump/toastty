@@ -244,7 +244,13 @@ extension AppControlExecutor {
                 "reset": .bool(args.taskString("changedSince") != nil && changes.reset),
             ]
         case .taskWorkspaceChoices:
-            return workspaceChoicesSnapshot(coordinator.workspaceChoices())
+            let taskID = try args.taskString("taskID").map { raw -> UUID in
+                guard let id = UUID(uuidString: raw), let record = coordinator.records.record(id: id), callerMaySee(record) else {
+                    throw AutomationSocketError.invalidPayload("No task has ID \(raw).")
+                }
+                return id
+            }
+            return workspaceChoicesSnapshot(coordinator.workspaceChoices(taskID: taskID))
         case .taskWatches:
             let watchID = try args.taskString("watchID").map { raw -> UUID in
                 guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("watchID must be a watch ID") }
@@ -399,6 +405,20 @@ extension AppControlExecutor {
     private func taskWorkspaceChoice(args: [String: AutomationJSONValue]) throws -> TaskWorkspaceChoice {
         let workspace = args.taskString("workspace")
         let recent = args.taskString("recentWorkspace")
+        let rootDirectory = args.taskString("rootDirectory")
+        if let rootDirectory {
+            guard workspace == nil, recent == nil else {
+                throw AutomationSocketError.invalidPayload("pass one of workspace, recentWorkspace or rootDirectory")
+            }
+            let path = rootDirectory.trimmingCharacters(in: .whitespaces)
+            guard path.hasPrefix("/") || path.hasPrefix("~") else {
+                throw AutomationSocketError.invalidPayload("rootDirectory must be an absolute path or start with ~")
+            }
+            if let callerSessionID = requestContext().callerSessionID, callerIsWorkspaceScoped(sessionID: callerSessionID) {
+                throw AutomationSocketError.invalidPayload("a workspace-scoped session cannot open a workspace")
+            }
+            return .directory(path)
+        }
         switch (workspace, recent) {
         case (let raw?, nil):
             guard let workspaceID = UUID(uuidString: raw.trimmingCharacters(in: .whitespaces)) else {
@@ -417,14 +437,16 @@ extension AppControlExecutor {
             }
             return .recent(recentID)
         default:
-            throw AutomationSocketError.invalidPayload("pass either workspace or recentWorkspace")
+            throw AutomationSocketError.invalidPayload("pass one of workspace, recentWorkspace or rootDirectory")
         }
     }
 
     private func workspaceChoicesSnapshot(_ choices: TaskWorkspaceChoices) -> [String: AutomationJSONValue] {
         let isScoped = requestContext().callerSessionID.map(callerIsWorkspaceScoped(sessionID:)) ?? false
         let open = choices.open.filter { callerMayAutomateWorkspace($0.id) }.map { workspace -> AutomationJSONValue in
-            .object(["workspaceID": .string(workspace.id.uuidString), "title": .string(workspace.title)])
+            var object: [String: AutomationJSONValue] = ["workspaceID": .string(workspace.id.uuidString), "title": .string(workspace.title)]
+            if let root = workspace.rootDirectory { object["rootDirectory"] = .string(root) }
+            return .object(object)
         }
         let recent = isScoped ? [] : choices.recent.map { item -> AutomationJSONValue in
             .object([
@@ -434,7 +456,24 @@ extension AppControlExecutor {
                 "closedAt": .string(ISO8601DateFormatter().string(from: item.closedAt)),
             ])
         }
-        return ["open": .array(open), "recent": .array(recent)]
+        var snapshot: [String: AutomationJSONValue] = ["open": .array(open), "recent": .array(recent)]
+        if let suggested = choices.suggested {
+            var object: [String: AutomationJSONValue] = [
+                "title": .string(suggested.title),
+                "rootDirectory": .string(suggested.rootDirectory),
+            ]
+            // The task.set-workspace argument that places the task there.
+            switch suggested.choice {
+            case .open(let id):
+                if callerMayAutomateWorkspace(id) { object["workspace"] = .string(id.uuidString) }
+            case .recent(let id):
+                if isScoped == false { object["recentWorkspace"] = .string(id.uuidString) }
+            case .directory(let path):
+                if isScoped == false { object["rootDirectory"] = .string(path) }
+            }
+            snapshot["suggested"] = .object(object)
+        }
+        return snapshot
     }
 
     private func visibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
@@ -565,6 +604,9 @@ extension AppControlExecutor {
             "effort": optional(record.resolved?.effort),
             "prompt": optional(record.resolved?.prompt),
             "triageNote": optional(record.triageNote),
+            "suggestedWorkspace": record.suggestedWorkspace.map {
+                .object(["title": .string($0.title), "rootDirectory": .string($0.rootDirectory)])
+            } ?? .null,
             "files": .array(record.attachments.map { .string($0.path) }),
             "filesRemovedAt": date(record.attachmentsRemovedAt),
             "setup": .object(setup),

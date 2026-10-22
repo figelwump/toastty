@@ -293,6 +293,110 @@ struct TaskRoutingTests {
         #expect(fixture.record(second.id)?.workspaceID == reopenedID)
     }
 
+    @Test func triageSuggestsAProjectThatIsNotOpenAndPickingItOpensIt() async throws {
+        let fixture = try makeFixture()
+        let website = fixture.root.appendingPathComponent("website", isDirectory: true)
+        let controlPlane = fixture.root.appendingPathComponent("control-plane", isDirectory: true)
+        for project in [website, controlPlane] {
+            try FileManager.default.createDirectory(at: project.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        }
+        // The open project's section is not offered as closed.
+        fixture.config.workspaces = [
+            TasksConfig.Workspace(path: website.path, guidelines: "The marketing site."),
+            TasksConfig.Workspace(path: fixture.projectRoot),
+        ]
+        fixture.recentWorkspaces.record(RecentWorkspace(id: UUID(), title: "control-plane", rootDirectory: controlPlane.path, closedAt: Date()))
+        let websiteRoot = TasksConfigFile.normalizedPath(website.path)
+        let workspaceCount = fixture.store.state.workspacesByID.count
+
+        fixture.triage.answer(.success(TaskTriage.Answer(
+            workspace: website.path,
+            agent: "codex",
+            title: "Pricing page typo",
+            reason: "It is about the website, which is not open."
+        )))
+        let created = try await fixture.coordinator.create(TaskCreateRequest(text: "pricing page has a typo"))
+        await fixture.waitUntil("triage ends") { fixture.record(created.id)?.setup != .routing }
+
+        // The task waits with the suggestion; nothing opened on its own.
+        let waiting = try #require(fixture.record(created.id))
+        #expect(waiting.setup == .needsWorkspace(reason: "It is about the website, which is not open."))
+        #expect(waiting.suggestedWorkspace == TaskWorkspaceSuggestion(title: "website", rootDirectory: websiteRoot))
+        #expect(waiting.triageNote == nil)
+        #expect(fixture.store.state.workspacesByID.count == workspaceCount)
+
+        // Triage saw the closed projects, recent first, with the configured
+        // one's guidelines.
+        let input = try inputJSON(try #require(fixture.triage.prompts.first))
+        #expect(input["closed_workspaces"] as? [[String: String]] == [
+            ["title": "control-plane", "root": TasksConfigFile.normalizedPath(controlPlane.path)],
+            ["title": "website", "root": websiteRoot, "guidelines": "The marketing site."],
+        ])
+
+        // The picker offers it first, as a directory to open.
+        let choices = fixture.coordinator.workspaceChoices(taskID: created.id)
+        #expect(choices.suggested == .init(title: "website", rootDirectory: websiteRoot, choice: .directory(websiteRoot)))
+        #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open website & Start")
+
+        fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex")))
+        try fixture.coordinator.setWorkspace(taskID: created.id, choice: .directory(websiteRoot))
+        await fixture.waitUntil("the task starts") { fixture.record(created.id)?.setup == .started }
+        let record = try #require(fixture.record(created.id))
+        let openedID = try #require(record.workspaceID)
+        let opened = try #require(fixture.store.state.workspacesByID[openedID])
+        #expect(opened.title == "website")
+        #expect(opened.rootDirectory == websiteRoot)
+        #expect(opened.parentWorkspaceID == nil)
+        #expect(record.projectRoot == websiteRoot)
+        #expect(record.suggestedWorkspace == nil)
+        // Focus stays where the user was.
+        #expect(fixture.store.selectedWorkspace?.id == fixture.workspaceID)
+    }
+
+    @Test func aSuggestionThatWasClosedOrOpenedSinceIsChosenThatWay() async throws {
+        let fixture = try makeFixture()
+        let controlPlane = fixture.root.appendingPathComponent("control-plane", isDirectory: true)
+        try FileManager.default.createDirectory(at: controlPlane.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let recent = RecentWorkspace(id: UUID(), title: "control-plane", rootDirectory: controlPlane.path, closedAt: Date())
+        fixture.recentWorkspaces.record(recent)
+        fixture.triage.answer(.success(TaskTriage.Answer(workspace: controlPlane.path, reason: "A control-plane bug.")))
+        let created = try await fixture.coordinator.create(TaskCreateRequest(text: "relay key rotation fails"))
+        await fixture.waitUntil("triage ends") { fixture.record(created.id)?.setup != .routing }
+
+        // A recently closed workspace reopens with its own title.
+        var choices = fixture.coordinator.workspaceChoices(taskID: created.id)
+        #expect(choices.suggested?.choice == .recent(recent.id))
+        #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open control-plane & Start")
+
+        // Opened by the user meanwhile: the suggestion is that workspace.
+        let openedID = UUID()
+        #expect(fixture.store.send(.reopenWorkspace(
+            windowID: try #require(fixture.store.state.windows.first?.id),
+            workspaceID: openedID,
+            panelID: UUID(),
+            title: "control-plane",
+            rootDirectory: controlPlane.path
+        )))
+        choices = fixture.coordinator.workspaceChoices(taskID: created.id)
+        #expect(choices.suggested?.choice == .open(openedID))
+        #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Start in control-plane")
+        #expect(TaskInboxCard.startTitle(for: nil, choices: choices) == "Start")
+
+        // A suggestion that is only a directory now, such as a renamed
+        // workspace that left the recent list, keeps its saved title.
+        let renamed = fixture.root.appendingPathComponent("proj", isDirectory: true)
+        try FileManager.default.createDirectory(at: renamed, withIntermediateDirectories: true)
+        var record = TaskRecord(createdAt: Date(), text: "x", title: "x", slug: "x", source: .cli, setup: .needsWorkspace(reason: "Not open."))
+        record.suggestedWorkspace = TaskWorkspaceSuggestion(title: "My Project", rootDirectory: renamed.path)
+        try fixture.coordinator.records.insert(record)
+        choices = fixture.coordinator.workspaceChoices(taskID: record.id)
+        #expect(choices.suggested?.choice == .directory(renamed.path))
+        #expect(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open My Project & Start")
+        try fixture.coordinator.setWorkspace(taskID: record.id, choice: .directory(renamed.path))
+        let opened = try #require(fixture.record(record.id)?.workspaceID)
+        #expect(fixture.store.state.workspacesByID[opened]?.title == "My Project")
+    }
+
     @Test func deleteStopsARunningTriage() async throws {
         let fixture = try makeFixture()
         fixture.triage.holdUntilCancelled()

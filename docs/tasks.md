@@ -95,9 +95,10 @@ toastty task get <task-id>      # one task, with its setup state
 toastty task list               # every task, oldest first
 toastty task retry <task-id>    # run setup, or a move into a worktree, again after it failed
 toastty task delete <task-id>   # delete the task and its attached files
-toastty task workspace-choices  # open and recently closed workspaces
+toastty task workspace-choices [<task-id>]  # open and recently closed workspaces, and triage's suggestion
 toastty task set-workspace <task-id> --workspace <id>   # place a waiting task
 toastty task set-workspace <task-id> --recent <id>      # reopen a closed one
+toastty task set-workspace <task-id> --root <dir>       # open a project directory
 ```
 
 These are short forms of `action run task.create`, `query run task.get`,
@@ -129,8 +130,10 @@ to stdin, and stops the command after `timeout_seconds`.
 
 The JSON holds the task text and the names of its files; the open top-level
 workspaces with their IDs, titles, root directories and the `guidelines` from
-their `[workspace."…"]` sections; the installed agent profiles that can take a
-first prompt; and `[triage] guidelines` (or the contents of `guidelines_file`,
+their `[workspace."…"]` sections; while the workspace is still to choose, the
+projects that are not open (`closed_workspaces`: recently closed workspaces,
+then the other `[workspace."…"]` roots, with titles, root directories and
+guidelines); the installed agent profiles that can take a first prompt; and `[triage] guidelines` (or the contents of `guidelines_file`,
 a path that is absolute, under `~`, or relative to `~/.toastty`). Values you
 already chose are listed as fixed.
 
@@ -145,7 +148,10 @@ The command answers with one JSON object on stdout:
 
 Toastty also reads the object from a fenced code block, after other text, or
 from the result of `claude -p --output-format json`. `workspace` may also be a
-root directory that exactly one open workspace has.
+root directory that exactly one open workspace has, or the root of one of
+`closed_workspaces`. That one is a suggestion: Toastty never opens a workspace
+on its own, so the task waits for you with it chosen (see
+[Pick a workspace](#pick-a-workspace)).
 
 Toastty checks the answer. The workspace must be open and the agent an
 installed profile; a model or effort counts only for an agent that takes one.
@@ -159,9 +165,13 @@ attached files.
 
 A task waits as `⚠ pick a workspace` when triage did not choose an open
 workspace, its workspace closed, or triage is off and the task names none.
-Open it from the Inbox. The Workspace menu lists open workspaces, then recently
-closed ones. Choose one and press Start. Toastty reopens a closed workspace
-with its title and one terminal in its root directory, without switching to it.
+Open it from the Inbox. The Workspace menu lists triage's suggestion, then open
+workspaces, then recently closed ones. When triage suggested a project that is
+not open, it is already chosen, and the main button names it, as in **Open
+toastty & Start**. Choose another one, or press it. Toastty opens a closed workspace, or
+a project from `tasks.toml` that was never open, with one terminal in its root
+directory, without switching to it. A reopened workspace keeps its title; a new
+one is named after its directory.
 Triage then runs again with the workspace fixed, for anything else the task
 still needs, and setup starts. Retry Triage asks triage again instead.
 

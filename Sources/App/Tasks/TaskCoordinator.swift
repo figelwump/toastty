@@ -542,7 +542,8 @@ final class TaskCoordinator {
     }
 
     /// Places a task that has not started in a workspace the user chose:
-    /// an open one, or a recently closed one, which Toastty opens again.
+    /// an open one, or a recently closed one or a project directory, which
+    /// Toastty opens.
     /// Triage then runs for anything else still missing, with the
     /// workspace fixed.
     func setWorkspace(taskID: UUID, choice: TaskWorkspaceChoice) throws {
@@ -571,7 +572,17 @@ final class TaskCoordinator {
             try checkProjectUnchanged(record, newRoot: root)
         case .recent(let recentID):
             try checkProjectUnchanged(record, newRoot: recentWorkspaces?.item(id: recentID)?.rootDirectory)
-            workspaceID = try reopenRecentWorkspace(recentID)
+            guard let recent = recentWorkspaces?.item(id: recentID) else {
+                throw TaskError("No recently closed workspace has ID \(recentID.uuidString).")
+            }
+            workspaceID = try openProject(title: recent.title, rootDirectory: recent.rootDirectory)
+        case .directory(let path):
+            let rootDirectory = TasksConfigFile.normalizedPath(path, homeDirectoryPath: homeDirectoryPath)
+            try checkProjectUnchanged(record, newRoot: rootDirectory)
+            workspaceID = try openProject(
+                title: Self.projectTitle(rootDirectory: rootDirectory, suggestion: record.suggestedWorkspace, homeDirectoryPath: homeDirectoryPath),
+                rootDirectory: rootDirectory
+            )
         }
         do {
             try records.save(id: taskID) {
@@ -579,6 +590,7 @@ final class TaskCoordinator {
                 $0.workspaceID = workspaceID
                 $0.projectRoot = nil
                 $0.resolved = nil
+                $0.suggestedWorkspace = nil
                 $0.setup = .routing
             }
         } catch {
@@ -607,26 +619,88 @@ final class TaskCoordinator {
     }
 
     /// The workspaces a task can be placed in, for the picker: the open
-    /// top-level ones, then recently closed ones whose project is not open.
-    func workspaceChoices() -> TaskWorkspaceChoices {
+    /// top-level ones, then recently closed ones whose project is not open,
+    /// and the project triage suggested for `taskID`, if any.
+    func workspaceChoices(taskID: UUID? = nil) -> TaskWorkspaceChoices {
         let recent = (recentWorkspaces?.items ?? []).filter { openWorkspace(onRoot: $0.rootDirectory) == nil }
-        return TaskWorkspaceChoices(
-            open: topLevelWorkspaces().map { TaskWorkspaceChoices.Open(id: $0.id, title: $0.title) },
+        var choices = TaskWorkspaceChoices(
+            open: topLevelWorkspaces().map {
+                TaskWorkspaceChoices.Open(id: $0.id, title: $0.title, rootDirectory: Self.rootDirectory(of: $0, fileManager: fileManager))
+            },
             recent: recent
         )
+        if let taskID, let record = records.record(id: taskID), case .needsWorkspace = record.setup,
+           let suggestion = record.suggestedWorkspace {
+            let target = TasksConfigFile.normalizedPath(suggestion.rootDirectory, homeDirectoryPath: homeDirectoryPath)
+            let choice: TaskWorkspaceChoice
+            if let open = openWorkspace(onRoot: suggestion.rootDirectory) {
+                choice = .open(open.id)
+            } else if let item = recent.first(where: { TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) == target }) {
+                choice = .recent(item.id)
+            } else {
+                choice = .directory(suggestion.rootDirectory)
+            }
+            // A reopened or open workspace keeps its own title; a directory
+            // opens under the suggestion's, as `projectTitle` names it.
+            let title: String
+            if case .directory = choice {
+                title = suggestion.title
+            } else {
+                title = choices.title(of: choice) ?? suggestion.title
+            }
+            choices.suggested = TaskWorkspaceChoices.Suggested(
+                title: title,
+                rootDirectory: suggestion.rootDirectory,
+                choice: choice
+            )
+        }
+        return choices
     }
 
-    /// Opens a recently closed project again, or finds it open already,
-    /// and returns its workspace.
-    private func reopenRecentWorkspace(_ recentID: UUID) throws -> UUID {
-        guard let recent = recentWorkspaces?.item(id: recentID) else {
-            throw TaskError("No recently closed workspace has ID \(recentID.uuidString).")
+    /// The title for a workspace opened on a project directory: the
+    /// suggestion's, else the directory's name.
+    static func projectTitle(rootDirectory: String, suggestion: TaskWorkspaceSuggestion?, homeDirectoryPath: String) -> String {
+        if let suggestion,
+           TasksConfigFile.normalizedPath(suggestion.rootDirectory, homeDirectoryPath: homeDirectoryPath) == rootDirectory {
+            return suggestion.title
         }
-        if let open = openWorkspace(onRoot: recent.rootDirectory) {
+        return URL(filePath: rootDirectory).lastPathComponent
+    }
+
+    /// The projects that are not open, for triage to suggest: recently
+    /// closed workspaces, then the `[workspace."<root>"]` roots in
+    /// tasks.toml, one per root directory, each still a directory. `open`
+    /// holds the open workspaces' git roots, so a terminal inside a nested
+    /// repository does not hide the project around it.
+    private func closedWorkspaces(config: TasksConfig, open: [TaskTriage.Workspace]) -> [TaskTriage.ClosedWorkspace] {
+        var seen = Set(open.map { TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) })
+        var result: [TaskTriage.ClosedWorkspace] = []
+        func add(title: String?, root: String) {
+            let normalized = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+            guard seen.insert(normalized).inserted, isDirectory(normalized) else { return }
+            result.append(TaskTriage.ClosedWorkspace(
+                title: title ?? URL(filePath: normalized).lastPathComponent,
+                rootDirectory: normalized,
+                guidelines: config.workspace(forProjectRoot: normalized, homeDirectoryPath: homeDirectoryPath)?.guidelines
+            ))
+        }
+        for item in recentWorkspaces?.items ?? [] {
+            add(title: item.title, root: item.rootDirectory)
+        }
+        for workspace in config.workspaces {
+            add(title: nil, root: workspace.path)
+        }
+        return result
+    }
+
+    /// Opens a project that is not open as a new top-level workspace, or
+    /// finds it open already, and returns its workspace.
+    private func openProject(title: String, rootDirectory: String) throws -> UUID {
+        if let open = openWorkspace(onRoot: rootDirectory) {
             return open.id
         }
-        guard isDirectory(recent.rootDirectory) else {
-            throw TaskError("The directory \(recent.rootDirectory) no longer exists.")
+        guard isDirectory(rootDirectory) else {
+            throw TaskError("The directory \(rootDirectory) no longer exists.")
         }
         guard let windowID = store.state.windows.first?.id else {
             throw TaskError("Open a Toastty window, then try again.")
@@ -636,15 +710,15 @@ final class TaskCoordinator {
             windowID: windowID,
             workspaceID: workspaceID,
             panelID: UUID(),
-            title: recent.title,
-            rootDirectory: recent.rootDirectory
+            title: title,
+            rootDirectory: rootDirectory
         )) else {
-            throw TaskError("Toastty could not open \(recent.title) again.")
+            throw TaskError("Toastty could not open \(title).")
         }
         flushLayout()
-        ToasttyLog.info("Reopened a recent workspace for a task", category: .tasks, metadata: [
+        ToasttyLog.info("Opened a project workspace for a task", category: .tasks, metadata: [
             "workspace_id": workspaceID.uuidString,
-            "recent_id": recentID.uuidString,
+            "root": rootDirectory,
         ])
         return workspaceID
     }
@@ -1086,6 +1160,7 @@ final class TaskCoordinator {
         }
         var workspaces = await openWorkspaces(config: config)
         guard isRouting(taskID: taskID, attempt: attempt) else { return }
+        var closed = fixedID == nil ? closedWorkspaces(config: config, open: workspaces) : []
         let pinnedAgent = record.pinned.agent.flatMap { id in agents.first { $0.id == id } }
         let missing = TaskTriage.missingFields(pinned: record.pinned, workspaceID: fixedID, pinnedAgent: pinnedAgent)
 
@@ -1099,6 +1174,7 @@ final class TaskCoordinator {
                     fixed: record.pinned,
                     fixedWorkspace: fixedID.flatMap { id in workspaces.first { $0.id == id } },
                     workspaces: workspaces,
+                    closedWorkspaces: closed,
                     agents: agents,
                     guidelines: try triageGuidelines(triage)
                 )
@@ -1118,9 +1194,12 @@ final class TaskCoordinator {
                 triageFailure = "Triage failed: \(error.localizedDescription)"
             }
             guard isRouting(taskID: taskID, attempt: attempt) else { return }
-            // A workspace may have closed while triage ran.
+            // A workspace may have closed, or opened, while triage ran.
             workspaces = await openWorkspaces(config: config)
             guard isRouting(taskID: taskID, attempt: attempt) else { return }
+            if fixedID == nil {
+                closed = closedWorkspaces(config: config, open: workspaces)
+            }
         }
         guard let current = records.record(id: taskID) else { return }
         let stillFixedID = fixedID.flatMap { store.state.workspacesByID[$0] == nil ? nil : $0 }
@@ -1129,6 +1208,7 @@ final class TaskCoordinator {
             workspaceID: stillFixedID,
             answer: answer,
             workspaces: workspaces,
+            closedWorkspaces: closed,
             agents: agents,
             homeDirectoryPath: homeDirectoryPath
         )
@@ -1162,10 +1242,14 @@ final class TaskCoordinator {
             } else {
                 reason = "No workspace was named, and triage is off. Pick a workspace for this task."
             }
+            let suggestion = fixedClosed ? nil : resolution.suggestedWorkspace.map {
+                TaskWorkspaceSuggestion(title: $0.title, rootDirectory: $0.rootDirectory)
+            }
             routingEnded(taskID: taskID, attempt: attempt) {
                 $0.title = title
                 $0.slug = slug
                 $0.triageNote = triageNote
+                $0.suggestedWorkspace = suggestion
                 $0.setup = .needsWorkspace(reason: reason)
             }
             return
@@ -1233,6 +1317,7 @@ final class TaskCoordinator {
                 $0.title = title
                 $0.slug = slug
                 $0.triageNote = finalNote
+                $0.suggestedWorkspace = nil
                 $0.setup = .settingUp
             }
         } catch {

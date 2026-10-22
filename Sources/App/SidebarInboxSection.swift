@@ -5,9 +5,13 @@ import SwiftUI
 /// the words can be tested without hosting it.
 struct SidebarInboxRowPresentation: Equatable {
     var title: String
+    /// Where the task stands, in full, for accessibility.
     var detail: String
     var tag: String
     var needsUser: Bool
+    /// The short text after the tag; `nil` when the full detail is too long
+    /// for the row and belongs in the popover.
+    var hint: String?
 
     static func make(_ record: TaskRecord, workspaceTitle: (UUID) -> String?) -> Self {
         let workspace = record.workspaceID.flatMap(workspaceTitle) ?? "closed workspace"
@@ -15,21 +19,25 @@ struct SidebarInboxRowPresentation: Equatable {
         switch record.setup {
         case .routing:
             let detail = record.workspaceID.flatMap(workspaceTitle).map { "→ \($0)\(agent)" } ?? "choosing a workspace"
-            return .init(title: record.title, detail: detail, tag: "routing…", needsUser: false)
+            return .init(title: record.title, detail: detail, tag: "routing…", needsUser: false, hint: detail)
         case .needsWorkspace(let reason):
-            return .init(title: record.title, detail: reason, tag: "⚠ pick a workspace", needsUser: true)
+            let hint = record.suggestedWorkspace.map { "suggests \($0.title)" }
+            return .init(title: record.title, detail: [hint, reason].compactMap { $0 }.joined(separator: ". "), tag: "⚠ pick a workspace", needsUser: true, hint: hint)
         case .settingUp:
-            return .init(title: record.title, detail: "→ \(workspace)\(agent)", tag: "setting up", needsUser: false)
+            let detail = "→ \(workspace)\(agent)"
+            return .init(title: record.title, detail: detail, tag: "setting up", needsUser: false, hint: detail)
         case .setupFailed(let reason):
             return .init(title: record.title, detail: reason, tag: "⚠ setup failed", needsUser: true)
         case .started:
             switch record.startWork?.state {
             case .running?:
-                return .init(title: record.title, detail: startWorkStep(record), tag: "moving to worktree", needsUser: false)
+                let detail = startWorkStep(record)
+                return .init(title: record.title, detail: detail, tag: "moving to worktree", needsUser: false, hint: detail)
             case .failed(let reason)?:
                 return .init(title: record.title, detail: reason, tag: "⚠ worktree failed", needsUser: true)
             case .finished?, nil:
-                return .init(title: record.title, detail: "→ \(workspace)\(agent)", tag: "started", needsUser: false)
+                let detail = "→ \(workspace)\(agent)"
+                return .init(title: record.title, detail: detail, tag: "started", needsUser: false, hint: detail)
             }
         }
     }
@@ -184,12 +192,9 @@ struct SidebarInboxSection: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(minHeight: Self.lineMinHeight, alignment: .leading)
+                // The tag first, so a narrow sidebar cuts the hint after it
+                // rather than leaving one letter of a long reason before it.
                 HStack(spacing: 6) {
-                    SidebarView.styledSessionSummaryText(presentation.detail)
-                        .foregroundStyle(ToastyTheme.sidebarSummaryText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
                     Text(presentation.tag)
                         .font(ToastyTheme.fontWorkspaceSessionChip)
                         .foregroundStyle(
@@ -200,6 +205,13 @@ struct SidebarInboxSection: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+                    if let hint = presentation.hint {
+                        SidebarView.styledSessionSummaryText(hint)
+                            .foregroundStyle(ToastyTheme.sidebarSummaryText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -221,9 +233,10 @@ struct SidebarInboxSection: View {
             }
         }
         .popover(isPresented: isPresented, arrowEdge: .trailing) {
-            TaskInboxPopover(taskID: record.id, records: records, coordinator: coordinator) {
+            TaskInboxCard(taskID: record.id, records: records, coordinator: coordinator) {
                 presentedTaskID = nil
             }
+            .inboxPopoverChrome()
         }
         .contextMenu {
             Button("Show Task…") { presentedTaskID = record.id }
@@ -245,172 +258,5 @@ struct SidebarInboxSection: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) { presentedTaskID = record.id }
         .accessibilityIdentifier("sidebar.inbox.task.\(record.id.uuidString)")
-    }
-}
-
-/// Opened from an Inbox row: the whole task, why setup failed, and the
-/// actions that move it on.
-struct TaskInboxPopover: View {
-    let taskID: UUID
-    @ObservedObject var records: TaskRecordStore
-    let coordinator: TaskCoordinator
-    let dismiss: () -> Void
-
-    @State private var errorMessage: String?
-    @State private var choices: TaskWorkspaceChoices?
-    @State private var chosen: TaskWorkspaceChoice?
-
-    var body: some View {
-        Group {
-            if let record = records.record(id: taskID), SidebarInboxRowPresentation.isInInbox(record) {
-                content(record)
-            } else {
-                // The task started or was deleted while the popover was open.
-                Text("This task left the Inbox.")
-                    .font(ToastyTheme.fontBody)
-                    .foregroundStyle(ToastyTheme.mutedText)
-                    .padding(14)
-            }
-        }
-        .frame(width: 320, alignment: .leading)
-    }
-
-    private func content(_ record: TaskRecord) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(record.title)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(ToastyTheme.primaryText)
-                .lineLimit(2)
-
-            ScrollView {
-                Text(record.text.isEmpty ? (record.pinned.prompt ?? "") : record.text)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxHeight: 140)
-            .fixedSize(horizontal: false, vertical: true)
-
-            if record.attachments.isEmpty == false {
-                Text(record.attachments.map(\.displayName).joined(separator: ", "))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .lineLimit(2)
-            }
-
-            if case .needsWorkspace(let reason) = record.setup {
-                workspacePicker(reason: reason)
-            }
-
-            if let reason = SidebarInboxRowPresentation.failureReason(record) {
-                Text(reason)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ToastyTheme.sidebarWorkspaceTagBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.sessionErrorText)
-            }
-
-            HStack(spacing: 6) {
-                Button("Delete", role: .destructive) {
-                    perform { try coordinator.delete(taskID: record.id) }
-                }
-                Spacer(minLength: 0)
-                if SidebarInboxRowPresentation.canRetry(record) {
-                    Button("Retry") {
-                        perform { try coordinator.retry(taskID: record.id) }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                } else if case .needsWorkspace = record.setup {
-                    Button("Retry Triage") {
-                        perform { try coordinator.retry(taskID: record.id) }
-                    }
-                    Button(chosenTitle.map { "Start in \($0)" } ?? "Start") {
-                        guard let chosen else { return }
-                        perform { try coordinator.setWorkspace(taskID: record.id, choice: chosen) }
-                    }
-                    .disabled(chosen == nil)
-                    .keyboardShortcut(.defaultAction)
-                }
-            }
-            .controlSize(.small)
-        }
-        .padding(12)
-    }
-
-    /// Why triage could not place the task, and a menu of the open
-    /// workspaces, then the recently closed ones.
-    private func workspacePicker(reason: String) -> some View {
-        let choices = choices ?? TaskWorkspaceChoices(open: [], recent: [])
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(reason)
-                .font(.system(size: 11))
-                .foregroundStyle(ToastyTheme.inactiveText)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ToastyTheme.sidebarWorkspaceTagBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
-
-            HStack(spacing: 8) {
-                Text("Workspace")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.mutedText)
-                Menu(chosenTitle ?? "Choose…") {
-                    Section("Open") {
-                        ForEach(choices.open) { workspace in
-                            Button(workspace.title) { chosen = .open(workspace.id) }
-                        }
-                    }
-                    if choices.recent.isEmpty == false {
-                        Section("Recent") {
-                            ForEach(choices.recent) { item in
-                                Button("\(item.title) — closed \(item.closedAt.formatted(.relative(presentation: .named)))") {
-                                    chosen = .recent(item.id)
-                                }
-                            }
-                        }
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .accessibilityIdentifier("sidebar.inbox.workspacePicker")
-            }
-        }
-        .onAppear {
-            if self.choices == nil {
-                self.choices = coordinator.workspaceChoices()
-            }
-        }
-    }
-
-    private var chosenTitle: String? {
-        switch chosen {
-        case .open(let id)?:
-            choices?.open.first { $0.id == id }?.title
-        case .recent(let id)?:
-            choices?.recent.first { $0.id == id }?.title
-        case nil:
-            nil
-        }
-    }
-
-    private func perform(_ action: () throws -> Void) {
-        do {
-            try action()
-            errorMessage = nil
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
     }
 }

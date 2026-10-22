@@ -21,11 +21,16 @@ Scripted triage (default):
   `task set-workspace --recent` reopens that one without selecting it, triage
   runs again with it fixed, and the agent starts in its directory;
 - a task whose triage is still running when the app is killed is routed again
-  after the relaunch.
+  after the relaunch;
+- a task about a project that is not open (a `[workspace."…"]` root that was
+  never open): triage suggests it, the task waits with `suggestedWorkspace`,
+  `task workspace-choices <task-id>` offers it under `suggested`, nothing opens
+  on its own, and `task set-workspace --root` opens it without selecting it.
 
 Real model (`--model claude`): one task with workspace guidelines that give bugs
 model `opus` at effort `low` (not the defaults); the answer must be readable and
-follow them.
+follow them. Then a task about the closed website project; the real model must
+suggest it.
 """
 
 import importlib.util
@@ -57,7 +62,13 @@ text = data['task']['text']
 fixed = data['fixed']
 if 'slow' in text and not (Path(__file__).parent / 'answer-slow').exists():
     time.sleep(60)
-if 'billing' in text:
+if 'pricing' in text:
+    answer = {'agent': 'claude', 'first_prompt': 'TRIAGE: open the pricing page.', 'title': 'Pricing page typo',
+              'slug': 'pricing-typo'}
+    if 'workspace' not in fixed:
+        closed = [w for w in data.get('closed_workspaces', []) if w['title'] == 'website']
+        answer.update(workspace=closed[0]['root'] if closed else None, reason='It is about the website, which is not open.')
+elif 'billing' in text:
     answer = {'first_prompt': 'TRIAGE: check the plan cache.', 'title': 'Billing page shows the old plan',
               'slug': 'billing-old-plan', 'agent': 'claude'}
     if 'workspace' not in fixed:
@@ -96,9 +107,10 @@ def main():
     # NSHomeDirectory(), which CFFIXED_USER_HOME sets.
     project = toastty_home = root / 'project'
     billing = root / 'billing-service'
-    for directory in (runtime_home, toastty_home / '.toastty', fake_bin, billing):
+    website = root / 'website'
+    for directory in (runtime_home, toastty_home / '.toastty', fake_bin, billing, website):
         directory.mkdir(parents=True)
-    for repository in (project, billing):
+    for repository in (project, billing, website):
         subprocess.run(['git', 'init', '-q', str(repository)], check=True)
     agent = fake_bin / 'claude'
     agent.write_text(FAKE_AGENT)
@@ -123,7 +135,10 @@ def main():
     (toastty_home / '.toastty/tasks.toml').write_text(
         f'[triage]\ncommand = {json.dumps(command)}\ntimeout_seconds = 180\n\n'
         f'[defaults]\nagent = "claude"\n\n'
-        f'[workspace.{json.dumps(str(project))}]\nguidelines = {json.dumps(guidelines)}\n')
+        f'[workspace.{json.dumps(str(project))}]\nguidelines = {json.dumps(guidelines)}\n\n'
+        # Never open in the check: triage may only suggest it.
+        f'[workspace.{json.dumps(str(website))}]\n'
+        f'guidelines = "The marketing website: the landing page, the pricing page and the docs."\n')
     recent_id = '6B2D8E0C-1E3F-4A5B-9C7D-0E1F2A3B4C5D'
     (runtime_home / 'recent-workspaces.json').write_text(json.dumps(dict(version=1, items=[dict(
         id=recent_id, title='billing-service', rootDirectory=str(billing), closedAt='2026-10-17T12:00:00Z')])))
@@ -171,6 +186,26 @@ def main():
         listed = launched.wait_until_ready()
         return launched, listed
 
+    def suggest_closed_project(text):
+        """Creates a task about the website, which is not open, and checks that
+        it waits with the website suggested and nothing opened."""
+        before = len(instance.query('workspace.list')['workspaces'])
+        code, out, err = run_cli('task', 'create', text, '--wait', '--timeout', '240')
+        require(code == 1 and 'needs a workspace' in err, f'Expected a wait for a workspace: {code} {out} {err}')
+        waiting = json.loads(out)['result']
+        suggestion = waiting.get('suggestedWorkspace')
+        require(suggestion and os.path.realpath(suggestion['rootDirectory']) == str(website)
+                and suggestion['title'] == 'website', f'Website not suggested: {waiting}')
+        require(len(instance.query('workspace.list')['workspaces']) == before, 'A workspace opened on its own')
+        code, out, err = run_cli('task', 'workspace-choices', waiting['taskID'])
+        require(code == 0, f'workspace-choices failed: {out} {err}')
+        choices = json.loads(out)['result']
+        offered = choices.get('suggested') or {}
+        require(os.path.realpath(offered.get('rootDirectory', '')) == str(website), f'Not offered: {choices}')
+        require(not any(os.path.realpath(w.get('rootDirectory', '')) == str(website) for w in choices['open']),
+                f'Website listed as open: {choices}')
+        return waiting
+
     instance, workspaces = launch()
     try:
         workspace_id = workspaces[0]['workspaceID']
@@ -197,6 +232,10 @@ def main():
                     f'Triage did not follow the workspace guidelines: {record}')
             require(record['triageNote'] is None, f'Triage answer was not used in full: {record}')
             require(text in message and (record['prompt'] or '') in message, f'Prompt not delivered: {message!r}')
+            suggested = suggest_closed_project(
+                'The pricing page on the marketing website shows the wrong monthly price for the Team plan.')
+            step('real triage suggested the closed project', suggestedWorkspace=suggested['suggestedWorkspace'],
+                 reason=suggested['setup']['reason'])
             evidence['status'] = 'passed'
             return
 
@@ -263,6 +302,31 @@ def main():
                              lambda: (lambda t: t if t['setup']['state'] == 'started' else None)(task(slow_id)))
         require(restarted['slug'] == 'unread-dot-2', f'Slug not made unique: {restarted}')
         step('relaunch routed the unfinished task', slug=restarted['slug'])
+
+        # 4. Triage suggests a project that is not open; the user opens it.
+        workspace_id = next(w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected'])
+        waiting = suggest_closed_project('pricing page has a typo in the Team plan')
+        inputs = [json.loads(path.read_text().split('INPUT:\n', 1)[1])
+                  for path in sorted((fake_bin / 'triage-inputs').iterdir())]
+        pricing_input = next(data for data in inputs if 'pricing' in data['task']['text'])
+        closed = {w['title']: w for w in pricing_input.get('closed_workspaces', [])}
+        require(os.path.realpath(closed.get('website', {}).get('root', '')) == str(website)
+                and 'pricing page' in closed['website'].get('guidelines', ''), f'Closed projects: {pricing_input}')
+        step('triage suggested a project that is not open', suggestedWorkspace=waiting['suggestedWorkspace'],
+             closedWorkspaces=pricing_input['closed_workspaces'])
+
+        code, out, err = run_cli('task', 'set-workspace', waiting['taskID'], '--root', waiting['suggestedWorkspace']['rootDirectory'])
+        require(code == 0, f'set-workspace --root failed: {out} {err}')
+        placed = wait_for('the pricing task to start',
+                          lambda: (lambda t: t if t['setup']['state'] == 'started' else None)(task(waiting['taskID'])))
+        listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
+        opened = listed[placed['workspaceID']]
+        require(opened['title'] == 'website' and not opened['isSelected'], f'Opened: {opened}')
+        require(listed[workspace_id]['isSelected'], 'The selected workspace lost selection')
+        require(placed['suggestedWorkspace'] is None, f'Suggestion kept after placing: {placed}')
+        message, session = agent_message(placed)
+        require(os.path.realpath(session['cwd']) == str(website), f'Agent not in the website project: {session}')
+        step('opened the suggested project and started there', workspace=opened, cwd=session['cwd'])
 
         evidence['status'] = 'passed'
     finally:

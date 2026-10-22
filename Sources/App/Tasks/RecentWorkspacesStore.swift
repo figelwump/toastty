@@ -12,12 +12,16 @@ struct RecentWorkspace: Codable, Equatable, Identifiable, Sendable {
 }
 
 /// Where the user placed a task.
-enum TaskWorkspaceChoice: Equatable, Sendable {
+enum TaskWorkspaceChoice: Hashable, Sendable {
     /// An open workspace, by ID.
     case open(UUID)
     /// A recently closed workspace, by its `RecentWorkspace` ID. Toastty
     /// opens it again, unless its project is open already.
     case recent(UUID)
+    /// A project directory that is not open, such as a root from tasks.toml
+    /// that triage suggested. Toastty opens a workspace there, unless the
+    /// project is open already.
+    case directory(String)
 }
 
 /// What the workspace picker offers for a task.
@@ -25,11 +29,36 @@ struct TaskWorkspaceChoices: Equatable {
     struct Open: Equatable, Identifiable {
         var id: UUID
         var title: String
+        var rootDirectory: String?
+    }
+
+    /// The project triage suggested, and how to choose it now: it may have
+    /// been opened, or closed again, since triage ran.
+    struct Suggested: Equatable {
+        var title: String
+        var rootDirectory: String
+        var choice: TaskWorkspaceChoice
+
+        var isOpen: Bool {
+            if case .open = choice { return true }
+            return false
+        }
     }
 
     var open: [Open]
     /// Recently closed workspaces whose project is not open, newest first.
     var recent: [RecentWorkspace]
+    var suggested: Suggested? = nil
+
+    /// The title the picker shows for a choice.
+    func title(of choice: TaskWorkspaceChoice) -> String? {
+        if let suggested, suggested.choice == choice { return suggested.title }
+        switch choice {
+        case .open(let id): return open.first { $0.id == id }?.title
+        case .recent(let id): return recent.first { $0.id == id }?.title
+        case .directory(let path): return URL(filePath: path).lastPathComponent
+        }
+    }
 }
 
 /// The last closed top-level workspaces, newest first, one per root

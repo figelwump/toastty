@@ -869,9 +869,9 @@ toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
-toastty task set-workspace <task-id> (--workspace <id> | --recent <id>)
+toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
-toastty task workspace-choices
+toastty task workspace-choices [<task-id>]
 toastty task send <task-id> (<text> | --text-file <path>)
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
@@ -894,9 +894,11 @@ workspace, or the wait timed out (exit 1). Relative `--file` and
 starts the agent there; it needs a workspace.
 
 Triage fills what `task create` leaves out when `[triage]` is set up.
-`task set-workspace` places a task that waits for a workspace, in an open one
-or in a recently closed one from `task workspace-choices`, which Toastty
-reopens.
+`task set-workspace` places a task that waits for a workspace, in an open one,
+in a recently closed one from `task workspace-choices`, which Toastty reopens,
+or in a project directory (`--root`), which Toastty opens as a new workspace.
+`task workspace-choices <task-id>` also shows the project triage suggested for
+that task, if any.
 
 `task start-work` runs from an agent session and moves its task into a git
 worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It
