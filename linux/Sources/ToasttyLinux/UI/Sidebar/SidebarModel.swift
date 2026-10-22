@@ -55,7 +55,9 @@ public struct SidebarWorkspaceRowModel: Equatable, Sendable {
     public let isSelected: Bool
     public let showsNewBadge: Bool
     public let hasUnread: Bool
-    public let runningAgentCount: Int
+    /// macOS's `active/running` agent badge: sessions working out of live
+    /// agent sessions (process watches excluded).
+    public let agentSummary: WorkspaceAgentSummary
     /// Ctrl+Alt+N for the first nine workspaces.
     public let shortcutLabel: String?
     public let isSubspace: Bool
@@ -83,7 +85,8 @@ public enum SidebarModel {
             var subtitle = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
             if tabCount > 1 { subtitle = "\(tabCount) tabs · " + subtitle }
 
-            let sessionRows = sessions.sessions(workspaceID: workspaceID).map { session in
+            let statuses = sessions.sessions(workspaceID: workspaceID)
+            let sessionRows = statuses.map { session in
                 sessionRow(
                     session,
                     workspace: workspace,
@@ -99,7 +102,7 @@ public enum SidebarModel {
                 isSelected: isSelected,
                 showsNewBadge: isSelected == false && workspace.hasBeenVisited == false,
                 hasUnread: workspace.unreadNotificationCount > 0,
-                runningAgentCount: sessionRows.filter { $0.statusKind == .working }.count,
+                agentSummary: WorkspaceAgentSummary.make(from: statuses, workspaceID: workspaceID),
                 shortcutLabel: shortcutLabel(index),
                 isSubspace: workspace.parentWorkspaceID != nil,
                 isDone: workspace.doneAt != nil,

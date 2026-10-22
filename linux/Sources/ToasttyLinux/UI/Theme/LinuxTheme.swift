@@ -140,6 +140,13 @@ public enum LinuxTheme {
       border-radius: 999px; background-color: var(--accent-bg-color); color: var(--accent-fg-color);
     }
     .count-badge.quiet { background-color: alpha(currentColor, 0.12); color: inherit; }
+    /* macOS workspaceAgentCountBadge: muted text, working tint while active. */
+    .agent-count-badge {
+      font-size: 0.75em; font-weight: 600; min-height: 16px; padding: 0 7px;
+      border-radius: 999px; background-color: alpha(currentColor, 0.1); color: alpha(currentColor, 0.65);
+    }
+    .agent-count-badge.active { background-color: color-mix(in srgb, var(--toastty-working) 15%, transparent); }
+    .agent-count-badge spinner { min-width: 8px; min-height: 8px; }
 
     .shortcut-hint {
       font-family: monospace; font-size: 0.74em; font-weight: 600;

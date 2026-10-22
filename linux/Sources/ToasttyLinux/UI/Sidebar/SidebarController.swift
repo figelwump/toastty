@@ -120,6 +120,24 @@ public final class SidebarController {
         }
     }
 
+    /// macOS `workspaceAgentCountBadge`: "active/running", with a spinner
+    /// and the working tint while any agent works, quiet otherwise.
+    private func makeAgentCountBadge(_ summary: WorkspaceAgentSummary) -> WidgetPtr {
+        let badge = Gtk.hbox(spacing: summary.hasActive ? 4 : 0, classes: ["agent-count-badge"])
+        Gtk.setClass(badge, "active", summary.hasActive)
+        gtk_widget_set_valign(badge, GTK_ALIGN_CENTER)
+        if summary.hasActive {
+            let spinner = gtk_spinner_new()!
+            gtk_spinner_start(cast(spinner))
+            gtk_widget_set_size_request(spinner, 8, 8)
+            gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER)
+            Gtk.append(badge, spinner)
+        }
+        Gtk.append(badge, Gtk.label("\(summary.active)/\(summary.running)", xalign: 0.5, ellipsize: false))
+        gtk_widget_set_tooltip_text(badge, "\(summary.active) active, \(summary.running) running")
+        return badge
+    }
+
     private func makeCard(_ row: SidebarWorkspaceRowModel) -> WidgetPtr {
         let card = Gtk.vbox(spacing: 2, classes: ["workspace-card"])
         Gtk.setName(card, "workspace-card-\(row.index)")
@@ -142,10 +160,8 @@ public final class SidebarController {
             gtk_widget_set_tooltip_text(dot, "Unread")
             Gtk.append(titleLine, dot)
         }
-        if row.runningAgentCount > 0 {
-            let badge = Gtk.label("\(row.runningAgentCount)", classes: ["count-badge"], xalign: 0.5, ellipsize: false)
-            gtk_widget_set_tooltip_text(badge, "\(row.runningAgentCount) running")
-            Gtk.append(titleLine, badge)
+        if row.agentSummary.hasRunning {
+            Gtk.append(titleLine, makeAgentCountBadge(row.agentSummary))
         }
         if let shortcut = row.shortcutLabel {
             let hint = Gtk.label(shortcut, classes: ["shortcut-hint"], xalign: 0.5, ellipsize: false)

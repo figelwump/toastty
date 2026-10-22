@@ -383,6 +383,11 @@ public final class AutomationScript {
             }
         }
         result["sidebarSessions"] = sessionRows.isEmpty ? "none" : sessionRows.joined(separator: ",")
+        // Agent count badges as `<workspace>:<active>/<running>`.
+        let agentRows = controller.sidebar.rowModels.filter(\.agentSummary.hasRunning).map {
+            "\($0.index):\($0.agentSummary.active)/\($0.agentSummary.running)"
+        }
+        result["sidebarAgents"] = agentRows.isEmpty ? "none" : agentRows.joined(separator: ",")
         if let selection = state.workspaceSelection(in: window.id), let tab = selection.workspace.selectedTab {
             let workspace = selection.workspace
             result["workspace"] = workspace.title

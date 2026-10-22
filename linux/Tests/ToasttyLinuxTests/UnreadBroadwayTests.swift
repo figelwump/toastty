@@ -35,11 +35,11 @@ struct UnreadBroadwayTests {
     terminal-type "$T" session start --agent claude --panel "$P" --session s1 >/dev/null; ev s1 '{"hook_event_name":"UserPromptSubmit","prompt":"hi","session_id":"n1"}'; echo STARTED; sleep 3; ev s1 '{"hook_event_name":"Stop","session_id":"n1"}'; sleep 600
     terminal-key Return
     terminal-wait-text 10000 STARTED
-    expect sidebarSessions=0:working
+    expect sidebarSessions=0:working sidebarAgents=0:1/1
     action workspace.create
     expect workspaces=2 workspaceIndex=1
     terminal-wait-state 10000 unreadCounts=1,0
-    expect sidebarUnread=0 sidebarSessions=0:ready:ready
+    expect sidebarUnread=0 sidebarSessions=0:ready:ready sidebarAgents=0:0/1
     action workspace.select-1
     terminal-wait-state 3000 unreadCounts=0,0
     expect sidebarUnread=none sidebarSessions=0:idle

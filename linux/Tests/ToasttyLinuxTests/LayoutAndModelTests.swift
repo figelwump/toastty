@@ -246,6 +246,8 @@ struct PaletteAndSidebarTests {
         #expect(sessions[0].statusKind == .working)
         #expect(sessions[1].chipLabel == "approval")
         #expect(sessions[1].attentionClass == "attention-approval")
+        // macOS "active/running": one working out of three live agents.
+        #expect(rows[0].agentSummary == WorkspaceAgentSummary(running: 3, active: 1))
         demo.setFlaggedForLater(sessionID: sessions[0].sessionID, flagged: true)
         let flagged = SidebarModel.rows(state: fixture.store.state, windowID: fixture.windowID, sessions: demo)
         #expect(flagged[0].sessions[0].isFlaggedForLater)
