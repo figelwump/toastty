@@ -23,7 +23,9 @@ public final class WebPanelHost: RightPanelContentHosting, WindowCommandHandling
     public init(services: any WebPanelServices) {
         self.services = services
         let resources = WebPanelResources.resourcesDirectory()
-        WebKitEnvironment.shared.pageDirectories = WebPanelResources.pageDirectories(resources: resources)
+        // First use creates the shared web context.
+        let environment = WebKitRendererSelection.withDMABufRenderer { WebKitEnvironment.shared }
+        environment.pageDirectories = WebPanelResources.pageDirectories(resources: resources)
         if resources == nil {
             FileHandle.standardError.write(Data("toastty-linux: web panel resources not found; set TOASTTY_APP_RESOURCES_PATH\n".utf8))
         }

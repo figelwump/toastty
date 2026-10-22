@@ -208,3 +208,20 @@ struct DesktopIntegrationTests {
         g_variant_unref(g_variant_ref_sink(payload))
     }
 }
+
+@Suite("WebKit renderer selection")
+struct WebKitRendererSelectionTests {
+    @Test func forcesDMABufUnlessTheUserChose() {
+        #expect(WebKitRendererSelection.shouldForceDMABufRenderer(environment: [:]))
+        #expect(WebKitRendererSelection.shouldForceDMABufRenderer(environment: ["WEBKIT_FORCE_DMABUF_RENDERER": "0"]) == false)
+        #expect(WebKitRendererSelection.shouldForceDMABufRenderer(environment: ["WEBKIT_DISABLE_DMABUF_RENDERER": "1"]) == false)
+    }
+
+    @Test func setsTheVariableOnlyAroundContextCreation() {
+        let seen = WebKitRendererSelection.withDMABufRenderer(environment: [:]) {
+            ProcessInfo.processInfo.environment[WebKitRendererSelection.forceVariable]
+        }
+        #expect(seen == "1")
+        #expect(ProcessInfo.processInfo.environment[WebKitRendererSelection.forceVariable] == nil)
+    }
+}
