@@ -2322,7 +2322,9 @@ final class SidebarViewTests: XCTestCase {
         tasks.hostingView.layoutSubtreeIfNeeded()
         XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
         XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
+        // Closed views stop observing the board, as in the app.
         tasks.window.orderOut(nil)
+        tasks.window.contentView = nil
 
         // The Status segment's Done expands Done in a view that opens after
         // the click, as the app opens it.
