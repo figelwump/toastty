@@ -143,7 +143,7 @@ struct WorkspaceHeaderMergeControl: View {
     private func primaryHelpText(mode: WorkspaceMergeMode, blocker: PullRequestMergeBlocker?) -> String {
         if let blocker {
             return "\(blocker.label): \(pullRequestName) is not ready to merge. Open it on GitHub, "
-                + "or merge it anyway from the menu"
+                + "or merge it anyway from the menu or with \(shortcut.symbolLabel)"
         }
         return shortcut.helpText(isTask ? taskHelpText : helpText(for: mode))
     }

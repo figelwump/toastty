@@ -15,6 +15,9 @@ struct TaskBoardTests {
         private var recorded: [[String]] = []
         private var held: [CheckedContinuation<Void, Never>] = []
         var holdsAnswers = false
+        /// Fails requests for `readinessViewFields`, like a token that
+        /// cannot read checks.
+        var rejectsReadinessFields = false
 
         /// `checks` is the `statusCheckRollup` array as JSON.
         func answer(
@@ -54,6 +57,9 @@ struct TaskBoardTests {
                 await withCheckedContinuation { continuation in
                     lock.withLock { held.append(continuation) }
                 }
+            }
+            if lock.withLock({ rejectsReadinessFields }), arguments.last == PullRequestStateCache.readinessViewFields {
+                return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "checks: forbidden", failure: nil)
             }
             guard let stdout = lock.withLock({ answersByURL[url] }) else {
                 return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: not found", failure: nil)
@@ -174,7 +180,7 @@ struct TaskBoardTests {
         let closed = try #require(board.items().first { $0.id == .task(task.id) })
         #expect(closed.taskSpaceWorkspaceID == nil)
         #expect(closed.stage == .toShip)
-        #expect(gitHub.calls.allSatisfy { $0.suffix(2) == ["--json", "state,isDraft,headRefOid,mergeCommit"] })
+        #expect(gitHub.calls.allSatisfy { $0.suffix(2) == ["--json", PullRequestStateCache.readinessViewFields] })
     }
 
     @Test func theRecordKeepsTheDoneMarkAndTheRightPullRequestsMerge() async throws {
@@ -290,7 +296,7 @@ struct TaskBoardTests {
         // With no earlier answer, a merge state GitHub has not worked out
         // reads as ready.
         await answer("UNKNOWN", checks: "[\(running)]")
-        #expect(gitHub.calls.last?.last == PullRequestStateCache.viewFields)
+        #expect(gitHub.calls.last?.last == PullRequestStateCache.readinessViewFields)
         #expect(cache.state(for: link)?.mergeBlocker == nil)
 
         await answer("BLOCKED", checks: "[\(passed),\(running)]")
@@ -298,6 +304,9 @@ struct TaskBoardTests {
         await answer("BLOCKED", review: "REVIEW_REQUIRED", checks: "[\(passed)]")
         #expect(cache.state(for: link)?.mergeBlocker == .reviewRequired)
         await answer("BLOCKED", checks: "[\(failedStatus),\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+        // A finished check that did not pass, such as a stale one, fails.
+        await answer("BLOCKED", checks: #"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"STALE"}]"#)
         #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
 
         // An unknown answer keeps the last known one instead of flickering
@@ -313,7 +322,12 @@ struct TaskBoardTests {
         #expect(cache.state(for: link)?.mergeability?.mergeState == .clean)
         await answer("DIRTY")
         #expect(cache.state(for: link)?.mergeBlocker == .conflicts)
+        // A token that cannot read checks still learns of the merge.
+        gitHub.rejectsReadinessFields = true
+        let callsBefore = gitHub.calls.count
         await answer("UNKNOWN", state: "MERGED")
+        #expect(gitHub.calls.count == callsBefore + 2)
+        #expect(gitHub.calls.last?.last == PullRequestStateCache.viewFields)
         #expect(cache.state(for: link)?.state == .merged)
         #expect(cache.state(for: link)?.mergeBlocker == nil)
     }
