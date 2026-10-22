@@ -553,6 +553,7 @@ extension AppControlExecutor {
             case .agentError: result["attention"] = .string("agentError")
             case .review: result["attention"] = .string("review")
             case .readyForReview: result["attention"] = .string("readyForReview")
+            case .agentFinished: result["attention"] = .string("agentFinished")
             case .cleanupStopped(let reason):
                 result["attention"] = .string("cleanupStopped")
                 result["reason"] = .string(reason)

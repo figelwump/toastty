@@ -8,8 +8,7 @@ public enum SidebarSegment: String, Codable, CaseIterable, Sendable {
 }
 
 public struct WindowState: Codable, Equatable, Identifiable, Sendable {
-    public static let defaultSidebarWidthBeforeAgentLaunch: Double = 180
-    public static let defaultSidebarWidthAfterAgentLaunch: Double = 280
+    public static let defaultSidebarWidth: Double = 280
     public static let minSidebarWidth: Double = 160
     public static let maxSidebarWidth: Double = 480
     public static let sidebarWidthComparisonEpsilon: Double = 0.0001

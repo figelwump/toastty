@@ -277,7 +277,8 @@ struct TasksView: View {
             .id(RowIdentity(
                 subject: entry.id,
                 group: entry.item.stage.group,
-                statusLine: TaskBoardPresentation.statusLine(entry.item)
+                statusLine: TaskBoardPresentation.statusLine(entry.item),
+                hasUnreadTurn: entry.item.hasUnreadTurn
             ))
         }
     }
@@ -286,6 +287,7 @@ struct TasksView: View {
         let subject: TaskBoardItem.Subject
         let group: TaskStage.Group
         let statusLine: String
+        let hasUnreadTurn: Bool
     }
 
     /// The chosen task, or the first one that needs the user, or the first.
@@ -309,8 +311,9 @@ private struct TasksViewRow: View {
         HStack(alignment: .top, spacing: 10) {
             TaskStageMark(item: item)
             VStack(alignment: .leading, spacing: 3) {
+                // Bolder while a finished turn is unread, as in the sidebar.
                 Text(item.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: item.hasUnreadTurn ? .semibold : .medium))
                     .foregroundStyle(ToastyTheme.primaryText)
                     .lineLimit(1)
                 HStack(spacing: 8) {
@@ -362,7 +365,7 @@ private struct TasksViewRow: View {
         .onTapGesture(perform: select)
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
+        .accessibilityLabel("\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.statusLine(item))")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
         .accessibilityIdentifier("tasks.view.row")

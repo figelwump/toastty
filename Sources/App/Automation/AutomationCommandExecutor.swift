@@ -258,7 +258,6 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 request,
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScope(for: context)
             )
-            store.recordSuccessfulAgentLaunch()
             stateVersion += 1
             var response = try automationObject(plan)
             response["stateVersion"] = .int(stateVersion)

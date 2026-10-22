@@ -143,8 +143,7 @@ enum ToastyTheme {
     static let emptyStateShortcutBorder = Color(hex: 0x3A3028)
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
 
-    static let sidebarWidthBeforeAgentLaunch = CGFloat(WindowState.defaultSidebarWidthBeforeAgentLaunch)
-    static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidthAfterAgentLaunch)
+    static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidth)
     static let workspaceTabBarHeight: CGFloat = 34
     // Keep a small inset above the folder-style tabs so the accent line does
     // not sit flush against the window edge when the tab strip lives in the

@@ -125,11 +125,15 @@ final class QuickEntryPanel: NSPanel {
         invalidateShadow()
     }
 
-    /// The top third of the screen with the pointer, centred.
+    /// The top third of the screen, centred.
     static func defaultFrame(size: NSSize = defaultSize, screen: NSScreen?) -> NSRect {
         guard let visible = (screen ?? NSScreen.main)?.visibleFrame else {
             return NSRect(origin: .zero, size: size)
         }
+        return defaultFrame(size: size, visibleFrame: visible)
+    }
+
+    nonisolated static func defaultFrame(size: NSSize, visibleFrame visible: NSRect) -> NSRect {
         let centerY = visible.maxY - visible.height / 3
         return NSRect(
             x: (visible.midX - size.width / 2).rounded(),
@@ -139,9 +143,111 @@ final class QuickEntryPanel: NSPanel {
         )
     }
 
-    static func screenWithPointer() -> NSScreen? {
-        let location = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(location, $0.frame, false) }
+    /// The screen the user is working on: the one holding most of the
+    /// focused window, else the one with the pointer.
+    static func focusedScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let index = QuickEntryPlacement.screenIndex(
+            focusedWindowFrame: focusedWindowFrame(screens: screens),
+            pointer: NSEvent.mouseLocation,
+            screenFrames: screens.map(\.frame)
+        )
+        return index.map { screens[$0] }
+    }
+
+    /// Toastty's own key or main window while it is active. For another app,
+    /// its frontmost normal window from the window server, whose bounds need
+    /// no Accessibility or screen recording permission.
+    private static func focusedWindowFrame(screens: [NSScreen]) -> NSRect? {
+        if NSApp.isActive {
+            let window = [NSApp.keyWindow, NSApp.mainWindow]
+                .compactMap { $0 }
+                .first { $0.isVisible && ($0 is QuickEntryPanel) == false }
+            return window?.frame
+        }
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let primaryHeight = screens.first?.frame.height,
+              let windows = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements],
+                  kCGNullWindowID
+              ) as? [[String: Any]] else {
+            return nil
+        }
+        return QuickEntryPlacement.frontWindowBounds(of: pid, in: windows).map {
+            QuickEntryPlacement.cocoaFrame(fromWindowServerBounds: $0, primaryScreenHeight: primaryHeight)
+        }
+    }
+}
+
+/// Where the quick entry panel opens.
+enum QuickEntryPlacement {
+    /// Where the user last left the panel, and on which screen.
+    struct Remembered: Equatable {
+        var topLeft: NSPoint
+        var screenFrame: NSRect
+    }
+
+    /// The screen holding most of `focusedWindowFrame`, else the one with
+    /// the pointer.
+    static func screenIndex(focusedWindowFrame: NSRect?, pointer: NSPoint, screenFrames: [NSRect]) -> Int? {
+        if let focusedWindowFrame {
+            let overlaps = screenFrames.enumerated().map { index, frame -> (Int, CGFloat) in
+                let overlap = frame.intersection(focusedWindowFrame)
+                return (index, overlap.isNull ? 0 : overlap.width * overlap.height)
+            }
+            if let best = overlaps.max(by: { $0.1 < $1.1 }), best.1 > 0 {
+                return best.0
+            }
+        }
+        return screenFrames.firstIndex { NSMouseInRect(pointer, $0, false) }
+    }
+
+    /// The panel frame on the target screen: the remembered spot when it was
+    /// on that same screen, kept inside its visible area; otherwise the
+    /// default spot there.
+    static func frame(
+        size: NSSize,
+        screenFrame: NSRect,
+        visibleFrame: NSRect,
+        remembered: Remembered?
+    ) -> NSRect {
+        guard let remembered, remembered.screenFrame == screenFrame else {
+            return QuickEntryPanel.defaultFrame(size: size, visibleFrame: visibleFrame)
+        }
+        var frame = NSRect(
+            x: remembered.topLeft.x,
+            y: remembered.topLeft.y - size.height,
+            width: size.width,
+            height: size.height
+        )
+        frame.origin.x = min(max(frame.minX, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - size.width))
+        frame.origin.y = min(max(frame.minY, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - size.height))
+        return frame
+    }
+
+    /// The bounds of `pid`'s frontmost visible normal-layer window, from a
+    /// window server list ordered front to back. A focused floating panel
+    /// is not found this way; finding it needs Accessibility permission.
+    static func frontWindowBounds(of pid: pid_t, in windows: [[String: Any]]) -> CGRect? {
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (window[kCGWindowLayer as String] as? Int) == 0,
+                  // Apps keep invisible helper windows on screen.
+                  ((window[kCGWindowAlpha as String] as? Double) ?? 1) > 0,
+                  let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                  bounds.width > 1, bounds.height > 1 else {
+                continue
+            }
+            return bounds
+        }
+        return nil
+    }
+
+    /// Window server bounds have their origin at the top left of the primary
+    /// screen, with y growing down; AppKit's start at its bottom left.
+    static func cocoaFrame(fromWindowServerBounds bounds: CGRect, primaryScreenHeight: CGFloat) -> NSRect {
+        NSRect(x: bounds.minX, y: primaryScreenHeight - bounds.maxY, width: bounds.width, height: bounds.height)
     }
 }
 
