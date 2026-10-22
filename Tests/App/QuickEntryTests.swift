@@ -16,7 +16,10 @@ struct QuickEntryTests {
         let stagingRoot: URL
         let controller: QuickEntryController
 
-        init(create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil) throws {
+        init(
+            create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
+            recordsPresetUsage: Bool = false
+        ) throws {
             let fixture = try TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
             let stagingRoot = fixture.root.appendingPathComponent("quick-entry-staging", isDirectory: true)
@@ -25,6 +28,9 @@ struct QuickEntryTests {
             controller = QuickEntryController(
                 store: fixture.store,
                 agentProfiles: { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
+                presetUsage: recordsPresetUsage
+                    ? QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:]))
+                    : nil,
                 create: create ?? { request in
                     try await fixture.coordinator.create(request, caller: .quickEntry)
                 },
@@ -89,6 +95,12 @@ struct QuickEntryTests {
 
         func pickerCommand(_ selector: Selector) async throws {
             try await pickerEditor().doCommand(by: selector)
+        }
+
+        /// A key typed into the open picker, as the window server delivers it.
+        func typeKeyInPicker(_ characters: String, keyCode: Int) throws {
+            let pickerPanel = try #require(controller.pickerPanel)
+            pickerPanel.sendEvent(try QuickEntryTests.commandKey(characters, keyCode: keyCode, modifiers: []))
         }
 
         func pressCommand(_ characters: String, keyCode: Int, in window: NSWindow?) throws {
@@ -504,6 +516,79 @@ struct QuickEntryTests {
         let sent = try #require(fixture.router.sentTextByPanelID[panelID])
         #expect(sent.contains("gpt-6.1-sol"))
         #expect(sent.contains("model_reasoning_effort"))
+    }
+
+    @Test func aPresetChosenTwiceIsListedFirstAndItsNumberPicksIt() async throws {
+        let harness = try Harness(recordsPresetUsage: true)
+        let fixture = harness.fixture
+        fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        let sol = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high")
+
+        func create(_ text: String, choosing: Bool) async throws {
+            harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+            let panel = try #require(harness.controller.panel)
+            try harness.type(text)
+            if choosing {
+                // The three columns, each part chosen separately.
+                try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: panel)
+                try harness.pressCommand("\u{F703}", keyCode: kVK_RightArrow, in: harness.controller.pickerPanel)
+                try await harness.typeInPicker("codex")
+                try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
+                try await harness.typeInPicker("gpt-6.1-sol")
+                try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
+                try await harness.typeInPicker("high")
+                try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
+                #expect(harness.controller.model?.preset == sol)
+            }
+            try harness.pressCommandReturn()
+            await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        }
+
+        // Until a preset has two uses, Frequent is the [defaults] preset.
+        try await create("First", choosing: true)
+        try await create("Auto does not count", choosing: false)
+        harness.controller.present(prefill: .empty)
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
+        #expect(harness.controller.picker?.rows.first?.title == "Claude Code · claude-opus-5-5")
+        harness.controller.dismiss()
+
+        try await create("Second", choosing: true)
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
+        let picker = try #require(harness.controller.picker)
+        #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Codex · gpt-6.1-sol"])
+        #expect(picker.rows.first?.number == 1)
+
+        // With text in the search, a digit is typed.
+        try await harness.typeInPicker("c")
+        try harness.typeKeyInPicker("1", keyCode: kVK_ANSI_1)
+        #expect(harness.controller.pickerPanel != nil)
+        #expect(try await harness.pickerEditor().string == "c1")
+        #expect(harness.controller.picker?.query == "c1")
+        try await harness.pickerEditor().string = ""
+        harness.controller.picker?.query = ""
+        // Shift+1 is a character, not the shortcut.
+        let shifted = try QuickEntryTests.commandKey("!", keyCode: kVK_ANSI_1, modifiers: .shift)
+        harness.controller.pickerPanel?.sendEvent(shifted)
+        #expect(harness.controller.pickerPanel != nil)
+        try await harness.pickerEditor().string = ""
+        harness.controller.picker?.query = ""
+        try harness.typeKeyInPicker("1", keyCode: kVK_ANSI_1)
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(model.preset == sol)
+
+        // In the columns, digits filter.
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
+        try harness.pressCommand("\u{F703}", keyCode: kVK_RightArrow, in: harness.controller.pickerPanel)
+        try harness.typeKeyInPicker("1", keyCode: kVK_ANSI_1)
+        #expect(harness.controller.picker?.columns != nil)
+        #expect(harness.controller.picker?.query == "1")
+        harness.controller.dismiss()
+
+        let saved = try String(contentsOf: fixture.root.appendingPathComponent(".toastty/task-preset-usage.json"), encoding: .utf8)
+        #expect(saved.contains("gpt-6.1-sol"))
+        #expect(saved.contains("\"count\" : 2"))
     }
 
     @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {

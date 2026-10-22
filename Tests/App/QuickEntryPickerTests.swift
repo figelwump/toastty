@@ -106,6 +106,28 @@ struct QuickEntryPickerTests {
         #expect(choices.value == [.agent(xhigh)], "Return keeps the pinned preset")
     }
 
+    @Test func numberKeysPickAFrequentPresetOnlyWhileTheSearchIsEmpty() {
+        let gptHigh = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high")
+        let (picker, choices) = agentPicker(frequent: [Self.opusHigh, gptHigh])
+        #expect(picker.rows.map(\.number) == [1, 2, nil, nil])
+        #expect(picker.chooseFrequent(number: 3) == false)
+        #expect(picker.chooseFrequent(number: 2))
+        #expect(choices.value == [.agent(gptHigh)])
+
+        // A pinned preset under Current has no number.
+        let xhigh = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh")
+        let (pinned, _) = agentPicker(frequent: [Self.opusHigh], current: xhigh)
+        #expect(pinned.rows.map(\.number) == [nil, 1, nil, nil])
+
+        // Once there is a search, digits are part of it.
+        picker.query = "gpt"
+        #expect(picker.rows.allSatisfy { $0.number == nil })
+        #expect(picker.chooseFrequent(number: 1) == false)
+        picker.query = ""
+        picker.openColumns()
+        #expect(picker.chooseFrequent(number: 1) == false)
+    }
+
     @Test func presetsOfProfilesThatAreGoneAreNotListed() {
         let (picker, _) = agentPicker(frequent: [QuickEntryPreset(agent: "gemini", model: "gemini-pro"), Self.opusHigh])
         #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Claude Code · claude-opus-5-5"])

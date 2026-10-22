@@ -25,6 +25,9 @@ final class QuickEntryPickerPanel: NSPanel {
     /// The picker's search, so a shortcut that clears it also clears the
     /// field at once.
     var currentQuery: () -> String = { "" }
+    /// A digit with no modifier. Returns true when it picked a Frequent
+    /// preset; otherwise the digit is typed into the search.
+    var onNumberKey: (Int) -> Bool = { _ in false }
 
     /// The pill and the screen area the picker was placed for; a size
     /// change places it again.
@@ -87,6 +90,21 @@ final class QuickEntryPickerPanel: NSPanel {
 
     override func cancelOperation(_ sender: Any?) {
         onClose()
+    }
+
+    /// Takes 1–9 before the search field sees them, while the picker has a
+    /// use for the digit.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+           let characters = event.characters, characters.count == 1,
+           let number = Int(characters), number > 0,
+           // While an input method is composing, its keys are its own.
+           (firstResponder as? NSTextView)?.hasMarkedText() != true,
+           onNumberKey(number) {
+            return
+        }
+        super.sendEvent(event)
     }
 
     override func resignKey() {

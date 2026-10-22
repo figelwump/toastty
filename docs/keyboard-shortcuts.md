@@ -18,7 +18,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+W` | Close focused panel |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Option+Shift+T` | Open the quick entry panel to create a task, from any app. Set it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`; see [Quick entry](tasks.md#quick-entry) |
-| `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list |
+| `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list. In the Agent list, `1`–`5` pick a Frequent preset while the search is empty |
 | `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
 
 `Option+Shift+W` and the tab's close button ask before closing a tab only when something in it is still running. A managed agent that has finished its turn does not count as running; one that is working or waiting on approval does. Closing a workspace's last tab also closes the workspace.
