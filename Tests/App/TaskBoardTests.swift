@@ -261,6 +261,64 @@ struct TaskBoardTests {
         #expect(cache.state(for: link)?.state == .open)
     }
 
+    @Test func aFinishedTurnNeedsTheUserUnlessTheAgentWaitsOnAnotherTask() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+        let other = try await startTask(fixture, text: "Define the API")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+
+        // Started but no turn finished yet: still running.
+        #expect(try item().stage == .running)
+
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(try item().stage == .running)
+        #expect(try item().agent == .working)
+
+        // The turn ends with an unread answer: the next step is the user's.
+        let endedAt = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt)
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        var finished = try item()
+        #expect(finished.stage == .needsYou(.agentFinished))
+        #expect(finished.stage.group == .needsYou)
+        #expect(finished.hasUnreadTurn)
+        #expect(TaskBoardPresentation.statusLine(finished) == "Codex finished · waiting for you")
+
+        // Reading it keeps the task waiting for the user, without the unread mark.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        finished = try item()
+        #expect(finished.stage == .needsYou(.agentFinished))
+        #expect(finished.hasUnreadTurn == false)
+        // The idle status a read turn can collapse to still counts as finished.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(1)
+        )
+        #expect(try item().stage == .needsYou(.agentFinished))
+
+        // After a relaunch the restored session starts idle, with no turn
+        // timing: it still waits for the user.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        fixture.sessionRuntimeStore.stopSession(sessionID: session, at: endedAt.addingTimeInterval(2))
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "restored-\(session)", agent: .codex, panelID: panel, windowID: windowID, workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, launchReason: .restore, at: endedAt.addingTimeInterval(3)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(3)
+        )
+        #expect(try item().stage == .needsYou(.agentFinished))
+
+        // An agent that ended its turn to wait on another task is running.
+        _ = try fixture.coordinator.addWatch(targetTaskID: other.id, condition: .idle, notifyTaskID: task.id)
+        let waiting = try item()
+        #expect(waiting.stage == .running)
+        #expect(TaskBoardPresentation.statusLine(waiting) == "Codex · waiting for \(other.title)")
+    }
+
     @Test func childrenListUnderTheTaskThatStartedThem() {
         func item(_ title: String, taskID: UUID, parent: UUID? = nil, stage: TaskStage) -> TaskBoardItem {
             let record = TaskRecord(

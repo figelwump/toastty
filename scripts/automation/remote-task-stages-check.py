@@ -16,6 +16,8 @@ directory is the project root), a fake agent, and a tasks.toml with
 - `task adopt` gives a task space made by `workspace.create` a record;
 - `window.sidebar.set-segment` and `window.tasks.show` work without changing
   the selected workspace;
+- a task whose agent reports a finished turn is `needsYou`/`agentFinished`,
+  and goes back to `running` once it holds a watch on another task;
 - the sidebar Tasks row's + and the Tasks view's New Task open the quick
   entry panel;
 - while the Tasks view shows, typing does not reach the terminal under it;
@@ -207,6 +209,25 @@ def main():
         cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')
+
+        # 3b. A task whose agent finishes a turn needs the user, in the
+        # Tasks view too; one that waits on another task through a watch is
+        # still running.
+        answered = cli_json('task', 'create', 'Explain the empty file search', '--workspace', workspace_id,
+                            '--wait', '--timeout', '90')
+        answered_id, answered_session = answered['taskID'], answered['setup']['sessionID']
+        for kind, summary in (('working', 'Working'), ('ready', 'Ready')):
+            cli_json('session', 'status', '--session', answered_session, '--kind', kind, '--summary', summary)
+            time.sleep(0.3)
+        finished = wait_for('the finished turn to need the user',
+                            lambda: (s := stage(answered_id)).get('attention') == 'agentFinished' and s)
+        require(finished['group'] == 'needsYou' and finished['needsUser'], f'Unexpected stage: {finished}')
+        step('finished turn needs you', stage=finished)
+        capture('tasks-view-needs-you')
+        cli_json('task', 'watch', task_id, '--until', 'archived', '--notify', answered_id)
+        waiting = wait_for('the watching task to run', lambda: (s := stage(answered_id))['group'] == 'running' and s)
+        step('waiting on a watch runs', stage=waiting)
+        capture('tasks-view-waiting-on-watch')
 
         # 4. Typing under the Tasks view does not reach the terminal; Esc
         # closes it, and typing then does.

@@ -2268,7 +2268,13 @@ final class SidebarViewTests: XCTestCase {
 
         let textValues = renderedTextValues(in: hostingView)
         XCTAssertTrue(textValues.contains("Task detail, qa-private-app-verification, Review"), "\(textValues)")
+        // The unread finished turn the sidebar marks ready waits for the
+        // user here too.
+        let readyUnread = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
+        XCTAssertEqual(readyUnread.stage, .needsYou(.agentFinished))
+        XCTAssertTrue(readyUnread.hasUnreadTurn)
         try attachSidebarRender(hostingView, name: "tasks-view")
+        try writeSidebarEvidence(hostingView, name: "tasks-view")
     }
 
     func testInboxPopoverShowsTheWorkspacePickerForATaskTriageCouldNotPlace() throws {
