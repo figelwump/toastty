@@ -15,6 +15,8 @@ final class QuickEntryController: ObservableObject {
     private let store: AppStore
     /// The profiles in agents.toml, as a launch resolves them.
     private let agentProfiles: @MainActor () -> [AgentLaunchProfileSummary]
+    /// The presets the user picks, for the Agent picker's Frequent list.
+    private let presetUsage: QuickEntryPresetUsage?
     private let create: @MainActor (TaskCreateRequest) async throws -> TaskRecord
     private let configLoader: @MainActor () throws -> TasksConfig
     private let stagingRootURL: URL
@@ -53,6 +55,7 @@ final class QuickEntryController: ObservableObject {
     init(
         store: AppStore,
         agentProfiles: @escaping @MainActor () -> [AgentLaunchProfileSummary],
+        presetUsage: QuickEntryPresetUsage? = nil,
         create: @escaping @MainActor (TaskCreateRequest) async throws -> TaskRecord,
         configLoader: @escaping @MainActor () throws -> TasksConfig,
         stagingRootURL: URL = FileManager.default.temporaryDirectory
@@ -62,6 +65,7 @@ final class QuickEntryController: ObservableObject {
     ) {
         self.store = store
         self.agentProfiles = agentProfiles
+        self.presetUsage = presetUsage
         self.create = create
         self.configLoader = configLoader
         self.stagingRootURL = stagingRootURL
@@ -174,7 +178,7 @@ final class QuickEntryController: ObservableObject {
             prefill: prefill,
             workspaceOptions: workspaceOptions(),
             agentProfiles: profiles,
-            frequentPresets: Self.defaultPreset(defaults, profiles: profiles).map { [$0] } ?? [],
+            frequentPresets: frequentPresets(defaults: defaults, profiles: profiles),
             stagingDirectoryURL: stagingDirectoryURL,
             create: create,
             onCreated: { [weak self] record in
@@ -239,6 +243,10 @@ final class QuickEntryController: ObservableObject {
     }
 
     private func finish(created record: TaskRecord) {
+        // Only a preset the user chose counts; Auto leaves it to triage.
+        if let preset = model?.preset {
+            presetUsage?.record(preset)
+        }
         let frame = panel?.frame
         close()
         restoreFocus()
@@ -403,6 +411,10 @@ final class QuickEntryController: ObservableObject {
             return true
         }
         pickerPanel.currentQuery = { [weak picker] in picker?.query ?? "" }
+        pickerPanel.onNumberKey = { [weak picker] number in
+            guard let picker, picker.query.isEmpty else { return false }
+            return picker.chooseFrequent(number: number)
+        }
         pickerPanel.onResignKey = { [weak self, weak pickerPanel] in
             guard let self, let pickerPanel, self.pickerPanel === pickerPanel else { return }
             self.pickerResignedKey(kind: kind)
@@ -482,6 +494,14 @@ final class QuickEntryController: ObservableObject {
                     models: models
                 )
             }
+    }
+
+    /// The presets used most, recent use counting more; `[defaults]` until
+    /// one has been used twice.
+    private func frequentPresets(defaults: TasksConfig.Defaults?, profiles: [QuickEntryAgentProfile]) -> [QuickEntryPreset] {
+        let used = presetUsage?.frequent(agents: Set(profiles.map(\.id))) ?? []
+        guard used.isEmpty else { return used }
+        return Self.defaultPreset(defaults, profiles: profiles).map { [$0] } ?? []
     }
 
     /// `[defaults]` as a preset, when its agent is offered. A model or

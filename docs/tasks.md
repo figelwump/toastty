@@ -31,8 +31,13 @@ Focus goes back to the app you were in.
   the Agent list. Type to filter, move with the arrow keys, and press
   `Return` to choose; the caret goes back to the task text. `Esc` closes
   only the list. The Workspace list holds Auto and the open workspaces.
-- **Agent, model and effort** are chosen together. The Agent list shows the
-  `[defaults]` preset from `tasks.toml` first, then Auto. With a preset
+- **Agent, model and effort** are chosen together. The Agent list shows
+  your Frequent presets first, then Auto. A preset is listed once you have
+  created two tasks with it; recent use counts more, with a 14-day
+  half-life, and the top five are shown. Until then the list shows the
+  `[defaults]` preset from `tasks.toml`. Only presets you pick count, not
+  Auto. Toastty keeps the counts in `~/.toastty/task-preset-usage.json`.
+  With the search empty, `1` to `5` pick a Frequent preset. With a preset
   highlighted, `Left Arrow` and `Right Arrow` change its effort. Typing also
   lists every agent and agent + model pair. **Choose agent, model, effort…**
   (`Cmd+Right Arrow`) opens three columns: `Tab` moves between them, and

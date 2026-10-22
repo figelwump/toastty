@@ -37,6 +37,7 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
     private var store: AppStore!
     private var controller: QuickEntryController!
     private var config = TasksConfig()
+    private var presetUsage: QuickEntryPresetUsage!
 
     override func setUp() async throws {
         store = AppStore(persistTerminalFontPreference: false)
@@ -44,9 +45,11 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         _ = store.send(.renameWorkspace(workspaceID: workspace.id, title: "toastty"))
         stagingRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-quick-entry-snapshot-\(UUID().uuidString)", isDirectory: true)
+        presetUsage = QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: stagingRoot.path, environment: [:]))
         controller = QuickEntryController(
             store: store,
             agentProfiles: { Self.agentProfiles },
+            presetUsage: presetUsage,
             create: { _ in throw TaskError("not used") },
             configLoader: { [unowned self] in config },
             stagingRootURL: stagingRoot,
@@ -163,8 +166,20 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
             default: []
             }
         }
+        // The design's Frequent list, most used first.
+        for (preset, uses) in [
+            (QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high"), 5),
+            (QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high"), 4),
+            (QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh"), 3),
+            (QuickEntryPreset(agent: "codex", model: "gpt-6-astra", effort: "medium"), 2),
+        ] {
+            for _ in 0..<uses {
+                presetUsage.record(preset)
+            }
+        }
         controller.present(prefill: .empty)
         let model = try XCTUnwrap(controller.model)
+        XCTAssertEqual(model.frequentPresets.count, 4)
         model.text = Self.keyboardDesignText
         model.preset = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high")
         controller.togglePicker(.agent)

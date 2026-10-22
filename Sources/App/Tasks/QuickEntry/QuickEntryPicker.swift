@@ -49,6 +49,9 @@ final class QuickEntryPicker: ObservableObject {
 
         let id: String
         var section: String?
+        /// 1–5 on a Frequent row while the search is empty: the key that
+        /// picks it.
+        var number: Int?
         var title: String
         var detail: String?
         /// The detail is a shortcut, drawn as key caps.
@@ -143,6 +146,15 @@ final class QuickEntryPicker: ObservableObject {
         adjusted.effort = next
         adjustedPresets[row.id] = adjusted
         rebuildRows(highlightingCurrent: false)
+        return true
+    }
+
+    /// 1–5 while the search is empty: picks that Frequent preset. Returns
+    /// false otherwise, so the digit goes to the search.
+    func chooseFrequent(number: Int) -> Bool {
+        guard columns == nil, let row = rows.first(where: { $0.number == number }) else { return false }
+        highlightedID = row.id
+        perform(row)
         return true
     }
 
@@ -246,6 +258,13 @@ final class QuickEntryPicker: ObservableObject {
                 },
                 query: query
             )
+            if query.isEmpty {
+                var number = 0
+                for index in rows.indices where rows[index].section == "Frequent" {
+                    number += 1
+                    rows[index].number = number
+                }
+            }
         }
         if highlightingCurrent, let id = currentRowID, rows.contains(where: { $0.id == id }) {
             highlightedID = id

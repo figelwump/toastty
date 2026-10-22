@@ -1091,6 +1091,7 @@ struct ToasttyApp: App {
         let quickEntryController = QuickEntryController(
             store: store,
             agentProfiles: { [weak agentLaunchService] in agentLaunchService?.launchProfileSummaries() ?? [] },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: runtimePaths),
             create: { [weak taskCoordinator] request in
                 guard let taskCoordinator else { throw TaskError("Toastty is quitting.") }
                 return try await taskCoordinator.create(request, caller: .quickEntry)

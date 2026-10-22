@@ -117,6 +117,9 @@ struct QuickEntryPickerView: View {
                     .buttonStyle(ChooseButtonStyle())
                     .accessibilityIdentifier("quick-entry.picker.choose")
             } else {
+                if let last = picker.rows.last(where: { $0.number != nil })?.number {
+                    KeyHint(keys: [last > 1 ? "1–\(last)" : "1"], label: "pick")
+                }
                 if picker.kind == .agent {
                     KeyHint(keys: ["←", "→"], label: "effort")
                 }
@@ -178,7 +181,7 @@ private struct PickerRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            Text(isHighlighted && query.isEmpty == false ? "↩" : "")
+            Text(row.number.map(String.init) ?? (isHighlighted && query.isEmpty == false ? "↩" : ""))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(QuickEntryView.mutedText)
                 .frame(width: 16)
