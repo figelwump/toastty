@@ -249,12 +249,13 @@ def main():
         require('\n'.join(TASK_LINES) in message and task['files'][0] in message,
                 f'The agent did not get the task as written: {message!r}')
         argv = (fake_bin / 'sessions' / f"{task['setup']['sessionID']}.argv").read_text().split('\n')
-        require(task['pinned'].get('model') == 'claude-opus-5-5' and task['pinned'].get('effort') == 'xhigh',
-                f'The preset was not pinned: {task["pinned"]}')
+        # [defaults] says high; the preset's xhigh must win.
+        require(task.get('model') == 'claude-opus-5-5' and task.get('effort') == 'xhigh',
+                f'The task did not keep the preset: {task}')
         require(argv[argv.index('--model') + 1] == 'claude-opus-5-5' and argv[argv.index('--effort') + 1] == 'xhigh',
                 f'The agent did not start with the preset: {argv}')
         step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message,
-             pinned=task['pinned'], argv=argv)
+             model=task.get('model'), effort=task.get('effort'), argv=argv)
 
         # 1b. Workspace left on Auto: triage places the task.
         open_panel_from_finder()
