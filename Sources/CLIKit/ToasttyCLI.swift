@@ -705,6 +705,18 @@ enum ToasttyCLIError: Error, LocalizedError, Equatable {
 public enum ToasttyCLI {
     public static func run(arguments: [String], environment: [String: String]) -> Int32 {
         do {
+            #if os(Linux)
+            // `toastty browser …` (Linux only; linux/Sources/ToasttyCLIKit/BrowserCLICommand.swift).
+            let (browserOptions, browserArguments) = try parseGlobalOptions(arguments: arguments, environment: environment)
+            if browserArguments.first == "browser" {
+                return try BrowserCLICommand.run(
+                    arguments: Array(browserArguments.dropFirst()),
+                    options: browserOptions,
+                    callerSessionID: callerSessionID(from: environment),
+                    environment: environment
+                )
+            }
+            #endif
             let invocation = try parse(arguments: arguments, environment: environment)
             let callerSessionID = callerSessionID(from: environment)
             switch invocation.command {

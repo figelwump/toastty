@@ -31,6 +31,8 @@ public final class BrowserPanelController: WebPanelController {
     private var pageMenuButton: WidgetPtr?
     #if TOASTTY_LINUX_APP_LOGIC
     private(set) var annotation: BrowserAnnotationOverlay?
+    /// Console, network and dialog records for `toastty browser`.
+    let automation = BrowserAutomationRecorder()
     #endif
     /// App-logic callbacks: a main-frame navigation committed, and the URI
     /// changed (`isLoading` true while a load is in flight).
@@ -67,6 +69,9 @@ public final class BrowserPanelController: WebPanelController {
         )
         buildChrome()
         connectWebView()
+        #if TOASTTY_LINUX_APP_LOGIC
+        automation.install(on: self)
+        #endif
         installKeys()
         installNavigationMouseButtons()
         WebDownloads.shared.watch(session: WebKitEnvironment.shared.browserSession)

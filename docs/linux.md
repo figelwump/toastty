@@ -786,6 +786,54 @@ ID keeps its widget across re-parenting.
   navigation is limited to the bundle and `about:`. Documents are read from
   `<config>/scratchpad` (the `ScratchpadDocumentStore` files).
 
+### Browser automation (`toastty browser`)
+
+Linux only: Playwright-like control of a browser panel so agents can load,
+inspect and test local web apps (`toastty browser --help`; agent guidance in
+the `toastty-capabilities` skill). Playwright itself cannot attach: it drives
+Chromium over CDP and its own patched Firefox/WebKit builds, while the panel is
+stock WebKitGTK.
+
+- CLI: `linux/Sources/ToasttyCLIKit/BrowserCLICommand.swift` (mirrored into
+  `ToasttyCLIKit` via `extraSources`), reached from a `#if os(Linux)` hook at
+  the top of `ToasttyCLI.run`. It sends one socket command,
+  `browser.automation` (`verb` plus arguments), with the caller terminal's
+  `TOASTTY_PANEL_ID` as `callerPanelID` so a bare command targets a browser in
+  the agent's own workspace.
+- App logic: `linux/Sources/ToasttyAppLogic/WebPanels/LinuxBrowserAutomation.swift`
+  resolves the panel like `panel.browser.state` (through a `#if os(Linux)`
+  extension of `AppControlExecutor`), creates one for `open` when the
+  workspace has none, waits for navigations with
+  `BrowserPanelRuntime.navigationGeneration`, and retries page calls that
+  report a retryable failure until `--timeout` (default 10s).
+- Page library: `LinuxBrowserAutomationScript.swift`, evaluated with
+  `webkit_web_view_call_async_javascript_function` in the isolated
+  `toastty-automation` script world (shared DOM, separate globals). It builds
+  the snapshot (implicit ARIA roles, accessible names, states, refs `eN` kept in
+  a `WeakRef` map), resolves locators (ref, CSS, XPath, `text=`, `role=`,
+  `label=`, `placeholder=`, `testid=`, `alt=`, `title=`, across open shadow
+  roots and same-origin frames), checks actionability (visible, enabled,
+  editable, hit target at the element's center), and dispatches synthetic
+  pointer/mouse/keyboard/input events. Fills use `execCommand('insertText')`
+  with a native value-setter fallback, so React's value tracker sees them.
+  WebKit runs some defaults for untrusted key events (Enter submits a form);
+  the library emulates Enter/Tab/Backspace/Space defaults only when the
+  browser did not react itself. WebKit drops a named world nothing refers to,
+  so the browser keeps a no-op user script in it; without that every call
+  started a fresh library and refs were lost.
+- Frontend: `BrowserAutomationRecorder` (`UI/RightPanel/BrowserAutomationSupport.swift`)
+  records console messages and uncaught errors (a main-world document-start
+  script posting to the `toasttyConsole` message handler), resource loads
+  (`resource-load-started`, then each resource's `finished`/`failed`), and
+  answers `script-dialog` by the automation policy once a command touched the
+  panel (default accept, logged as `dialog` console entries). Screenshots use
+  `webkit_web_view_get_snapshot` (visible region, or full document).
+- Panels in unselected workspaces work (off-screen hosts keep their last size);
+  a never-shown panel has no viewport, so geometry checks are skipped there.
+- Tests: `BrowserAutomationBroadwayTests` (real app on Broadway, real CLI,
+  `file://` fixture), `BrowserCLICommandTests` (`linux/Tests/ToasttyCLITests`,
+  mirrored into `ToasttyCLITests`), `LinuxBrowserAutomationTests`.
+
 ### Browser annotation mode
 
 macOS behavior (`docs/right-panel.md`, "Annotation mode"), ported for the
@@ -1019,6 +1067,10 @@ code (macOS branches unchanged); run a macOS build
 | `Tests/App/SystemNotificationSenderTests.swift` | `tearDown` hops onto the main actor explicitly under corelibs XCTest |
 | `Sources/App/Agents/ToasttyAgentPluginBundle.swift` | `bundleRootURL(bundle:)` (macOS value unchanged: `<resources>/ToasttyAgentPluginBundle`) backs `bundledPluginURL`; on Linux, for `Bundle.main`, `linuxBundleRootURL` looks in `TOASTTY_APP_RESOURCES_PATH` (install) and then the checkout root (same layout) |
 | `Sources/App/Agents/CodexSkillsManager.swift` | (unguarded, same path on macOS) the default marketplace source is `ToasttyAgentPluginBundle.bundleRootURL()` instead of a restated `Bundle.main.resourceURL` path |
+| `Sources/CLIKit/ToasttyCLI.swift` | `#if os(Linux)` hook at the top of `run` hands `toastty browser …` to `BrowserCLICommand` |
+| `Sources/App/Automation/AutomationCommandExecutor.swift` | `#if os(Linux)` `browser.automation` command case runs `LinuxBrowserAutomation` |
+| `Sources/App/AppControl/AppControlExecutor.swift` | `#if os(Linux)` extension at the end exposes browser target/workspace resolution, placement parsing and the `panel.browser.state` snapshot (file-private there) to `LinuxBrowserAutomation` |
+| `plugins/toastty/skills/toastty-capabilities/SKILL.md` | (text, ships on macOS too) "Testing A Web App In A Browser Panel (Linux)" section for `toastty browser` |
 | `Sources/CLIKit/SetupResourceResolver.swift` | Linux checkout builds fall back to `<checkout>/examples/skills` when the resources have no `WorkflowExamples/skills` |
 | `plugins/toastty/skills/toastty-read-terminal/SKILL.md` | (text, ships on macOS too) the pane-by-number example says "pane 3" (Option+Shift+3; Alt+Shift+3 on Linux) instead of "⌘3", which switches tabs on macOS |
 | `WebPanels/LocalDocumentApp/src/{LocalDocumentPanelApp.tsx,styles.css}` + regenerated `Sources/App/Resources/WebPanels/local-document-panel/*` | Edit button shows `Ctrl+E` outside Apple platforms; editor text uses `--pre-text` (light theme previously drew dark text on the dark editor background, macOS included). `npm test` in `WebPanels/LocalDocumentApp` passes (71) |

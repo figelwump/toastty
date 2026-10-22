@@ -179,9 +179,27 @@ final class BrowserPanelRuntime: ObservableObject, WebPanelAnnotationRuntime {
         return host
     }
 
+    /// Counts main-frame navigation starts (`toastty browser` waits for a
+    /// navigation it started, or one a click started, to settle).
+    private(set) var navigationGeneration = 0
+
+    /// The host's page access for `toastty browser`, building an off-screen
+    /// host when the panel was never shown.
+    func automationHost() -> (any LinuxBrowserAutomationHost)? {
+        ensureHost() as? any LinuxBrowserAutomationHost
+    }
+
+    /// Loads `urlString` in the host (`toastty browser open`).
+    func loadForAutomation(urlString: String) -> Bool {
+        guard let host = ensureHost() else { return false }
+        clearAnnotationsForPageChange()
+        return host.load(urlString: urlString)
+    }
+
     func hostDidReport(_ event: LinuxBrowserNavigationEvent) {
         switch event {
         case .started:
+            navigationGeneration += 1
             navigationResult = .loading
             navigationError = nil
         case .finished:

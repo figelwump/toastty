@@ -313,6 +313,16 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 context: context
             )
 
+        #if os(Linux)
+        case "browser.automation":
+            // `toastty browser …` (Linux only; LinuxBrowserAutomation.swift).
+            return try await LinuxBrowserAutomation(
+                executor: appControlExecutor,
+                registry: webPanelRuntimeRegistry,
+                context: context
+            ).run(payload)
+        #endif
+
         case "session.claude_question":
             guard let requestJSON = payload.string("requestJSON"),
                   requestJSON.utf8.count <= 128 * 1024,

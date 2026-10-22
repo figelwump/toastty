@@ -3062,3 +3062,33 @@ extension AppControlExecutor {
         return (joined, lines.count, truncated)
     }
 }
+
+#if os(Linux)
+/// `toastty browser` (Linux only; `LinuxBrowserAutomation`) resolves and
+/// reports browser panels the way `panel.browser.state` does.
+extension AppControlExecutor {
+    func linuxBrowserTarget(
+        args: [String: AutomationJSONValue],
+        context: AutomationRequestContext
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        try withRequestContext(context) { try resolveBrowserTarget(payload: args) }
+    }
+
+    func linuxBrowserWorkspaceID(args: [String: AutomationJSONValue], context: AutomationRequestContext) throws -> UUID {
+        try withRequestContext(context) { try resolveWorkspaceID(args: args) }
+    }
+
+    func linuxBrowserPlacement(_ rawValue: String) throws -> WebPanelPlacement {
+        try webPanelPlacement(args: ["placement": .string(rawValue)])
+    }
+
+    func linuxBrowserStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: BrowserPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        browserPanelStateSnapshot(workspaceID: workspaceID, panelID: panelID, webState: webState, runtimeState: runtimeState)
+    }
+}
+#endif

@@ -68,6 +68,17 @@ private let loadFailedTrampoline: @convention(c) (gpointer?, guint, UnsafePointe
     return MainActor.assumeIsolated { b.handler(event, uriString, loadError) }.gboolean
 }
 
+typealias ResourceLoadHandler = @MainActor (_ resource: OpaquePointer, _ request: OpaquePointer) -> Void
+
+// WebKitWebView::resource-load-started (view, resource, request, data)
+private let resourceLoadTrampoline: @convention(c) (gpointer?, gpointer?, gpointer?, gpointer?) -> Void = { _, resource, request, data in
+    let b: WebSignalBox<ResourceLoadHandler> = webBox(data)
+    guard let resource, let request else { return }
+    nonisolated(unsafe) let resourcePointer = OpaquePointer(resource)
+    nonisolated(unsafe) let requestPointer = OpaquePointer(request)
+    MainActor.assumeIsolated { b.handler(resourcePointer, requestPointer) }
+}
+
 typealias FileMonitorHandler = @MainActor (_ eventType: UInt32) -> Void
 
 // GFileMonitor::changed (monitor, file, other_file, event_type, data)
@@ -93,6 +104,10 @@ enum WebSignal {
 
     static func create(_ view: some GPointer, _ handler: @escaping CreateHandler) {
         connect(view, "create", unsafeBitCast(createTrampoline, to: UnsafeMutableRawPointer.self), handler)
+    }
+
+    static func resourceLoadStarted(_ view: some GPointer, _ handler: @escaping ResourceLoadHandler) {
+        connect(view, "resource-load-started", unsafeBitCast(resourceLoadTrampoline, to: UnsafeMutableRawPointer.self), handler)
     }
 
     static func loadFailed(_ view: some GPointer, _ handler: @escaping LoadFailedHandler) {
@@ -156,6 +171,49 @@ enum WebJavaScript {
     }
 
     static func bool(_ json: String?) -> Bool { json == "true" }
+
+    /// Runs `body` as the body of an async function in `world` (or the
+    /// main world) and waits for its promise
+    /// (`webkit_web_view_call_async_javascript_function`). A string result
+    /// arrives as is, any other as JSON.
+    static func callAsync(
+        _ view: UnsafeMutablePointer<WebKitWebView>,
+        _ body: String,
+        world: String? = nil,
+        completion: @escaping @MainActor (Result<String?, WebJavaScriptError>) -> Void
+    ) {
+        let box = Unmanaged.passRetained(JSCallbackBox(completion)).toOpaque()
+        webkit_web_view_call_async_javascript_function(view, body, -1, nil, world, nil, nil, callAsyncCallback, box)
+    }
+}
+
+private let callAsyncCallback: GAsyncReadyCallback = { source, result, data in
+    let box = Unmanaged<JSCallbackBox>.fromOpaque(data!).takeRetainedValue()
+    var error: UnsafeMutablePointer<GError>?
+    let value = webkit_web_view_call_async_javascript_function_finish(
+        UnsafeMutableRawPointer(source!).assumingMemoryBound(to: WebKitWebView.self), result, &error
+    )
+    let outcome: Result<String?, WebJavaScriptError>
+    if let error {
+        outcome = .failure(.evaluation(String(cString: error.pointee.message)))
+        g_error_free(error)
+    } else if let value {
+        if jsc_value_is_undefined(value).bool || jsc_value_is_null(value).bool {
+            outcome = .success(nil)
+        } else if jsc_value_is_string(value).bool, let raw = jsc_value_to_string(value) {
+            outcome = .success(String(cString: raw))
+            g_free(raw)
+        } else if let json = jsc_value_to_json(value, 0) {
+            outcome = .success(String(cString: json))
+            g_free(json)
+        } else {
+            outcome = .success(nil)
+        }
+        g_object_unref(UnsafeMutableRawPointer(value))
+    } else {
+        outcome = .success(nil)
+    }
+    MainActor.assumeIsolated { box.completion(outcome) }
 }
 
 /// A JSCValue message body serialized to JSON.

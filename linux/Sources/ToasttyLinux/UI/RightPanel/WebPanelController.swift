@@ -162,10 +162,12 @@ public class WebPanelController {
 
     public var isLoading: Bool { webkit_web_view_is_loading(webView).bool }
 
-    /// PNG of the visible page (`webkit_web_view_get_snapshot`).
-    public func snapshotPNG(completion: @escaping @MainActor (Data?) -> Void) {
+    /// PNG of the visible page, or of the whole document
+    /// (`webkit_web_view_get_snapshot`).
+    public func snapshotPNG(fullDocument: Bool = false, completion: @escaping @MainActor (Data?) -> Void) {
         let box = Unmanaged.passRetained(SnapshotBox(completion)).toOpaque()
-        webkit_web_view_get_snapshot(webView, WEBKIT_SNAPSHOT_REGION_VISIBLE, WEBKIT_SNAPSHOT_OPTIONS_NONE, nil, snapshotCallback, box)
+        let region = fullDocument ? WEBKIT_SNAPSHOT_REGION_FULL_DOCUMENT : WEBKIT_SNAPSHOT_REGION_VISIBLE
+        webkit_web_view_get_snapshot(webView, region, WEBKIT_SNAPSHOT_OPTIONS_NONE, nil, snapshotCallback, box)
     }
 }
 

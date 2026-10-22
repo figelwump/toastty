@@ -20,6 +20,9 @@
     },
     "ToasttyCLIKit": {
       "source": "Sources/CLIKit",
+      "extraSources": [
+        "linux/Sources/ToasttyCLIKit"
+      ],
       "implicitImports": [
         "ToasttyFoundationShim",
         "FoundationNetworking"
@@ -45,6 +48,9 @@
     },
     "ToasttyCLITests": {
       "source": "Tests/CLI",
+      "extraSources": [
+        "linux/Tests/ToasttyCLITests"
+      ],
       "implicitImports": [
         "ToasttyFoundationShim",
         "FoundationNetworking"

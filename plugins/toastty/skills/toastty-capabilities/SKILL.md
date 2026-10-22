@@ -175,6 +175,45 @@ report verification as incomplete with the last available state. Do not select
 a workspace/tab or move focus to force a stronger result. Report visual or
 application readiness separately when the available evidence cannot establish it.
 
+## Testing A Web App In A Browser Panel (Linux)
+
+On Linux, `toastty browser` drives a Toastty browser panel the way Playwright
+drives a browser, for loading, inspecting and testing local web apps. (On macOS
+it is not available yet; the CLI reports `unknown command: browser`.) Commands
+target a browser in this terminal's workspace, or `--panel <id>`; they never
+change selection or focus.
+
+```bash
+B() { "$TOASTTY_CLI_PATH" browser "$@"; }
+B open http://localhost:3000 --placement splitRight   # waits for the load; creates a browser if none
+B snapshot                       # outline with refs: - button "Save" [ref=e7]
+B fill e4 "Buy milk"; B press Enter --target e4
+B click 'role=button[name="Save"]'; B check 'label=Remember me'; B select '#size' Large
+B wait text "Saved"              # or: wait visible|hidden <target>, wait url '*/done', wait idle
+B text '#status'; B eval 'window.store.getState().items.length'
+B console --errors; B network --failed
+B screenshot --out /tmp/page.png # then read the PNG to look at the page
+```
+
+- Name elements by a `snapshot` ref (`e12`), a CSS selector, XPath (`//…`), or
+  `text=`, `role=button[name="Save"]`, `label=`, `placeholder=`, `testid=`
+  locators; quote the value for an exact match (`text="Save"`). Refs last until
+  the page navigates; take a new snapshot after navigation or large changes.
+- Actions wait (default 10s, `--timeout <ms>`) until the element is visible,
+  enabled and not covered, then report what they hit, whether several elements
+  matched, and whether the action navigated. `--force` skips the checks.
+- Input is synthetic DOM events (untrusted), with emulated defaults for Enter,
+  Tab, Backspace and Space. It works with React and other frameworks, but CSS
+  `:hover` and handlers that require `event.isTrusted` do not react.
+- `eval` runs in the page (expression, function, or statements with `return`)
+  and awaits promises. `dialog accept|dismiss` sets how later
+  alert/confirm/prompt dialogs are answered (default: accept); answered dialogs
+  appear in `console`.
+- `--json` returns the raw result. Run `toastty browser --help` for every
+  command. The right panel is narrow; `--placement splitRight` gives the page
+  more room. A browser in a workspace or tab the user has never shown still
+  loads and takes input, but `screenshot` needs it on screen once.
+
 ## Closing Panels
 
 `panel.close` is non-interactive on the app-control path: it returns an error
