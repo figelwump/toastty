@@ -174,9 +174,10 @@ final class QuickEntryController: ObservableObject {
         previousFirstResponder = previousKeyWindow?.firstResponder
 
         let stagingDirectoryURL = stagingRootURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        // A broken tasks.toml shows its error at Create Task; the pickers
-        // then offer no `[defaults]` preset.
-        let defaults = (try? configLoader())?.defaults
+        // A broken tasks.toml shows its error at once, since the Agent pill
+        // may then have no preset and Create Task stays off.
+        let config = Result { try configLoader() }
+        let defaults = (try? config.get())?.defaults
         let profiles = quickEntryAgentProfiles(defaults: defaults)
         let options = workspaceOptions()
         let frequent = frequentPresets(defaults: defaults, profiles: profiles)
@@ -204,6 +205,9 @@ final class QuickEntryController: ObservableObject {
                 self?.dismiss()
             }
         )
+        if case .failure(let error) = config {
+            model.showError("tasks.toml: \(error.localizedDescription)")
+        }
         self.model = model
 
         let dropTarget = QuickEntryDropTarget(model: model)

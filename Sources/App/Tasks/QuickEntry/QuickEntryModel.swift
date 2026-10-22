@@ -142,6 +142,10 @@ final class QuickEntryModel: ObservableObject {
         return (preset.model ?? name, preset.effort)
     }
 
+    func showError(_ message: String) {
+        errorMessage = message
+    }
+
     func requestFocus() {
         focusRequestID &+= 1
     }

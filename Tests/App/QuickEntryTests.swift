@@ -247,9 +247,20 @@ struct QuickEntryTests {
     @Test func aFailedCreateKeepsThePanelAndTheTextUntilItSucceeds() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
+        // Broken when the panel opens: the error shows at once, since the
+        // Agent pill has no preset and Create Task stays off.
         fixture.configError = TaskError("tasks.toml line 3: [defaults] agent is empty")
-        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.errorMessage?.contains("[defaults] agent is empty") == true)
+        #expect(harness.controller.model?.preset == nil)
+        harness.controller.dismiss()
+
+        // Broken after the panel opened: the create fails and keeps the draft.
+        fixture.configError = nil
+        harness.controller.present(prefill: .empty)
         let model = try #require(harness.controller.model)
+        #expect(model.errorMessage == nil)
+        fixture.configError = TaskError("tasks.toml line 3: [defaults] agent is empty")
         try harness.type("Keep this text")
 
         try harness.pressCommandReturn()

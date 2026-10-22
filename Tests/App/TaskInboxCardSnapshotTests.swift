@@ -20,8 +20,9 @@ final class TaskInboxCardSnapshotTests: XCTestCase {
             XCTAssertTrue(fixture.coordinator.isTriageConfigured)
             return try render(record, in: fixture, name: "task-inbox-card-triage-on")
         }()
-        // The same card; triage only adds its button to the footer row.
+        // The same card; triage only adds Retry Triage to the footer row.
         XCTAssertEqual(image.size.height, withTriage.size.height)
+        XCTAssertNotEqual(image.tiffRepresentation, withTriage.tiffRepresentation)
     }
 
     private func waitingTask(in fixture: TaskCoordinatorTests.Fixture, reason: String) throws -> TaskRecord {

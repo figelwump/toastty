@@ -107,8 +107,8 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 A value you set is never changed. A request with an agent that is not in
 `agents.toml`, a model or effort that agent does not take, a file that cannot
 be read, or a first message longer than 64 KB fails at once and saves nothing.
-So does a request that leaves out the agent when `[defaults]` names none. A
-file given as a symbolic link is copied as the file it points to.
+So does a request that leaves out the agent when `[defaults]` names none and
+triage is off. A file given as a symbolic link is copied as the file it points to.
 
 An agent that splits its work names the agent, its settings and a first
 prompt:
@@ -547,8 +547,8 @@ set, Toastty runs that command, usually a model CLI, once for a task that
 leaves out the workspace, the agent, the first prompt, or a model or effort
 its agent takes. It chooses what is missing, and may add a first prompt, a
 title and a slug. A title or slug alone never starts it. Quick entry always
-names the workspace and agent, so there triage only adds a first prompt and
-any model or effort the preset leaves out.
+names the workspace and agent, so there triage only adds a first prompt, a
+title and a slug, and any model or effort the preset leaves out.
 
 ```toml
 [triage]
