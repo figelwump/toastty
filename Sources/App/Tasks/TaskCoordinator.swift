@@ -625,7 +625,7 @@ final class TaskCoordinator {
         let recent = (recentWorkspaces?.items ?? []).filter { openWorkspace(onRoot: $0.rootDirectory) == nil }
         var choices = TaskWorkspaceChoices(
             open: topLevelWorkspaces().map {
-                TaskWorkspaceChoices.Open(id: $0.id, title: $0.title, rootDirectory: Self.savedOrTerminalDirectory(of: $0, fileManager: fileManager))
+                TaskWorkspaceChoices.Open(id: $0.id, title: $0.title, rootDirectory: Self.rootDirectory(of: $0, fileManager: fileManager))
             },
             recent: recent
         )
@@ -655,12 +655,6 @@ final class TaskCoordinator {
             )
         }
         return choices
-    }
-
-    /// A workspace's saved root, else its first terminal's directory. No
-    /// git lookup, for the picker's menu.
-    private static func savedOrTerminalDirectory(of workspace: WorkspaceState, fileManager: FileManager) -> String? {
-        workspace.rootDirectory ?? firstTerminalDirectory(in: workspace, fileManager: fileManager)
     }
 
     /// The title for a workspace opened on a project directory: the
