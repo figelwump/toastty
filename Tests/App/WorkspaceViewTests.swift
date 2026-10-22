@@ -1714,6 +1714,76 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
+    /// While GitHub says the pull request is not ready to merge, the button
+    /// reads Open PR in a neutral color and opens it instead of merging; it
+    /// turns back into Merge once GitHub says it is ready.
+    @MainActor
+    func testPullRequestSubspaceHeaderOpensAPullRequestThatIsNotReady() throws {
+        var mergeRequests: [UUID] = []
+        var openedURLs: [URL] = []
+        let pullRequestURL = "https://github.com/example/toastty/pull/59"
+        let cache = PullRequestStateCache(runner: OfflinePullRequestRunner())
+        let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        var observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        func answer(_ state: TaskPullRequestState) {
+            observedAt = observedAt.addingTimeInterval(1)
+            cache.store(state, for: link, observedAt: observedAt)
+            pumpMainRunLoop(duration: 0.05)
+        }
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            isWorkspaceMergeEnabled: true,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+                workspace.title = "fix-claude-question-lifetime"
+                workspace.parentWorkspaceID = parent.id
+                workspace.annotations["github-pr"] = try XCTUnwrap(
+                    WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL)
+                )
+                state.workspacesByID[workspaceID] = workspace
+            },
+            pullRequestStateCache: cache,
+            requestWorkspaceMerge: { workspaceID, _ in mergeRequests.append(workspaceID) },
+            openPullRequestURL: { openedURLs.append($0) }
+        )
+        defer { harness.window.orderOut(nil) }
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+
+        answer(TaskPullRequestState(state: .open, isDraft: true, mergeability: PullRequestMergeability(mergeState: .draft)))
+        try writeTopBarEvidence(harness, name: "topbar-open-pr-draft")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs, [URL(string: pullRequestURL)])
+        XCTAssertEqual(mergeRequests, [])
+
+        answer(TaskPullRequestState(
+            state: .open,
+            mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
+        ))
+        try writeTopBarEvidence(harness, name: "topbar-open-pr-checks-failing")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 2)
+        XCTAssertEqual(mergeRequests, [])
+
+        // GitHub still working it out keeps the last known state.
+        answer(TaskPullRequestState(state: .open, mergeability: PullRequestMergeability(mergeState: .unknown)))
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 3)
+        XCTAssertEqual(mergeRequests, [])
+
+        answer(TaskPullRequestState(
+            state: .open,
+            mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
+        ))
+        try writeTopBarEvidence(harness, name: "topbar-merge-ready-clean")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+        XCTAssertEqual(openedURLs.count, 3)
+    }
+
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),
@@ -2902,7 +2972,9 @@ final class WorkspaceViewTests: XCTestCase {
         appIsActive: Bool? = nil,
         isWorkspaceMergeEnabled: Bool = false,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
-        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
+        pullRequestStateCache: PullRequestStateCache? = nil,
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
+        openPullRequestURL: (@MainActor (URL) -> Void)? = nil
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
@@ -2949,6 +3021,7 @@ final class WorkspaceViewTests: XCTestCase {
         registry.synchronize(with: store.state)
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
+        sessionRuntimeStore.pullRequestStateCache = pullRequestStateCache
         let tempHomeDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -2995,7 +3068,8 @@ final class WorkspaceViewTests: XCTestCase {
                 runtimeRegistry: registry
             ),
             sidebarVisible: true,
-            requestWorkspaceMerge: requestWorkspaceMerge
+            requestWorkspaceMerge: requestWorkspaceMerge,
+            openPullRequestURL: openPullRequestURL
         )
         let hostingView = NSHostingView(rootView: workspaceView.frame(width: hostWidth, height: 600))
         let window = NSWindow(
@@ -3274,5 +3348,12 @@ final class WorkspaceViewTests: XCTestCase {
         }
 
         return false
+    }
+}
+
+/// `gh` that never answers; the hosted top bar test stores answers itself.
+private struct OfflinePullRequestRunner: WorkspaceMergeCommandRunning {
+    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+        WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
     }
 }

@@ -1060,7 +1060,7 @@ final class DisplayShortcutInterceptor {
         }
         // While a merge or cleanup is under way the shortcut does nothing,
         // like the button, and is not passed to the terminal.
-        if case .ready(_, let mode) = presentation {
+        if case .ready(_, let mode, _) = presentation {
             requestWorkspaceMerge(workspace.id, mode)
         }
         return true

@@ -72,12 +72,16 @@ private final class WorkspaceMergeFixture {
         controller.requestMerge(workspaceID: taskWorkspaceID, mode: mode ?? store.workspaceMergeMode)
     }
 
+    /// GitHub's last answer about the pull request, as the top bar reads it.
+    var pullRequestState: TaskPullRequestState?
+
     var presentation: WorkspaceMergePresentation? {
         guard let workspace = store.state.workspacesByID[taskWorkspaceID] else { return nil }
         return WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[taskWorkspaceID],
-            mode: store.workspaceMergeMode
+            mode: store.workspaceMergeMode,
+            pullRequestState: pullRequestState
         )
     }
 
@@ -122,6 +126,34 @@ struct WorkspaceMergeTests {
         #expect(merge.pullRequest.url == "https://github.com/example/toastty/pull/59")
         #expect(merge.repoPath == "/work/toastty-fix-question-root")
         #expect(fixture.problems.isEmpty)
+    }
+
+    @Test
+    func aPullRequestThatIsNotReadyOpensInsteadButStillMerges() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.pullRequestState = TaskPullRequestState(state: .open, isDraft: true)
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeAndCleanUp, blocker: .draft))
+        #expect(fixture.presentation?.title == "Open PR #59")
+
+        fixture.pullRequestState = TaskPullRequestState(
+            state: .open,
+            mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
+        )
+        #expect(fixture.presentation?.title == "Open PR #59")
+        // The menu and the shortcut still merge on purpose.
+        fixture.merge()
+        #expect(fixture.merges.count == 1)
+
+        fixture.pullRequestState = TaskPullRequestState(
+            state: .open,
+            mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
+        )
+        #expect(fixture.presentation?.title == "Merge PR #59")
+
+        // A merge under way still shows its progress.
+        fixture.pullRequestState = TaskPullRequestState(state: .open, isDraft: true)
+        try fixture.setRequest(.merging(thenCleanUp: true))
+        #expect(fixture.presentation?.title == "Merging PR #59…")
     }
 
     @Test

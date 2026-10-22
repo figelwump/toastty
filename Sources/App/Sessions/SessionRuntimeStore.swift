@@ -78,6 +78,9 @@ final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
     /// Set once at launch; runs what the Merge button asks for.
     var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Set once at launch; GitHub's last answer for each pull request,
+    /// which tells the Merge button whether the pull request is ready.
+    var pullRequestStateCache: PullRequestStateCache?
     /// Set once at launch; a task space's Merge button asks it first, so
     /// the task's agent can check the pull request before it merges.
     weak var taskCoordinator: TaskCoordinator?

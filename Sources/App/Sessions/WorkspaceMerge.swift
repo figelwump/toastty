@@ -23,12 +23,15 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
 /// What a subspace with a pull request shows for merging it: the Merge
 /// button, its in-progress form, the cleanup that follows a Merge and Clean,
 /// or the done label. The button reads the same in both modes; its menu shows
-/// the mode. Top-level workspaces and
+/// the mode. While GitHub says the pull request is not ready to merge, the
+/// button opens it instead, and its menu still merges. Top-level workspaces and
 /// subspaces whose `github-pr` annotation has no GitHub pull request URL show
 /// nothing. The label comes from that URL, never from the annotation's text,
 /// so it always names the pull request the button acts on.
 enum WorkspaceMergePresentation: Equatable {
-    case ready(pullRequest: String, mode: WorkspaceMergeMode)
+    /// Nothing is under way, so the user can merge. `blocker` is why GitHub
+    /// would not merge the pull request yet, if it said.
+    case ready(pullRequest: String, mode: WorkspaceMergeMode, blocker: PullRequestMergeBlocker? = nil)
     /// The merge runs, or a Merge and Clean waits for the pull request to
     /// merge before its cleanup starts.
     case merging(pullRequest: String)
@@ -41,11 +44,14 @@ enum WorkspaceMergePresentation: Equatable {
     /// The done mark records a finished merge, and only a subspace can hold
     /// one, so a top-level workspace gets no button. `isCheckingMerge` is a
     /// task whose agent checks the pull request before it merges.
+    /// `pullRequestState` is GitHub's last answer; without one the button
+    /// offers Merge.
     static func make(
         workspace: WorkspaceState,
         request: WorkspaceMergeRequest?,
         mode: WorkspaceMergeMode = .mergeAndCleanUp,
-        isCheckingMerge: Bool = false
+        isCheckingMerge: Bool = false,
+        pullRequestState: TaskPullRequestState? = nil
     ) -> Self? {
         guard workspace.parentWorkspaceID != nil,
               let link = pullRequestLink(in: workspace) else {
@@ -74,13 +80,15 @@ enum WorkspaceMergePresentation: Equatable {
         if workspace.doneAt != nil {
             return .done(pullRequest: pullRequest)
         }
-        return .ready(pullRequest: pullRequest, mode: mode)
+        return .ready(pullRequest: pullRequest, mode: mode, blocker: pullRequestState?.mergeBlocker)
     }
 
     var title: String {
         switch self {
-        case .ready(let pullRequest, _):
+        case .ready(let pullRequest, _, nil):
             return "Merge \(pullRequest)"
+        case .ready(let pullRequest, _, _?):
+            return "Open \(pullRequest)"
         case .merging(let pullRequest):
             return "Merging \(pullRequest)…"
         case .cleaningUp(let pullRequest):
@@ -121,7 +129,7 @@ enum WorkspaceMergePresentation: Equatable {
 
     var pullRequest: String {
         switch self {
-        case .ready(let pullRequest, _),
+        case .ready(let pullRequest, _, _),
              .merging(let pullRequest),
              .cleaningUp(let pullRequest),
              .cleanupFailed(let pullRequest, _),
@@ -234,7 +242,7 @@ struct WorkspaceMergeController {
         problemTitle: String
     ) -> (pullRequest: String, link: WorkspacePullRequestLink, repoPath: String)? {
         guard let workspace = store.state.workspacesByID[workspaceID],
-              case .ready(let pullRequest, _)? = WorkspaceMergePresentation.make(
+              case .ready(let pullRequest, _, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
                 isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspaceID)

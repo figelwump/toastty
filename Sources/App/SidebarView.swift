@@ -4216,7 +4216,7 @@ struct SidebarView: View {
         presentation: WorkspaceMergePresentation
     ) -> some View {
         switch presentation {
-        case .ready(let pullRequest, _) where sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id):
+        case .ready(let pullRequest, _, _) where sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id):
             // A task merges its own way and always cleans up after.
             Button(ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle("Merge \(pullRequest)")) {
                 requestWorkspaceMerge(row.id, store.workspaceMergeMode)
@@ -4230,7 +4230,7 @@ struct SidebarView: View {
                     TaskActions.archive(taskID: taskID, coordinator: coordinator)
                 }
             }
-        case .ready(let pullRequest, let currentMode):
+        case .ready(let pullRequest, let currentMode, _):
             ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
                 let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
                 // The shortcut runs the mode selected in the top bar button menu.
