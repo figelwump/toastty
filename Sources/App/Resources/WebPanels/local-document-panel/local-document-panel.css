@@ -531,6 +531,13 @@ body {
   cursor: text;
 }
 
+.local-document-line-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 :root[data-theme="light"] .local-document-editor-status-error {
   color: #7f2618;
 }

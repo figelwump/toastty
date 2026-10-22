@@ -8,6 +8,7 @@ import {
   computeOffsetRevealLayout
 } from "./lineReveal.mjs";
 import { applyEditorIndentation } from "./editorIndentation.mjs";
+import { LocalDocumentLineEditor, type LocalDocumentLineEditorHandle } from "./LineEditor";
 import {
   highlightStatusMessage,
   useDocumentHighlightHTML
@@ -438,6 +439,7 @@ function LocalDocumentEditor(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  lineEditorRef: React.RefObject<LocalDocumentLineEditorHandle | null>;
   updateDraftContent: (nextContent: string) => void;
 }) {
   React.useLayoutEffect(() => {
@@ -515,18 +517,27 @@ function LocalDocumentEditor(props: {
           )}
         </div>
       )}
-      <textarea
-        ref={props.textareaRef}
-        className="local-document-editor"
-        value={props.draftContent}
-        onChange={(event) => props.updateDraftContent(event.target.value)}
-        onKeyDown={handleKeyDown}
-        spellCheck={false}
-        autoCorrect="off"
-        autoCapitalize="off"
-        wrap="off"
-        readOnly={props.bootstrap.isSaving}
-      />
+      {props.bootstrap.editorEngine === "codemirror" ? (
+        <LocalDocumentLineEditor
+          bootstrap={props.bootstrap}
+          draftContent={props.draftContent}
+          editorRef={props.lineEditorRef}
+          updateDraftContent={props.updateDraftContent}
+        />
+      ) : (
+        <textarea
+          ref={props.textareaRef}
+          className="local-document-editor"
+          value={props.draftContent}
+          onChange={(event) => props.updateDraftContent(event.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          wrap="off"
+          readOnly={props.bootstrap.isSaving}
+        />
+      )}
     </section>
   );
 }
@@ -1231,13 +1242,20 @@ function LoadedLocalDocumentPanelApp(props: {
   const previewRootRef = React.useRef<HTMLElement | null>(null);
   const previewContentRef = React.useRef<HTMLElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const lineEditorRef = React.useRef<LocalDocumentLineEditorHandle | null>(null);
+  // Edit-mode search targets whichever editor is mounted.
+  const editorRef = React.useMemo(() => ({
+    get current() {
+      return lineEditorRef.current ?? textareaRef.current;
+    }
+  }), []);
 
   useLocalDocumentSearchController({
     content: renderedContent,
     isEditing: props.bootstrap.isEditing,
     previewRootRef,
     previewContentRef,
-    textareaRef
+    textareaRef: editorRef
   });
 
   return (
@@ -1260,6 +1278,7 @@ function LoadedLocalDocumentPanelApp(props: {
           bootstrap={props.bootstrap}
           draftContent={props.draftContent}
           textareaRef={textareaRef}
+          lineEditorRef={lineEditorRef}
           updateDraftContent={props.updateDraftContent}
         />
       ) : (

@@ -50,6 +50,10 @@ public struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     public let saveErrorMessage: String?
     public let theme: LocalDocumentPanelTheme
     public let textScale: Double
+    /// Edit mode uses the bundle's CodeMirror editor: in WebKitGTK the
+    /// `<textarea>` editor (macOS's, which omits this field) re-lays out
+    /// every line after the caret on each keystroke.
+    public let editorEngine: String
 
     /// Same derivation as macOS `LocalDocumentPanelRuntime.makeBootstrap`.
     public init(session: LocalDocumentEditingSession, theme: LocalDocumentPanelTheme, textScale: Double) {
@@ -76,6 +80,7 @@ public struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         saveErrorMessage = session.saveErrorMessage
         self.theme = theme
         self.textScale = textScale
+        editorEngine = "codemirror"
     }
 
     public static func highlightState(

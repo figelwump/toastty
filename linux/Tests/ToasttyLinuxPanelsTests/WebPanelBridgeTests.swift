@@ -45,7 +45,7 @@ struct LocalDocumentBridgeTests {
         let expected: Set<String> = [
             "contractVersion", "filePath", "displayName", "format", "syntaxLanguage", "formatLabel", "shouldHighlight",
             "highlightState", "content", "contentRevision", "isEditing", "isDirty", "hasExternalConflict", "isSaving",
-            "theme", "textScale",
+            "theme", "textScale", "editorEngine",
         ]
         #expect(keys.subtracting(["saveErrorMessage"]) == expected)
         #expect(object?["contractVersion"] as? Int == 7)
@@ -53,6 +53,7 @@ struct LocalDocumentBridgeTests {
         #expect(object?["syntaxLanguage"] as? String == "yaml")
         #expect(object?["highlightState"] as? String == "enabled")
         #expect(object?["theme"] as? String == "dark")
+        #expect(object?["editorEngine"] as? String == "codemirror")
         #expect(bootstrap.deliveryJavaScript()?.contains("bridge.receiveBootstrap({") == true)
     }
 
