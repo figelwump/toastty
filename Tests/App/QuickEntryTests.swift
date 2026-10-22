@@ -467,3 +467,114 @@ struct QuickEntryHotKeyTests {
         #expect(hotKey.register(nil) == .off)
     }
 }
+
+/// Where the panel opens with a laptop and an external display: the laptop
+/// is the primary screen at the origin, the external one sits to its right.
+struct QuickEntryPlacementTests {
+    let laptop = NSRect(x: 0, y: 0, width: 1512, height: 982)
+    let laptopVisible = NSRect(x: 0, y: 0, width: 1512, height: 944)
+    let external = NSRect(x: 1512, y: -200, width: 2560, height: 1440)
+    let externalVisible = NSRect(x: 1512, y: -200, width: 2560, height: 1415)
+    let size = NSSize(width: 600, height: 210)
+
+    @Test func opensOnTheScreenOfTheFocusedWindowNotThePointer() {
+        let editorOnExternal = NSRect(x: 1700, y: 100, width: 1600, height: 900)
+        let pointerOnLaptop = NSPoint(x: 300, y: 300)
+
+        let index = QuickEntryPlacement.screenIndex(
+            focusedWindowFrame: editorOnExternal,
+            pointer: pointerOnLaptop,
+            screenFrames: [laptop, external]
+        )
+
+        #expect(index == 1)
+    }
+
+    @Test func aWindowAcrossTwoScreensCountsForTheOneHoldingMoreOfIt() {
+        let straddling = NSRect(x: 1300, y: 100, width: 1000, height: 600)
+
+        #expect(QuickEntryPlacement.screenIndex(
+            focusedWindowFrame: straddling,
+            pointer: .zero,
+            screenFrames: [laptop, external]
+        ) == 1)
+    }
+
+    @Test func withoutAFocusedWindowTheScreenWithThePointerWins() {
+        #expect(QuickEntryPlacement.screenIndex(
+            focusedWindowFrame: nil,
+            pointer: NSPoint(x: 2000, y: 400),
+            screenFrames: [laptop, external]
+        ) == 1)
+        #expect(QuickEntryPlacement.screenIndex(
+            focusedWindowFrame: NSRect(x: 9000, y: 9000, width: 100, height: 100),
+            pointer: NSPoint(x: 300, y: 300),
+            screenFrames: [laptop, external]
+        ) == 0)
+    }
+
+    @Test func aRememberedSpotOnAnotherScreenIsIgnored() {
+        let leftOnLaptop = QuickEntryPlacement.Remembered(topLeft: NSPoint(x: 100, y: 800), screenFrame: laptop)
+
+        let frame = QuickEntryPlacement.frame(
+            size: size,
+            screenFrame: external,
+            visibleFrame: externalVisible,
+            remembered: leftOnLaptop
+        )
+
+        #expect(frame == QuickEntryPanel.defaultFrame(size: size, visibleFrame: externalVisible))
+        #expect(externalVisible.contains(frame))
+    }
+
+    @Test func aRememberedSpotOnTheSameScreenIsReusedAndKeptOnScreen() {
+        let moved = QuickEntryPlacement.Remembered(topLeft: NSPoint(x: 1900, y: 1000), screenFrame: external)
+        let frame = QuickEntryPlacement.frame(
+            size: size,
+            screenFrame: external,
+            visibleFrame: externalVisible,
+            remembered: moved
+        )
+        #expect(frame.origin == NSPoint(x: 1900, y: 790))
+
+        // A spot partly off the visible area, as after the Dock grew.
+        let offEdge = QuickEntryPlacement.Remembered(topLeft: NSPoint(x: 1300, y: 1000), screenFrame: laptop)
+        let clamped = QuickEntryPlacement.frame(
+            size: size,
+            screenFrame: laptop,
+            visibleFrame: laptopVisible,
+            remembered: offEdge
+        )
+        #expect(laptopVisible.contains(clamped))
+        #expect(clamped.maxY == laptopVisible.maxY)
+    }
+
+    @Test func theFrontWindowSkipsInvisibleOtherLayerAndOtherAppWindows() {
+        func window(pid: pid_t, layer: Int, alpha: Double, _ bounds: CGRect) -> [String: Any] {
+            [
+                kCGWindowOwnerPID as String: pid,
+                kCGWindowLayer as String: layer,
+                kCGWindowAlpha as String: alpha,
+                kCGWindowBounds as String: bounds.dictionaryRepresentation,
+            ]
+        }
+        let visible = CGRect(x: -3000, y: 300, width: 1400, height: 900)
+        let windows = [
+            window(pid: 7, layer: 25, alpha: 1, CGRect(x: 1200, y: 0, width: 30, height: 24)),
+            window(pid: 9, layer: 0, alpha: 1, CGRect(x: 100, y: 100, width: 800, height: 600)),
+            window(pid: 7, layer: 0, alpha: 0, CGRect(x: 100, y: 100, width: 800, height: 600)),
+            window(pid: 7, layer: 0, alpha: 1, visible),
+        ]
+
+        #expect(QuickEntryPlacement.frontWindowBounds(of: 7, in: windows) == visible)
+        #expect(QuickEntryPlacement.frontWindowBounds(of: 8, in: windows) == nil)
+    }
+
+    @Test func windowServerBoundsFlipToAppKitCoordinates() {
+        // 100 pt below the top of a 982 pt primary screen, 500 pt tall.
+        let bounds = CGRect(x: 1700, y: 100, width: 800, height: 500)
+
+        #expect(QuickEntryPlacement.cocoaFrame(fromWindowServerBounds: bounds, primaryScreenHeight: 982)
+            == NSRect(x: 1700, y: 382, width: 800, height: 500))
+    }
+}

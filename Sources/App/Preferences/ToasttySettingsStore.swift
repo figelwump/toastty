@@ -2,8 +2,6 @@ import CoreState
 import Foundation
 
 struct ToasttySettings: Equatable {
-    /// One-way app-wide latch for sidebar defaults after the first successful agent launch.
-    var hasEverLaunchedAgent = false
     /// When false, Cmd+Q quits immediately without checking terminal activity.
     var askBeforeQuitting = true
     /// What a subspace's Merge button and shortcut do.
@@ -16,14 +14,15 @@ struct ToasttySettings: Equatable {
 
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
-    private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
+    /// No longer written. Older builds set it after the first agent launch,
+    /// so it still marks an existing install for Getting Started.
+    private static let legacyHasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
     private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
     private static let workspaceMergeEnabledKey = "toastty.workspaceMergeEnabled"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
-            hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults),
             askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults),
             workspaceMergeMode: userDefaults.string(forKey: workspaceMergeModeKey)
                 .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp,
@@ -34,7 +33,7 @@ enum ToasttySettingsStore {
     static func hasPersistedSettings(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> Bool {
         for key in [
             terminalFontSizeKey,
-            hasEverLaunchedAgentKey,
+            legacyHasEverLaunchedAgentKey,
             askBeforeQuittingKey,
         ] where userDefaults.object(forKey: key) != nil {
             return true
@@ -50,13 +49,6 @@ enum ToasttySettingsStore {
 
     static func clearLegacyTerminalFontSizePoints(userDefaults: UserDefaults = ToasttyAppDefaults.current) {
         userDefaults.removeObject(forKey: terminalFontSizeKey)
-    }
-
-    static func persistHasEverLaunchedAgent(
-        _ hasEverLaunchedAgent: Bool,
-        userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) {
-        userDefaults.set(hasEverLaunchedAgent, forKey: hasEverLaunchedAgentKey)
     }
 
     static func persistAskBeforeQuitting(
@@ -85,21 +77,6 @@ enum ToasttySettingsStore {
             return AppState.clampedTerminalFontPoints(points.doubleValue)
         default:
             return nil
-        }
-    }
-
-    private static func loadHasEverLaunchedAgent(userDefaults: UserDefaults) -> Bool {
-        guard let storedValue = userDefaults.object(forKey: hasEverLaunchedAgentKey) else {
-            return false
-        }
-
-        switch storedValue {
-        case let value as Bool:
-            return value
-        case let value as NSNumber:
-            return value.boolValue
-        default:
-            return false
         }
     }
 

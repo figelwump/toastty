@@ -78,11 +78,6 @@ final class AppStore: ObservableObject {
     private var navigationOriginPanelID: UUID?
 
     @Published private(set) var state: AppState
-    /// Persisted compatibility flag that switches windows into the wider
-    /// sidebar layout once managed session-status UI has been used at least
-    /// once. It originally tracked agent launches, but process-watch rows
-    /// should opt into the same expanded session-status treatment.
-    @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var hasAutoOpenedGettingStartedPanelThisLaunch = false
     @Published private(set) var askBeforeQuitting: Bool
     /// What a subspace's Merge button and shortcut do; the user picks it from
@@ -134,7 +129,6 @@ final class AppStore: ObservableObject {
     init(
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
-        initialHasEverLaunchedAgent: Bool = false,
         initialAskBeforeQuitting: Bool = true,
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
         isWorkspaceMergeEnabled: Bool = false,
@@ -144,7 +138,6 @@ final class AppStore: ObservableObject {
         recentRightPanelItemsStore: RightPanelRecentItemsStore = .inMemory()
     ) {
         self.state = state
-        hasEverLaunchedAgent = initialHasEverLaunchedAgent
         askBeforeQuitting = initialAskBeforeQuitting
         workspaceMergeMode = initialWorkspaceMergeMode
         self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
@@ -1992,17 +1985,6 @@ final class AppStore: ObservableObject {
 
     func removeActionAppliedObserver(_ token: UUID) {
         actionAppliedObservers.removeValue(forKey: token)
-    }
-
-    func recordSessionStatusSidebarExpansionEligibility() {
-        guard hasEverLaunchedAgent == false else { return }
-        hasEverLaunchedAgent = true
-        guard persistUserSettings else { return }
-        ToasttySettingsStore.persistHasEverLaunchedAgent(true)
-    }
-
-    func recordSuccessfulAgentLaunch() {
-        recordSessionStatusSidebarExpansionEligibility()
     }
 
     @discardableResult

@@ -785,7 +785,6 @@ final class SessionRuntimeStore: ObservableObject {
         repoRoot: String?,
         at now: Date
     ) {
-        store?.recordSessionStatusSidebarExpansionEligibility()
         startSession(
             sessionID: sessionID,
             agent: .processWatch,

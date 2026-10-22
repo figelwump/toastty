@@ -204,19 +204,17 @@ EOF
 # ---------------------------------------------------------------- launch
 
 # Toastty keeps a runtime-isolated instance's settings in a defaults domain
-# named for an FNV-1a hash of its runtime home (ToasttyRuntimePaths). Marking an
-# agent as launched before startup gives the sidebar its full 280pt width.
+# named for an FNV-1a hash of its runtime home (ToasttyRuntimePaths).
 # CFFIXED_USER_HOME points Foundation's home directory, and with it every
 # ~/.toastty or ~/.codex path the app resolves, at the demo home. Preferences
-# still go through the user's cfprefsd, so this run-specific domain is written
-# there and deleted on exit.
+# still go through the user's cfprefsd, so the app writes this run-specific
+# domain there, and the exit trap deletes it.
 DEFAULTS_SUITE="$(python3 -c "
 import sys
 h = 0xcbf29ce484222325
 for b in sys.argv[1].encode():
     h = ((h ^ b) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
 print('com.GiantThings.toastty.runtime.%016x' % h)" "$RUNTIME")"
-defaults write "$DEFAULTS_SUITE" toastty.hasEverLaunchedAgent -bool true
 
 # A private, short temporary directory: the app writes its socket and the shared
 # socket discovery record (toastty-<uid>/current-socket.json) under TMPDIR, so

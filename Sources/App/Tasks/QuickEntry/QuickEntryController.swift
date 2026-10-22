@@ -29,9 +29,10 @@ final class QuickEntryController: ObservableObject {
     private var previousApplication: NSRunningApplication?
     private weak var previousKeyWindow: NSWindow?
     private weak var previousFirstResponder: NSResponder?
-    /// The last panel's top-left corner, so the next one opens where the
-    /// user left it. The top stays put because the height follows the text.
-    private var lastPanelTopLeft: NSPoint?
+    /// Where the last panel was, so the next one opens there when it opens
+    /// on the same screen. The top stays put because the height follows the
+    /// text.
+    private var lastPanelPlacement: QuickEntryPlacement.Remembered?
     private var toastPanel: QuickEntryToastPanel?
     private var toastTask: Task<Void, Never>?
 
@@ -191,9 +192,18 @@ final class QuickEntryController: ObservableObject {
         if let fittingHeight = panel.contentView?.fittingSize.height, fittingHeight > 0 {
             size.height = fittingHeight.rounded(.up)
         }
-        var frame = QuickEntryPanel.defaultFrame(size: size, screen: QuickEntryPanel.screenWithPointer())
-        if let lastPanelTopLeft {
-            frame.origin = NSPoint(x: lastPanelTopLeft.x, y: lastPanelTopLeft.y - size.height)
+        // The screen of the window the user is working in, not the one with
+        // Toastty's window or the last panel.
+        let frame: NSRect
+        if let screen = QuickEntryPanel.focusedScreen() ?? NSScreen.main {
+            frame = QuickEntryPlacement.frame(
+                size: size,
+                screenFrame: screen.frame,
+                visibleFrame: screen.visibleFrame,
+                remembered: lastPanelPlacement
+            )
+        } else {
+            frame = NSRect(origin: .zero, size: size)
         }
         panel.setFrame(frame, display: false)
         self.panel = panel
@@ -226,7 +236,12 @@ final class QuickEntryController: ObservableObject {
     /// copies.
     private func close() {
         guard let panel else { return }
-        lastPanelTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        lastPanelPlacement = panel.screen.map {
+            QuickEntryPlacement.Remembered(
+                topLeft: NSPoint(x: panel.frame.minX, y: panel.frame.maxY),
+                screenFrame: $0.frame
+            )
+        }
         panel.orderOut(nil)
         panel.contentView = nil
         self.panel = nil
@@ -284,7 +299,7 @@ final class QuickEntryController: ObservableObject {
         toastTask?.cancel()
         toastPanel?.orderOut(nil)
         let toast = QuickEntryToastPanel(message: "Task created · in the Inbox")
-        let anchor = frame ?? QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.screenWithPointer())
+        let anchor = frame ?? QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.focusedScreen())
         toast.setFrameOrigin(NSPoint(
             x: (anchor.midX - QuickEntryToastPanel.size.width / 2).rounded(),
             y: (anchor.midY - QuickEntryToastPanel.size.height / 2).rounded()
