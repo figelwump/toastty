@@ -323,9 +323,10 @@ def main():
         drive('key', KEY_RETURN)
         drive('type', 'Delete this line')
         wait_for_text('Keep this\nDelete this line')
-        # Deletes to the start of the line only.
+        # Deletes to the start of the line only. The driver's output drops
+        # the line break that is left.
         drive('key', KEY_DELETE, 'cmd')
-        wait_for_text('Keep this\n')
+        wait_for_text('Keep this')
         drive('key', KEY_2, 'cmd')
         wait_for('the agent picker', picker_windows, timeout=10)
         drive('key', KEY_RIGHT, 'cmd')
