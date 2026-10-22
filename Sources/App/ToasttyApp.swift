@@ -1070,6 +1070,7 @@ struct ToasttyApp: App {
             runner: WorkspaceMergeLiveCommandRunner(socketPath: socketPath, cliExecutablePath: cliExecutablePath)
         )
         sessionRuntimeStore.workspaceMergeCoordinator?.pullRequestStateCache = pullRequestStateCache
+        sessionRuntimeStore.pullRequestStateCache = pullRequestStateCache
         let taskBoard = TaskBoardStore(
             coordinator: taskCoordinator,
             store: store,

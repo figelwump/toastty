@@ -16,10 +16,22 @@ struct TaskBoardTests {
         private var held: [CheckedContinuation<Void, Never>] = []
         var holdsAnswers = false
 
-        func answer(_ url: String, state: String, isDraft: Bool = false, mergeCommit: String? = nil) {
+        /// `checks` is the `statusCheckRollup` array as JSON.
+        func answer(
+            _ url: String,
+            state: String,
+            isDraft: Bool = false,
+            mergeCommit: String? = nil,
+            mergeStateStatus: String? = nil,
+            reviewDecision: String = "",
+            checks: String = "[]"
+        ) {
             let commit = mergeCommit.map { #"{"oid":"\#($0)"}"# } ?? "null"
+            let mergeability = mergeStateStatus.map {
+                #","mergeStateStatus":"\#($0)","reviewDecision":"\#(reviewDecision)","statusCheckRollup":\#(checks)"#
+            } ?? ""
             lock.withLock {
-                answersByURL[url] = #"{"state":"\#(state)","isDraft":\#(isDraft),"headRefOid":"head1","mergeCommit":\#(commit)}"#
+                answersByURL[url] = #"{"state":"\#(state)","isDraft":\#(isDraft),"headRefOid":"head1","mergeCommit":\#(commit)\#(mergeability)}"#
             }
         }
 
@@ -259,6 +271,51 @@ struct TaskBoardTests {
         #expect(cache.entries[other.url]?.lastError == "gh: not found")
         await cache.refresh(link).value
         #expect(cache.state(for: link)?.state == .open)
+    }
+
+    @Test func mergeabilityComesFromGitHubAndSurvivesAnUnknownAnswer() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 5)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func answer(_ mergeStateStatus: String, state: String = "OPEN", review: String = "", checks: String = "[]") async {
+            clock = clock.addingTimeInterval(1)
+            gitHub.answer(pullRequestURL, state: state, mergeStateStatus: mergeStateStatus, reviewDecision: review, checks: checks)
+            await cache.refresh(link).value
+        }
+        let passed = #"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}"#
+        let running = #"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#
+        let failedStatus = #"{"__typename":"StatusContext","state":"FAILURE"}"#
+
+        // With no earlier answer, a merge state GitHub has not worked out
+        // reads as ready.
+        await answer("UNKNOWN", checks: "[\(running)]")
+        #expect(gitHub.calls.last?.last == PullRequestStateCache.viewFields)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+
+        await answer("BLOCKED", checks: "[\(passed),\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        await answer("BLOCKED", review: "REVIEW_REQUIRED", checks: "[\(passed)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .reviewRequired)
+        await answer("BLOCKED", checks: "[\(failedStatus),\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+
+        // An unknown answer keeps the last known one instead of flickering
+        // back to Merge.
+        await answer("UNKNOWN", checks: "[\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+
+        await answer("CLEAN", review: "APPROVED", checks: "[\(passed)]")
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+        // A value this build does not know reads as unknown, so it keeps
+        // the last known state.
+        await answer("SOMETHING_NEW")
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .clean)
+        await answer("DIRTY")
+        #expect(cache.state(for: link)?.mergeBlocker == .conflicts)
+        await answer("UNKNOWN", state: "MERGED")
+        #expect(cache.state(for: link)?.state == .merged)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
     }
 
     @Test func aFinishedTurnNeedsTheUserUnlessTheAgentWaitsOnAnotherTask() async throws {

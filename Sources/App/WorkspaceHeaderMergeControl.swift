@@ -4,13 +4,19 @@ import SwiftUI
 /// The merge control under a subspace's title in the top bar: the Merge
 /// button with a menu that picks what it does, its in-progress form while
 /// Toastty merges, the cleanup that follows a Merge and Clean,
-/// or the done label. It takes the subtitle slot, so it has to fit the
-/// 16pt the top bar leaves under the title.
+/// or the done label. While the pull request is not ready to merge, the
+/// button opens it instead, in a neutral color, and its menu merges it.
+/// It takes the subtitle slot, so it has to fit the 16pt the top bar
+/// leaves under the title.
 struct WorkspaceHeaderMergeControl: View {
     let presentation: WorkspaceMergePresentation
     /// `<owner>/<repo>#<number>`, so the tooltip names exactly what merges.
     var pullRequestName: String = ""
     var merge: () -> Void = {}
+    /// Merges in the given mode, from the menu of a pull request that is
+    /// not ready to merge.
+    var mergeInMode: (WorkspaceMergeMode) -> Void = { _ in }
+    var openPullRequest: () -> Void = {}
     var setMode: (WorkspaceMergeMode) -> Void = { _ in }
     var retryCleanup: () -> Void = {}
     var cancelCleanup: () -> Void = {}
@@ -25,25 +31,31 @@ struct WorkspaceHeaderMergeControl: View {
 
     var body: some View {
         switch presentation {
-        case .ready(_, let mode):
+        case .ready(_, let mode, let blocker):
+            let tone: WorkspaceHeaderMergeButtonStyle.Tone = blocker == nil ? .merge : .neutral
             HStack(spacing: 1) {
-                Button(action: merge) {
+                Button(action: blocker == nil ? merge : openPullRequest) {
                     HStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.merge")
+                        Image(systemName: blocker == nil ? "arrow.triangle.merge" : "arrow.up.right")
                             .font(.system(size: 8, weight: .bold))
                         titleText
                     }
                 }
-                .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .leading))
-                .help(shortcut.helpText(isTask ? taskHelpText : helpText(for: mode)))
+                .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .leading, tone: tone))
+                .help(primaryHelpText(mode: mode, blocker: blocker))
                 .accessibilityLabel(presentation.title)
-                .accessibilityIdentifier("topbar.workspace.merge")
+                .accessibilityIdentifier(blocker == nil ? "topbar.workspace.merge" : "topbar.workspace.merge.open")
 
                 Menu {
                     if isTask {
+                        if blocker != nil {
+                            Button(shortcut.menuTitle("Merge \(presentation.pullRequest)"), action: merge)
+                        }
                         Button("Merge Without Checks", action: mergeWithoutChecks)
                         Divider()
                         Button("Archive Task…", action: archiveTask)
+                    } else if blocker != nil {
+                        mergeActionItems(mode: mode)
                     } else {
                         modeMenuItems(mode: mode)
                     }
@@ -54,9 +66,9 @@ struct WorkspaceHeaderMergeControl: View {
                 }
                 .menuStyle(.button)
                 .menuIndicator(.hidden)
-                .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .trailing, horizontalPadding: 4))
+                .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .trailing, horizontalPadding: 4, tone: tone))
                 .fixedSize()
-                .help(isTask ? "More ways to finish this task" : "Choose what the Merge button does")
+                .help(menuHelpText(blocker: blocker))
                 .accessibilityLabel("Merge options")
                 .accessibilityIdentifier("topbar.workspace.merge.mode")
             }
@@ -112,6 +124,33 @@ struct WorkspaceHeaderMergeControl: View {
         // shortcut never close a pull request.
         Divider()
         Button(WorkspaceMergePresentation.closeWithoutMergingTitle, action: closeWithoutMerging)
+    }
+
+    /// The modes as actions, like the sidebar's context menu: the button
+    /// opens the pull request, so the menu is where it merges.
+    @ViewBuilder
+    private func mergeActionItems(mode: WorkspaceMergeMode) -> some View {
+        ForEach(WorkspaceMergeMode.allCases, id: \.self) { option in
+            let title = WorkspaceMergePresentation.actionTitle(mode: option, pullRequest: presentation.pullRequest)
+            Button(option == mode ? shortcut.menuTitle(title) : title) {
+                mergeInMode(option)
+            }
+        }
+        Divider()
+        Button(WorkspaceMergePresentation.closeWithoutMergingTitle, action: closeWithoutMerging)
+    }
+
+    private func primaryHelpText(mode: WorkspaceMergeMode, blocker: PullRequestMergeBlocker?) -> String {
+        if let blocker {
+            return "\(blocker.label): \(pullRequestName) is not ready to merge. Open it on GitHub, "
+                + "or merge it anyway from the menu"
+        }
+        return shortcut.helpText(isTask ? taskHelpText : helpText(for: mode))
+    }
+
+    private func menuHelpText(blocker: PullRequestMergeBlocker?) -> String {
+        if isTask { return "More ways to finish this task" }
+        return blocker == nil ? "Choose what the Merge button does" : "Merge anyway, or close the pull request"
     }
 
     private var taskHelpText: String {
@@ -180,15 +219,23 @@ private struct WorkspaceHeaderMergeButtonStyle: ButtonStyle {
         case trailing
     }
 
+    /// Green while the pull request is ready to merge, neutral while the
+    /// button only opens it.
+    enum Tone {
+        case merge
+        case neutral
+    }
+
     let corners: Corners
     var horizontalPadding: CGFloat = ToastyTheme.workspaceMergeControlHorizontalPadding
+    var tone: Tone = .merge
     @State private var isHovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         let radius = ToastyTheme.workspaceMergeControlCornerRadius
         configuration.label
             .font(ToastyTheme.fontWorkspaceMergeButton)
-            .foregroundStyle(ToastyTheme.accentDark)
+            .foregroundStyle(tone == .merge ? ToastyTheme.accentDark : ToastyTheme.sidebarDisclosureText)
             .padding(.horizontal, horizontalPadding)
             .frame(height: ToastyTheme.workspaceMergeControlHeight)
             .background(
@@ -198,7 +245,7 @@ private struct WorkspaceHeaderMergeButtonStyle: ButtonStyle {
                     bottomTrailingRadius: corners == .trailing ? radius : 0,
                     topTrailingRadius: corners == .trailing ? radius : 0
                 )
-                .fill(ToastyTheme.sidebarSubspaceDoneMark)
+                .fill(tone == .merge ? ToastyTheme.sidebarSubspaceDoneMark : ToastyTheme.sidebarDisclosureBackground)
             )
             .brightness(configuration.isPressed ? -0.08 : isHovered ? 0.06 : 0)
             .contentShape(Rectangle())

@@ -98,6 +98,9 @@ struct WorkspaceView: View {
     var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     /// Runs the Merge button menu's Close Without Merging for a workspace.
     var requestWorkspaceClose: @MainActor (UUID) -> Void = { _ in }
+    /// Opens a pull request that is not ready to merge, from the button
+    /// that replaces Merge. `nil` routes it like any other link.
+    var openPullRequestURL: (@MainActor (URL) -> Void)? = nil
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var seenUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -726,29 +729,23 @@ struct WorkspaceView: View {
         ) {
             // A pull request subspace gives the whole slot to its merge
             // control; the sidebar and tab dots still show unreads.
-            WorkspaceHeaderMergeControl(
-                presentation: mergePresentation,
-                pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
-                    ?? mergePresentation.pullRequest,
-                merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
-                setMode: { store.setWorkspaceMergeMode($0) },
-                retryCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
-                },
-                cancelCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
-                },
-                closeWithoutMerging: { requestWorkspaceClose(workspace.id) },
-                isTask: sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
-                mergeWithoutChecks: {
-                    TaskActions.mergeWithoutChecks(workspaceID: workspace.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
-                },
-                archiveTask: {
-                    guard let coordinator = sessionRuntimeStore.taskCoordinator,
-                          let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
-                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            if let cache = sessionRuntimeStore.pullRequestStateCache,
+               let link = WorkspaceMergePresentation.pullRequestLink(in: workspace) {
+                PullRequestStateReader(cache: cache, link: link) { pullRequestState in
+                    workspaceHeaderMergeControl(
+                        for: workspace,
+                        presentation: WorkspaceMergePresentation.make(
+                            workspace: workspace,
+                            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+                            mode: store.workspaceMergeMode,
+                            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+                            pullRequestState: pullRequestState
+                        ) ?? mergePresentation
+                    )
                 }
-            )
+            } else {
+                workspaceHeaderMergeControl(for: workspace, presentation: mergePresentation)
+            }
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
             // one summary, never both, so the title column never overflows.
@@ -769,6 +766,47 @@ struct WorkspaceView: View {
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
             }
+        }
+    }
+
+    private func workspaceHeaderMergeControl(
+        for workspace: WorkspaceState,
+        presentation mergePresentation: WorkspaceMergePresentation
+    ) -> some View {
+        WorkspaceHeaderMergeControl(
+            presentation: mergePresentation,
+            pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
+                ?? mergePresentation.pullRequest,
+            merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
+            mergeInMode: { requestWorkspaceMerge(workspace.id, $0) },
+            openPullRequest: { openWorkspacePullRequest(workspace) },
+            setMode: { store.setWorkspaceMergeMode($0) },
+            retryCleanup: {
+                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
+            },
+            cancelCleanup: {
+                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
+            },
+            closeWithoutMerging: { requestWorkspaceClose(workspace.id) },
+            isTask: sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
+            mergeWithoutChecks: {
+                TaskActions.mergeWithoutChecks(workspaceID: workspace.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
+            },
+            archiveTask: {
+                guard let coordinator = sessionRuntimeStore.taskCoordinator,
+                      let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
+                TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            }
+        )
+    }
+
+    private func openWorkspacePullRequest(_ workspace: WorkspaceState) {
+        guard let link = WorkspaceMergePresentation.pullRequestLink(in: workspace),
+              let url = URL(string: link.url) else { return }
+        if let openPullRequestURL {
+            openPullRequestURL(url)
+        } else {
+            _ = AppURLRouter.open(url, preferredWindowID: windowID, appStore: store)
         }
     }
 
@@ -5924,5 +5962,18 @@ private struct TopBarButtonChrome<Content: View>: View {
                     .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
             .fixedSize(horizontal: true, vertical: true)
+    }
+}
+
+/// Redraws its content when GitHub's answer for `link` changes, so the top
+/// bar's merge control follows it without the whole workspace view
+/// observing the cache.
+private struct PullRequestStateReader<Content: View>: View {
+    @ObservedObject var cache: PullRequestStateCache
+    let link: WorkspacePullRequestLink
+    @ViewBuilder let content: (TaskPullRequestState?) -> Content
+
+    var body: some View {
+        content(cache.state(for: link))
     }
 }

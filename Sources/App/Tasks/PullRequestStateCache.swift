@@ -19,7 +19,9 @@ final class PullRequestStateCache: ObservableObject {
     }
 
     static let requestTimeout: TimeInterval = 30
-    static let viewFields = "state,isDraft,headRefOid,mergeCommit"
+    /// `statusCheckRollup` only tells failing checks from running ones, for
+    /// the not-ready Merge button.
+    static let viewFields = "state,isDraft,headRefOid,mergeCommit,mergeStateStatus,reviewDecision,statusCheckRollup"
 
     @Published private(set) var entries: [String: Entry] = [:]
     /// Called with each answer that changes the cache.
@@ -79,6 +81,13 @@ final class PullRequestStateCache: ObservableObject {
         if let answeredAt = entry.answeredAt, answeredAt > observedAt {
             return
         }
+        var state = state
+        // While GitHub works out the merge state, as it does after a push,
+        // keep the last known one so the Merge button does not flicker.
+        if state.state == .open, state.mergeability?.isKnown != true,
+           let known = entry.state?.mergeability, known.isKnown {
+            state.mergeability = known
+        }
         let changed = entry.state != state
         entry.state = state
         entry.answeredAt = observedAt
@@ -89,7 +98,7 @@ final class PullRequestStateCache: ObservableObject {
         }
     }
 
-    /// Reads `gh pr view --json state,isDraft,headRefOid,mergeCommit`.
+    /// Reads `gh pr view --json` with `viewFields`.
     nonisolated static func state(from result: WorkspaceMergeCommandResult) -> TaskPullRequestState? {
         guard result.exitCode == 0,
               let object = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
@@ -102,7 +111,40 @@ final class PullRequestStateCache: ObservableObject {
             state: state,
             isDraft: object["isDraft"] as? Bool ?? false,
             headSHA: object["headRefOid"] as? String,
-            mergeCommit: mergeCommit
+            mergeCommit: mergeCommit,
+            mergeability: mergeability(from: object)
         )
+    }
+
+    /// `nil` when the answer has no `mergeStateStatus`. A value this build
+    /// does not know reads as unknown, so it never blocks the Merge button.
+    private nonisolated static func mergeability(from object: [String: Any]) -> PullRequestMergeability? {
+        guard let rawMergeState = object["mergeStateStatus"] as? String else { return nil }
+        let rawReview = (object["reviewDecision"] as? String)?.lowercased() ?? ""
+        return PullRequestMergeability(
+            mergeState: PullRequestMergeability.MergeState(rawValue: rawMergeState.lowercased()) ?? .unknown,
+            checks: checks(from: object["statusCheckRollup"] as? [[String: Any]] ?? []),
+            reviewDecision: PullRequestMergeability.ReviewDecision(rawValue: rawReview)
+        )
+    }
+
+    /// Any failing check fails the rollup; otherwise any unfinished one
+    /// keeps it running. Entries are check runs (`status`, `conclusion`)
+    /// or commit statuses (`state`).
+    private nonisolated static func checks(from rollup: [[String: Any]]) -> PullRequestMergeability.Checks? {
+        guard rollup.isEmpty == false else { return nil }
+        let failing: Set<String> = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]
+        var isRunning = false
+        for check in rollup {
+            if let state = check["state"] as? String {
+                if failing.contains(state) { return .failing }
+                if state == "PENDING" || state == "EXPECTED" { isRunning = true }
+            } else if (check["status"] as? String) != "COMPLETED" {
+                isRunning = true
+            } else if let conclusion = check["conclusion"] as? String, failing.contains(conclusion) {
+                return .failing
+            }
+        }
+        return isRunning ? .running : .passing
     }
 }
