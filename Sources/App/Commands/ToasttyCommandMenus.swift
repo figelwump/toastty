@@ -554,6 +554,15 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.modifiers
             )
             .disabled(!canToggleCommandRightPanel)
+
+            Button(ToasttyBuiltInCommand.toggleTasksViewTitle(tasksViewShown: commandWindow?.showsTasksView == true)) {
+                toggleTasksViewFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.modifiers
+            )
+            .disabled(commandSelection == nil || sessionRuntimeStore.taskCoordinator?.board?.isEnabled != true)
         }
 
         CommandMenu("Workspace") {
@@ -1071,6 +1080,13 @@ struct ToasttyCommandMenus: Commands {
 
     private var sidebarVisibleForCommand: Bool {
         commandSelection?.window.sidebarVisible ?? true
+    }
+
+    /// The Tasks view covers the selected workspace without changing it, so
+    /// hiding it returns to that workspace.
+    private func toggleTasksViewFromCommandSelection() {
+        guard let selection = commandSelection else { return }
+        store.send(.setTasksViewShown(windowID: selection.windowID, shown: selection.window.showsTasksView == false))
     }
 
     private func toggleSidebarFromCommandSelection() {

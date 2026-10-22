@@ -70,7 +70,7 @@ struct TasksView: View {
     var body: some View {
         let items = board.items()
         let sections = TasksViewSections.make(items, releasable: board.canRelease)
-        let selected = selectedItem(in: items, sections: sections)
+        let selected = board.tasksViewSelection(windowID: windowID, items: items)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -290,13 +290,6 @@ struct TasksView: View {
         let hasUnreadTurn: Bool
     }
 
-    /// The chosen task, or the first one that needs the user, or the first.
-    private func selectedItem(in items: [TaskBoardItem], sections: TasksViewSections) -> TaskBoardItem? {
-        if let chosen = board.selectionByWindowID[windowID], let item = items.first(where: { $0.id == chosen }) {
-            return item
-        }
-        return sections.all.first?.item
-    }
 }
 
 private struct TasksViewRow: View {
@@ -576,22 +569,7 @@ private struct TasksViewDetail: View {
 
     private func taskActionButton(_ action: TaskBoardPresentation.DetailAction, record: TaskRecord, coordinator: TaskCoordinator) -> some View {
         Button(action.title) {
-            switch action {
-            case .merge:
-                perform { try coordinator.requestMerge(taskID: record.id) }
-            case .mergeWithoutChecks:
-                perform { try coordinator.requestMerge(taskID: record.id, route: .direct) }
-            case .cancelMerge:
-                perform { try coordinator.cancelMerge(taskID: record.id) }
-            case .markDone:
-                perform { _ = try coordinator.markDone(taskID: record.id) }
-            case .archive:
-                TaskActions.archive(taskID: record.id, coordinator: coordinator)
-            case .cleanUp:
-                perform { try coordinator.retryCleanup(taskID: record.id) }
-            case .keepAsIs:
-                perform { try coordinator.dismissCleanup(taskID: record.id) }
-            }
+            perform { try TaskActions.run(action, taskID: record.id, coordinator: coordinator) }
         }
         .buttonStyle(TasksViewButtonStyle(isPrimary: action.isPrimary))
         .help(action.help)
@@ -665,11 +643,11 @@ private struct TasksViewDetail: View {
     }
 
     private func openTaskSpace(_ workspaceID: UUID) {
-        let windowID = store.state.windows.first { $0.workspaceIDs.contains(workspaceID) }?.id ?? self.windowID
-        store.selectWorkspace(
-            windowID: windowID,
+        TaskActions.openTaskSpace(
             workspaceID: workspaceID,
-            preferringUnreadSessionPanelIn: sessionRuntimeStore
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
         )
     }
 
