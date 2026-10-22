@@ -232,9 +232,11 @@ struct ToasttyMobileRootView: View {
                 refresh: sessionController.refreshLiveSessions,
                 onSettings: { presentedSheet = .settings },
                 openWorkspace: openWorkspace,
+                // Reinstall advice outlasts the relay cooldown error that usually follows it.
                 notificationError: sessionController.pushController?.configuration == nil
-                    ? nil : sessionController.pushController?.errorMessage,
-                retryNotifications: { sessionController.pushController?.retry() }
+                    ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
+                retryNotifications: sessionController.pushController?.deliveryHint != nil
+                    ? nil : { sessionController.pushController?.retry() }
             )
                 .navigationDestination(for: ToasttyMobileRoute.self) { route in
                     switch route {

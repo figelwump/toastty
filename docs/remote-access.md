@@ -169,6 +169,18 @@ reproduction if the events must survive an app restart. Apple accepting a
 verification push does not establish that the iPhone received it or completed
 setup. Older relay versions provide fewer result details.
 
+iOS can keep giving Toastty a notification token that Apple accepts but no
+longer delivers to. Updates and unregistering do not replace this token.
+Setup then stays at "Enabling alerts", or alerts stop with no error on the
+iPhone, the Mac, or the service. After two test notifications that Apple
+accepted expire without reaching the iPhone, Home and Settings show a message
+that recommends reinstalling Toastty. Retry does not appear with this message.
+A test notification counts as missed only if it had at least one minute to
+arrive. The count resets when a test notification arrives, the token or relay
+changes, or alerts turn off. To fix the token, delete Toastty from the iPhone,
+install it again, and allow notifications. Pairing credentials are kept in the
+iPhone Keychain, so the Mac connection usually continues without pairing again.
+
 Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;
 alerts already sent can still arrive. Unconfigured builds hide these controls

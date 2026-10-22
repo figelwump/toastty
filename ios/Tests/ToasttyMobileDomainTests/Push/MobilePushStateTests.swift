@@ -43,6 +43,26 @@ final class MobilePushStateTests: XCTestCase {
         XCTAssertTrue(security.addedItems.isEmpty)
     }
 
+    func testStateSavedBeforeMissedProofTrackingStillLoadsAndNewFieldsRoundTrip() throws {
+        let security = RecordingSecurityClient()
+        let store = KeychainMobilePushStateStore(securityClient: security)
+        var state = MobilePushState()
+        state.pending = Self.registration()
+        state.pending?.appleAcceptedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        state.missedProofs = 2
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        legacy.removeValue(forKey: "missedProofs")
+        var pending = try XCTUnwrap(legacy["pending"] as? [String: Any])
+        pending.removeValue(forKey: "appleAcceptedAt")
+        legacy["pending"] = pending
+        security.copyResult = .data(try JSONSerialization.data(withJSONObject: legacy))
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertNil(loaded.missedProofs)
+        XCTAssertNil(loaded.pending?.appleAcceptedAt)
+        security.copyResult = .data(try JSONEncoder().encode(state))
+        XCTAssertEqual(try store.load(), state)
+    }
+
     static func registration(stage: MobilePushRegistration.Stage = .pending) -> MobilePushRegistration {
         MobilePushRegistration(pairingID: UUID(), gatewayURL: NativePairingClientTests.gatewayURL,
             relayURL: URL(string: "https://push.example.com")!, relayID: "toastty-push-dev-v1",

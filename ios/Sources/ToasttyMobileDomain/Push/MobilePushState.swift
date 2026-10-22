@@ -17,6 +17,8 @@ public struct MobilePushRegistration: Codable, Equatable, Sendable, CustomString
     public var expiresAt: Date?
     public var nonce: String?
     public var createdAt: Date
+    /// When the relay reported that Apple accepted this registration's test push.
+    public var appleAcceptedAt: Date?
 
     public init(registrationID: UUID = UUID(), pairingID: UUID, gatewayURL: URL,
                 relayURL: URL, relayID: String, deviceToken: String,
@@ -52,6 +54,9 @@ public struct MobilePushState: Codable, Equatable, Sendable, CustomStringConvert
     public var blockedBuildID: String?
     public var retryAfter: Date?
     public var cleanupRetryAfter: Date?
+    /// Consecutive Apple-accepted verification pushes that expired unreceived.
+    /// Optional so states saved before this field still decode.
+    public var missedProofs: Int?
 
     public init(installationID: UUID = UUID()) { self.installationID = installationID }
     public var description: String { "<redacted push state>" }

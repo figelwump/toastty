@@ -186,7 +186,7 @@ struct ToasttyNotificationSettingsSection: View {
         case .off: "Off"
         case .turningOff: "Off on this iPhone. Waiting to stop alerts at the notification service."
         case .permissionDenied: "Alerts are off in iOS Settings."
-        case .pending: "Enabling alerts. Keep Toastty open and connected to your Mac."
+        case .pending: controller.deliveryHint ?? "Enabling alerts. Keep Toastty open and connected to your Mac."
         case .enabled: "On"
         }
     }
@@ -194,13 +194,15 @@ struct ToasttyNotificationSettingsSection: View {
 
 struct ToasttyNotificationErrorBanner: View {
     let message: String
-    let retry: () -> Void
+    let retry: (() -> Void)?
     var body: some View {
         HStack(spacing: 12) {
             Text(message).font(.caption).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Retry", action: retry).font(.caption.weight(.semibold))
-                .accessibilityIdentifier("toastty-mobile-notifications-banner-retry")
+            if let retry {
+                Button("Retry", action: retry).font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("toastty-mobile-notifications-banner-retry")
+            }
         }
         .padding(12)
         .background(ToasttyDesignTokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))

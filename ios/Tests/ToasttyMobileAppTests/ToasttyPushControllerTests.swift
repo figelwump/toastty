@@ -397,15 +397,91 @@ final class ToasttyPushControllerTests: XCTestCase {
 
     func testNewInstallationQueuesLeftoverKeychainRegistrationBeforeResettingIntent() async throws {
         let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
         h.controller.receivedToken(Harness.token)
         await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
         h.marker.installationID = nil
         let reinstalled = h.makeController()
         await reinstalled.restore()
+        XCTAssertNil(reinstalled.storedState?.missedProofs)
         XCTAssertFalse(reinstalled.desired)
         XCTAssertNil(reinstalled.storedState?.pending)
-        XCTAssertEqual(reinstalled.storedState?.cleanup.count, 1)
+        XCTAssertEqual(reinstalled.storedState?.cleanup.count, 2)
         XCTAssertFalse(reinstalled.storedState?.introHandled ?? true)
+    }
+
+    func testRepeatedUnreceivedProofsSuggestReinstallingUntilAProofArrives() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        for _ in 0..<ToasttyPushController.missedProofsBeforeHint {
+            XCTAssertNil(h.controller.deliveryHint)
+            h.clock.advance(301)
+            await h.controller.reconcile()
+        }
+        XCTAssertNotNil(h.controller.deliveryHint)
+        await assertBeginCount(3, h.relay)
+
+        // The count survives an app restart. A delivered proof clears it even
+        // when the relay completion fails.
+        let restarted = h.makeController()
+        await h.connect(restarted)
+        await restarted.reconcile()
+        XCTAssertNotNil(restarted.deliveryHint)
+        await h.relay.failCompletionOnce()
+        let pending = try XCTUnwrap(restarted.storedState?.pending)
+        _ = await restarted.receiveForeground(Harness.proof(pending))
+        XCTAssertEqual(restarted.storedState?.pending?.stage, .pending)
+        XCTAssertNil(restarted.storedState?.missedProofs)
+        XCTAssertNil(restarted.deliveryHint)
+        await restarted.reconcile()
+        await restarted.reconcile()
+        XCTAssertEqual(restarted.presentation, .enabled)
+    }
+
+    func testOnlyAcceptedProofsWithTimeToArriveCountTowardTheReinstallHint() async throws {
+        let h = try await Harness.make(desired: true)
+        // A pending retry reports an unknown outcome, not Apple's acceptance.
+        await h.relay.setBeginDiagnostic(PushRelayDiagnostic(statusCode: 202, code: .verificationResultUnknown))
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+
+        // Acceptance 20 seconds before the local deadline is too recent to count.
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        await h.relay.failBeginOnce(.network)
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        h.clock.advance(280)
+        await h.controller.reconcile()
+        h.clock.advance(21)
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
+        h.controller.receivedToken(String(repeating: "cd", count: 32))
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+    }
+
+    func testTurningAlertsOffForgetsMissedProofs() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
+        await h.controller.setDesired(false)
+        XCTAssertNil(h.controller.storedState?.missedProofs)
     }
 
     func testLockedStateResumesAfterUnlockWithoutReplacingTheSavedAttempt() async throws {
@@ -872,6 +948,7 @@ final class ToasttyPushControllerTests: XCTestCase {
         let native: PushNativeSpy
         let clock: PushClock
         static let token = String(repeating: "ab", count: 32)
+        static let accepted = PushRelayDiagnostic(statusCode: 201, code: .appleAccepted)
         static let config = ToasttyPushConfiguration(relayURL: URL(string: "https://push.example.com")!,
             relayID: "toastty-push-dev-v1", apnsEnvironment: .development)
 

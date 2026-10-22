@@ -117,6 +117,20 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-notifications-retry"].waitForExistence(timeout: 5))
     }
 
+    func testRepeatedlyMissedTestNotificationsSuggestReinstallingInHomeAndSettings() {
+        let app = launch(mode: "missed-proofs")
+        let hint = "This iPhone isn’t receiving Toastty’s test notifications. Delete and reinstall Toastty, then allow notifications."
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-notifications-error"].firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts[hint].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-notifications-banner-retry"].exists)
+        capture(app, name: "Reinstall hint on Home")
+        app.buttons["toastty-mobile-settings-button"].tap()
+        let status = app.staticTexts["toastty-mobile-notifications-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertEqual(status.label, hint)
+        capture(app, name: "Reinstall hint in Settings")
+    }
+
     func testDisabledAlertsBeforeOptInShowAnOffBlockedToggleAndLinkToIOSSettings() {
         let app = launch(mode: "denied")
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 8))

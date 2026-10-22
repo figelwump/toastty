@@ -71,6 +71,13 @@ final class ToasttyPushController {
         configuration != nil && configurationMatches && context?.connected == true && context?.supported == true
             && storedState?.introHandled == false && permission != .denied
     }
+    /// iOS can keep returning an app token that Apple accepts but no longer
+    /// delivers to. Only deleting and reinstalling the app has replaced it.
+    var deliveryHint: String? {
+        guard presentation == .pending, (storedState?.missedProofs ?? 0) >= Self.missedProofsBeforeHint else { return nil }
+        return "This iPhone isn’t receiving Toastty’s test notifications. Delete and reinstall Toastty, then allow notifications."
+    }
+    static let missedProofsBeforeHint = 2
     var presentation: ToasttyPushPresentation {
         guard configuration != nil, storedState != nil else { return .unavailable }
         guard desired else { return storedState?.cleanup.isEmpty == false || storedState?.needsMacClear == true ? .turningOff : .off }
@@ -146,6 +153,7 @@ final class ToasttyPushController {
                 state.desired = false
                 state.introHandled = false
                 state.needsMacClear = true
+                state.missedProofs = nil
                 state.installationID = UUID()
             }
             try store.save(state)
@@ -240,6 +248,7 @@ final class ToasttyPushController {
                     $0.desired = false
                     $0.needsMacClear = $0.needsMacClear || $0.active != nil || $0.pending != nil || !$0.cleanup.isEmpty
                     $0.queueCleanup()
+                    $0.missedProofs = nil
                 }
             }
             catch { errorMessage = "Couldn’t save notification settings. Try again."; return }
@@ -270,7 +279,7 @@ final class ToasttyPushController {
         queuedTaps.removeAll()
         await restore()
         if let pairingID, let context, context.pairingID != pairingID { return true }
-        do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = false } }
+        do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = false; $0.missedProofs = nil } }
         catch { errorMessage = "Couldn’t save notification cleanup. Try again."; return false }
         revision &+= 1
         scheduleReconcile()
@@ -413,10 +422,18 @@ final class ToasttyPushController {
                pending.deviceToken != token || pending.relayURL != configuration.relayURL
                 || pending.relayID != configuration.relayID
                 || (pending.stage == .pending && pending.nonce == nil && now().timeIntervalSince(pending.createdAt) >= 300) {
+                let replaced = pending.deviceToken != token || pending.relayURL != configuration.relayURL
+                    || pending.relayID != configuration.relayID
                 emit(pending.deviceToken != token ? .pushTokenChanged
-                    : pending.relayURL != configuration.relayURL || pending.relayID != configuration.relayID
-                        ? .pushRelayChanged : .pushProofExpired, registration: pending)
-                try persist { $0.cleanup.append(pending); $0.pending = nil }
+                    : replaced ? .pushRelayChanged : .pushProofExpired, registration: pending)
+                try persist { state in
+                    state.cleanup.append(pending); state.pending = nil
+                    // Give an accepted push a minute to arrive before it counts as missed.
+                    if replaced { state.missedProofs = nil }
+                    else if let accepted = pending.appleAcceptedAt, now().timeIntervalSince(accepted) >= 60 {
+                        state.missedProofs = (state.missedProofs ?? 0) + 1
+                    }
+                }
             }
             if storedState?.pending == nil {
                 guard (storedState?.cleanup.count ?? 0) < 124 else {
@@ -462,6 +479,7 @@ final class ToasttyPushController {
                     try persist { state in
                         guard var current = state.pending, current.stage == .pending else { return }
                         current.expiresAt = result.expiresAt.map(Date.init(timeIntervalSince1970:))
+                        if operationDiagnostic?.code == .appleAccepted { current.appleAcceptedAt = now() }
                         if result.state == "active" { current.stage = .relayActive }
                         state.pending = current
                     }
@@ -480,6 +498,7 @@ final class ToasttyPushController {
                 if let old = state.active { state.cleanup.append(old) }
                 var enabled = ready; enabled.stage = .enabled; enabled.nonce = nil
                 state.active = enabled; state.pending = nil; state.needsMacClear = false; state.retryAfter = nil
+                state.missedProofs = nil
             }
             errorMessage = nil
             succeeded(.pushRegistrationEnabled, registration: ready)
@@ -518,7 +537,8 @@ final class ToasttyPushController {
         guard attempt.pairingID == payload.pairingID else { emit(.pushProofOtherPairing, registration: attempt); return }
         guard let nonce = payload.nonce else { emit(.pushProofInvalid, registration: attempt); return }
         guard desired else { emit(.pushProofDisabled, registration: attempt); return }
-        do { try persist { $0.pending?.nonce = nonce } }
+        // A delivered nonce proves receipt even if the relay completion fails.
+        do { try persist { $0.pending?.nonce = nonce; $0.missedProofs = nil } }
         catch {
             emit(.pushProofSaveFailed, registration: attempt)
             handleFailure(error)
@@ -615,6 +635,7 @@ final class ToasttyPushController {
             state.cleanup.append(contentsOf: mismatched)
             if mismatched.contains(where: { $0.registrationID == state.active?.registrationID }) { state.active = nil }
             if mismatched.contains(where: { $0.registrationID == state.pending?.registrationID }) { state.pending = nil }
+            state.missedProofs = nil
         }
     }
 
