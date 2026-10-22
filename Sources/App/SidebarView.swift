@@ -1038,10 +1038,13 @@ struct SidebarView: View {
         )
     }
 
-    private func openTasksView(selecting subject: TaskBoardItem.Subject?) {
+    private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
         cancelWorkspaceRename()
         if let subject {
             taskBoard.selectionByWindowID[windowID] = subject
+        }
+        if let group {
+            taskBoard.revealGroupByWindowID[windowID] = group
         }
         _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
     }
@@ -1053,7 +1056,7 @@ struct SidebarView: View {
         let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)
         return SidebarStatusSegment(
             sections: sections,
-            openTasksView: openTasksView(selecting:),
+            openTasksGroup: { group in openTasksView(selecting: nil, revealing: group) },
             release: { workspaceID in
                 if let coordinator = taskBoard.coordinator {
                     TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
@@ -1088,44 +1091,57 @@ struct SidebarView: View {
             let toShip = items.filter { $0.stage == .toShip }.count
             let done = items.filter { $0.stage == .done }.count
             if toShip > 0 || done > 0 {
-                Button {
-                    openTasksView(selecting: nil)
-                } label: {
-                    HStack(spacing: 12) {
-                        if toShip > 0 {
+                // Each count opens the Tasks view at its own group.
+                HStack(spacing: 12) {
+                    if toShip > 0 {
+                        finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
                             Label("To ship \(toShip)", systemImage: "arrow.up.square")
                                 .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                         }
-                        if done > 0 {
+                    }
+                    if done > 0 {
+                        finishedTasksButton(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
                             Label("Done \(done)", systemImage: "checkmark.square")
                                 .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
                         }
-                        Spacer(minLength: 0)
                     }
-                    .font(ToastyTheme.fontWorkspaceSessionChip)
-                    .labelStyle(.titleAndIcon)
-                    .contentShape(Rectangle())
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .labelStyle(.titleAndIcon)
                 .padding(.horizontal, 18)
                 .padding(.bottom, 10)
-                .help("Show finished tasks in the Tasks view")
-                .accessibilityLabel(Self.finishedTasksFooterLabel(toShip: toShip, done: done))
-                .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(projectWorkspaceID.uuidString)")
-                .background {
-                    SidebarSemanticTextBridge(text: Self.finishedTasksFooterLabel(toShip: toShip, done: done))
-                        .frame(width: 0, height: 0)
-                        .allowsHitTesting(false)
-                }
             }
         }
     }
 
-    static func finishedTasksFooterLabel(toShip: Int, done: Int) -> String {
-        var parts: [String] = []
-        if toShip > 0 { parts.append("\(toShip) to ship") }
-        if done > 0 { parts.append("\(done) done") }
-        return "Finished tasks: " + parts.joined(separator: ", ") + ". Opens the Tasks view."
+    private func finishedTasksButton(
+        _ group: TaskStage.Group,
+        count: Int,
+        projectWorkspaceID: UUID,
+        @ViewBuilder label: () -> some View
+    ) -> some View {
+        let accessibilityText = Self.finishedTasksFooterLabel(group, count: count)
+        return Button {
+            openTasksView(selecting: nil, revealing: group)
+        } label: {
+            label()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(group == .done ? "Show done tasks in the Tasks view" : "Show tasks to ship in the Tasks view")
+        .accessibilityLabel(accessibilityText)
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(group == .done ? "done" : "toShip").\(projectWorkspaceID.uuidString)")
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    static func finishedTasksFooterLabel(_ group: TaskStage.Group, count: Int) -> String {
+        let counted = group == .done ? "\(count) done" : "\(count) to ship"
+        return "Finished tasks: \(counted). Opens the Tasks view."
     }
 
     private var sidebarTitlebarCover: some View {

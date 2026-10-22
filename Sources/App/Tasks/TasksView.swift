@@ -70,16 +70,24 @@ struct TasksView: View {
     var body: some View {
         let items = board.items()
         let sections = TasksViewSections.make(items, releasable: board.canRelease)
-        let selected = selectedItem(in: items, sections: sections)
+        let selected = board.tasksViewSelection(windowID: windowID, items: items)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 if let configError = board.configError {
                     configErrorBanner(configError)
                 }
-                ScrollView {
-                    list(sections, selectedID: selected?.id)
-                        .padding(.bottom, 16)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        list(sections, selectedID: selected?.id)
+                            .padding(.bottom, 16)
+                    }
+                    // The request can come while the view opens or while it
+                    // already shows.
+                    .onAppear { revealRequestedGroup(using: proxy) }
+                    .onChange(of: board.revealGroupByWindowID[windowID]) { _, _ in
+                        revealRequestedGroup(using: proxy)
+                    }
                 }
 
             }
@@ -197,6 +205,7 @@ struct TasksView: View {
             groupHeader(.running, count: sections.running.count)
             rows(sections.running, selectedID: selectedID)
             groupHeader(.toShip, count: sections.toShip.reduce(0) { $0 + $1.entries.count })
+                .id(TaskStage.Group.toShip)
             ForEach(sections.toShip) { lane in
                 HStack(spacing: 8) {
                     Text("\(lane.projectTitle) · \(lane.entries.count) \(lane.entries.count == 1 ? "task" : "tasks")")
@@ -215,6 +224,7 @@ struct TasksView: View {
                 rows(lane.entries, selectedID: selectedID)
             }
             collapsibleGroup(.done, entries: sections.done, isExpanded: $isDoneExpanded, selectedID: selectedID)
+                .id(TaskStage.Group.done)
             if sections.archived.isEmpty == false {
                 collapsibleGroup(.archived, entries: sections.archived, isExpanded: $isArchivedExpanded, selectedID: selectedID)
             }
@@ -259,10 +269,32 @@ struct TasksView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(TaskBoardPresentation.groupTitle(group)), \(entries.count), \(isExpanded.wrappedValue ? "expanded" : "collapsed")")
+            .accessibilityLabel(Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+            .background {
+                SidebarSemanticTextBridge(text: Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
             if isExpanded.wrappedValue {
                 rows(entries, selectedID: selectedID)
             }
+        }
+    }
+
+    static func collapsibleGroupLabel(_ group: TaskStage.Group, count: Int, isExpanded: Bool) -> String {
+        "\(TaskBoardPresentation.groupTitle(group)), \(count), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    /// Shows the group the sidebar asked for, once.
+    private func revealRequestedGroup(using proxy: ScrollViewProxy) {
+        guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
+        if group == .done {
+            isDoneExpanded = true
+        }
+        // After the expanded rows lay out, so the group's top lands at the
+        // top of the list.
+        Task { @MainActor in
+            proxy.scrollTo(group, anchor: .top)
         }
     }
 
@@ -290,13 +322,6 @@ struct TasksView: View {
         let hasUnreadTurn: Bool
     }
 
-    /// The chosen task, or the first one that needs the user, or the first.
-    private func selectedItem(in items: [TaskBoardItem], sections: TasksViewSections) -> TaskBoardItem? {
-        if let chosen = board.selectionByWindowID[windowID], let item = items.first(where: { $0.id == chosen }) {
-            return item
-        }
-        return sections.all.first?.item
-    }
 }
 
 private struct TasksViewRow: View {
@@ -576,22 +601,7 @@ private struct TasksViewDetail: View {
 
     private func taskActionButton(_ action: TaskBoardPresentation.DetailAction, record: TaskRecord, coordinator: TaskCoordinator) -> some View {
         Button(action.title) {
-            switch action {
-            case .merge:
-                perform { try coordinator.requestMerge(taskID: record.id) }
-            case .mergeWithoutChecks:
-                perform { try coordinator.requestMerge(taskID: record.id, route: .direct) }
-            case .cancelMerge:
-                perform { try coordinator.cancelMerge(taskID: record.id) }
-            case .markDone:
-                perform { _ = try coordinator.markDone(taskID: record.id) }
-            case .archive:
-                TaskActions.archive(taskID: record.id, coordinator: coordinator)
-            case .cleanUp:
-                perform { try coordinator.retryCleanup(taskID: record.id) }
-            case .keepAsIs:
-                perform { try coordinator.dismissCleanup(taskID: record.id) }
-            }
+            perform { try TaskActions.run(action, taskID: record.id, coordinator: coordinator) }
         }
         .buttonStyle(TasksViewButtonStyle(isPrimary: action.isPrimary))
         .help(action.help)
@@ -665,11 +675,11 @@ private struct TasksViewDetail: View {
     }
 
     private func openTaskSpace(_ workspaceID: UUID) {
-        let windowID = store.state.windows.first { $0.workspaceIDs.contains(workspaceID) }?.id ?? self.windowID
-        store.selectWorkspace(
-            windowID: windowID,
+        TaskActions.openTaskSpace(
             workspaceID: workspaceID,
-            preferringUnreadSessionPanelIn: sessionRuntimeStore
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
         )
     }
 

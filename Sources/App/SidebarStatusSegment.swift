@@ -116,7 +116,8 @@ enum TaskAge {
 /// project card; the rest open the Tasks view.
 struct SidebarStatusSegment<RowContent: View>: View {
     let sections: SidebarStatusSections
-    let openTasksView: (TaskBoardItem.Subject?) -> Void
+    /// Opens the Tasks view at a group.
+    let openTasksGroup: (TaskStage.Group) -> Void
     var release: (UUID) -> Void = { _ in }
     @ViewBuilder let row: (SidebarStatusSections.Entry) -> RowContent
 
@@ -145,7 +146,7 @@ struct SidebarStatusSegment<RowContent: View>: View {
             }
             if sections.doneCount > 0 {
                 Button {
-                    openTasksView(nil)
+                    openTasksGroup(.done)
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.right")
@@ -233,7 +234,7 @@ struct SidebarStatusSegment<RowContent: View>: View {
 
     private func laneButton(_ lane: SidebarStatusSections.Lane) -> some View {
         Button {
-            openTasksView(nil)
+            openTasksGroup(.toShip)
         } label: {
             HStack(alignment: .top, spacing: 6) {
                 RoundedRectangle(cornerRadius: 2)

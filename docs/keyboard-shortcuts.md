@@ -18,6 +18,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+W` | Close focused panel |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Option+Shift+T` | Open the quick entry panel to create a task, from any app. Set it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`; see [Quick entry](tasks.md#quick-entry) |
+| `Cmd+Shift+T` | Show the Tasks view, or hide it and return to the workspace it covered. **View > Show Tasks** does the same |
 | `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list. In the Agent list, `1`–`5` pick a Frequent preset while the search is empty |
 | `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
 
@@ -94,6 +95,8 @@ order. Pane shortcuts and keyboard navigation still follow the pane layout.
 | Shortcut | Action |
 |---|---|
 | `Cmd+Shift+P` | Open the command palette |
+
+The palette also acts on tasks. Commands named `Task: <action>` act on the current task: the row selected in the Tasks view while it shows, otherwise the task whose task space is selected. They are the actions of the Tasks view's detail pane that apply now, and each row names the task. `Release <project>…` starts a release for each open project with a `release_prompt`. See [Tasks](tasks.md#the-command-palette).
 
 ## Search
 
