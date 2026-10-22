@@ -2182,7 +2182,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("Inbox, 6 tasks"), "Inbox header missing: \(textValues)")
         XCTAssertTrue(textValues.contains("Why artifacts files are missing from file search, Inbox task, pick a workspace, suggests toastty. Toastty's workspace is not open."), "\(textValues)")
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, Inbox task, pick a workspace, None of the open workspaces has a billing page."), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Inbox task, routing…, choosing a workspace"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Inbox task, setting up, choosing a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Inbox task, setting up, → closed workspace · codex"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Composer drafts, Inbox task, setting up, → \(parentTitle) · codex"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The agent did not start: profile missing"), "\(textValues)")

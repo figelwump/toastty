@@ -28,7 +28,7 @@ enum TaskBoardPresentation {
         switch item.stage {
         case .inbox:
             switch item.record?.setup {
-            case .routing?: return "routing…"
+            case .routing?: return "setting up"
             case .settingUp?: return "setting up"
             default: return "moving to worktree"
             }

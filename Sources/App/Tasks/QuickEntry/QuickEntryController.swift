@@ -15,13 +15,15 @@ final class QuickEntryController: ObservableObject {
     private let store: AppStore
     /// The profiles in agents.toml, as a launch resolves them.
     private let agentProfiles: @MainActor () -> [AgentLaunchProfileSummary]
-    /// The presets the user picks, for the Agent picker's Frequent list.
+    /// The presets the user picks, for the Agent picker's Frequent list,
+    /// and the workspace last used.
     private let presetUsage: QuickEntryPresetUsage?
     private let create: @MainActor (TaskCreateRequest) async throws -> TaskRecord
     private let configLoader: @MainActor () throws -> TasksConfig
     private let stagingRootURL: URL
     private let registersGlobalHotKey: Bool
     private let toastDuration: Duration
+    private let frontmostApplication: @MainActor () -> NSRunningApplication?
     private var hotKey: QuickEntryHotKey?
 
     private(set) var panel: QuickEntryPanel?
@@ -61,7 +63,8 @@ final class QuickEntryController: ObservableObject {
         stagingRootURL: URL = FileManager.default.temporaryDirectory
             .appending(path: "toastty-quick-entry", directoryHint: .isDirectory),
         registersGlobalHotKey: Bool,
-        toastDuration: Duration = .milliseconds(1600)
+        toastDuration: Duration = .milliseconds(1600),
+        frontmostApplication: @escaping @MainActor () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
     ) {
         self.store = store
         self.agentProfiles = agentProfiles
@@ -71,6 +74,7 @@ final class QuickEntryController: ObservableObject {
         self.stagingRootURL = stagingRootURL
         self.registersGlobalHotKey = registersGlobalHotKey
         self.toastDuration = toastDuration
+        self.frontmostApplication = frontmostApplication
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -162,7 +166,7 @@ final class QuickEntryController: ObservableObject {
             return
         }
 
-        let frontmost = NSWorkspace.shared.frontmostApplication
+        let frontmost = frontmostApplication()
         previousApplication = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : frontmost
         // The main window rather than the key window: opened from the
         // command palette, the key window is the palette, which is closing.
@@ -170,15 +174,28 @@ final class QuickEntryController: ObservableObject {
         previousFirstResponder = previousKeyWindow?.firstResponder
 
         let stagingDirectoryURL = stagingRootURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        // A broken tasks.toml shows its error at Create Task; the pickers
-        // then offer no `[defaults]` preset.
-        let defaults = (try? configLoader())?.defaults
+        // A broken tasks.toml shows its error at once, since the Agent pill
+        // may then have no preset and Create Task stays off.
+        let config = Result { try configLoader() }
+        let defaults = (try? config.get())?.defaults
         let profiles = quickEntryAgentProfiles(defaults: defaults)
+        let options = workspaceOptions()
+        let frequent = frequentPresets(defaults: defaults, profiles: profiles)
+        var prefill = prefill
+        prefill.workspaceID = prefill.workspaceID ?? Self.initialWorkspaceID(
+            selectedProject: selectedProjectID(),
+            lastUsed: presetUsage?.lastWorkspaceID,
+            openedInToastty: previousApplication == nil,
+            options: options
+        )
         let model = QuickEntryModel(
             prefill: prefill,
-            workspaceOptions: workspaceOptions(),
+            // The top Frequent preset, which is `[defaults]` until one has
+            // been used twice.
+            preset: frequent.first,
+            workspaceOptions: options,
             agentProfiles: profiles,
-            frequentPresets: frequentPresets(defaults: defaults, profiles: profiles),
+            frequentPresets: frequent,
             stagingDirectoryURL: stagingDirectoryURL,
             create: create,
             onCreated: { [weak self] record in
@@ -188,6 +205,9 @@ final class QuickEntryController: ObservableObject {
                 self?.dismiss()
             }
         )
+        if case .failure(let error) = config {
+            model.showError("tasks.toml: \(error.localizedDescription)")
+        }
         self.model = model
 
         let dropTarget = QuickEntryDropTarget(model: model)
@@ -243,9 +263,11 @@ final class QuickEntryController: ObservableObject {
     }
 
     private func finish(created record: TaskRecord) {
-        // Only a preset the user chose counts; Auto leaves it to triage.
         if let preset = model?.preset {
             presetUsage?.record(preset)
+        }
+        if let workspaceID = model?.workspaceID {
+            presetUsage?.recordWorkspace(workspaceID)
         }
         let frame = panel?.frame
         close()
@@ -472,7 +494,7 @@ final class QuickEntryController: ObservableObject {
     }
 
     /// The installed profiles that can take a task as their first message,
-    /// as triage offers them, each with its models and efforts.
+    /// each with its models and efforts.
     private func quickEntryAgentProfiles(defaults: TasksConfig.Defaults?) -> [QuickEntryAgentProfile] {
         agentProfiles()
             .filter { $0.isInstalled && $0.acceptsInitialPrompt }
@@ -531,6 +553,29 @@ final class QuickEntryController: ObservableObject {
             }
         }
         return options
+    }
+
+    /// The project of the workspace selected in Toastty's main window; a
+    /// task space counts as its project.
+    private func selectedProjectID() -> UUID? {
+        let state = store.state
+        guard let selected = state.selectedWorkspaceSelection()?.workspaceID else { return nil }
+        return state.subspaceParentIDsByWorkspaceID()[selected] ?? selected
+    }
+
+    /// The workspace the panel starts on. Opened over Toastty, it is the
+    /// selected project, where the user is working. Opened from another
+    /// app, it is the workspace last used in quick entry, since the
+    /// selection in a window in the background says less; the selected
+    /// project when that one closed. nil when neither is open.
+    static func initialWorkspaceID(
+        selectedProject: UUID?,
+        lastUsed: UUID?,
+        openedInToastty: Bool,
+        options: [QuickEntryModel.Option]
+    ) -> UUID? {
+        let candidates = openedInToastty ? [selectedProject, lastUsed] : [lastUsed, selectedProject]
+        return candidates.compactMap { $0 }.first { id in options.contains { $0.id == id.uuidString } }
     }
 
     /// The top-level workspace that holds a panel, for "New Task from

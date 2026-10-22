@@ -233,7 +233,7 @@ struct TaskRoutingTests {
     @Test func withoutTriageATaskWithNoWorkspaceWaitsForThePick() async throws {
         let fixture = try makeFixture(triage: false)
         let created = try await fixture.coordinator.create(TaskCreateRequest(text: "Fix the unread dot"))
-        #expect(created.setup == .needsWorkspace(reason: "No workspace was named, and triage is off. Pick a workspace for this task."))
+        #expect(created.setup == .needsWorkspace(reason: TaskCoordinator.noWorkspaceReason))
 
         try fixture.coordinator.setWorkspace(taskID: created.id, choice: .open(fixture.workspaceID))
         await fixture.waitUntil("the task starts") { fixture.record(created.id)?.setup == .started }

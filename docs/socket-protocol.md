@@ -356,10 +356,12 @@ Notable action-specific behavior:
   - `workspace` defaults to the calling managed session's workspace; a subspace
     resolves to its parent. A workspace-scoped session may always add tasks to
     its own project; any other workspace must be in its scope.
-  - when `[triage]` in `~/.toastty/tasks.toml` has a command and the request
-    leaves out the workspace, agent, prompt, or a model or effort the agent
-    takes, setup starts in the `routing` state while triage chooses them. A
-    task with no workspace afterwards is in `needsWorkspace`.
+  - `[defaults]` in `~/.toastty/tasks.toml` fills an agent, model or effort
+    the request leaves out. A task with no workspace is in `needsWorkspace`
+    until `task.set-workspace` places it.
+  - optional: when `[triage]` has a command and the request leaves out the
+    workspace, agent, prompt, or a model or effort the agent takes, setup
+    starts in the `routing` state while triage chooses them first.
   - invalid requests return `INVALID_PAYLOAD` and save nothing.
 - `task.start-work`
   - requires a calling managed session, whose task moves into a new git
@@ -375,14 +377,15 @@ Notable action-specific behavior:
 - `task.retry`, `task.delete`
   - require `args.taskID`. A workspace-scoped session reaches only the tasks it
     created or whose workspace or task space is in its scope. `task.retry`
-    runs triage again for a task without a workspace or agent.
+    fills the workspace and agent again for a task without them, with triage
+    when it is on; without a workspace, the task waits for one again.
 - `task.set-workspace`
   - requires `args.taskID` and one of `workspace` (an open workspace ID),
     `recentWorkspace` (an ID from `task.workspace-choices`, which Toastty opens
     again) or `rootDirectory` (a project directory, absolute or under `~`,
     which Toastty opens as a new workspace unless the project is open). The
-    task must not have started or have a task space. Triage runs again with
-    the workspace fixed, then setup starts.
+    task must not have started or have a task space. `[defaults]`, or triage
+    when it is on, fills anything else still missing, then setup starts.
   - a workspace-scoped session may choose only workspaces in its scope, and
     cannot reopen a closed workspace or open a directory.
 - `task.send`

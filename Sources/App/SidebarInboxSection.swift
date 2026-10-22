@@ -19,7 +19,7 @@ struct SidebarInboxRowPresentation: Equatable {
         switch record.setup {
         case .routing:
             let detail = record.workspaceID.flatMap(workspaceTitle).map { "→ \($0)\(agent)" } ?? "choosing a workspace"
-            return .init(title: record.title, detail: detail, tag: "routing…", needsUser: false, hint: detail)
+            return .init(title: record.title, detail: detail, tag: "setting up", needsUser: false, hint: detail)
         case .needsWorkspace(let reason):
             let hint = record.suggestedWorkspace.map { "suggests \($0.title)" }
             return .init(title: record.title, detail: [hint, reason].compactMap { $0 }.joined(separator: ". "), tag: "⚠ pick a workspace", needsUser: true, hint: hint)
@@ -242,7 +242,7 @@ struct SidebarInboxSection: View {
             Button("Show Task…") { presentedTaskID = record.id }
             if SidebarInboxRowPresentation.canRetry(record) {
                 Button(record.setup.isStarted ? "Retry Move" : "Retry Setup") { try? coordinator.retry(taskID: record.id) }
-            } else if case .needsWorkspace = record.setup {
+            } else if case .needsWorkspace = record.setup, coordinator.isTriageConfigured {
                 Button("Retry Triage") { try? coordinator.retry(taskID: record.id) }
             }
             Divider()

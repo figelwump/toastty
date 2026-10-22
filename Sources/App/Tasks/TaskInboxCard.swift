@@ -5,10 +5,10 @@ import ImageIO
 import SwiftUI
 
 /// One Inbox task with the actions that move it on: the popover from its
-/// sidebar row, and the Tasks view's detail pane. When triage could not
-/// place the task, it holds the workspace field, with triage's suggestion
-/// chosen first. Drawn to the "Workspace Picker Design" Scratchpad, in the
-/// quick entry panel's colors.
+/// sidebar row, and the Tasks view's detail pane. When the task has no
+/// workspace, it holds the workspace field; when triage is on and suggested
+/// a project, that suggestion is chosen first. Drawn to the "Workspace
+/// Picker Design" Scratchpad, in the quick entry panel's colors.
 struct TaskInboxCard: View {
     enum Layout {
         /// The sidebar popover: a status label and the title, a fixed width,
@@ -27,6 +27,9 @@ struct TaskInboxCard: View {
     @State private var errorMessage: String?
     @State private var choices: TaskWorkspaceChoices?
     @State private var selection: Selection = .suggested
+    /// Read when the card opens: Retry Triage is offered only while
+    /// `[triage] command` is set.
+    @State private var isTriageEnabled = false
 
     /// What the user chose. The suggestion is kept as such, not as the choice
     /// it was when the card opened, since the project may open or close while
@@ -212,7 +215,8 @@ struct TaskInboxCard: View {
         var isProblem: Bool
     }
 
-    /// Why the task waits, and what triage could not do, as quiet notes.
+    /// Why the task waits, and what triage could not do when it ran, as
+    /// quiet notes.
     private func notes(_ record: TaskRecord) -> [Note] {
         var notes: [Note] = []
         if case .needsWorkspace(let reason) = record.setup {
@@ -248,7 +252,7 @@ struct TaskInboxCard: View {
 
     static func status(_ record: TaskRecord) -> (label: String, needsUser: Bool) {
         switch record.setup {
-        case .routing: return ("Routing", false)
+        case .routing: return ("Setting up", false)
         case .needsWorkspace: return ("Needs a workspace", true)
         case .settingUp: return ("Setting up", false)
         case .setupFailed: return ("Setup failed", true)
@@ -452,7 +456,7 @@ struct TaskInboxCard: View {
 
     @ViewBuilder
     private func secondaryActions(_ record: TaskRecord) -> some View {
-        if isPickingWorkspace(record) {
+        if isPickingWorkspace(record), isTriageEnabled {
             Button("Retry Triage") {
                 perform { try coordinator.retry(taskID: record.id) }
             }
@@ -472,6 +476,7 @@ struct TaskInboxCard: View {
     private func loadChoices() {
         guard let record = records.record(id: taskID), isPickingWorkspace(record) else { return }
         choices = coordinator.workspaceChoices(taskID: taskID)
+        isTriageEnabled = coordinator.isTriageConfigured
     }
 
     private func perform(_ action: () throws -> Void) {

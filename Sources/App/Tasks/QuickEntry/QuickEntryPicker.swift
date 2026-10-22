@@ -33,16 +33,14 @@ enum QuickEntryPickerKind: Equatable {
 @MainActor
 final class QuickEntryPicker: ObservableObject {
     enum Choice: Equatable {
-        case workspace(UUID?)
-        case agent(QuickEntryPreset?)
+        case workspace(UUID)
+        case agent(QuickEntryPreset)
     }
 
     struct Row: Identifiable, Equatable {
         enum Action: Equatable {
-            case workspace(UUID?)
+            case workspace(UUID)
             case preset(QuickEntryPreset)
-            /// Leaves the choice to triage.
-            case auto
             /// Opens the columns with this agent and model chosen.
             case columns(agent: String?, model: String?)
         }
@@ -82,7 +80,9 @@ final class QuickEntryPicker: ObservableObject {
     /// The preset rows: the pinned preset under "Current" when it is not a
     /// Frequent one, so the picker opens on it, then the Frequent presets.
     private let listedPresets: [(preset: QuickEntryPreset, section: String)]
-    private let current: Choice
+    /// The pill's value when the picker opened; nil while none is chosen.
+    private let currentWorkspaceID: UUID?
+    private let currentPreset: QuickEntryPreset?
     /// Presets whose effort was changed with ← →, by row.
     private var adjustedPresets: [Row.ID: QuickEntryPreset] = [:]
 
@@ -92,7 +92,8 @@ final class QuickEntryPicker: ObservableObject {
         profiles = []
         frequent = []
         listedPresets = []
-        self.current = .workspace(current)
+        currentWorkspaceID = current
+        currentPreset = nil
         rebuildRows(highlightingCurrent: true)
     }
 
@@ -107,7 +108,8 @@ final class QuickEntryPicker: ObservableObject {
             listed.insert((current, "Current"), at: 0)
         }
         listedPresets = listed
-        self.current = .agent(current)
+        currentWorkspaceID = nil
+        currentPreset = current
         rebuildRows(highlightingCurrent: true)
     }
 
@@ -199,7 +201,7 @@ final class QuickEntryPicker: ObservableObject {
     func openColumns(agent: String? = nil, model: String? = nil) {
         guard kind == .agent, columns == nil else { return }
         var start: QuickEntryPreset
-        if case .agent(let preset?) = current, profile(preset.agent) != nil {
+        if let preset = currentPreset, profile(preset.agent) != nil {
             start = preset
         } else if let first = frequent.first ?? profiles.first.map({ QuickEntryPreset(agent: $0.id) }) {
             start = first
@@ -230,8 +232,6 @@ final class QuickEntryPicker: ObservableObject {
             onChoose(.workspace(workspaceID))
         case .preset(let preset):
             onChoose(.agent(preset))
-        case .auto:
-            onChoose(kind == .workspace ? .workspace(nil) : .agent(nil))
         case .columns(let agent, let model):
             openColumns(agent: agent, model: model)
         }
@@ -276,15 +276,14 @@ final class QuickEntryPicker: ObservableObject {
         }
     }
 
-    /// The row for the pill's value, highlighted when the picker opens. On
-    /// Auto, the Agent picker starts on its first Frequent preset instead,
-    /// so ⌘2 then Return picks it.
+    /// The row for the pill's value, highlighted when the picker opens.
+    /// With nothing chosen yet, the picker starts on its first row.
     private var currentRowID: Row.ID? {
-        switch current {
-        case .workspace(let workspaceID):
-            return workspaceID.map { "workspace:\($0.uuidString)" } ?? "auto"
-        case .agent(let preset):
-            return preset.map(Self.presetRowID)
+        switch kind {
+        case .workspace:
+            return currentWorkspaceID.map { "workspace:\($0.uuidString)" }
+        case .agent:
+            return currentPreset.map(Self.presetRowID)
         }
     }
 
@@ -296,9 +295,8 @@ final class QuickEntryPicker: ObservableObject {
         "preset:\(preset.agent)|\(preset.model ?? "")|\(preset.effort ?? "")"
     }
 
-    /// Auto, then the open workspaces.
+    /// The open workspaces.
     static func workspaceRows(_ workspaces: [QuickEntryModel.Option], query: String) -> [Row] {
-        let auto = Row(id: "auto", title: "Auto", detail: "triage chooses", action: .auto, searchText: "Auto")
         let open = workspaces.compactMap { option -> Row? in
             guard let id = UUID(uuidString: option.id) else { return nil }
             return Row(
@@ -309,10 +307,10 @@ final class QuickEntryPicker: ObservableObject {
                 searchText: option.title
             )
         }
-        return ranked([auto], query: query) + ranked(open, query: query)
+        return ranked(open, query: query)
     }
 
-    /// The preset rows, Auto and the columns. A search also lists every
+    /// The preset rows and the columns. A search also lists every
     /// agent and agent + model pair, after the presets. Each preset comes
     /// with its effort as adjusted with ← →, and its section.
     static func agentRows(
@@ -336,7 +334,6 @@ final class QuickEntryPicker: ObservableObject {
             )
         }
         let other = [
-            Row(id: "auto", section: "Other", title: "Auto", detail: "triage chooses", action: .auto, searchText: "Auto"),
             Row(
                 id: "columns",
                 section: "Other",
@@ -377,9 +374,9 @@ final class QuickEntryPicker: ObservableObject {
                 ))
             }
         }
-        // Auto and the columns follow the pairs, unless their title starts
-        // with the search: "auto" also matches inside a name such as
-        // "release authority".
+        // The columns row follows the pairs, unless its title starts with
+        // the search: a word such as "choose" can also match inside a
+        // profile name.
         let normalized = query.normalizedPaletteQuery
         let otherMatches = ranked(other, query: query)
         let leading = otherMatches.filter { $0.title.lowercased().hasPrefix(normalized) }

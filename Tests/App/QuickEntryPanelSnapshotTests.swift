@@ -36,7 +36,8 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
     private var stagingRoot: URL!
     private var store: AppStore!
     private var controller: QuickEntryController!
-    private var config = TasksConfig()
+    /// The agent pill starts on this preset until one is used twice.
+    private var config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
     private var presetUsage: QuickEntryPresetUsage!
 
     override func setUp() async throws {
@@ -53,7 +54,8 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
             create: { _ in throw TaskError("not used") },
             configLoader: { [unowned self] in config },
             stagingRootURL: stagingRoot,
-            registersGlobalHotKey: false
+            registersGlobalHotKey: false,
+            frontmostApplication: { nil }
         )
     }
 
@@ -66,6 +68,8 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         controller.present(prefill: .empty)
         let model = try XCTUnwrap(controller.model)
         XCTAssertFalse(model.canSubmit)
+        XCTAssertEqual(model.workspaceTitle, "toastty", "The selected workspace")
+        XCTAssertEqual(model.agentTitle, "claude-opus-5-5 · high", "The [defaults] preset")
         let empty = try render("quick-entry-empty")
 
         model.text = Self.designText
@@ -92,8 +96,19 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         model.attachImageData(try Self.screenshotData(), named: "Screenshot 4.11.52 PM.png")
         XCTAssertEqual(model.attachments.map(\.displayName), ["selection.txt", "Screenshot 4.11.52 PM.png"])
         XCTAssertEqual(model.workspaceTitle, "toastty")
-        XCTAssertEqual(model.agentTitle, "Auto")
+        XCTAssertEqual(model.agentTitle, "claude-opus-5-5 · high")
         try render("quick-entry-pinned-workspace")
+    }
+
+    func testNoWorkspaceDisablesCreateWithAHint() throws {
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        model.text = Self.designText
+        model.workspaceID = nil
+        XCTAssertEqual(model.workspaceTitle, "None")
+        XCTAssertEqual(model.missingChoiceHint, "Pick a workspace with ⌘1")
+        XCTAssertFalse(model.canSubmit)
+        try render("quick-entry-no-workspace")
     }
 
     func testDropHighlightAndError() throws {
@@ -127,7 +142,7 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
 
     func testFooterStaysOneRowWithLongNames() throws {
         controller.present(prefill: .empty)
-        let short = try render("quick-entry-footer-auto")
+        let short = try render("quick-entry-footer-preselected")
         controller.dismiss()
 
         let workspace = try XCTUnwrap(store.selectedWorkspace)
