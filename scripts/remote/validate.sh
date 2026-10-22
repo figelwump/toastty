@@ -384,7 +384,7 @@ sync_worktree_to_remote() {
   local remote_worktree_dir="$2"
 
   rsync -a --delete \
-    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
     --exclude '.git' \
     --exclude '.DS_Store' \
     --exclude 'artifacts' \
@@ -425,7 +425,7 @@ sync_local_ghostty_artifacts_to_remote() {
     GhosttyKit.Release.metadata.env; do
     if [[ -e "$dependencies_dir/$candidate" ]]; then
       rsync -aL \
-        -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
         "$dependencies_dir/$candidate" \
         "$REMOTE_HOST:$remote_worktree_dir/Dependencies/" || return 1
       synced_any=1
@@ -439,7 +439,7 @@ sync_local_ghostty_artifacts_to_remote() {
 
 remote_shell() {
   local script="$1"
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
+  ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
 set -euo pipefail
 $script
 EOF
@@ -448,7 +448,7 @@ EOF
 run_remote_preflight() {
   local output
   if ! output="$(
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$REMOTE_REPO_ROOT" \
       "$REMOTE_GUI_ROOT" <<'EOF' 2>&1
 set -euo pipefail
@@ -592,7 +592,7 @@ wait_for_remote_completion() {
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
 
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$RUN_LABEL" \
       "$remote_run_root" \
       "$remote_worktree_dir" \
@@ -778,7 +778,7 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
 
   log "Copying remote artifacts back"
   mkdir -p "$LOCAL_ARTIFACTS_DIR/remote"
-  if rsync -a "$REMOTE_HOST:$remote_run_root/" "$LOCAL_ARTIFACTS_DIR/remote/"; then
+  if rsync -a -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' "$REMOTE_HOST:$remote_run_root/" "$LOCAL_ARTIFACTS_DIR/remote/"; then
     :
   else
     remote_validation_exit_code=1

@@ -470,7 +470,7 @@ run_local_mode() {
   require_command base64
   require_command ssh
   log "target=$REMOTE_HOST mode=$MODE"
-  ssh -T -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -s -- \
+  ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -s -- \
     --remote-exec \
     "$MODE" \
     "$(encode_base64 "$REMOTE_REPO_ROOT")" \
