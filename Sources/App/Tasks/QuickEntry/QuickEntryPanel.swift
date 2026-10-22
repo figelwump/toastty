@@ -20,6 +20,8 @@ final class QuickEntryPanel: NSPanel {
 
     var onSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
+    /// ⌘1 or ⌘2: open, or close, the Workspace or Agent picker.
+    var onPicker: (QuickEntryPickerKind) -> Void = { _ in }
 
     init() {
         super.init(
@@ -49,7 +51,8 @@ final class QuickEntryPanel: NSPanel {
     /// otherwise act on the Toastty window behind it: ⌘W would close a
     /// terminal there, and ⌘T would open a tab. While Toastty is not the
     /// active app its menu bar does not handle ⌘C or ⌘V either, so the
-    /// panel sends the editing shortcuts to the text field itself.
+    /// panel sends the editing shortcuts to the text field itself, and
+    /// ⌘← or ⌘⌫ to its key handling.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -60,6 +63,10 @@ final class QuickEntryPanel: NSPanel {
         switch Self.commandAction(key: key, keyCode: event.keyCode, modifiers: modifiers) {
         case .edit(let selector):
             _ = firstResponder?.tryToPerform(selector, with: nil)
+        case .textNavigation:
+            firstResponder?.keyDown(with: event)
+        case .picker(let kind):
+            onPicker(kind)
         case .submit:
             onSubmit()
         case .close:
@@ -74,6 +81,10 @@ final class QuickEntryPanel: NSPanel {
 
     enum CommandAction: Equatable {
         case edit(Selector)
+        /// ⌘ with an arrow or Delete: moves the caret or deletes, in the
+        /// text field.
+        case textNavigation
+        case picker(QuickEntryPickerKind)
         case submit
         case close
         /// ⌘Q and ⌘H, which act on the app rather than a window.
@@ -91,11 +102,24 @@ final class QuickEntryPanel: NSPanel {
         if modifiers == .command, key == "q" || key == "h" {
             return .application
         }
+        if modifiers == .command, key == "1" {
+            return .picker(.workspace)
+        }
+        if modifiers == .command, key == "2" {
+            return .picker(.agent)
+        }
         if let selector = editingSelector(key: key, modifiers: modifiers) {
             return .edit(selector)
         }
+        if textNavigationKeyCodes.contains(keyCode) {
+            return .textNavigation
+        }
         return .ignore
     }
+
+    static let rightArrowKeyCode: UInt16 = 124
+    /// The arrows, Delete, Forward Delete, Home, End, Page Up and Page Down.
+    private static let textNavigationKeyCodes: Set<UInt16> = [123, 124, 125, 126, 51, 117, 115, 119, 116, 121]
 
     static func editingSelector(key: String, modifiers: NSEvent.ModifierFlags) -> Selector? {
         switch (key, modifiers) {

@@ -1,6 +1,8 @@
 import AppKit
 import CoreState
 import Foundation
+import RemoteProtocol
+import SwiftUI
 
 /// Opens the quick entry panel from the global shortcut and from Toastty's
 /// own entry points, and creates the task through `task.create`.
@@ -11,7 +13,8 @@ final class QuickEntryController: ObservableObject {
     @Published private(set) var shortcut: QuickEntryShortcut? = .default
 
     private let store: AppStore
-    private let agentCatalogProvider: any AgentCatalogProviding
+    /// The profiles in agents.toml, as a launch resolves them.
+    private let agentProfiles: @MainActor () -> [AgentLaunchProfileSummary]
     private let create: @MainActor (TaskCreateRequest) async throws -> TaskRecord
     private let configLoader: @MainActor () throws -> TasksConfig
     private let stagingRootURL: URL
@@ -21,6 +24,15 @@ final class QuickEntryController: ObservableObject {
 
     private(set) var panel: QuickEntryPanel?
     private(set) var model: QuickEntryModel?
+    private(set) var picker: QuickEntryPicker?
+    private(set) var pickerPanel: QuickEntryPickerPanel?
+    /// The pill whose mouse-down just closed its picker, and that click's
+    /// event number, so its mouse-up does not open the picker again.
+    private var pickerClosedByPillClick: (kind: QuickEntryPickerKind, eventNumber: Int)?
+    /// Models that live sessions of a provider reported recently, most
+    /// recent first: the list the iPhone's start-session screen offers. It
+    /// comes from remote access, which is set up after this controller.
+    var recentModels: @MainActor (AgentKind) -> [String] = { _ in [] }
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
     // Removed in deinit, which is not main-actor isolated.
@@ -40,7 +52,7 @@ final class QuickEntryController: ObservableObject {
 
     init(
         store: AppStore,
-        agentCatalogProvider: any AgentCatalogProviding,
+        agentProfiles: @escaping @MainActor () -> [AgentLaunchProfileSummary],
         create: @escaping @MainActor (TaskCreateRequest) async throws -> TaskRecord,
         configLoader: @escaping @MainActor () throws -> TasksConfig,
         stagingRootURL: URL = FileManager.default.temporaryDirectory
@@ -49,7 +61,7 @@ final class QuickEntryController: ObservableObject {
         toastDuration: Duration = .milliseconds(1600)
     ) {
         self.store = store
-        self.agentCatalogProvider = agentCatalogProvider
+        self.agentProfiles = agentProfiles
         self.create = create
         self.configLoader = configLoader
         self.stagingRootURL = stagingRootURL
@@ -154,12 +166,15 @@ final class QuickEntryController: ObservableObject {
         previousFirstResponder = previousKeyWindow?.firstResponder
 
         let stagingDirectoryURL = stagingRootURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        // A broken tasks.toml shows its error at Create Task; the pickers
+        // then offer no `[defaults]` preset.
+        let defaults = (try? configLoader())?.defaults
+        let profiles = quickEntryAgentProfiles(defaults: defaults)
         let model = QuickEntryModel(
             prefill: prefill,
             workspaceOptions: workspaceOptions(),
-            agentOptions: agentCatalogProvider.catalog.profiles.map {
-                QuickEntryModel.Option(id: $0.id, title: $0.displayName)
-            },
+            agentProfiles: profiles,
+            frequentPresets: Self.defaultPreset(defaults, profiles: profiles).map { [$0] } ?? [],
             stagingDirectoryURL: stagingDirectoryURL,
             create: create,
             onCreated: { [weak self] record in
@@ -175,11 +190,13 @@ final class QuickEntryController: ObservableObject {
         let panel = QuickEntryPanel()
         panel.onSubmit = { [weak model] in model?.submit() }
         panel.onCancel = { [weak model] in model?.cancel() }
+        panel.onPicker = { [weak self] kind in self?.togglePicker(kind) }
         panel.contentView = QuickEntryContentView(
             rootView: QuickEntryView(
                 model: model,
                 dropTarget: dropTarget,
                 attachFiles: { [weak self] in self?.chooseFiles() },
+                togglePicker: { [weak self] kind in self?.togglePicker(kind) },
                 onHeightChange: { [weak panel] height in
                     // Called during SwiftUI layout; resizing the window there
                     // would start a layout pass inside the current one.
@@ -236,6 +253,7 @@ final class QuickEntryController: ObservableObject {
     /// copies.
     private func close() {
         guard let panel else { return }
+        closePicker(refocusText: false)
         lastPanelPlacement = panel.screen.map {
             QuickEntryPlacement.Remembered(
                 topLeft: NSPoint(x: panel.frame.minX, y: panel.frame.maxY),
@@ -276,6 +294,7 @@ final class QuickEntryController: ObservableObject {
 
     private func chooseFiles() {
         guard let panel, let model else { return }
+        closePicker(refocusText: false)
         let openPanel = NSOpenPanel()
         openPanel.allowsMultipleSelection = true
         openPanel.canChooseDirectories = false
@@ -319,6 +338,162 @@ final class QuickEntryController: ObservableObject {
                 self?.toastPanel = nil
             }
         }
+    }
+
+    // MARK: - Pickers
+
+    /// ⌘1, ⌘2 or a click on a pill: opens its picker, or closes it when
+    /// it is the one open.
+    func togglePicker(_ kind: QuickEntryPickerKind) {
+        if let picker, picker.kind == kind {
+            closePicker(refocusText: true)
+            return
+        }
+        if let closed = pickerClosedByPillClick {
+            pickerClosedByPillClick = nil
+            // The mouse-down on the pill took focus from the picker and
+            // closed it; this is the same click's mouse-up, which shares
+            // its event number.
+            if closed.kind == kind, let event = NSApp.currentEvent, event.type == .leftMouseUp,
+               event.eventNumber == closed.eventNumber {
+                return
+            }
+        }
+        openPicker(kind)
+    }
+
+    func openPicker(_ kind: QuickEntryPickerKind) {
+        guard let panel, let model, model.isEditable else { return }
+        closePicker(refocusText: false)
+
+        let picker = switch kind {
+        case .workspace:
+            QuickEntryPicker(workspaces: model.workspaceOptions, current: model.workspaceID)
+        case .agent:
+            QuickEntryPicker(profiles: model.agentProfiles, frequent: model.frequentPresets, current: model.preset)
+        }
+        picker.onChoose = { [weak self, weak model] choice in
+            switch choice {
+            case .workspace(let workspaceID):
+                model?.workspaceID = workspaceID
+            case .agent(let preset):
+                model?.preset = preset
+            }
+            self?.closePicker(refocusText: true)
+        }
+        picker.onClose = { [weak self] in
+            self?.closePicker(refocusText: true)
+        }
+
+        let pickerPanel = QuickEntryPickerPanel()
+        pickerPanel.onPickerShortcut = { [weak self] kind in self?.togglePicker(kind) }
+        pickerPanel.onClose = { [weak picker] in picker?.cancel() }
+        pickerPanel.onSubmitTask = { [weak self, weak picker] in
+            guard let self, let picker else { return }
+            picker.submit()
+            // Create only once the choice is made; a row that opens the
+            // columns leaves the picker open.
+            if self.picker == nil {
+                self.model?.submit()
+            }
+        }
+        pickerPanel.onCommandRight = { [weak picker] in
+            guard let picker, picker.kind == .agent, picker.columns == nil else { return false }
+            picker.openColumns()
+            return true
+        }
+        pickerPanel.currentQuery = { [weak picker] in picker?.query ?? "" }
+        pickerPanel.onResignKey = { [weak self, weak pickerPanel] in
+            guard let self, let pickerPanel, self.pickerPanel === pickerPanel else { return }
+            self.pickerResignedKey(kind: kind)
+        }
+        let hostingView = NSHostingView(rootView: QuickEntryPickerView(picker: picker) { [weak pickerPanel] size in
+            // Called during SwiftUI layout; see the quick entry panel.
+            DispatchQueue.main.async { pickerPanel?.fit(size) }
+        })
+        pickerPanel.contentView = hostingView
+        let pill = model.pillFrames[kind].map {
+            QuickEntryPickerPlacement.screenFrame(of: $0, inPanelFrame: panel.frame)
+        } ?? NSRect(x: panel.frame.minX + 14, y: panel.frame.minY + 10, width: 1, height: 26)
+        pickerPanel.place(
+            size: hostingView.fittingSize,
+            pill: pill,
+            visibleFrame: (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
+        )
+        self.picker = picker
+        self.pickerPanel = pickerPanel
+        model.openPicker = kind
+        panel.addChildWindow(pickerPanel, ordered: .above)
+        pickerPanel.makeKey()
+        ToasttyLog.debug("Opened a quick entry picker", category: .tasks, metadata: [
+            "picker": kind == .workspace ? "workspace" : "agent",
+        ])
+    }
+
+    /// Closes the open picker. With `refocusText`, the caret goes back to
+    /// the task text; otherwise focus stays where the user put it.
+    func closePicker(refocusText: Bool) {
+        guard let pickerPanel else { return }
+        self.pickerPanel = nil
+        picker = nil
+        model?.openPicker = nil
+        pickerPanel.parent?.removeChildWindow(pickerPanel)
+        pickerPanel.orderOut(nil)
+        pickerPanel.contentView = nil
+        if refocusText, let panel {
+            panel.makeKey()
+            model?.requestFocus()
+        }
+    }
+
+    /// A click outside the picker, or another app in front, closes it.
+    private func pickerResignedKey(kind: QuickEntryPickerKind) {
+        if let event = NSApp.currentEvent, event.type == .leftMouseDown, let panel, event.window === panel,
+           let pill = model?.pillFrames[kind] {
+            let point = event.locationInWindow
+            let flipped = NSPoint(x: point.x, y: panel.frame.height - point.y)
+            if pill.contains(flipped) {
+                pickerClosedByPillClick = (kind, event.eventNumber)
+            }
+        }
+        closePicker(refocusText: false)
+    }
+
+    /// The installed profiles that can take a task as their first message,
+    /// as triage offers them, each with its models and efforts.
+    private func quickEntryAgentProfiles(defaults: TasksConfig.Defaults?) -> [QuickEntryAgentProfile] {
+        agentProfiles()
+            .filter { $0.isInstalled && $0.acceptsInitialPrompt }
+            .map { summary in
+                var models: [String] = []
+                if summary.supportsModel {
+                    models = Array(recentModels(summary.agent).prefix(RemoteSessionStartPolicy.maximumRecentModelCount))
+                    // `[defaults]` names a model even when no live session
+                    // has reported one, as when remote access is off.
+                    if defaults?.agent == summary.profileID, let model = defaults?.model, models.contains(model) == false {
+                        models.append(model)
+                    }
+                }
+                return QuickEntryAgentProfile(
+                    id: summary.profileID,
+                    displayName: summary.displayName,
+                    supportsModel: summary.supportsModel,
+                    efforts: RemoteSessionStarter.reasoningEfforts(for: summary),
+                    models: models
+                )
+            }
+    }
+
+    /// `[defaults]` as a preset, when its agent is offered. A model or
+    /// effort the agent cannot take is left out, as the coordinator does.
+    static func defaultPreset(_ defaults: TasksConfig.Defaults?, profiles: [QuickEntryAgentProfile]) -> QuickEntryPreset? {
+        guard let defaults, let agent = defaults.agent,
+              let profile = profiles.first(where: { $0.id == agent }) else { return nil }
+        return QuickEntryPreset(
+            agent: agent,
+            model: profile.supportsModel ? defaults.model : nil,
+            effort: profile.efforts.isEmpty ? nil : defaults.effort
+        )
     }
 
     // MARK: - Options

@@ -3,12 +3,15 @@ import SwiftUI
 
 /// The quick entry panel's content, drawn to "Task Inbox Mockups" panel 1:
 /// a small label, the task text, a row of attachments, and a footer with
-/// the Workspace and Agent choices and Create Task. The panel's height
+/// the Workspace and Agent choices and Create Task. The footer's pills
+/// follow "Task Keyboard Flow" revision 3, section 1. The panel's height
 /// follows the text.
 struct QuickEntryView: View {
     @ObservedObject var model: QuickEntryModel
     let dropTarget: QuickEntryDropTarget
     let attachFiles: () -> Void
+    /// A click on a pill: opens its picker, or closes it.
+    let togglePicker: (QuickEntryPickerKind) -> Void
     /// Called with the content's height whenever it changes, so the window
     /// can fit it.
     let onHeightChange: (CGFloat) -> Void
@@ -146,48 +149,28 @@ struct QuickEntryView: View {
         }
     }
 
+    /// One row: a long workspace or model name is cut short, and the
+    /// buttons keep their size.
     private var footer: some View {
         HStack(spacing: 8) {
-            Menu {
-                Button("Auto") { model.workspaceID = nil }
-                if model.workspaceOptions.isEmpty == false {
-                    Divider()
-                }
-                ForEach(model.workspaceOptions) { option in
-                    Button(option.title) { model.workspaceID = UUID(uuidString: option.id) }
-                }
-            } label: {
-                PillLabel(title: "Workspace", value: model.workspaceTitle, isAuto: model.workspaceID == nil)
-            }
-            // The button style with a plain button keeps the custom pill
-            // label; the borderless style replaces it with the title.
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(model.isEditable == false)
-            .help("The workspace the task starts in. Auto lets triage choose.")
-            .accessibilityValue(model.workspaceTitle)
+            pill(
+                .workspace,
+                title: "Workspace",
+                value: model.workspaceTitle,
+                isAuto: model.workspaceID == nil,
+                help: "The workspace the task starts in. Auto lets triage choose."
+            )
             .accessibilityIdentifier("quick-entry.workspace")
 
-            Menu {
-                Button("Auto") { model.agentID = nil }
-                if model.agentOptions.isEmpty == false {
-                    Divider()
-                }
-                ForEach(model.agentOptions) { option in
-                    Button(option.title) { model.agentID = option.id }
-                }
-            } label: {
-                PillLabel(title: "Agent", value: model.agentTitle, isAuto: model.agentID == nil)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(model.isEditable == false)
-            .help("The agent that works on the task. Auto lets triage choose.")
-            .accessibilityValue(model.agentTitle)
+            pill(
+                .agent,
+                title: "Agent",
+                value: model.agentTitleParts.name,
+                suffix: model.agentTitleParts.effort.map { " · \($0)" },
+                accessibilityValue: model.agentTitle,
+                isAuto: model.preset == nil,
+                help: "The agent, model and effort for the task. Auto lets triage choose."
+            )
             .accessibilityIdentifier("quick-entry.agent")
 
             Spacer(minLength: 8)
@@ -198,6 +181,8 @@ struct QuickEntryView: View {
             .buttonStyle(.plain)
             .help("Close without creating a task")
             .accessibilityLabel("Cancel")
+            .fixedSize()
+            .layoutPriority(1)
 
             Button(action: model.submit) {
                 CreateButtonLabel(isSubmitting: model.isSubmitting)
@@ -205,53 +190,107 @@ struct QuickEntryView: View {
             .buttonStyle(CreateButtonStyle())
             .disabled(model.canSubmit == false)
             .accessibilityIdentifier("quick-entry.create")
+            .fixedSize()
+            .layoutPriority(1)
         }
+    }
+
+    private func pill(
+        _ kind: QuickEntryPickerKind,
+        title: String,
+        value: String,
+        suffix: String? = nil,
+        accessibilityValue: String? = nil,
+        isAuto: Bool,
+        help: String
+    ) -> some View {
+        let shortcut = kind == .workspace ? "⌘1" : "⌘2"
+        return Button {
+            togglePicker(kind)
+        } label: {
+            PillLabel(
+                title: title,
+                value: value,
+                suffix: suffix,
+                shortcut: shortcut,
+                isAuto: isAuto,
+                isOpen: model.openPicker == kind
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isEditable == false)
+        .help("\(help) \(shortcut)")
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            model.pillFrames[kind] = frame
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(accessibilityValue ?? value)
     }
 }
 
 /// A key shown as a small outlined key cap, such as "esc" or "⌘V".
 private struct KeyCap: View {
     let text: String
+    var size: CGFloat = 11
     var color: Color = QuickEntryView.mutedText
     var border: Color = QuickEntryView.chipBorder
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, design: .monospaced))
+            .font(.system(size: size, design: .monospaced))
             .foregroundStyle(color)
-            .padding(.horizontal, 5)
+            .padding(.horizontal, size < 11 ? 4 : 5)
             .padding(.vertical, 1)
             .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(border, lineWidth: 1))
     }
 }
 
+/// A footer choice: its name, its value, and the shortcut that opens its
+/// picker. Only the value shrinks, ending in "…"; a suffix such as
+/// " · high" stays whole.
 private struct PillLabel: View {
     let title: String
     let value: String
+    let suffix: String?
+    let shortcut: String
     let isAuto: Bool
+    let isOpen: Bool
 
     var body: some View {
-        HStack(spacing: 5) {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        HStack(spacing: 6) {
             Text(title)
                 .foregroundStyle(QuickEntryView.mutedText)
-            Text(value)
-                .foregroundStyle(isAuto ? QuickEntryView.autoText : ToastyTheme.primaryText)
-                .lineLimit(1)
-                .frame(maxWidth: 160, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
+                .fixedSize()
+            HStack(spacing: 0) {
+                Text(value)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let suffix {
+                    Text(suffix)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+            .foregroundStyle(isAuto ? QuickEntryView.autoText : ToastyTheme.primaryText)
+            KeyCap(text: shortcut, size: 10)
+                .fixedSize()
         }
         .font(.system(size: 12))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        .background(Capsule(style: .continuous).fill(isAuto ? QuickEntryView.autoBackground : QuickEntryView.pillBackground))
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(shape.fill(isAuto ? QuickEntryView.autoBackground : QuickEntryView.pillBackground))
         .overlay(
-            Capsule(style: .continuous)
-                .strokeBorder(isAuto ? QuickEntryView.autoBorder : QuickEntryView.pillBorder, lineWidth: 1)
+            shape.strokeBorder(
+                isOpen ? QuickEntryView.autoText : (isAuto ? QuickEntryView.autoBorder : QuickEntryView.pillBorder),
+                lineWidth: 1
+            )
         )
-        .contentShape(Capsule())
-        // One element named for the pill; the menu adds the value.
+        // The design's glow around an open pill.
+        .overlay(shape.inset(by: -2).strokeBorder(QuickEntryView.autoText.opacity(isOpen ? 0.18 : 0), lineWidth: 2))
+        .contentShape(shape)
+        // One element named for the pill; the button adds the value.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
     }
 }
 

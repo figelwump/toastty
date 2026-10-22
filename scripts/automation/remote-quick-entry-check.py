@@ -14,13 +14,21 @@ Its `tasks.toml` sets the shortcut to Control+Option+Shift+T, so it does not
 compete with the wrapper's own instance, which holds the default. With
 Finder in front, it checks that:
 - the shortcut opens the panel while Finder stays the active app;
-- typed text, a pasted image and a picked workspace become the task, with
-  source quickEntry, and the agent starts with the text as written;
+- Command+1 opens the Workspace picker, typing filters it and Return picks
+  and puts the caret back in the text; Command+2 then Right Arrow raises the
+  `[defaults]` preset's effort, all without making Toastty active;
+- typed text, a pasted image, the picked workspace and the preset become the
+  task, with source quickEntry, and the agent starts with the text as
+  written and the preset's model and effort;
 - the panel closes and Finder is still in front;
 - with Workspace left on Auto, triage (a fake command that picks the first
   open workspace) places the task and it starts;
-- Esc closes a second panel without creating a task, and Command+T in the
-  panel opens no tab in Toastty;
+- Esc in a picker closes only the picker; Esc then closes a second panel
+  without creating a task, and Command+T in the panel opens no tab in
+  Toastty;
+- Command+Delete deletes in the text; the three columns (Command+Right
+  Arrow, typing, Tab) pin an agent, a typed model and an effort; clicks on
+  a pill and a picker row work;
 - Command+W closes the panel without closing the terminal behind it;
 - a file, a file promise and PNG data dragged from another process attach,
   dropped on the text or on the footer, and dragged text joins the text;
@@ -58,7 +66,9 @@ print(json.dumps({"workspace": match.group(1) if match else None, "reason": "rem
 FINDER = 'com.apple.finder'
 # Virtual key codes on a US keyboard.
 KEY_T, KEY_V, KEY_W, KEY_RETURN, KEY_ESCAPE = 17, 9, 13, 36, 53
+KEY_1, KEY_2, KEY_TAB, KEY_DELETE, KEY_RIGHT = 18, 19, 48, 51, 124
 PANEL = 'quick-entry.panel'
+PICKER = 'quick-entry.picker'
 
 
 def main():
@@ -95,7 +105,8 @@ def main():
     triage.write_text(FAKE_TRIAGE)
     (user_home / '.toastty/tasks.toml').write_text(
         '[triage]\ncommand = "/usr/bin/python3 ' + str(triage) + '"\ntimeout_seconds = 30\n\n'
-        '[defaults]\nagent = "claude"\n\n[quick_entry]\nshortcut = "ctrl+opt+shift+t"\n')
+        '[defaults]\nagent = "claude"\nmodel = "claude-opus-5-5"\neffort = "high"\n\n'
+        '[quick_entry]\nshortcut = "ctrl+opt+shift+t"\n')
     image = root / 'pasted.png'
     subprocess.run(['sips', '-s', 'format', 'png', '/System/Library/CoreServices/Finder.app/Contents/Resources/Finder.icns',
                     '--out', str(image)], check=True, capture_output=True)
@@ -139,6 +150,19 @@ def main():
         listed = listed_windows()
         return [w for w in listed or [] if w['identifier'] == PANEL]
 
+    def picker_windows():
+        listed = listed_windows()
+        return [w for w in listed or [] if w['identifier'] == PICKER]
+
+    def picker_closed():
+        listed = listed_windows()
+        return listed is not None and any(w['identifier'] == PANEL for w in listed) \
+            and all(w['identifier'] != PICKER for w in listed)
+
+    def wait_for_value(identifier, expected):
+        return wait_for(f'{identifier} to read {expected!r}',
+                        lambda: drive('value', pid, identifier) == expected, timeout=10, interval=0.5)
+
     def panel_closed():
         # Only a successful listing that still shows the main window proves
         # the panel is gone; an empty or failed read proves nothing.
@@ -172,19 +196,33 @@ def main():
             if w['workspaceID'] == workspace['workspaceID'] for cwd in w['terminalCwds']], interval=1)
         step('booted', workspaceID=workspace['workspaceID'], title=workspace['title'])
 
-        # 1. Create a task from the panel.
+        # 1. Create a task from the panel, picking the workspace and the
+        # agent preset from the keyboard.
         open_panel_from_finder()
-        drive('press-menu', pid, 'quick-entry.workspace', workspace['title'])
-        # The menu applies its choice after it closes.
-        wait_for('the picked workspace', lambda: drive('value', pid, 'quick-entry.workspace') == workspace['title'], timeout=10)
+        require(drive('value', pid, 'quick-entry.workspace') == 'Auto', 'The workspace did not start on Auto')
+        drive('key', KEY_1, 'cmd')
+        wait_for('the workspace picker', picker_windows, timeout=10)
+        drive('type', workspace['title'])
+        drive('key', KEY_RETURN)
+        wait_for('the workspace picker to close', picker_closed, timeout=10)
+        wait_for_value('quick-entry.workspace', workspace['title'])
+        # Return put the caret back in the text: typing lands there.
         drive('type', TASK_LINES[0])
         drive('key', KEY_RETURN)
         drive('type', TASK_LINES[1])
         typed = wait_for_text('\n'.join(TASK_LINES))
+        drive('key', KEY_2, 'cmd')
+        wait_for('the agent picker', picker_windows, timeout=10)
+        require(drive('frontmost') == FINDER, 'Opening a picker activated Toastty')
+        drive('key', KEY_RIGHT)
+        drive('key', KEY_RETURN)
+        wait_for('the agent picker to close', picker_closed, timeout=10)
+        wait_for_value('quick-entry.agent', 'claude-opus-5-5 · xhigh')
         drive('pasteboard-png', image)
         drive('key', KEY_V, 'cmd')
         time.sleep(0.5)
-        step('filled in', text=typed, workspace=drive('value', pid, 'quick-entry.workspace'))
+        step('filled in', text=typed, workspace=drive('value', pid, 'quick-entry.workspace'),
+             agent=drive('value', pid, 'quick-entry.agent'), frontmost=drive('frontmost'))
         drive('key', KEY_RETURN, 'cmd')
 
         def created_task():
@@ -210,7 +248,13 @@ def main():
         message = wait_for('the agent message', lambda: message_file.is_file() and message_file.read_text())
         require('\n'.join(TASK_LINES) in message and task['files'][0] in message,
                 f'The agent did not get the task as written: {message!r}')
-        step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message)
+        argv = (fake_bin / 'sessions' / f"{task['setup']['sessionID']}.argv").read_text().split('\n')
+        require(task['pinned'].get('model') == 'claude-opus-5-5' and task['pinned'].get('effort') == 'xhigh',
+                f'The preset was not pinned: {task["pinned"]}')
+        require(argv[argv.index('--model') + 1] == 'claude-opus-5-5' and argv[argv.index('--effort') + 1] == 'xhigh',
+                f'The agent did not start with the preset: {argv}')
+        step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message,
+             pinned=task['pinned'], argv=argv)
 
         # 1b. Workspace left on Auto: triage places the task.
         open_panel_from_finder()
@@ -247,6 +291,15 @@ def main():
         drive('key', KEY_T, 'cmd')
         time.sleep(1)
         require(terminal_count() == terminals and panel_windows(), 'Command+T in the panel acted on Toastty')
+        drive('key', KEY_1, 'cmd')
+        wait_for('the workspace picker', picker_windows, timeout=10)
+        drive('type', 'zz')
+        drive('key', KEY_ESCAPE)
+        wait_for('Esc to close only the picker', picker_closed, timeout=10)
+        require(drive('value', pid, 'quick-entry.workspace') == 'Auto', 'Esc in the picker changed the workspace')
+        drive('type', ' at all')
+        wait_for_text('Never mind at all')
+        step('escape closed only the picker', text=drive('value', pid, 'quick-entry.text'))
         drive('key', KEY_ESCAPE)
         wait_for('the panel to close', panel_closed, timeout=10)
         tasks = run_cli('task', 'list')['tasks']
@@ -262,6 +315,37 @@ def main():
         require(terminal_count() == terminals, f'Command+W closed a terminal: {terminal_count()} of {terminals}')
         require(len(run_cli('task', 'list')['tasks']) == 2, 'Command+W created a task')
         step('command-w closed the panel only', terminals=terminal_count())
+
+        # 3b. Command+Delete in the text, the three columns, and the mouse.
+        open_panel_from_finder()
+        drive('type', 'Delete this line')
+        wait_for_text('Delete this line')
+        drive('key', KEY_DELETE, 'cmd')
+        wait_for_text('')
+        drive('key', KEY_2, 'cmd')
+        wait_for('the agent picker', picker_windows, timeout=10)
+        drive('key', KEY_RIGHT, 'cmd')
+        drive('type', 'claude')
+        drive('key', KEY_TAB)
+        drive('type', 'claude-sonnet-5-5')
+        drive('key', KEY_TAB)
+        drive('type', 'low')
+        drive('key', KEY_RETURN)
+        wait_for('the columns to close', picker_closed, timeout=10)
+        wait_for_value('quick-entry.agent', 'claude-sonnet-5-5 · low')
+        step('columns pinned a typed model', agent=drive('value', pid, 'quick-entry.agent'))
+
+        # The first row is the [defaults] preset.
+        x, y, w, h = map(float, drive('frame', pid, 'quick-entry.agent').split())
+        drive('click', x + w / 2, y + h / 2)
+        wait_for('a click on the pill to open its picker', picker_windows, timeout=10)
+        x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
+        drive('click', x + w / 2, y + h / 2)
+        wait_for('a click on a row to close the picker', picker_closed, timeout=10)
+        wait_for_value('quick-entry.agent', 'claude-opus-5-5 · high')
+        step('mouse picked a row', agent=drive('value', pid, 'quick-entry.agent'))
+        drive('key', KEY_ESCAPE)
+        wait_for('the panel to close', panel_closed, timeout=10)
 
         # 4. Real drags from another process, and Command+V with text. Each
         # case records its outcome and the check fails at the end, so one

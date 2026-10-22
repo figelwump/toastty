@@ -1090,7 +1090,7 @@ struct ToasttyApp: App {
         }
         let quickEntryController = QuickEntryController(
             store: store,
-            agentCatalogProvider: agentCatalogStore,
+            agentProfiles: { [weak agentLaunchService] in agentLaunchService?.launchProfileSummaries() ?? [] },
             create: { [weak taskCoordinator] request in
                 guard let taskCoordinator else { throw TaskError("Toastty is quitting.") }
                 return try await taskCoordinator.create(request, caller: .quickEntry)
@@ -1346,7 +1346,7 @@ struct ToasttyApp: App {
                 ) ?? .unavailable
             }
         )
-        _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
+        let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -1355,7 +1355,13 @@ struct ToasttyApp: App {
             sessionLauncher: remoteSessionLauncher,
             sessionCloseController: remoteSessionCloseController,
             sessionExitController: sessionExitController
-        ))
+        )
+        _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
+        // The quick entry Agent picker offers the models the iPhone's
+        // start-session screen offers.
+        quickEntryController.recentModels = { [weak remoteAccessService] provider in
+            remoteAccessService?.recentModels(for: provider) ?? []
+        }
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(

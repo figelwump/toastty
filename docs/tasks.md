@@ -27,6 +27,20 @@ Focus goes back to the app you were in.
   Auto leaves the choice to [triage](#triage), which picks among your open
   workspaces. When triage is off or cannot choose, the task waits in the
   Inbox as `⚠ pick a workspace`.
+- **Pick from the keyboard:** `Cmd+1` opens the Workspace list and `Cmd+2`
+  the Agent list. Type to filter, move with the arrow keys, and press
+  `Return` to choose; the caret goes back to the task text. `Esc` closes
+  only the list. The Workspace list holds Auto and the open workspaces.
+- **Agent, model and effort** are chosen together. The Agent list shows the
+  `[defaults]` preset from `tasks.toml` first, then Auto. With a preset
+  highlighted, `Left Arrow` and `Right Arrow` change its effort. Typing also
+  lists every agent and agent + model pair. **Choose agent, model, effort…**
+  (`Cmd+Right Arrow`) opens three columns: `Tab` moves between them, and
+  typing filters the one in focus. The Model column lists the models that
+  live sessions reported recently (while remote access is on), the
+  `[defaults]` model, and **Default**; type any other model name to use it.
+  A column is hidden when the agent takes no model or no effort. The pill
+  then shows `model · effort`, or the agent's name when no model is chosen.
 - The panel floats over other apps and full-screen windows and stays open
   while you switch apps, for example to take a screenshot. Drag its
   background to move it. `Esc` closes it without saving; the attached copies

@@ -18,6 +18,7 @@
 //   frame <pid> <identifier>            prints an element's frame: x y width height
 //   drag <from-x> <from-y> <to-x> <to-y>
 //                                       drags with the mouse between two points
+//   click <x> <y>                       clicks at a point
 //   pasteboard-text <text>              puts text on the general pasteboard
 //   pasteboard-png <path>               puts a PNG on the general pasteboard
 
@@ -290,6 +291,20 @@ case "drag":
     }
     mouse(.leftMouseUp, to)
     usleep(300_000)
+
+case "click":
+    let values = arguments.dropFirst().compactMap(Double.init)
+    guard arguments.count == 3, values.count == 2 else { fail("click <x> <y>") }
+    let point = CGPoint(x: values[0], y: values[1])
+    let source = CGEventSource(stateID: .hidSystemState)
+    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+            fail("could not make a mouse event")
+        }
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+        usleep(120_000)
+    }
 
 case "pasteboard-text":
     guard arguments.count == 2 else { fail("pasteboard-text <text>") }
