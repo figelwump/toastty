@@ -83,6 +83,9 @@ public final class LinuxAppLogic {
     /// does and feeds it from `handleTerminalRuntimeEvent`.
     let terminalMetadataService: TerminalMetadataService
     private var terminalMetadataSync: AnyCancellable?
+    /// Unanswered Codex questions (see `LinuxAppLogic+CodexQuestions.swift`).
+    var codexQuestionMonitor: CodexPendingQuestionMonitor?
+    let codexQuestionChanges = PassthroughSubject<Void, Never>()
     var pendingSurfaceChildSnapshots: [UUID: Set<pid_t>] = [:]
     var liveTitleSubscriptions: [UUID: AnyCancellable] = [:]
     var liveTitleObservers: [UUID: @MainActor () -> Void] = [:]
@@ -556,6 +559,7 @@ public final class LinuxAppLogic {
         if options.runsBackgroundMaintenance, bootstrap.automationConfig == nil {
             LinuxAppConfiguration.scheduleCodexIntegrationMaintenance()
         }
+        startCodexQuestionMonitor()
         ToasttyLog.info(
             "Linux app logic bootstrapped",
             category: .bootstrap,
@@ -588,6 +592,7 @@ public final class LinuxAppLogic {
         if let persistenceObserverToken {
             store.removeActionAppliedObserver(persistenceObserverToken)
         }
+        codexQuestionMonitor?.stop()
         remoteAccessService?.setEnabled(false, persist: false)
         automationSocketServer = nil
         LinuxPlatform.postApplicationWillTerminate()

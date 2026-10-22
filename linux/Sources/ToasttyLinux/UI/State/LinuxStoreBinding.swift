@@ -61,7 +61,14 @@ public protocol LinuxSessionSource: AnyObject {
     func sessions(workspaceID: UUID) -> [WorkspaceSessionStatus]
     func isFlaggedForLater(sessionID: String) -> Bool
     func setFlaggedForLater(sessionID: String, flagged: Bool)
+    func pendingQuestion(sessionID: String) -> String?
     func observe(_ handler: @escaping @MainActor () -> Void) -> LinuxObservation
+}
+
+extension LinuxSessionSource {
+    /// An unanswered agent question for the session (Codex's async
+    /// `request_user_input_async`); nil when none is waiting.
+    public func pendingQuestion(sessionID: String) -> String? { nil }
 }
 
 /// Outcome of an app-level command.

@@ -375,6 +375,21 @@ when a notification is clicked (routes to the panel exactly like macOS),
 `LinuxPlatform.postApplicationActivationChange(isActive:)`,
 `postScreenParametersChanged()`, `postApplicationWillTerminate()`.
 
+Codex questions (Linux-only, `ToasttyAppLogic/Agents/CodexPendingQuestionMonitor.swift`
+and `Bootstrap/LinuxAppLogic+CodexQuestions.swift`): Codex 0.163+ asks with
+the async `request_user_input_async` tool, which returns at once while the
+turn keeps working, so hooks report "working" and the shared
+`CodexSessionLogWatcher` (which knows the older blocking
+`request_user_input` event) never sees the question. The monitor polls each
+active Codex session's rollout (its captured resume record) once a second,
+keeps unanswered questions until a `<send_user_message_question_reply>`
+names their call or any other user message arrives, and the sidebar shows
+the session as needing an answer ("question" chip, approval styling, the
+question as its summary). A new question the user is not looking at also
+marks the panel unread and posts a desktop notification (the shared
+notification path suppresses those for managed sessions). macOS has the
+same gap; the shared watcher would be the place to fix it there.
+
 Dock badge: nothing calls `setApplicationBadgeCount` (macOS shows no Dock
 badge). The number Ubuntu Dock shows is its own count of Toastty's
 notifications in GNOME's message tray, which outlive the app. So the GTK

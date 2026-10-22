@@ -253,6 +253,26 @@ struct PaletteAndSidebarTests {
         #expect(flagged[0].sessions[0].isFlaggedForLater)
     }
 
+    /// A waiting Codex question reads like an approval on the session row,
+    /// even though the agent keeps working.
+    @Test func sidebarSessionRowShowsPendingQuestion() {
+        let fixture = Fixture()
+        let workspace = fixture.store.state.workspacesByID.values.first!
+        let panelID = workspace.focusedPanelID!
+        let status = WorkspaceSessionStatus(
+            sessionID: "codex-1", panelID: panelID, workspaceID: workspace.id, agent: .codex,
+            status: SessionStatus(kind: .working, summary: "Working"), cwd: nil, updatedAt: Date(), isActive: true
+        )
+        let row = SidebarModel.sessionRow(status, workspace: workspace, isFocused: false, isFlagged: false,
+                                          pendingQuestion: "Which pose?")
+        #expect(row.chipLabel == "question")
+        #expect(row.summary == "Which pose?")
+        #expect(row.attentionClass == "attention-approval")
+        #expect(row.dotClass == "needs-approval")
+        let plain = SidebarModel.sessionRow(status, workspace: workspace, isFocused: false, isFlagged: false)
+        #expect(plain.chipLabel == nil && plain.statusKind == .working)
+    }
+
     @Test func dragReorderDestination() {
         #expect(SidebarController.reorderDestination(from: 0, onto: 2, placeAfter: false) == 1)
         #expect(SidebarController.reorderDestination(from: 0, onto: 2, placeAfter: true) == 2)

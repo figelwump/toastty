@@ -57,6 +57,10 @@ public final class AppLogicStoreBinding: LinuxStoreBinding, LinuxSessionSource, 
         logic.isLaterFlagged(sessionID: sessionID)
     }
 
+    public func pendingQuestion(sessionID: String) -> String? {
+        logic.codexPendingQuestion(sessionID: sessionID)
+    }
+
     public func setFlaggedForLater(sessionID: String, flagged: Bool) {
         logic.setLaterFlag(sessionID: sessionID, isFlagged: flagged)
     }

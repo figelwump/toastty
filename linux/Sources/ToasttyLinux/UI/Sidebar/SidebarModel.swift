@@ -12,7 +12,7 @@ public struct SidebarSessionRowModel: Equatable, Sendable {
     public let name: String
     public let agentLabel: String
     public let statusKind: SessionStatusKind
-    /// "approval", "error", "ready" or "waiting"; nil when the dot says enough.
+    /// "question", "approval", "error", "ready" or "waiting"; nil when the dot says enough.
     public let chipLabel: String?
     public let summary: String?
     public let isUnread: Bool
@@ -91,7 +91,8 @@ public enum SidebarModel {
                     session,
                     workspace: workspace,
                     isFocused: isSelected && selectedPanelID == session.panelID,
-                    isFlagged: sessions.isFlaggedForLater(sessionID: session.sessionID)
+                    isFlagged: sessions.isFlaggedForLater(sessionID: session.sessionID),
+                    pendingQuestion: sessions.pendingQuestion(sessionID: session.sessionID)
                 )
             }
             return SidebarWorkspaceRowModel(
@@ -120,7 +121,8 @@ public enum SidebarModel {
         _ session: WorkspaceSessionStatus,
         workspace: WorkspaceState,
         isFocused: Bool,
-        isFlagged: Bool
+        isFlagged: Bool,
+        pendingQuestion: String? = nil
     ) -> SidebarSessionRowModel {
         let isUnread: Bool = {
             guard let tabID = workspace.tabID(containingPanelID: session.panelID),
@@ -128,6 +130,7 @@ public enum SidebarModel {
             return isFocused == false
         }()
         let chip: String? = {
+            if pendingQuestion != nil { return "question" }
             if case .waitingOnChildren = session.projection { return "waiting" }
             switch session.status.kind {
             case .needsApproval: return "approval"
@@ -136,14 +139,16 @@ public enum SidebarModel {
             case .idle, .working: return nil
             }
         }()
-        let summary = session.status.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = (pendingQuestion ?? session.status.summary).trimmingCharacters(in: .whitespacesAndNewlines)
         let name = session.displayTitleOverride ?? session.providerSessionName ?? session.agent.displayName
         return SidebarSessionRowModel(
             sessionID: session.sessionID,
             panelID: session.panelID,
             name: name,
             agentLabel: session.agent.rawValue,
-            statusKind: session.status.kind,
+            // A waiting question needs the user like an approval does, even
+            // while the agent keeps working (Codex asks asynchronously).
+            statusKind: pendingQuestion != nil ? .needsApproval : session.status.kind,
             chipLabel: chip,
             summary: summary.isEmpty ? nil : summary,
             isUnread: isUnread,

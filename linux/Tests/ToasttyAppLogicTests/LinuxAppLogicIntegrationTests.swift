@@ -145,6 +145,54 @@ struct LinuxAppLogicIntegrationTests {
         }
     }
 
+    /// A Codex session's async question (read from its rollout by
+    /// `CodexPendingQuestionMonitor`) reaches the sidebar API, marks the
+    /// panel unread, and notifies session observers; the answer clears it.
+    @Test func codexQuestionReachesTheSidebarAndMarksThePanelUnread() async throws {
+        let instance = try makeInstance()
+        defer { instance.tearDown() }
+        let logic = instance.logic
+        let workspace = try #require(logic.store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        let windowID = try #require(logic.store.state.windows.first?.id)
+        let rollout = instance.root.appendingPathComponent("rollout.jsonl")
+        try Data().write(to: rollout)
+
+        let started = Date()
+        logic.sessionRuntimeStore.startSession(
+            sessionID: "codex-q", agent: .codex, panelID: panelID, windowID: windowID, workspaceID: workspace.id,
+            usesSessionStatusNotifications: true, codexStatusTrackingSource: .hooks,
+            cwd: instance.root.path, repoRoot: nil, at: started
+        )
+        _ = logic.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: ManagedAgentResumeRecord(
+            agent: .codex, nativeSessionID: "01a16480-0000-7000-8000-000000000001",
+            sessionFilePath: rollout.path, cwd: instance.root.path, capturedAt: started
+        )))
+        var observed = 0
+        let subscription = logic.observeSessions { observed += 1 }
+        defer { subscription.cancel() }
+        let monitor = try #require(logic.codexQuestionMonitor)
+        monitor.poll()
+        #expect(logic.codexPendingQuestion(sessionID: "codex-q") == nil)
+
+        func append(_ line: String) throws {
+            let handle = try FileHandle(forWritingTo: rollout)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((line + "\n").utf8))
+            try handle.close()
+        }
+        try append(LinuxCodexQuestionTests.questionLine(callID: "call_q1", titles: ["Which pose?"]))
+        observed = 0
+        monitor.poll()
+        #expect(logic.codexPendingQuestion(sessionID: "codex-q") == "Which pose?")
+        #expect(logic.store.state.workspacesByID[workspace.id]?.unreadNotificationCount == 1)
+        try await LinuxTestSupport.waitUntil("session observers notified") { observed > 0 }
+
+        try append(LinuxCodexQuestionTests.replyLine(callID: "call_q1", answer: "Rest"))
+        monitor.poll()
+        #expect(logic.codexPendingQuestion(sessionID: "codex-q") == nil)
+    }
+
     @Test func terminalSeamCarriesLaunchEnvironmentAndAutomationInput() async throws {
         let instance = try makeInstance()
         defer { instance.tearDown() }

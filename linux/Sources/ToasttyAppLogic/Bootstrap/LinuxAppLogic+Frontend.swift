@@ -228,9 +228,17 @@ extension LinuxAppLogic {
     }
 
     /// `handler` runs after session state changed (coalesced per turn).
+    /// Also runs when a Codex question is asked or answered.
     public func observeSessions(_ handler: @escaping @MainActor () -> Void) -> LinuxAppLogicSubscription {
-        LinuxAppLogicSubscription(sessionRuntimeStore.$sessionRegistry.sink { _ in
+        let deliver: @Sendable () -> Void = {
             DispatchQueue.main.async { MainActor.assumeIsolated { handler() } }
+        }
+        // OpenCombine has no `merge`.
+        let sessions = sessionRuntimeStore.$sessionRegistry.sink { _ in deliver() }
+        let questions = codexQuestionChanges.sink { deliver() }
+        return LinuxAppLogicSubscription(AnyCancellable {
+            sessions.cancel()
+            questions.cancel()
         })
     }
 }
