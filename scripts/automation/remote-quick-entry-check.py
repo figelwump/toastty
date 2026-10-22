@@ -319,10 +319,13 @@ def main():
 
         # 3b. Command+Delete in the text, the three columns, and the mouse.
         open_panel_from_finder()
+        drive('type', 'Keep this')
+        drive('key', KEY_RETURN)
         drive('type', 'Delete this line')
-        wait_for_text('Delete this line')
+        wait_for_text('Keep this\nDelete this line')
+        # Deletes to the start of the line only.
         drive('key', KEY_DELETE, 'cmd')
-        wait_for_text('')
+        wait_for_text('Keep this\n')
         drive('key', KEY_2, 'cmd')
         wait_for('the agent picker', picker_windows, timeout=10)
         drive('key', KEY_RIGHT, 'cmd')
