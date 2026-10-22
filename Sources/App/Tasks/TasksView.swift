@@ -77,9 +77,17 @@ struct TasksView: View {
                 if let configError = board.configError {
                     configErrorBanner(configError)
                 }
-                ScrollView {
-                    list(sections, selectedID: selected?.id)
-                        .padding(.bottom, 16)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        list(sections, selectedID: selected?.id)
+                            .padding(.bottom, 16)
+                    }
+                    // The request can come while the view opens or while it
+                    // already shows.
+                    .onAppear { revealRequestedGroup(using: proxy) }
+                    .onChange(of: board.revealGroupByWindowID[windowID]) { _, _ in
+                        revealRequestedGroup(using: proxy)
+                    }
                 }
 
             }
@@ -197,6 +205,7 @@ struct TasksView: View {
             groupHeader(.running, count: sections.running.count)
             rows(sections.running, selectedID: selectedID)
             groupHeader(.toShip, count: sections.toShip.reduce(0) { $0 + $1.entries.count })
+                .id(TaskStage.Group.toShip)
             ForEach(sections.toShip) { lane in
                 HStack(spacing: 8) {
                     Text("\(lane.projectTitle) · \(lane.entries.count) \(lane.entries.count == 1 ? "task" : "tasks")")
@@ -215,6 +224,7 @@ struct TasksView: View {
                 rows(lane.entries, selectedID: selectedID)
             }
             collapsibleGroup(.done, entries: sections.done, isExpanded: $isDoneExpanded, selectedID: selectedID)
+                .id(TaskStage.Group.done)
             if sections.archived.isEmpty == false {
                 collapsibleGroup(.archived, entries: sections.archived, isExpanded: $isArchivedExpanded, selectedID: selectedID)
             }
@@ -259,10 +269,32 @@ struct TasksView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(TaskBoardPresentation.groupTitle(group)), \(entries.count), \(isExpanded.wrappedValue ? "expanded" : "collapsed")")
+            .accessibilityLabel(Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+            .background {
+                SidebarSemanticTextBridge(text: Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
             if isExpanded.wrappedValue {
                 rows(entries, selectedID: selectedID)
             }
+        }
+    }
+
+    static func collapsibleGroupLabel(_ group: TaskStage.Group, count: Int, isExpanded: Bool) -> String {
+        "\(TaskBoardPresentation.groupTitle(group)), \(count), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    /// Shows the group the sidebar asked for, once.
+    private func revealRequestedGroup(using proxy: ScrollViewProxy) {
+        guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
+        if group == .done {
+            isDoneExpanded = true
+        }
+        // After the expanded rows lay out, so the group's top lands at the
+        // top of the list.
+        Task { @MainActor in
+            proxy.scrollTo(group, anchor: .top)
         }
     }
 

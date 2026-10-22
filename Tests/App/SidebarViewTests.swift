@@ -2281,6 +2281,89 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(hostingView, name: "tasks-view")
     }
 
+    func testSidebarDoneCountsOpenTheTasksViewWithDoneExpanded() throws {
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Already open and short enough that Done starts below the fold.
+        var tasks = hostTasksView(harness, board: board, height: 300)
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-done-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-done-click")
+
+        // The project card's Done count expands Done and scrolls to it.
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID], "The view should clear the request it applied.")
+        let doneFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "Done, 1, expanded")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: doneFrame.midX, y: doneFrame.midY)),
+            "Done should be scrolled into view: \(doneFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-done-count")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-done-count")
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-after-done-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-after-done-click")
+
+        // The Tasks row opens the view without touching Done.
+        tasks.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Done, 1, expanded", in: tasks.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Tasks, ", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
+        tasks.window.orderOut(nil)
+
+        // The Status segment's Done expands Done in a view that opens after
+        // the click, as the app opens it.
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Done, 1 task, opens the Tasks view", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
+        tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, expanded"), "\(renderedTextValues(in: tasks.hostingView))")
+    }
+
+    private func hostTasksView(
+        _ harness: SidebarHarness,
+        board: TaskBoardStore,
+        height: CGFloat
+    ) -> (window: NSWindow, hostingView: NSView) {
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {},
+            newTaskShortcutLabel: "⌥⇧T"
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: height))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: height), styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+        return (window, hostingView)
+    }
+
     func testTasksViewDetailShowsAnInboxTaskOnceWithThePicker() throws {
         var waiting = TaskRecord(
             createdAt: Date().addingTimeInterval(-120),
