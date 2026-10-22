@@ -317,7 +317,7 @@ def main():
         require(len(run_cli('task', 'list')['tasks']) == 2, 'Command+W created a task')
         step('command-w closed the panel only', terminals=terminal_count())
 
-        # 3b. Command+Delete in the text, the three columns, and the mouse.
+        # 3b. Command+Delete in the text, the mouse, and the three columns.
         open_panel_from_finder()
         drive('type', 'Keep this')
         drive('key', KEY_RETURN)
@@ -327,6 +327,45 @@ def main():
         # the line break that is left.
         drive('key', KEY_DELETE, 'cmd')
         wait_for_text('Keep this')
+        # The mouse, with the Agent pill still on Auto: a drag on the
+        # header moves the panel, a click on the Agent pill opens its
+        # picker, and a click on its first row, the [defaults] preset,
+        # chooses it. Each case records its outcome and the check fails at
+        # the end, so one run shows every case.
+        outcomes = {}
+
+        def poll(probe, timeout=5):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if probe():
+                    return True
+                time.sleep(0.2)
+            return False
+
+        px, py, pw, ph = map(float, drive('frame', pid, PANEL).split())
+        under = json.loads(drive('windows-at', px + pw / 2, py + 8))
+        drive('drag', px + pw / 2, py + 8, px + pw / 2 + 80, py + 48)
+        moved = tuple(map(float, drive('frame', pid, PANEL).split()))
+        outcomes['header drag moves the panel'] = dict(
+            ok=abs(moved[0] - px - 80) < 6 and abs(moved[1] - py - 40) < 6,
+            before=(px, py), after=moved[:2], windows_under_point=under)
+        step('header drag', **outcomes['header drag moves the panel'])
+
+        x, y, w, h = map(float, drive('frame', pid, 'quick-entry.agent').split())
+        under = json.loads(drive('windows-at', x + w / 2, y + h / 2))
+        drive('click', x + w / 2, y + h / 2)
+        opened = poll(lambda: bool(picker_windows()))
+        outcomes['click on a pill opens its picker'] = dict(ok=opened, windows_under_point=under)
+        step('pill click', **outcomes['click on a pill opens its picker'])
+        if opened:
+            x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
+            drive('click', x + w / 2, y + h / 2)
+            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'claude-opus-5-5 · high')
+            outcomes['click on a row chooses it'] = dict(ok=chosen, agent=drive('value', pid, 'quick-entry.agent'))
+            step('row click', **outcomes['click on a row chooses it'])
+        if picker_windows():
+            drive('key', KEY_ESCAPE)
+            wait_for('the picker to close', picker_closed, timeout=10)
         drive('key', KEY_2, 'cmd')
         wait_for('the agent picker', picker_windows, timeout=10)
         drive('key', KEY_RIGHT, 'cmd')
@@ -339,23 +378,11 @@ def main():
         wait_for('the columns to close', picker_closed, timeout=10)
         wait_for_value('quick-entry.agent', 'claude-sonnet-5-5 · low')
         step('columns pinned a typed model', agent=drive('value', pid, 'quick-entry.agent'))
-
-        # The first row is the [defaults] preset.
-        x, y, w, h = map(float, drive('frame', pid, 'quick-entry.agent').split())
-        drive('click', x + w / 2, y + h / 2)
-        wait_for('a click on the pill to open its picker', picker_windows, timeout=10)
-        x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
-        drive('click', x + w / 2, y + h / 2)
-        wait_for('a click on a row to close the picker', picker_closed, timeout=10)
-        wait_for_value('quick-entry.agent', 'claude-opus-5-5 · high')
-        step('mouse picked a row', agent=drive('value', pid, 'quick-entry.agent'))
         drive('key', KEY_ESCAPE)
         wait_for('the panel to close', panel_closed, timeout=10)
 
-        # 4. Real drags from another process, and Command+V with text. Each
-        # case records its outcome and the check fails at the end, so one
-        # run shows every case.
-        outcomes = {}
+        # 4. Real drags from another process, and Command+V with text,
+        # recorded with the mouse cases above.
 
         def frame(identifier):
             return tuple(map(float, drive('frame', pid, identifier).split()))

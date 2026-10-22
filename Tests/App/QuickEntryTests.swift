@@ -387,6 +387,26 @@ struct QuickEntryTests {
         harness.controller.dismiss()
     }
 
+    /// Wires the pill's button to its picker. A real click also has to get
+    /// past the panel's background drag; the live check covers that.
+    @Test func aClickOnAPillOpensItsPicker() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        await harness.fixture.waitUntil("the pills are laid out") { model.pillFrames[.agent] != nil }
+        let pill = try #require(model.pillFrames[.agent])
+        let location = NSPoint(x: pill.midX, y: panel.frame.height - pill.midY)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            panel.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: panel.windowNumber, context: nil, eventNumber: 7, clickCount: 1, pressure: 1
+            )))
+        }
+        await harness.fixture.waitUntil("the click opens the Agent picker") { harness.controller.picker?.kind == .agent }
+        harness.controller.dismiss()
+    }
+
     @Test func escapeAndCommandWCloseOnlyThePicker() async throws {
         let harness = try Harness()
         harness.controller.present(prefill: .empty)
