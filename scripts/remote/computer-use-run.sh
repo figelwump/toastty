@@ -164,7 +164,7 @@ sync_worktree_to_remote() {
   local remote_worktree_dir="$2"
 
   rsync -a --delete \
-    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
     --exclude '.git' \
     --exclude '.DS_Store' \
     --exclude 'artifacts' \
@@ -183,7 +183,7 @@ sync_worktree_to_remote() {
 
 remote_shell() {
   local script="$1"
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
+  ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
 set -euo pipefail
 $script
 EOF
@@ -192,7 +192,7 @@ EOF
 run_remote_preflight() {
   local output
   if ! output="$(
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$REMOTE_REPO_ROOT" \
       "$REMOTE_GUI_ROOT" \
       "$CURRENT_CODEX_APP_CLI" \
@@ -348,7 +348,7 @@ copy_prompt_to_artifacts() {
 
 copy_remote_artifacts_back() {
   mkdir -p "$LOCAL_ARTIFACTS_DIR/remote"
-  rsync -a "$REMOTE_HOST:$1/" "$LOCAL_ARTIFACTS_DIR/remote/"
+  rsync -a -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' "$REMOTE_HOST:$1/" "$LOCAL_ARTIFACTS_DIR/remote/"
 }
 
 run_remote_prepare_mode() {
@@ -652,7 +652,7 @@ run_local_mode() {
     fi
 
     if [[ "$CLEANUP_REMOTE_PREPARED" == "1" && "$CLEANUP_REMOTE_STOPPED" != "1" ]]; then
-      ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+      ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
         "$CLEANUP_REMOTE_WORKTREE_DIR" \
         "$SCRIPT_PATH" \
         "$RUN_LABEL" \
@@ -747,7 +747,7 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
   fi
 
   log "Building and launching Toastty on the remote host"
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
       "$RUN_LABEL" \
@@ -800,7 +800,7 @@ EOF
   fi
   CLEANUP_REMOTE_PREPARED=1
 
-  rsync -a "$REMOTE_HOST:$remote_run_root/launch.json" "$LOCAL_ARTIFACTS_DIR/remote/"
+  rsync -a -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' "$REMOTE_HOST:$remote_run_root/launch.json" "$LOCAL_ARTIFACTS_DIR/remote/"
 
   local launch_json="$LOCAL_ARTIFACTS_DIR/remote/launch.json"
   app_pid="$(jq -r '.appPid' "$launch_json")"
@@ -872,7 +872,7 @@ EOF
   fi
 
   log "Stopping remote Toastty and Codex app-server"
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
       "$RUN_LABEL" \
