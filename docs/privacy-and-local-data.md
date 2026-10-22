@@ -399,7 +399,8 @@ secret and caches an Apple provider token. Session titles are forwarded for
 delivery, not stored in the relay database.
 
 The iPhone stores its enrollment state, APNs device token, relay credentials,
-and pending cleanup records in a non-synchronizing Keychain item. The Mac keeps
+pending cleanup records, and a count of test notifications that did not arrive
+in a non-synchronizing Keychain item. The Mac keeps
 its relay send authority in the protected device file described above. Turning
 notifications off or unpairing retains pending revocation records until the
 service accepts cleanup. Alerts already sent can still arrive.

@@ -189,7 +189,8 @@ struct ToasttyHomeView: View {
     let onSettings: () -> Void
     let openWorkspace: (UUID) -> Void
     let notificationError: String?
-    let retryNotifications: () -> Void
+    /// Nil hides Retry, such as for advice that retrying cannot resolve.
+    let retryNotifications: (() -> Void)?
 
     @AppStorage private var storedWorkspaceSessionFilter: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
@@ -208,7 +209,7 @@ struct ToasttyHomeView: View {
         onSettings: @escaping () -> Void = {},
         openWorkspace: @escaping (UUID) -> Void = { _ in },
         notificationError: String? = nil,
-        retryNotifications: @escaping () -> Void = {},
+        retryNotifications: (() -> Void)? = nil,
         defaults: UserDefaults = .standard
     ) {
         self.controller = controller
