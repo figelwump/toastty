@@ -121,6 +121,17 @@ reverting upstream's renderer architecture. The widget therefore:
 
 Frames are bottom-up (OpenGL origin); the widget flips them in `snapshot()`.
 
+Each frame is a new `GdkDmabufTexture`, so the host must not let GTK use its
+Vulkan renderer: GSK Vulkan imports every frame at a high cost. On NVIDIA
+one animating terminal took ~44% of a core on the main thread and leaked
+~14 KB per frame inside the driver (hundreds of MB per hour), against ~10%
+and no growth with GSK GL. Ghostty's GTK app sets `GDK_DISABLE=vulkan` for
+the same reason; `toastty-linux` sets it around `gtk_init` only
+(`GtkRendererSelection.swift`), so child processes do not inherit it, and
+leaves an explicit `GSK_RENDERER` alone. Embedders of the widget should do
+the same. Reusing one `GdkTexture` per swap-chain buffer is not an option:
+GSK Vulkan then shows stale frames, since GTK treats textures as immutable.
+
 ## Runtime notes
 
 - Call `toastty_ghostty_init()` once, before anything else. It runs

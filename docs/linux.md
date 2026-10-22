@@ -592,6 +592,7 @@ and `$ORIGIN/../lib` for an installed layout.
 
 | Piece | File | Notes |
 |---|---|---|
+| GTK renderer | `App/GtkRendererSelection.swift` | `GDK_DISABLE=vulkan` around `gtk_init` only (restored after, so children never inherit it), like Ghostty's GTK app: GSK Vulkan re-imports every DMA-BUF frame, which on NVIDIA cost ~44% of a core and leaked hundreds of MB per hour; an explicit `GSK_RENDERER` wins. See `linux/ghostty/README.md` |
 | One Ghostty app per process | `GhosttyRuntime.swift` | macOS config precedence (`TOASTTY_GHOSTTY_PARSE_CLI_ARGS`, `TOASTTY_GHOSTTY_CONFIG_PATH`, `$XDG_CONFIG_HOME/ghostty/config[.ghostty]`, `~/.config/ghostty/…`, Ghostty defaults), `TOASTTY_DEBUG_LOGIN_SHELL`, config diagnostics to stderr, `font-size` → `setConfiguredTerminalFont`, OSC 7501 enabled, `ghostty_app_set_color_scheme` follows `AdwStyleManager:dark`, app focus = any Toastty window active, panel-frame colors from Ghostty `background`/`foreground`, unfocused-split overlay from `unfocused-split-opacity`/`-fill`, `reload_config` |
 | Terminal host | `GhosttyTerminalHost.swift` | `TerminalPanelHosting`; one surface per panel inside a `GtkOverlay` (search bar, unfocused dim, link-hover label), kept alive across re-layouts, tab and workspace switches |
 | Surface operations | `GhosttyTerminalSurface.swift` | send text/keys, read viewport/scrollback, binding actions, prompt state (`ghostty_surface_is_at_prompt`), close confirmation (`ghostty_surface_needs_confirm_quit`); API matches app-logic's `LinuxTerminalSurface` |

@@ -5,6 +5,7 @@ import Foundation
 public enum ToasttyLinuxMain {
     @MainActor
     public static func run(arguments: [String]) -> Int32 {
+        GtkRendererSelection.initializeGtk()
         let environment = ProcessInfo.processInfo.environment
         let automation = AutomationScript.fromEnvironment()
         #if TOASTTY_LINUX_APP_LOGIC
