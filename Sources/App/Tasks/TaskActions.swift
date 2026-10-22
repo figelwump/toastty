@@ -39,6 +39,44 @@ enum TaskActions {
         }
     }
 
+    /// Runs one of the actions the Tasks view's detail pane offers, which the
+    /// command palette offers too. Archive asks first and shows its own
+    /// failures; the others throw.
+    static func run(_ action: TaskBoardPresentation.DetailAction, taskID: UUID, coordinator: TaskCoordinator) throws {
+        switch action {
+        case .merge:
+            try coordinator.requestMerge(taskID: taskID)
+        case .mergeWithoutChecks:
+            try coordinator.requestMerge(taskID: taskID, route: .direct)
+        case .cancelMerge:
+            try coordinator.cancelMerge(taskID: taskID)
+        case .markDone:
+            _ = try coordinator.markDone(taskID: taskID)
+        case .archive:
+            archive(taskID: taskID, coordinator: coordinator)
+        case .cleanUp:
+            try coordinator.retryCleanup(taskID: taskID)
+        case .keepAsIs:
+            try coordinator.dismissCleanup(taskID: taskID)
+        }
+    }
+
+    /// Selects the task space in the window that holds it, or else in
+    /// `fallbackWindowID`, which also hides that window's Tasks view.
+    static func openTaskSpace(
+        workspaceID: UUID,
+        fallbackWindowID: UUID,
+        store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore
+    ) {
+        let windowID = store.state.windows.first { $0.workspaceIDs.contains(workspaceID) }?.id ?? fallbackWindowID
+        store.selectWorkspace(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            preferringUnreadSessionPanelIn: sessionRuntimeStore
+        )
+    }
+
     static func release(workspaceID: UUID, coordinator: TaskCoordinator) {
         perform("Unable to Start the Release") {
             _ = try coordinator.release(workspaceID: workspaceID, caller: .unmanaged)

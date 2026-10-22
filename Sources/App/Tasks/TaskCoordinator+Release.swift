@@ -29,9 +29,7 @@ extension TaskCoordinator {
         guard let releasePrompt = config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releasePrompt else {
             throw TaskError("Set release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.")
         }
-        if let running = records.records.first(where: {
-            $0.release != nil && $0.projectRoot == root && $0.shippedAt == nil && $0.archivedAt == nil && $0.doneAt == nil
-        }) {
+        if let running = releaseUnderWay(projectRoot: root) {
             throw TaskError("A release of \(project.title) is already under way: \(running.title).")
         }
         let children = toShipTasks(projectRoot: root)
@@ -82,6 +80,18 @@ extension TaskCoordinator {
         ])
         startSetup(taskID: record.id)
         return record
+    }
+
+    /// The project's release task that has not shipped or ended, if any.
+    /// A project has one release at a time, whichever spelling of its path
+    /// the release was made with.
+    func releaseUnderWay(projectRoot root: String) -> TaskRecord? {
+        let target = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+        return records.records.first { record in
+            guard record.release != nil, record.shippedAt == nil, record.archivedAt == nil, record.doneAt == nil,
+                  let projectRoot = record.projectRoot else { return false }
+            return TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: homeDirectoryPath) == target
+        }
     }
 
     /// The project's merged tasks that no release tag contains yet.

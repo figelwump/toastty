@@ -13,6 +13,10 @@ enum CommandPaletteCatalog {
         profileShortcutRegistry: ProfileShortcutRegistry
     ) -> [PaletteCommandDescriptor] {
         staticCommandDescriptors(originWindowID: originWindowID, actions: actions) +
+            CommandPaletteTaskCatalog.descriptors(
+                current: actions.currentTask(originWindowID: originWindowID),
+                releases: actions.taskReleaseOptions(originWindowID: originWindowID)
+            ) +
             workspaceSwitchDescriptors(originWindowID: originWindowID, actions: actions) +
             terminalProfileDescriptors(
                 originWindowID: originWindowID,
@@ -62,6 +66,7 @@ enum CommandPaletteCatalog {
             (.newScratchpad, actions.canCreateScratchpad(originWindowID: originWindowID)),
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
             (.newTask, actions.canCreateTask()),
+            (.toggleTasksView, actions.canToggleTasksView(originWindowID: originWindowID)),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
@@ -218,6 +223,8 @@ enum CommandPaletteCatalog {
         actions: CommandPaletteActionHandling
     ) -> String {
         switch command {
+        case .toggleTasksView:
+            return actions.tasksViewTitle(originWindowID: originWindowID)
         case .toggleSidebar:
             return actions.sidebarTitle(originWindowID: originWindowID)
         case .toggleRightPanel:

@@ -414,6 +414,24 @@ and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project sets `release_prompt`; the sidebar's
 Status To ship lines have one too. A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
+`Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
+it hides the view and returns to the workspace it covered.
+
+### The command palette
+
+Type `task`, `done` or `merge` in the command palette to act on the current
+task: the row selected in the Tasks view while it shows, otherwise the task
+whose task space is selected. The palette lists the detail pane's actions that
+apply now, as **Task: Merge**, **Task: Merge Without Checks**, **Task: Cancel
+Merge**, **Task: Mark Done**, **Task: Archive…**, **Task: Clean Up** and
+**Task: Keep As Is**, plus **Task: Open PR** and, from the Tasks view, **Task:
+Open Task Space**. Each row names the task and its stage. The actions run as
+the detail pane's buttons do, with the same confirmations. **Task: Merge**
+shows `Option+Shift+M` when it acts on the selected task space.
+
+**Release <project>…** starts a release for each open project with a
+`release_prompt`, as the To ship line's **Release…** does, even when nothing
+waits to ship. It is hidden while a release of that project is under way.
 
 ## Merge a task
 
@@ -476,7 +494,8 @@ release task: Toastty fetches the remote's default branch, and starts the
 release agent with `release_prompt` in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The agent
 also gets the list of tasks waiting to ship. `toastty task release` does the
-same from the CLI.
+same from the CLI, and **Release <project>…** in the command palette does it
+for an open project even when its To ship list is empty.
 
 Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
