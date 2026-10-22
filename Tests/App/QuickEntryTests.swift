@@ -24,7 +24,7 @@ struct QuickEntryTests {
             self.stagingRoot = stagingRoot
             controller = QuickEntryController(
                 store: fixture.store,
-                agentCatalogProvider: TestAgentCatalogProvider(),
+                agentProfiles: { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
                 create: create ?? { request in
                     try await fixture.coordinator.create(request, caller: .quickEntry)
                 },
@@ -70,6 +70,30 @@ struct QuickEntryTests {
                 keyCode: UInt16(kVK_Return)
             ))
             try textView().keyDown(with: event)
+        }
+
+        /// The open picker's search field editor, once the field has
+        /// focus in the picker's window.
+        func pickerEditor() async throws -> NSTextView {
+            let pickerPanel = try #require(controller.pickerPanel)
+            await fixture.waitUntil("the picker's search has focus") {
+                (pickerPanel.firstResponder as? NSTextView)?.delegate is NSTextField
+            }
+            return try #require(pickerPanel.firstResponder as? NSTextView)
+        }
+
+        func typeInPicker(_ text: String) async throws {
+            let editor = try await pickerEditor()
+            editor.insertText(text, replacementRange: editor.selectedRange())
+        }
+
+        func pickerCommand(_ selector: Selector) async throws {
+            try await pickerEditor().doCommand(by: selector)
+        }
+
+        func pressCommand(_ characters: String, keyCode: Int, in window: NSWindow?) throws {
+            let window = try #require(window)
+            #expect(window.performKeyEquivalent(with: try QuickEntryTests.commandKey(characters, keyCode: keyCode)))
         }
 
         var stagedDirectories: [URL] {
@@ -294,6 +318,11 @@ struct QuickEntryTests {
 
     @Test func commandShortcutRouting() {
         let cases: [(String, Int, NSEvent.ModifierFlags, QuickEntryPanel.CommandAction)] = [
+            ("1", kVK_ANSI_1, .command, .picker(.workspace)),
+            ("2", kVK_ANSI_2, .command, .picker(.agent)),
+            ("\u{F702}", kVK_LeftArrow, .command, .textNavigation),
+            ("\u{7F}", kVK_Delete, .command, .textNavigation),
+            ("3", kVK_ANSI_3, .command, .ignore),
             ("w", kVK_ANSI_W, .command, .close),
             (".", kVK_ANSI_Period, .command, .close),
             ("\r", kVK_Return, .command, .submit),
@@ -306,6 +335,175 @@ struct QuickEntryTests {
         for (key, keyCode, modifiers, action) in cases {
             #expect(QuickEntryPanel.commandAction(key: key, keyCode: UInt16(keyCode), modifiers: modifiers) == action, "\(modifiers) \(key)")
         }
+    }
+
+    @Test func commandDeleteAndArrowsEditTheText() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let textView = try harness.textView()
+        await harness.fixture.waitUntil("the text has focus") { panel.firstResponder === textView }
+        try harness.type("First line\nsecond line")
+        // ⌘⌫ deletes to the start of the line, in the text, not in a menu.
+        try harness.pressCommand("\u{7F}", keyCode: kVK_Delete, in: panel)
+        #expect(harness.controller.model?.text == "First line\n")
+        harness.controller.dismiss()
+    }
+
+    // MARK: - Pickers
+
+    @Test func commandOneOpensTheWorkspacePickerAndReturnPicksAndRefocusesTheText() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        try harness.type("Fix the sidebar")
+        #expect(model.workspaceTitle == "Auto")
+
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        let pickerPanel = try #require(harness.controller.pickerPanel)
+        #expect(pickerPanel.isVisible)
+        #expect(pickerPanel.parent === panel)
+        #expect(pickerPanel.styleMask.contains(.nonactivatingPanel))
+        #expect(model.openPicker == .workspace)
+        // It hangs from the Workspace pill.
+        let pill = try #require(model.pillFrames[.workspace])
+        #expect(abs(pickerPanel.frame.minX - (panel.frame.minX + pill.minX)) < 1)
+
+        try await harness.typeInPicker("toas")
+        #expect(harness.controller.picker?.highlightedRow?.title == "toastty")
+        try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
+
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(pickerPanel.isVisible == false)
+        #expect(model.openPicker == nil)
+        #expect(model.workspaceID == fixture.workspaceID)
+        #expect(model.workspaceTitle == "toastty")
+        await fixture.waitUntil("the panel is key with the text focused") {
+            panel.isKeyWindow && panel.firstResponder === (try? harness.textView())
+        }
+        #expect(model.text == "Fix the sidebar")
+        harness.controller.dismiss()
+    }
+
+    /// Wires the pill's button to its picker. A real click also has to get
+    /// past the panel's background drag; the live check covers that.
+    @Test func aClickOnAPillOpensItsPicker() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        await harness.fixture.waitUntil("the pills are laid out") { model.pillFrames[.agent] != nil }
+        let pill = try #require(model.pillFrames[.agent])
+        let location = NSPoint(x: pill.midX, y: panel.frame.height - pill.midY)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            panel.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: panel.windowNumber, context: nil, eventNumber: 7, clickCount: 1, pressure: 1
+            )))
+        }
+        await harness.fixture.waitUntil("the click opens the Agent picker") { harness.controller.picker?.kind == .agent }
+        harness.controller.dismiss()
+    }
+
+    @Test func escapeAndCommandWCloseOnlyThePicker() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: panel)
+        try await harness.typeInPicker("codex")
+        try await harness.pickerCommand(#selector(NSResponder.cancelOperation(_:)))
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(harness.controller.isPresented)
+        #expect(model.preset == nil, "Esc keeps the pill as it was")
+
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        try harness.pressCommand("w", keyCode: kVK_ANSI_W, in: harness.controller.pickerPanel)
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(harness.controller.isPresented)
+
+        // ⌘1 toggles, and ⌘2 switches from one picker to the other.
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.pickerPanel)
+        #expect(harness.controller.picker?.kind == .agent)
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.pickerPanel)
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(harness.controller.isPresented)
+        harness.controller.dismiss()
+    }
+
+    @Test func commandTwoPinsTheDefaultsPresetWithAnEffortAndTheAgentStartsWithIt() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        try harness.type("Composer keeps a blank line")
+
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: panel)
+        let picker = try #require(harness.controller.picker)
+        #expect(picker.rows.first?.title == "Claude Code · claude-opus-5-5")
+        #expect(picker.highlightedRow?.id == picker.rows.first?.id)
+        try await harness.pickerCommand(#selector(NSResponder.moveRight(_:)))
+        #expect(picker.rows.first?.detail == "xhigh")
+        try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
+        #expect(model.preset == QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh"))
+        #expect(model.agentTitle == "claude-opus-5-5 · xhigh")
+
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        let record = try #require(fixture.coordinator.records.records.last)
+        #expect(record.pinned.agent == "claude")
+        #expect(record.pinned.model == "claude-opus-5-5")
+        #expect(record.pinned.effort == "xhigh")
+        await fixture.waitForSetup(record.id)
+        let panelID = try #require(fixture.record(record.id)?.operation.taskSpace?.panelID)
+        let sent = try #require(fixture.router.sentTextByPanelID[panelID])
+        #expect(sent.contains("--model claude-opus-5-5"))
+        #expect(sent.contains("--effort xhigh"))
+    }
+
+    @Test func theColumnsPickAnAgentModelAndEffortSeparately() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        try harness.type("Release notes")
+
+        try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: panel)
+        try await harness.typeInPicker("gp")
+        try harness.pressCommand("\u{F703}", keyCode: kVK_RightArrow, in: harness.controller.pickerPanel)
+        let picker = try #require(harness.controller.picker)
+        #expect(picker.columns?.focused == .agent)
+        // Cleared at once, before SwiftUI updates the field: the next key
+        // can come first.
+        #expect(try await harness.pickerEditor().string.isEmpty)
+        try await harness.typeInPicker("codex")
+        try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
+        try await harness.typeInPicker("gpt-6.1-sol")
+        try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
+        try await harness.typeInPicker("hi")
+        #expect(picker.columns?.preset == QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high"))
+        try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
+        #expect(harness.controller.pickerPanel == nil)
+        #expect(model.agentTitle == "gpt-6.1-sol · high")
+
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        let record = try #require(fixture.coordinator.records.records.last)
+        #expect(record.pinned.agent == "codex")
+        #expect(record.pinned.model == "gpt-6.1-sol")
+        #expect(record.pinned.effort == "high")
+        await fixture.waitForSetup(record.id)
+        let panelID = try #require(fixture.record(record.id)?.operation.taskSpace?.panelID)
+        let sent = try #require(fixture.router.sentTextByPanelID[panelID])
+        #expect(sent.contains("gpt-6.1-sol"))
+        #expect(sent.contains("model_reasoning_effort"))
     }
 
     @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {

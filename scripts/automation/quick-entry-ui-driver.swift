@@ -18,6 +18,8 @@
 //   frame <pid> <identifier>            prints an element's frame: x y width height
 //   drag <from-x> <from-y> <to-x> <to-y>
 //                                       drags with the mouse between two points
+//   click <x> <y>                       clicks at a point
+//   windows-at <x> <y>                  prints the windows under a point, front first, as JSON
 //   pasteboard-text <text>              puts text on the general pasteboard
 //   pasteboard-png <path>               puts a PNG on the general pasteboard
 
@@ -290,6 +292,41 @@ case "drag":
     }
     mouse(.leftMouseUp, to)
     usleep(300_000)
+
+case "click":
+    let values = arguments.dropFirst().compactMap(Double.init)
+    guard arguments.count == 3, values.count == 2 else { fail("click <x> <y>") }
+    let point = CGPoint(x: values[0], y: values[1])
+    let source = CGEventSource(stateID: .hidSystemState)
+    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+            fail("could not make a mouse event")
+        }
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+        usleep(120_000)
+    }
+
+case "windows-at":
+    // The window server's front-to-back list under a point, for telling
+    // whether a click there can reach the window it is meant for. A
+    // click-through overlay is listed too, so read the list as a whole.
+    let values = arguments.dropFirst().compactMap(Double.init)
+    guard arguments.count == 3, values.count == 2 else { fail("windows-at <x> <y>") }
+    let point = CGPoint(x: values[0], y: values[1])
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    let found = list.compactMap { window -> [String: String]? in
+        guard let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+              bounds.contains(point) else { return nil }
+        return [
+            "owner": window[kCGWindowOwnerName as String] as? String ?? "",
+            "layer": "\(window[kCGWindowLayer as String] as? Int ?? 0)",
+            "bounds": "\(bounds)",
+        ]
+    }
+    let data = try JSONSerialization.data(withJSONObject: Array(found.prefix(4)))
+    print(String(decoding: data, as: UTF8.self))
 
 case "pasteboard-text":
     guard arguments.count == 2 else { fail("pasteboard-text <text>") }

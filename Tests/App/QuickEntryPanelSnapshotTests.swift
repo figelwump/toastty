@@ -1,17 +1,42 @@
 import AppKit
 import CoreState
+import RemoteProtocol
 import XCTest
 @testable import ToasttyApp
 
 /// Renders the quick entry panel as a user sees it, and keeps the images on
-/// the test result for visual review against "Task Inbox Mockups" panel 1.
+/// the test result for visual review against "Task Inbox Mockups" panel 1,
+/// and its pickers against "Task Keyboard Flow" revision 3, sections 1–2.
 @MainActor
 final class QuickEntryPanelSnapshotTests: XCTestCase {
     private static let designText = "Sidebar unread pill doesn't clear when I read the session from the phone, see screenshot. Probably the read-receipt path skips the desktop store"
 
+    /// The profiles in the design: Claude Code and Codex take a model and
+    /// an effort, Cursor only a model, and Shipper, a Codex command under
+    /// another name, neither.
+    static let agentProfiles: [AgentLaunchProfileSummary] = [
+        ("claude", "Claude Code", true, true),
+        ("codex", "Codex", true, true),
+        ("pi", "Pi", true, true),
+        ("cursor", "Cursor", true, false),
+        ("shipper", "Shipper (Codex, release authority)", false, false),
+    ].map { id, name, model, effort in
+        AgentLaunchProfileSummary(
+            profileID: id,
+            displayName: name,
+            agent: AgentKind(rawValue: id)!,
+            isInstalled: true,
+            acceptsInitialPrompt: true,
+            acceptsLeadingDashPrompt: true,
+            supportsModel: model,
+            supportsReasoningEffort: effort
+        )
+    }
+
     private var stagingRoot: URL!
     private var store: AppStore!
     private var controller: QuickEntryController!
+    private var config = TasksConfig()
 
     override func setUp() async throws {
         store = AppStore(persistTerminalFontPreference: false)
@@ -21,9 +46,9 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
             .appendingPathComponent("toastty-quick-entry-snapshot-\(UUID().uuidString)", isDirectory: true)
         controller = QuickEntryController(
             store: store,
-            agentCatalogProvider: TestAgentCatalogProvider(),
+            agentProfiles: { Self.agentProfiles },
             create: { _ in throw TaskError("not used") },
-            configLoader: { TasksConfig() },
+            configLoader: { [unowned self] in config },
             stagingRootURL: stagingRoot,
             registersGlobalHotKey: false
         )
@@ -97,11 +122,121 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         )
     }
 
+    func testFooterStaysOneRowWithLongNames() throws {
+        controller.present(prefill: .empty)
+        let short = try render("quick-entry-footer-auto")
+        controller.dismiss()
+
+        let workspace = try XCTUnwrap(store.selectedWorkspace)
+        _ = store.send(.renameWorkspace(workspaceID: workspace.id, title: "toastty-quick-entry-pickers-and-presets"))
+        controller.present(prefill: QuickEntryPrefill(workspaceID: workspace.id))
+        let model = try XCTUnwrap(controller.model)
+        model.text = Self.designText
+        model.preset = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol-long-context-preview", effort: "xhigh")
+        let long = try render("quick-entry-footer-long-names")
+        XCTAssertEqual(long.size.height, short.size.height, "The footer stays one row")
+
+        model.preset = QuickEntryPreset(agent: "shipper")
+        try render("quick-entry-footer-profile-name")
+    }
+
+    func testWorkspacePicker() throws {
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        for title in ["emptyos", "toastty-ios", "ghostty-fork"] {
+            XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: title, activate: false)))
+        }
+        controller.present(prefill: .empty)
+        controller.model?.text = Self.keyboardDesignText
+        controller.togglePicker(.workspace)
+        try renderWithPicker("quick-entry-workspace-picker")
+
+        controller.picker?.query = "tios"
+        try renderWithPicker("quick-entry-workspace-picker-search")
+    }
+
+    func testAgentPickerFrequentSearchAndColumns() throws {
+        config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        controller.recentModels = { provider in
+            switch provider {
+            case .claude: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+            case .codex: ["gpt-6.1-sol", "gpt-6-astra"]
+            default: []
+            }
+        }
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        model.text = Self.keyboardDesignText
+        model.preset = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high")
+        controller.togglePicker(.agent)
+        let picker = try XCTUnwrap(controller.picker)
+        XCTAssertEqual(model.openPicker, .agent)
+        try renderWithPicker("quick-entry-agent-picker")
+
+        picker.query = "gpt"
+        try renderWithPicker("quick-entry-agent-picker-search")
+
+        picker.query = ""
+        picker.openColumns()
+        picker.tab(1)
+        try renderWithPicker("quick-entry-agent-picker-columns")
+    }
+
+    private static let keyboardDesignText = "Sidebar drops the Inbox group after a restart even though one task is still in it"
+
+    /// Renders the panel and its open picker together, placed as on screen,
+    /// on the design's page color.
+    @discardableResult
+    private func renderWithPicker(_ name: String) throws -> NSBitmapImageRep {
+        let panelImage = try render("\(name)-panel-only", attach: false)
+        let pickerPanel = try XCTUnwrap(controller.pickerPanel)
+        let panel = try XCTUnwrap(controller.panel)
+        let pickerView = try XCTUnwrap(pickerPanel.contentView)
+        pickerView.layoutSubtreeIfNeeded()
+        let pickerImage = try XCTUnwrap(pickerView.bitmapImageRepForCachingDisplay(in: pickerView.bounds))
+        pickerView.cacheDisplay(in: pickerView.bounds, to: pickerImage)
+        XCTAssertEqual(pickerPanel.frame.size, pickerView.bounds.size, "The picker fits its content")
+
+        let margin: CGFloat = 24
+        let union = panel.frame.union(pickerPanel.frame)
+        let size = NSSize(width: union.width + margin * 2, height: union.height + margin * 2)
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor(calibratedRed: 0.08, green: 0.08, blue: 0.08, alpha: 1).setFill()
+            NSRect(origin: .zero, size: size).fill()
+            for (frame, bitmap, radius) in [
+                (panel.frame, panelImage, QuickEntryPanel.cornerRadius),
+                (pickerPanel.frame, pickerImage, 10),
+            ] {
+                let rect = NSRect(
+                    x: frame.minX - union.minX + margin,
+                    y: frame.minY - union.minY + margin,
+                    width: frame.width,
+                    height: frame.height
+                )
+                // Each window is clipped to its rounded shape, as the
+                // window server shows it.
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+                bitmap.draw(in: rect)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            return true
+        }
+        let composite = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(composite.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return composite
+    }
+
     /// Lets SwiftUI lay out and the panel fit its content, then renders the
     /// panel and keeps the image on the test result. The window shadow is
     /// drawn by the window server and is not in the image.
     @discardableResult
-    private func render(_ name: String) throws -> NSBitmapImageRep {
+    private func render(_ name: String, attach: Bool = true) throws -> NSBitmapImageRep {
         let panel = try XCTUnwrap(controller.panel)
         let contentView = try XCTUnwrap(panel.contentView)
         let deadline = Date().addingTimeInterval(0.6)
@@ -113,6 +248,7 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
         XCTAssertEqual(bitmap.size.width, QuickEntryPanel.width)
         XCTAssertEqual(bitmap.size.height, panel.frame.height, "The panel fits its content")
+        guard attach else { return bitmap }
 
         let attachment = XCTAttachment(
             data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),

@@ -42,6 +42,7 @@ esac
 for argument in "$@"; do message="$argument"; done
 dir="$(dirname "$0")/sessions"; mkdir -p "$dir"
 printf '%s' "$message" > "$dir/$TOASTTY_SESSION_ID.message"
+printf '%s\n' "$@" > "$dir/$TOASTTY_SESSION_ID.argv"
 printf '{"sessionID":"%s","panelID":"%s","cwd":"%s"}\n' "$TOASTTY_SESSION_ID" "$TOASTTY_PANEL_ID" "$PWD" > "$dir/$TOASTTY_SESSION_ID.json"
 while IFS= read -r line; do :; done
 '''

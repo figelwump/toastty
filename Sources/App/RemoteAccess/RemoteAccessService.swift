@@ -3902,8 +3902,9 @@ final class RemoteAccessService: ObservableObject {
     }
 
     /// Models that this provider's listed sessions report, most recently
-    /// active first, without repeats.
-    private func recentModels(for provider: AgentKind) -> [String] {
+    /// active first, without repeats. Sessions report a model only while
+    /// remote access is on.
+    func recentModels(for provider: AgentKind) -> [String] {
         var seen: Set<String> = []
         return buildConversationSummaries()
             .filter { $0.provider == provider }

@@ -16,7 +16,7 @@ struct QuickEntryPrefill: Equatable {
 }
 
 /// The quick entry panel's state: the text, the attached files, and the
-/// optional workspace and agent. Toastty copies each attached file into a
+/// optional workspace and agent preset. Toastty copies each attached file into a
 /// staging directory as soon as it is added, because a dragged screenshot
 /// or a pasted image may live only in a temporary file.
 @MainActor
@@ -40,8 +40,9 @@ final class QuickEntryModel: ObservableObject {
     @Published private(set) var attachments: [Attachment] = []
     /// nil means Auto: triage chooses.
     @Published var workspaceID: UUID?
-    /// nil means Auto: triage or `[defaults]` chooses.
-    @Published var agentID: String?
+    /// The agent, model and effort; nil means Auto: triage or `[defaults]`
+    /// chooses.
+    @Published var preset: QuickEntryPreset?
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSubmitting = false
     /// Files still being copied in.
@@ -50,9 +51,16 @@ final class QuickEntryModel: ObservableObject {
     @Published private(set) var focusRequestID = 0
     /// A drag with files or images is over the panel.
     @Published var isDropTargeted = false
+    /// The pill whose picker is open.
+    @Published var openPicker: QuickEntryPickerKind?
+    /// Where each pill is, in the panel's top-left coordinates, so its
+    /// picker opens under it.
+    var pillFrames: [QuickEntryPickerKind: CGRect] = [:]
 
     let workspaceOptions: [Option]
-    let agentOptions: [Option]
+    let agentProfiles: [QuickEntryAgentProfile]
+    /// Presets listed first in the Agent picker.
+    let frequentPresets: [QuickEntryPreset]
 
     private let stagingDirectoryURL: URL
     private let create: @MainActor (TaskCreateRequest) async throws -> TaskRecord
@@ -66,14 +74,16 @@ final class QuickEntryModel: ObservableObject {
     init(
         prefill: QuickEntryPrefill,
         workspaceOptions: [Option],
-        agentOptions: [Option],
+        agentProfiles: [QuickEntryAgentProfile],
+        frequentPresets: [QuickEntryPreset],
         stagingDirectoryURL: URL,
         create: @escaping @MainActor (TaskCreateRequest) async throws -> TaskRecord,
         onCreated: @escaping @MainActor (TaskRecord) -> Void,
         onCancel: @escaping @MainActor () -> Void
     ) {
         self.workspaceOptions = workspaceOptions
-        self.agentOptions = agentOptions
+        self.agentProfiles = agentProfiles
+        self.frequentPresets = frequentPresets
         self.stagingDirectoryURL = stagingDirectoryURL
         self.create = create
         self.onCreated = onCreated
@@ -105,8 +115,20 @@ final class QuickEntryModel: ObservableObject {
         workspaceID.flatMap { id in workspaceOptions.first { $0.id == id.uuidString }?.title } ?? "Auto"
     }
 
+    /// `model · effort`. The model names its provider, so the profile's
+    /// name is added only when no model is chosen. A profile that runs
+    /// another provider's command, such as a release profile wrapping
+    /// Codex, takes no model, so it always shows its name.
     var agentTitle: String {
-        agentID.flatMap { id in agentOptions.first { $0.id == id }?.title } ?? "Auto"
+        let parts = agentTitleParts
+        return parts.effort.map { "\(parts.name) · \($0)" } ?? parts.name
+    }
+
+    /// The pill cuts a long model short but keeps the effort.
+    var agentTitleParts: (name: String, effort: String?) {
+        guard let preset else { return ("Auto", nil) }
+        let name = agentProfiles.first { $0.id == preset.agent }?.displayName ?? preset.agent
+        return (preset.model ?? name, preset.effort)
     }
 
     func requestFocus() {
@@ -162,7 +184,9 @@ final class QuickEntryModel: ObservableObject {
             files: attachments.map { $0.url.path(percentEncoded: false) },
             clientRequestID: clientRequestID,
             workspaceID: workspaceID,
-            agent: agentID
+            agent: preset?.agent,
+            model: preset?.model,
+            effort: preset?.effort
         )
         Task { @MainActor in
             do {
