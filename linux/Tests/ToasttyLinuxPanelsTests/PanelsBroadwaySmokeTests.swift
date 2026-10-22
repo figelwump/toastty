@@ -175,10 +175,10 @@ struct PanelsBroadwaySmokeTests {
         try Self.script(fixtures: fixtures).write(to: scriptURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: work) }
 
-        let display = 30 + Int.random(in: 0..<25)
-        let broadway = try Self.launch(broadwayd, [":\(display)"], environment: Self.environment([:]), log: work.appendingPathComponent("broadwayd.log"))
+        let (broadway, display) = try BroadwayLauncher.start(
+            broadwayd, displays: 30..<55, environment: Self.environment([:]), log: work.appendingPathComponent("broadwayd.log")
+        )
         defer { kill(broadway.processIdentifier, SIGKILL); _ = Self.waitForExit(broadway, timeout: 5) }
-        Thread.sleep(forTimeInterval: 0.5)
 
         let runtimeHome = work.appendingPathComponent("runtime-home")
         try FileManager.default.createDirectory(at: runtimeHome, withIntermediateDirectories: true)

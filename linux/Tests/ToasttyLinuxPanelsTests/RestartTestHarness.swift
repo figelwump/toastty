@@ -39,7 +39,7 @@ final class RestartTestHarness {
         }
         chmod(runtime.path, 0o700)
 
-        let display = 30 + Int.random(in: 0..<25)
+        let display: Int
         var base: [String: String] = [
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": home.path,
@@ -57,13 +57,16 @@ final class RestartTestHarness {
         if let lang = ProcessInfo.processInfo.environment["LANG"] { base["LANG"] = lang }
 
         do {
-            broadway = try Smoke.launch(broadwayd, [":\(display)"], environment: base, log: work.appendingPathComponent("broadwayd.log"))
+            let started = try BroadwayLauncher.start(
+                broadwayd, displays: 30..<55, environment: base, log: work.appendingPathComponent("broadwayd.log")
+            )
+            broadway = started.process
+            display = started.display
         } catch {
             try? FileManager.default.removeItem(at: work)
             try? FileManager.default.removeItem(at: runtime)
             throw error
         }
-        Thread.sleep(forTimeInterval: 0.5)
 
         appEnvironment = base
         appEnvironment.merge([

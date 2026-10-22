@@ -158,15 +158,13 @@ struct BroadwaySmokeTests {
         let scriptURL = work.appendingPathComponent("smoke.txt")
         try Self.script.write(to: scriptURL, atomically: true, encoding: .utf8)
 
-        let display = 60 + Int.random(in: 0..<30)
-        let broadway = try Self.launch(
-            broadwayd, [":\(display)"],
+        let (broadway, display) = try BroadwayLauncher.start(
+            broadwayd, displays: 60..<90,
             environment: Self.cleanEnvironment(extra: [:]),
             log: work.appendingPathComponent("broadwayd.log")
         )
         // gtk4-broadwayd ignores SIGTERM.
         defer { Self.stop(broadway, signal: SIGKILL) }
-        Thread.sleep(forTimeInterval: 0.5)
 
         let app = try Self.launch(
             binary, [],

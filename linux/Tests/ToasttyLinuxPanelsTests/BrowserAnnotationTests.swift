@@ -222,10 +222,10 @@ struct BrowserAnnotationBroadwayTests {
         environment.removeValue(forKey: "DBUS_SESSION_BUS_ADDRESS")
         for key in environment.keys where key.hasPrefix("TOASTTY_GHOSTTY_CONFIG") { environment.removeValue(forKey: key) }
 
-        let display = 90 + Int.random(in: 0..<10)
-        let broadway = try S.launch(broadwayd, [":\(display)"], environment: environment, log: work.appendingPathComponent("broadwayd.log"))
+        let (broadway, display) = try BroadwayLauncher.start(
+            broadwayd, displays: 90..<100, environment: environment, log: work.appendingPathComponent("broadwayd.log")
+        )
         defer { kill(broadway.processIdentifier, SIGKILL); _ = S.waitForExit(broadway, timeout: 5) }
-        Thread.sleep(forTimeInterval: 0.5)
 
         for (key, value) in [
             "HOME": home.path,

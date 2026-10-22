@@ -190,12 +190,10 @@ struct TerminalBroadwayTests {
         var environment = BroadwaySmokeTests.cleanEnvironment(extra: isolated)
         environment.removeValue(forKey: "DBUS_SESSION_BUS_ADDRESS")
 
-        let display = 60 + Int.random(in: 0..<30)
-        let broadway = try BroadwaySmokeTests.launch(
-            broadwayd, [":\(display)"], environment: environment, log: work.appendingPathComponent("broadwayd.log")
+        let (broadway, display) = try BroadwayLauncher.start(
+            broadwayd, displays: 60..<90, environment: environment, log: work.appendingPathComponent("broadwayd.log")
         )
         defer { BroadwaySmokeTests.stop(broadway, signal: SIGKILL) }
-        Thread.sleep(forTimeInterval: 0.5)
 
         isolated = [
             "HOME": home.path,
