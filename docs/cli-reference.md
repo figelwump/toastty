@@ -893,12 +893,15 @@ workspace, or the wait timed out (exit 1). Relative `--file` and
 `--prompt-file` itself. With `--start-work`, setup makes a git worktree and
 starts the agent there; it needs a workspace.
 
-Triage fills what `task create` leaves out when `[triage]` is set up.
+Without `--workspace`, and outside an agent session, the task waits in the
+Inbox for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
+effort you leave out; optional [triage](tasks.md#optional-triage) fills them
+first when `[triage]` is set up.
 `task set-workspace` places a task that waits for a workspace, in an open one,
 in a recently closed one from `task workspace-choices`, which Toastty reopens,
 or in a project directory (`--root`), which Toastty opens as a new workspace.
-`task workspace-choices <task-id>` also shows the project triage suggested for
-that task, if any.
+With triage on, `task workspace-choices <task-id>` also shows the project
+triage suggested for that task, if any.
 
 `task start-work` runs from an agent session and moves its task into a git
 worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It

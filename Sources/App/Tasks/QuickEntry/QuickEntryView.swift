@@ -25,9 +25,9 @@ struct QuickEntryView: View {
     static let chipBorder = Color(hex: 0x333333)
     static let pillBackground = Color(hex: 0x202020)
     static let pillBorder = Color(hex: 0x343434)
-    static let autoText = Color(hex: 0xE8B46A)
-    static let autoBackground = Color(hex: 0x241C11)
-    static let autoBorder = Color(hex: 0x4A3A22)
+    static let accentText = Color(hex: 0xE8B46A)
+    static let missingBackground = Color(hex: 0x241C11)
+    static let missingBorder = Color(hex: 0x4A3A22)
     static let errorText = Color(hex: 0xE55C5C)
 
     var body: some View {
@@ -103,8 +103,13 @@ struct QuickEntryView: View {
             if model.isDropTargeted {
                 Text("Drop to attach")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Self.autoText)
+                    .foregroundStyle(Self.accentText)
                     .accessibilityIdentifier("quick-entry.drop-hint")
+            } else if let hint = model.missingChoiceHint {
+                Text(hint)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Self.accentText)
+                    .accessibilityIdentifier("quick-entry.missing-choice")
             }
         }
         .frame(height: 14)
@@ -157,8 +162,8 @@ struct QuickEntryView: View {
                 .workspace,
                 title: "Workspace",
                 value: model.workspaceTitle,
-                isAuto: model.workspaceID == nil,
-                help: "The workspace the task starts in. Auto lets triage choose."
+                isMissing: model.workspaceID == nil,
+                help: "The workspace the task starts in."
             )
             .accessibilityIdentifier("quick-entry.workspace")
 
@@ -168,8 +173,8 @@ struct QuickEntryView: View {
                 value: model.agentTitleParts.name,
                 suffix: model.agentTitleParts.effort.map { " · \($0)" },
                 accessibilityValue: model.agentTitle,
-                isAuto: model.preset == nil,
-                help: "The agent, model and effort for the task. Auto lets triage choose."
+                isMissing: model.preset == nil,
+                help: "The agent, model and effort for the task."
             )
             .accessibilityIdentifier("quick-entry.agent")
 
@@ -189,6 +194,7 @@ struct QuickEntryView: View {
             }
             .buttonStyle(CreateButtonStyle())
             .disabled(model.canSubmit == false)
+            .help(model.missingChoiceHint ?? "Create the task")
             .accessibilityIdentifier("quick-entry.create")
             .fixedSize()
             .layoutPriority(1)
@@ -201,7 +207,7 @@ struct QuickEntryView: View {
         value: String,
         suffix: String? = nil,
         accessibilityValue: String? = nil,
-        isAuto: Bool,
+        isMissing: Bool,
         help: String
     ) -> some View {
         let shortcut = kind == .workspace ? "⌘1" : "⌘2"
@@ -213,7 +219,7 @@ struct QuickEntryView: View {
                 value: value,
                 suffix: suffix,
                 shortcut: shortcut,
-                isAuto: isAuto,
+                isMissing: isMissing,
                 isOpen: model.openPicker == kind
             )
         }
@@ -253,7 +259,7 @@ private struct PillLabel: View {
     let value: String
     let suffix: String?
     let shortcut: String
-    let isAuto: Bool
+    let isMissing: Bool
     let isOpen: Bool
 
     var body: some View {
@@ -272,22 +278,22 @@ private struct PillLabel: View {
                         .fixedSize()
                 }
             }
-            .foregroundStyle(isAuto ? QuickEntryView.autoText : ToastyTheme.primaryText)
+            .foregroundStyle(isMissing ? QuickEntryView.accentText : ToastyTheme.primaryText)
             KeyCap(text: shortcut, size: 10)
                 .fixedSize()
         }
         .font(.system(size: 12))
         .padding(.horizontal, 9)
         .frame(height: 26)
-        .background(shape.fill(isAuto ? QuickEntryView.autoBackground : QuickEntryView.pillBackground))
+        .background(shape.fill(isMissing ? QuickEntryView.missingBackground : QuickEntryView.pillBackground))
         .overlay(
             shape.strokeBorder(
-                isOpen ? QuickEntryView.autoText : (isAuto ? QuickEntryView.autoBorder : QuickEntryView.pillBorder),
+                isOpen ? QuickEntryView.accentText : (isMissing ? QuickEntryView.missingBorder : QuickEntryView.pillBorder),
                 lineWidth: 1
             )
         )
         // The design's glow around an open pill.
-        .overlay(shape.inset(by: -2).strokeBorder(QuickEntryView.autoText.opacity(isOpen ? 0.18 : 0), lineWidth: 2))
+        .overlay(shape.inset(by: -2).strokeBorder(QuickEntryView.accentText.opacity(isOpen ? 0.18 : 0), lineWidth: 2))
         .contentShape(shape)
         // One element named for the pill; the button adds the value.
         .accessibilityElement(children: .ignore)

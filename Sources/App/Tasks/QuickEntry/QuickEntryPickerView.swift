@@ -13,7 +13,7 @@ struct QuickEntryPickerView: View {
     static let border = Color(hex: 0x3D3D3D)
     static let divider = Color(hex: 0x2E2E2E)
     static let selectedRow = Color(hex: 0x2A2622)
-    static let accent = QuickEntryView.autoText
+    static let accent = QuickEntryView.accentText
     /// The list scrolls past this height.
     static let maximumListHeight: CGFloat = 320
 

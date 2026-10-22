@@ -497,7 +497,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. When [triage] in ~/.toastty/tasks.toml has a command, it chooses the workspace, agent, model, effort and first prompt the request leaves out; set them all to skip it. [defaults] fills an agent, model or effort still missing. A task with no workspace waits in the Inbox until one is picked with task.set-workspace. A repeated clientRequestID from the same caller returns the first task.",
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. A task with no workspace waits in the Inbox until one is picked with task.set-workspace. Optional: when [triage] in tasks.toml has a command, it first chooses the workspace, agent, model, effort and first prompt the request leaves out. A repeated clientRequestID from the same caller returns the first task.",
                 selectors: [],
                 parameters: [
                     .taskText(required: false),
@@ -532,7 +532,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent goes through triage again.",
+                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent fills them again: from triage when [triage] has a command, otherwise from [defaults], and without a workspace it waits for one.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
             )
@@ -548,7 +548,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Place a task that has not started in a workspace: an open one (workspace), a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again, or a project directory (rootDirectory), such as the one triage suggested, which Toastty opens as a new workspace unless the project is open. Triage then runs for anything else the task still needs, and setup starts.",
+                summary: "Place a task that has not started in a workspace: an open one (workspace), a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again, or a project directory (rootDirectory), which Toastty opens as a new workspace unless the project is open. [defaults], or triage when it is on, then fills anything else the task still needs, and setup starts.",
                 selectors: [],
                 parameters: [
                     .taskID(required: true),
@@ -779,7 +779,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while triage runs, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session and when its status last changed), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session and when its status last changed), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
             )
@@ -799,7 +799,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task, under suggested, with the choice that places it there. A workspace-scoped session sees only open workspaces in its scope.",
+                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task when triage is on, under suggested, with the choice that places it there. A workspace-scoped session sees only open workspaces in its scope.",
                 selectors: [],
                 parameters: [
                     .taskID(required: false),
@@ -1017,7 +1017,7 @@ private extension AppControlParameterDescriptor {
     }
 
     static func taskRootDirectory(required: Bool) -> Self {
-        .init(name: "rootDirectory", summary: "A project directory that is not open, such as triage's suggestion. Toastty opens a workspace there.", valueType: .string, required: required)
+        .init(name: "rootDirectory", summary: "A project directory that is not open. Toastty opens a workspace there.", valueType: .string, required: required)
     }
 
     static func taskPrompt(required: Bool) -> Self {

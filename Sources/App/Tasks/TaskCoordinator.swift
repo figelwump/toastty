@@ -356,7 +356,7 @@ final class TaskCoordinator {
             // The agent and its settings are known now, so they are checked
             // now rather than after the user picks a workspace.
             _ = try resolvedFields(pinned: pinned, workspaceID: nil, defaults: config.defaults)
-            setup = .needsWorkspace(reason: "No workspace was named, and triage is off. Pick a workspace for this task.")
+            setup = .needsWorkspace(reason: Self.noWorkspaceReason)
         }
 
         var startWork: TaskStartWork?
@@ -499,7 +499,8 @@ final class TaskCoordinator {
 
     /// Runs setup again for a task whose setup failed, or a move into a
     /// worktree that failed, from the last step it finished. A task that
-    /// has no workspace or agent yet goes through triage again.
+    /// has no workspace or agent yet fills them again, from triage when it
+    /// is on.
     func retry(taskID: UUID) throws {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
@@ -1114,6 +1115,15 @@ final class TaskCoordinator {
         triageRunner != nil && config.triage?.command != nil
     }
 
+    /// Whether triage is on now, for the Inbox's Retry Triage. False when
+    /// tasks.toml cannot be read.
+    var isTriageConfigured: Bool {
+        (try? configLoader()).map(isTriageEnabled) ?? false
+    }
+
+    /// Why a task waits when no workspace was named and triage is off.
+    static let noWorkspaceReason = "No workspace was named. Pick a workspace for this task."
+
     private func startRouting(taskID: UUID) {
         let attempt = UUID()
         setupAttempts[taskID] = attempt
@@ -1240,7 +1250,7 @@ final class TaskCoordinator {
             } else if isTriageEnabled(config) {
                 reason = resolution.workspaceReason ?? "Triage did not choose an open workspace."
             } else {
-                reason = "No workspace was named, and triage is off. Pick a workspace for this task."
+                reason = Self.noWorkspaceReason
             }
             let suggestion = fixedClosed ? nil : resolution.suggestedWorkspace.map {
                 TaskWorkspaceSuggestion(title: $0.title, rootDirectory: $0.rootDirectory)

@@ -41,13 +41,13 @@ struct QuickEntryPickerTests {
 
     // MARK: - Workspace
 
-    @Test func workspacePickerListsAutoThenOpenWorkspacesAndStartsOnTheCurrentOne() {
+    @Test func workspacePickerListsTheOpenWorkspacesAndStartsOnTheCurrentOne() {
         let ids = (0..<3).map { _ in UUID() }
         let options = zip(ids, ["toastty", "emptyos", "toastty-ios"]).map {
             QuickEntryModel.Option(id: $0.uuidString, title: $1)
         }
         let picker = QuickEntryPicker(workspaces: options, current: ids[1])
-        #expect(picker.rows.map(\.title) == ["Auto", "toastty", "emptyos", "toastty-ios"])
+        #expect(picker.rows.map(\.title) == ["toastty", "emptyos", "toastty-ios"], "No Auto row")
         #expect(picker.highlightedRow?.title == "emptyos")
 
         picker.query = "tios"
@@ -59,24 +59,18 @@ struct QuickEntryPickerTests {
         picker.submit()
         #expect(choices.value == [.workspace(ids[2])])
 
-        picker.query = "auto"
-        #expect(picker.rows.map(\.title) == ["Auto"])
-        picker.submit()
-        #expect(choices.value.last == .workspace(nil))
-
         picker.query = "zzz"
         #expect(picker.rows.isEmpty)
         picker.submit()
-        #expect(choices.value.count == 2, "Return with no match chooses nothing")
+        #expect(choices.value.count == 1, "Return with no match chooses nothing")
     }
 
     @Test func arrowsMoveTheHighlightAndStopAtTheEnds() {
         let options = ["a", "b"].map { QuickEntryModel.Option(id: UUID().uuidString, title: $0) }
         let picker = QuickEntryPicker(workspaces: options, current: nil)
-        #expect(picker.highlightedRow?.title == "Auto")
+        #expect(picker.highlightedRow?.title == "a", "With none chosen, the first workspace")
         picker.move(-1)
-        #expect(picker.highlightedRow?.title == "Auto")
-        picker.move(1)
+        #expect(picker.highlightedRow?.title == "a")
         picker.move(1)
         picker.move(1)
         #expect(picker.highlightedRow?.title == "b")
@@ -84,12 +78,12 @@ struct QuickEntryPickerTests {
 
     // MARK: - Agent list
 
-    @Test func agentPickerListsFrequentThenAutoAndColumnsAndStartsOnTheTopPreset() {
+    @Test func agentPickerListsFrequentThenColumnsAndStartsOnTheTopPreset() {
         let (picker, _) = agentPicker()
-        #expect(picker.rows.map(\.title) == ["Claude Code · claude-opus-5-5", "Auto", "Choose agent, model, effort…"])
-        #expect(picker.rows.map(\.section) == ["Frequent", "Other", "Other"])
+        #expect(picker.rows.map(\.title) == ["Claude Code · claude-opus-5-5", "Choose agent, model, effort…"], "No Auto row")
+        #expect(picker.rows.map(\.section) == ["Frequent", "Other"])
         #expect(picker.rows.first?.detail == "high")
-        #expect(picker.highlightedRow?.action == .preset(Self.opusHigh), "On Auto, ⌘2 then Return picks the top preset")
+        #expect(picker.highlightedRow?.action == .preset(Self.opusHigh), "With none chosen, ⌘2 then Return picks the top preset")
 
         // A pinned preset that is listed is where the picker starts.
         let sonnet = QuickEntryPreset(agent: "claude", model: "claude-sonnet-5-5", effort: "low")
@@ -100,7 +94,7 @@ struct QuickEntryPickerTests {
     @Test func aPinnedPresetThatIsNotFrequentIsListedAsCurrentAndKeptByReturn() {
         let xhigh = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh")
         let (picker, choices) = agentPicker(current: xhigh)
-        #expect(picker.rows.map(\.section) == ["Current", "Frequent", "Other", "Other"])
+        #expect(picker.rows.map(\.section) == ["Current", "Frequent", "Other"])
         #expect(picker.highlightedRow?.action == .preset(xhigh))
         picker.submit()
         #expect(choices.value == [.agent(xhigh)], "Return keeps the pinned preset")
@@ -109,7 +103,7 @@ struct QuickEntryPickerTests {
     @Test func numberKeysPickAFrequentPresetOnlyWhileTheSearchIsEmpty() {
         let gptHigh = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high")
         let (picker, choices) = agentPicker(frequent: [Self.opusHigh, gptHigh])
-        #expect(picker.rows.map(\.number) == [1, 2, nil, nil])
+        #expect(picker.rows.map(\.number) == [1, 2, nil])
         #expect(picker.chooseFrequent(number: 3) == false)
         #expect(picker.chooseFrequent(number: 2))
         #expect(choices.value == [.agent(gptHigh)])
@@ -117,7 +111,7 @@ struct QuickEntryPickerTests {
         // A pinned preset under Current has no number.
         let xhigh = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh")
         let (pinned, _) = agentPicker(frequent: [Self.opusHigh], current: xhigh)
-        #expect(pinned.rows.map(\.number) == [nil, 1, nil, nil])
+        #expect(pinned.rows.map(\.number) == [nil, 1, nil])
 
         // Once there is a search, digits are part of it.
         picker.query = "gpt"
@@ -205,22 +199,22 @@ struct QuickEntryPickerTests {
 
         // On any other row the arrows move the caret.
         picker.move(1)
-        #expect(picker.highlightedRow?.title == "Auto")
+        #expect(picker.highlightedRow?.title == "Choose agent, model, effort…")
         #expect(picker.adjustEffort(1) == false)
     }
 
-    @Test func autoAndColumnsRows() {
+    @Test func noAutoRowAndTheColumnsRowLeadsWhenItsTitleStartsWithTheSearch() {
         let (picker, choices) = agentPicker()
-        // "auto" also matches inside "release authority"; a row whose
-        // title starts with the search comes first.
+        // "auto" matches only inside other titles, and the columns row
+        // follows the agents.
         picker.query = "auto"
-        #expect(picker.rows.map(\.title) == ["Auto", "Shipper (Codex, release authority)", "Choose agent, model, effort…"])
-        picker.submit()
-        #expect(choices.value == [.agent(nil)])
+        #expect(picker.rows.map(\.title) == ["Shipper (Codex, release authority)", "Choose agent, model, effort…"])
 
         picker.query = "choose"
+        #expect(picker.rows.first?.title == "Choose agent, model, effort…")
         picker.submit()
         #expect(picker.columns != nil)
+        #expect(choices.value.isEmpty)
     }
 
     // MARK: - Columns
@@ -374,8 +368,12 @@ struct QuickEntryPickerTests {
             onCreated: { _ in },
             onCancel: {}
         )
-        #expect(model.agentTitle == "Auto")
+        #expect(model.agentTitle == "None")
+        #expect(model.missingChoiceHint == "Pick a workspace with ⌘1")
+        model.workspaceID = UUID()
+        #expect(model.missingChoiceHint == "Pick an agent with ⌘2")
         model.preset = Self.opusHigh
+        #expect(model.missingChoiceHint == nil)
         #expect(model.agentTitle == "claude-opus-5-5 · high")
         model.preset = QuickEntryPreset(agent: "claude", effort: "high")
         #expect(model.agentTitle == "Claude Code · high")

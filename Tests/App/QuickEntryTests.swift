@@ -40,7 +40,9 @@ struct QuickEntryTests {
                 },
                 stagingRootURL: stagingRoot,
                 registersGlobalHotKey: false,
-                toastDuration: .milliseconds(50)
+                toastDuration: .milliseconds(50),
+                // Opened over Toastty, whatever app the test host is behind.
+                frontmostApplication: { nil }
             )
         }
 
@@ -173,24 +175,73 @@ struct QuickEntryTests {
         #expect(fixture.record(record.id)?.setup == .started)
     }
 
-    @Test func autoWorkspaceWithTriageOffSavesTheTaskForTheUserToPlace() async throws {
+    @Test func thePanelStartsOnTheSelectedProjectAndTheDefaultsPresetAndPinsBoth() async throws {
+        let harness = try Harness()
+        let fixture = harness.fixture
+        fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        #expect(model.workspaceID == fixture.workspaceID)
+        #expect(model.workspaceTitle == "toastty")
+        #expect(model.preset == QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        #expect(model.missingChoiceHint == nil)
+        try harness.type("Start here")
+
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        let record = try #require(fixture.coordinator.records.records.first)
+        #expect(record.pinned.workspaceID == fixture.workspaceID)
+        #expect(record.pinned.agent == "claude")
+        #expect(record.pinned.model == "claude-opus-5-5")
+        #expect(record.pinned.effort == "high")
+
+        // A selected task space counts as its project.
+        await fixture.waitForSetup(record.id)
+        let taskSpaceID = try #require(fixture.record(record.id)?.operation.taskSpace?.workspaceID)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: taskSpaceID)))
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == taskSpaceID)
+        harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.workspaceID == fixture.workspaceID)
+        harness.controller.dismiss()
+    }
+
+    @Test func createWaitsForAWorkspace() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
         harness.controller.present(prefill: .empty)
         let model = try #require(harness.controller.model)
-        #expect(model.workspaceID == nil)
-        try harness.type("Place me later")
+        try harness.type("Somewhere")
+        // As when no workspace is selected or remembered.
+        model.workspaceID = nil
+        #expect(model.workspaceTitle == "None")
+        #expect(model.missingChoiceHint == "Pick a workspace with ⌘1")
+        #expect(model.canSubmit == false)
 
         try harness.pressCommandReturn()
-        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        #expect(harness.controller.isPresented)
+        #expect(fixture.coordinator.records.records.isEmpty)
 
-        let record = try #require(fixture.coordinator.records.records.first)
-        #expect(record.source == .quickEntry)
-        #expect(record.workspaceID == nil)
-        guard case .needsWorkspace = record.setup else {
-            Issue.record("Expected the task to wait for a workspace, got \(record.setup)")
-            return
+        model.workspaceID = fixture.workspaceID
+        #expect(model.canSubmit)
+        harness.controller.dismiss()
+    }
+
+    @Test func theStartingWorkspaceDependsOnWhereThePanelOpened() {
+        let selected = UUID()
+        let lastUsed = UUID()
+        let closed = UUID()
+        let options = [selected, lastUsed].map { QuickEntryModel.Option(id: $0.uuidString, title: "w") }
+        func start(_ selectedProject: UUID?, _ last: UUID?, inToastty: Bool) -> UUID? {
+            QuickEntryController.initialWorkspaceID(
+                selectedProject: selectedProject, lastUsed: last, openedInToastty: inToastty, options: options
+            )
         }
+        #expect(start(selected, lastUsed, inToastty: true) == selected)
+        #expect(start(selected, lastUsed, inToastty: false) == lastUsed)
+        #expect(start(selected, closed, inToastty: false) == selected, "A closed last workspace is skipped")
+        #expect(start(nil, lastUsed, inToastty: true) == lastUsed)
+        #expect(start(closed, nil, inToastty: true) == nil)
     }
 
     @Test func aFailedCreateKeepsThePanelAndTheTextUntilItSucceeds() async throws {
@@ -367,11 +418,14 @@ struct QuickEntryTests {
     @Test func commandOneOpensTheWorkspacePickerAndReturnPicksAndRefocusesTheText() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "emptyos", activate: false)))
+        let emptyosID = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "emptyos" }?.id)
         harness.controller.present(prefill: .empty)
         let panel = try #require(harness.controller.panel)
         let model = try #require(harness.controller.model)
         try harness.type("Fix the sidebar")
-        #expect(model.workspaceTitle == "Auto")
+        #expect(model.workspaceTitle == "toastty")
 
         try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
         let pickerPanel = try #require(harness.controller.pickerPanel)
@@ -383,15 +437,16 @@ struct QuickEntryTests {
         let pill = try #require(model.pillFrames[.workspace])
         #expect(abs(pickerPanel.frame.minX - (panel.frame.minX + pill.minX)) < 1)
 
-        try await harness.typeInPicker("toas")
-        #expect(harness.controller.picker?.highlightedRow?.title == "toastty")
+        #expect(harness.controller.picker?.highlightedRow?.title == "toastty", "It starts on the current workspace")
+        try await harness.typeInPicker("empt")
+        #expect(harness.controller.picker?.highlightedRow?.title == "emptyos")
         try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
 
         #expect(harness.controller.pickerPanel == nil)
         #expect(pickerPanel.isVisible == false)
         #expect(model.openPicker == nil)
-        #expect(model.workspaceID == fixture.workspaceID)
-        #expect(model.workspaceTitle == "toastty")
+        #expect(model.workspaceID == emptyosID)
+        #expect(model.workspaceTitle == "emptyos")
         await fixture.waitUntil("the panel is key with the text focused") {
             panel.isKeyWindow && panel.firstResponder === (try? harness.textView())
         }
@@ -430,7 +485,7 @@ struct QuickEntryTests {
         try await harness.pickerCommand(#selector(NSResponder.cancelOperation(_:)))
         #expect(harness.controller.pickerPanel == nil)
         #expect(harness.controller.isPresented)
-        #expect(model.preset == nil, "Esc keeps the pill as it was")
+        #expect(model.preset == QuickEntryPreset(agent: "claude"), "Esc keeps the pill as it was")
 
         try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
         try harness.pressCommand("w", keyCode: kVK_ANSI_W, in: harness.controller.pickerPanel)
@@ -546,8 +601,10 @@ struct QuickEntryTests {
 
         // Until a preset has two uses, Frequent is the [defaults] preset.
         try await create("First", choosing: true)
-        try await create("Auto does not count", choosing: false)
+        // Accepting the preset the panel starts on counts too.
+        try await create("With the defaults preset", choosing: false)
         harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.preset == QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high"))
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
         #expect(harness.controller.picker?.rows.first?.title == "Claude Code · claude-opus-5-5")
         harness.controller.dismiss()
@@ -555,6 +612,7 @@ struct QuickEntryTests {
         try await create("Second", choosing: true)
         harness.controller.present(prefill: .empty)
         let model = try #require(harness.controller.model)
+        #expect(model.preset == sol, "The panel starts on the top Frequent preset")
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
         let picker = try #require(harness.controller.picker)
         #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Codex · gpt-6.1-sol"])
@@ -589,6 +647,8 @@ struct QuickEntryTests {
         let saved = try String(contentsOf: fixture.root.appendingPathComponent(".toastty/task-preset-usage.json"), encoding: .utf8)
         #expect(saved.contains("gpt-6.1-sol"))
         #expect(saved.contains("\"count\" : 2"))
+        let lastWorkspace = try String(contentsOf: fixture.root.appendingPathComponent(".toastty/task-last-workspace.json"), encoding: .utf8)
+        #expect(lastWorkspace.contains(fixture.workspaceID.uuidString))
     }
 
     @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {

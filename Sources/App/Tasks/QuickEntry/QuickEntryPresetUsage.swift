@@ -11,23 +11,29 @@ struct QuickEntryPresetUsageRecord: Codable, Equatable, Sendable {
     var lastUsedAt: Date
 }
 
-/// Counts the presets the user picks in quick entry, so the Agent picker
-/// lists their favorites first. Only explicit choices are recorded: Auto,
-/// triage and agent-created tasks do not count. Kept in
+/// Counts the presets of the tasks created in quick entry, so the Agent
+/// picker lists the user's favorites first and starts on the top one.
+/// Agent-created tasks do not count. Kept in
 /// `~/.toastty/task-preset-usage.json`, as the command palette keeps its
-/// usage.
+/// usage. Also remembers the last workspace a quick entry task went to, in
+/// `~/.toastty/task-last-workspace.json`.
 @MainActor
 final class QuickEntryPresetUsage {
     static let fileName = "task-preset-usage.json"
+    static let lastWorkspaceFileName = "task-last-workspace.json"
     static let halfLife: TimeInterval = 14 * 24 * 60 * 60
     /// A preset is listed once it has been used this many times.
     static let minimumUses = 2
     static let frequentLimit = 5
 
     private let fileURL: URL
+    private let lastWorkspaceFileURL: URL
     private let fileManager: FileManager
     private let now: () -> Date
     private var records: [QuickEntryPresetUsageRecord]
+    /// The workspace of the last task created in quick entry. It may have
+    /// closed since.
+    private(set) var lastWorkspaceID: UUID?
 
     init(
         runtimePaths: ToasttyRuntimePaths = .resolve(),
@@ -35,9 +41,22 @@ final class QuickEntryPresetUsage {
         now: @escaping () -> Date = Date.init
     ) {
         fileURL = runtimePaths.configDirectoryURL.appending(path: Self.fileName, directoryHint: .notDirectory)
+        lastWorkspaceFileURL = runtimePaths.configDirectoryURL
+            .appending(path: Self.lastWorkspaceFileName, directoryHint: .notDirectory)
         self.fileManager = fileManager
         self.now = now
         records = Self.load(from: fileURL, fileManager: fileManager)
+        lastWorkspaceID = Self.loadLastWorkspace(from: lastWorkspaceFileURL, fileManager: fileManager)
+    }
+
+    private struct LastWorkspace: Codable {
+        var workspaceID: UUID
+    }
+
+    func recordWorkspace(_ workspaceID: UUID) {
+        guard workspaceID != lastWorkspaceID else { return }
+        lastWorkspaceID = workspaceID
+        write(LastWorkspace(workspaceID: workspaceID), to: lastWorkspaceFileURL, failure: "Failed to save the last quick entry workspace")
     }
 
     func record(_ preset: QuickEntryPreset) {
@@ -79,17 +98,34 @@ final class QuickEntryPresetUsage {
     }
 
     private func save() {
+        write(records, to: fileURL, failure: "Failed to save task preset usage")
+    }
+
+    private func write(_ value: some Encodable, to url: URL, failure: String) {
         do {
-            try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(records).write(to: fileURL, options: [.atomic])
+            try encoder.encode(value).write(to: url, options: [.atomic])
         } catch {
-            ToasttyLog.warning("Failed to save task preset usage", category: .tasks, metadata: [
-                "path": fileURL.path,
+            ToasttyLog.warning(failure, category: .tasks, metadata: [
+                "path": url.path,
                 "error": error.localizedDescription,
             ])
+        }
+    }
+
+    private static func loadLastWorkspace(from url: URL, fileManager: FileManager) -> UUID? {
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try JSONDecoder().decode(LastWorkspace.self, from: Data(contentsOf: url)).workspaceID
+        } catch {
+            ToasttyLog.warning("Failed to load the last quick entry workspace", category: .tasks, metadata: [
+                "path": url.path,
+                "error": error.localizedDescription,
+            ])
+            return nil
         }
     }
 

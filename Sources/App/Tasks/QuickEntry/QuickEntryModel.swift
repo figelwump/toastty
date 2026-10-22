@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// What an opener fills in before the quick entry panel shows.
 struct QuickEntryPrefill: Equatable {
-    /// Pins the workspace; nil leaves it on Auto.
+    /// Chooses the workspace; nil keeps the one the panel starts on.
     var workspaceID: UUID?
     /// Text selected in a terminal. It is attached as a text file, so the
     /// task text stays what the user types.
@@ -16,7 +16,7 @@ struct QuickEntryPrefill: Equatable {
 }
 
 /// The quick entry panel's state: the text, the attached files, and the
-/// optional workspace and agent preset. Toastty copies each attached file into a
+/// workspace and agent preset the task needs. Toastty copies each attached file into a
 /// staging directory as soon as it is added, because a dragged screenshot
 /// or a pasted image may live only in a temporary file.
 @MainActor
@@ -38,10 +38,11 @@ final class QuickEntryModel: ObservableObject {
 
     @Published var text = ""
     @Published private(set) var attachments: [Attachment] = []
-    /// nil means Auto: triage chooses.
+    /// nil until the user chooses one, when no workspace is selected in
+    /// Toastty and none was used before. Create Task waits for it.
     @Published var workspaceID: UUID?
-    /// The agent, model and effort; nil means Auto: triage or `[defaults]`
-    /// chooses.
+    /// The agent, model and effort. nil only when no Frequent preset or
+    /// `[defaults]` agent is offered; Create Task waits for a choice.
     @Published var preset: QuickEntryPreset?
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSubmitting = false
@@ -73,6 +74,7 @@ final class QuickEntryModel: ObservableObject {
 
     init(
         prefill: QuickEntryPrefill,
+        preset: QuickEntryPreset? = nil,
         workspaceOptions: [Option],
         agentProfiles: [QuickEntryAgentProfile],
         frequentPresets: [QuickEntryPreset],
@@ -88,6 +90,7 @@ final class QuickEntryModel: ObservableObject {
         self.create = create
         self.onCreated = onCreated
         self.onCancel = onCancel
+        self.preset = preset
         apply(prefill)
     }
 
@@ -104,7 +107,15 @@ final class QuickEntryModel: ObservableObject {
     var canSubmit: Bool {
         isEditable
             && pendingAttachmentCount == 0
+            && missingChoiceHint == nil
             && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    /// Why Create Task waits for the user, when a pill has no value.
+    var missingChoiceHint: String? {
+        if workspaceID == nil { return "Pick a workspace with ⌘1" }
+        if preset == nil { return "Pick an agent with ⌘2" }
+        return nil
     }
 
     var canAttachMore: Bool {
@@ -112,7 +123,7 @@ final class QuickEntryModel: ObservableObject {
     }
 
     var workspaceTitle: String {
-        workspaceID.flatMap { id in workspaceOptions.first { $0.id == id.uuidString }?.title } ?? "Auto"
+        workspaceID.flatMap { id in workspaceOptions.first { $0.id == id.uuidString }?.title } ?? "None"
     }
 
     /// `model · effort`. The model names its provider, so the profile's
@@ -126,7 +137,7 @@ final class QuickEntryModel: ObservableObject {
 
     /// The pill cuts a long model short but keeps the effort.
     var agentTitleParts: (name: String, effort: String?) {
-        guard let preset else { return ("Auto", nil) }
+        guard let preset else { return ("None", nil) }
         let name = agentProfiles.first { $0.id == preset.agent }?.displayName ?? preset.agent
         return (preset.model ?? name, preset.effort)
     }
