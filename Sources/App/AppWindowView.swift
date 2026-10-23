@@ -62,7 +62,8 @@ struct AppWindowView: View {
             },
             localDocumentCloseConfirmationState: { [webPanelRuntimeRegistry] panelID in
                 webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
-            }
+            },
+            taskSpaceCloseAsker: .live(sessionRuntimeStore: sessionRuntimeStore)
         ).closeSessionInteractively(panelID: panelID, sessionTitle: sessionTitle)
     }
 
@@ -272,7 +273,7 @@ struct AppWindowView: View {
             } else {
                 closeConfirmationSummary = .none
             }
-            pendingWorkspaceClose = PendingWorkspaceClose(
+            let closeTarget = PendingWorkspaceClose(
                 windowID: request.windowID,
                 workspaceID: request.workspaceID,
                 source: request.source,
@@ -281,6 +282,16 @@ struct AppWindowView: View {
                 localDocumentSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
                 firstLocalDocumentSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
             )
+            // A task space whose task asks the close question asks it in
+            // place of this confirmation. A save in progress still refuses.
+            if closeTarget.allowsDestructiveConfirmation,
+               sessionRuntimeStore.taskSpaceCloseQuestion(workspaceID: request.workspaceID) != nil {
+                Task { @MainActor in
+                    askTaskSpaceCloseQuestion(closeTarget)
+                }
+                return
+            }
+            pendingWorkspaceClose = closeTarget
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
             guard let request = notification.object as? GettingStartedPanelRequest else { return }
@@ -532,6 +543,18 @@ struct AppWindowView: View {
                 }
             }
         )
+    }
+
+    private func askTaskSpaceCloseQuestion(_ closeTarget: PendingWorkspaceClose) {
+        let asker = TaskSpaceCloseAsker.live(sessionRuntimeStore: sessionRuntimeStore)
+        guard let answer = asker.ask(closingWorkspaceID: closeTarget.workspaceID, warning: { closeTarget.confirmationMessage }),
+              answer.choice != nil,
+              store.confirmWorkspaceClose(
+                  windowID: closeTarget.windowID,
+                  workspaceID: closeTarget.workspaceID,
+                  source: closeTarget.source
+              ) else { return }
+        asker.taskSpaceClosed(answer)
     }
 
     private func confirmWorkspaceClose(_ closeTarget: PendingWorkspaceClose) {

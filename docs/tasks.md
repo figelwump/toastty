@@ -503,11 +503,35 @@ Each step is saved as it finishes; if one stops, the task shows in Needs you
 with the reason, and **Clean Up** continues from there. `toastty task archive`
 does the same from the CLI.
 
+A task without a worktree or a pull request can also be archived when you
+close its task space; see
+[Finish without a pull request](#finish-without-a-pull-request).
+
 ## Finish without a pull request
 
 For work that has no pull request, the agent runs `toastty task
 ready-for-review`, and the task waits in Needs you. **Mark Done**, or
 `toastty task mark-done`, finishes it.
+
+A task that has no worktree and no pull request often answers in place. When
+you close its task space, Toastty asks what happens to the task:
+
+- **Mark Done** closes the task space and marks the task done.
+- **Archive** closes the task space and archives the task.
+- **Keep** closes the task space. The task stays in Needs you as "task space
+  closed".
+- **Cancel**, or Esc, closes nothing.
+
+Toastty asks when you close the task space's last pane (Close Pane or Cmd+W),
+close its last tab, close the workspace, or close its last session from the
+sidebar. When that close also needs a confirmation, for example because an
+agent still runs, the question includes the warning, so you see one dialog.
+Toastty does not ask when an agent or the terminal's shell exits, when an
+agent, the CLI, automation or the iPhone app closes the task space, after a
+merge or an archive, when the session moves into a worktree, or when Toastty
+quits. Toastty also does not ask for a task
+with a worktree or a pull request, or for a task that is already done or
+archived.
 
 ## Release
 

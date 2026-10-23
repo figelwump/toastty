@@ -166,7 +166,7 @@ enum TaskActions {
         return options
     }
 
-    private static func presentFailure(_ title: String, _ message: String) {
+    static func presentFailure(_ title: String, _ message: String) {
         WorkspaceMergeCoordinator.presentAlert(title: title, message: message)
     }
 }
