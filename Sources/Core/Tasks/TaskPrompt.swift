@@ -46,14 +46,17 @@ public enum TaskPrompt {
     /// The first message of the session that continues a moved task in its
     /// worktree. A fork has the whole conversation already, so it learns
     /// only where it is now. A fresh session, used when the agent cannot be
-    /// forked, also gets the task.
+    /// forked, never saw the first message, so it also gets the skill line
+    /// and the task.
     public static func movedToWorktree(
         record: TaskRecord,
         worktree: TaskOperation.Worktree,
         base: TaskOperation.Base?,
         forked: Bool
     ) -> String {
-        var sections = [worktreeLine(worktree, base: base)]
+        let skill = forked ? nil : record.resolved?.skill ?? record.pinned.skill
+        var sections = skill.map { [skillLine($0)] } ?? []
+        sections.append(worktreeLine(worktree, base: base))
         if forked {
             sections.append(
                 "Toastty moved this conversation here, and the previous session closes. "
@@ -64,10 +67,7 @@ public enum TaskPrompt {
                 "Toastty moved the task \"\(record.title)\" here. The conversation that shaped it "
                     + "stays in the previous session, which this agent cannot continue."
             )
-            // This session never saw the first message, so it gets the
-            // skill line too.
             sections.append(compose(
-                skill: record.resolved?.skill ?? record.pinned.skill,
                 firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path)

@@ -486,7 +486,8 @@ struct TaskStartWorkTests {
         #expect(fixture.launcher.calls.count == 2)
         #expect(fresh.forkFromSessionID == nil)
         #expect(fresh.profileID == "cursor")
-        #expect(fresh.prompt.hasSuffix("\n\nUse the repo-start skill.\n\nComposer keeps a blank line after send"))
+        #expect(fresh.prompt.hasPrefix("Use the repo-start skill.\n\nYou are in the git worktree"))
+        #expect(fresh.prompt.hasSuffix("Composer keeps a blank line after send"))
         #expect(moved.startWork?.state == .finished)
         #expect(moved.operation.worktreeSession?.forked == false)
         guard case .kept(let reason)? = moved.operation.sourceOutcome else {

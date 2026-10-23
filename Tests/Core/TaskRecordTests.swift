@@ -101,7 +101,8 @@ struct TaskRecordTests {
             resolved: TaskFields(agent: "cursor", skill: "task-start")
         )
         let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
-        #expect(fresh.hasSuffix("\n\nUse the task-start skill.\n\nFix it"))
+        #expect(fresh.hasPrefix("Use the task-start skill.\n\nYou are in the git worktree /w/fix"))
+        #expect(fresh.hasSuffix("cannot continue.\n\nFix it"))
         let forked = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: true)
         #expect(forked.contains("skill") == false)
     }
@@ -126,8 +127,8 @@ struct TaskRecordTests {
             title: "Fix it",
             slug: "fix-it",
             source: .agent(sessionID: "s1"),
-            pinned: TaskFields(agent: "codex"),
-            resolved: TaskFields(agent: "codex", model: "gpt-6.1-sol", effort: "high"),
+            pinned: TaskFields(agent: "codex", skill: "toastty-release"),
+            resolved: TaskFields(agent: "codex", model: "gpt-6.1-sol", effort: "high", skill: "task-start"),
             workspaceID: UUID(),
             projectRoot: "/repo",
             setup: .setupFailed(reason: "boom"),

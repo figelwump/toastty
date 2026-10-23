@@ -1307,7 +1307,10 @@ final class TaskCoordinator {
                 ),
                 workspaceID: workspaceID,
                 defaults: config.defaults,
-                skill: config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                // A release that comes back here keeps to its release skill.
+                skill: current.release == nil
+                    ? config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil
             )
             let firstMessage = TaskPrompt.compose(
                 skill: resolved.skill,

@@ -410,9 +410,10 @@ does, even when nothing waits to ship. It is hidden while a release of that proj
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
 menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 
-1. Toastty sends the task's agent `Use the <merge_skill> skill.`, then the
-   project's `merge_prompt` if it has one, then the pull request you accepted.
-   The default skill is `toastty-task-merge`, which Toastty ships. A busy
+1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
+   `merge_skill` is set, then `merge_prompt` if one is set, then the pull
+   request you accepted. With neither set, the skill is `toastty-task-merge`,
+   which Toastty ships. A busy
    agent gets the message once its turn ends; with no agent in the task
    space, Toastty starts the task's agent in a new tab there. The task shows "Merging…".
 2. The skill checks what you cannot see at a glance: unresolved review threads,
@@ -467,8 +468,9 @@ contains its merge commit. A project can release from Toastty when
 its To ship line makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The
-agent's first message is `Use the <release_skill> skill.`, then
-`release_prompt`, then the list of tasks waiting to ship. `toastty task release` does the
+agent's first message starts with `Use the <release_skill> skill.` when a
+release skill is set, then `release_prompt` if one is set, then the list of
+tasks waiting to ship. `toastty task release` does the
 same from the CLI, and **Release <project>…** in the command palette does it
 for an open project even when its To ship list is empty.
 
@@ -509,7 +511,8 @@ release_prompt = "Wait for my approval before any production change."  # optiona
   worktree. A forked session already has the conversation, so it gets no
   second skill line.
 - With only `merge_prompt` set, Merge sends that prompt as written, with no
-  skill line.
+  skill line. Each key is looked up on its own, so a `merge_skill` in
+  `[defaults]` also comes before a project's own `merge_prompt`.
 - Toastty does not check that the skill is installed. Name a skill the task's
   agent can load: one in `~/.toastty/skills/`, the repository's
   `.agents/skills/`, or one Toastty ships.

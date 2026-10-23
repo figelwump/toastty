@@ -373,6 +373,20 @@ struct TaskLifecycleTests {
         }
         #expect(reason.contains("origin"))
         #expect(fixture.record(release.id)?.worktree == nil)
+
+        // Placed again, the release routes like a new task but keeps to its
+        // own prompt rather than the start skill.
+        try git(["remote", "set-url", "origin", fixture.repository.remote], in: fixture.repository.project)
+        try fixture.coordinator.setWorkspace(taskID: release.id, choice: .open(fixture.workspaceID))
+        await fixture.waitUntil("setup ends") {
+            let setup = fixture.record(release.id)?.setup
+            return setup != .routing && setup != .settingUp
+        }
+        #expect(fixture.record(release.id)?.setup == .started)
+        #expect(fixture.record(release.id)?.resolved?.skill == nil)
+        let launch = try #require(fixture.launcher.calls.last)
+        #expect(launch.prompt.contains("Use toastty-release."))
+        #expect(launch.prompt.contains("Use the task-start skill.") == false)
     }
 
     @Test func onlyATagTheRemoteHasShipsATaskAndItsRelease() async throws {
