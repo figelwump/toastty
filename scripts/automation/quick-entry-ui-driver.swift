@@ -23,13 +23,16 @@
 //   pasteboard-text <text>              puts text on the general pasteboard
 //   pasteboard-png <path>               puts a PNG on the general pasteboard
 //   labels <pid> <identifier>           prints the labels of the elements with
-//                                       that identifier, in tree order, as JSON
-//   texts <pid> <identifier>            prints the static texts under the
-//                                       element, in tree order, as JSON
-//   context-menu <pid> <identifier> <label-prefix|-> [item-title]
+//                                       that identifier, or of all with *, in
+//                                       tree order, as JSON
+//   texts <pid> <identifier|*>          prints the static texts under the
+//                                       element, or in every window, as JSON
+//   context-menu <pid> <identifier|*> <label-prefix|-> [item-title|@keep]
 //                                       right-clicks the element, prints the
 //                                       open menu's item titles as JSON, then
-//                                       presses the item or closes the menu
+//                                       presses the item, leaves the menu open
+//                                       with @keep, or closes it
+//   close-menu <pid>                    closes the app's open menu
 //   dialog <pid>                        prints a dialog window's texts and
 //                                       buttons as JSON, or {}
 //   dialog-press <pid> <button-title>   presses a dialog window's button
@@ -120,6 +123,20 @@ func center(of element: AXUIElement) -> CGPoint? {
     AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin)
     AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
     return CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+}
+
+/// Waits for the app's open menu to close, so later keys reach the app,
+/// and presses Esc if it stays open.
+func waitForMenuToClose(_ app: AXUIElement) {
+    func menuIsOpen() -> Bool {
+        find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole }) != nil
+    }
+    for _ in 0..<30 where menuIsOpen() {
+        usleep(100_000)
+    }
+    if menuIsOpen() {
+        post(key: 53, flags: [])
+    }
 }
 
 func element(in app: AXUIElement, identifier wanted: String) -> AXUIElement? {
@@ -238,21 +255,28 @@ case "labels":
     guard arguments.count == 3 else { fail("labels <pid> <identifier>") }
     var labels: [String] = []
     for window in windows(of: application(arguments[1])) {
-        visit(window) { if identifier($0) == arguments[2] { labels.append(label($0)) } }
+        visit(window) { if arguments[2] == "*" || identifier($0) == arguments[2] { labels.append(label($0)) } }
     }
     let data = try JSONSerialization.data(withJSONObject: labels)
     print(String(decoding: data, as: UTF8.self))
 
 case "texts":
-    guard arguments.count == 3 else { fail("texts <pid> <identifier>") }
-    guard let found = element(in: application(arguments[1]), identifier: arguments[2]) else {
-        fail("no element \(arguments[2])")
+    guard arguments.count == 3 else { fail("texts <pid> <identifier|*>") }
+    let app = application(arguments[1])
+    let roots: [AXUIElement]
+    if arguments[2] == "*" {
+        roots = windows(of: app)
+    } else {
+        guard let found = element(in: app, identifier: arguments[2]) else { fail("no element \(arguments[2])") }
+        roots = [found]
     }
     var texts: [String] = []
-    visit(found) { element in
-        if attribute(element, kAXRoleAttribute) as? String == kAXStaticTextRole,
-           let value = attribute(element, kAXValueAttribute) as? String {
-            texts.append(value)
+    for root in roots {
+        visit(root) { element in
+            if attribute(element, kAXRoleAttribute) as? String == kAXStaticTextRole,
+               let value = attribute(element, kAXValueAttribute) as? String {
+                texts.append(value)
+            }
         }
     }
     let data = try JSONSerialization.data(withJSONObject: texts)
@@ -267,25 +291,31 @@ case "context-menu":
     var target: AXUIElement?
     for window in windows(of: app) where target == nil {
         visit(window) { element in
-            if target == nil, identifier(element) == arguments[2], label(element).hasPrefix(prefix) { target = element }
+            if target == nil, arguments[2] == "*" || identifier(element) == arguments[2], label(element).hasPrefix(prefix) {
+                target = element
+            }
         }
     }
-    guard let target, let center = center(of: target) else { fail("no element \(arguments[2]) labelled \(prefix)") }
+    guard let target else { fail("no element \(arguments[2]) labelled \(prefix)") }
     // A real right-click, as a user opens the menu; AXShowMenu on a row
-    // can open its parent's menu instead.
-    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
-    AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-    usleep(300_000)
-    for type in [CGEventType.rightMouseDown, .rightMouseUp] {
-        guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type,
-                                  mouseCursorPosition: center, mouseButton: .right) else { fail("could not make a click") }
-        event.post(tap: .cghidEventTap)
-        usleep(60_000)
-    }
+    // can open its parent's menu instead. A click while the app is still
+    // coming to the front can miss, so it is tried again.
     var menu: AXUIElement?
-    for _ in 0..<50 where menu == nil {
-        usleep(100_000)
-        menu = find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole })
+    for _ in 0..<3 where menu == nil {
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        usleep(500_000)
+        guard let center = center(of: target) else { fail("\(prefix) has no frame") }
+        for type in [CGEventType.rightMouseDown, .rightMouseUp] {
+            guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type,
+                                      mouseCursorPosition: center, mouseButton: .right) else { fail("could not make a click") }
+            event.post(tap: .cghidEventTap)
+            usleep(60_000)
+        }
+        for _ in 0..<25 where menu == nil {
+            usleep(100_000)
+            menu = find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole })
+        }
     }
     guard let menu else { fail("no context menu opened") }
     let items = children(menu).filter { attribute($0, kAXRoleAttribute) as? String == kAXMenuItemRole }
@@ -293,15 +323,28 @@ case "context-menu":
     let titles = items.map { (attribute($0, kAXTitleAttribute) as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "—" }
     let data = try JSONSerialization.data(withJSONObject: titles)
     print(String(decoding: data, as: UTF8.self))
+    if arguments.count == 5, arguments[4] == "@keep" {
+        break
+    }
     if arguments.count == 5 {
         guard let item = items.first(where: { attribute($0, kAXTitleAttribute) as? String == arguments[4] }) else {
-            post(key: 53, flags: [])
+            AXUIElementPerformAction(menu, kAXCancelAction as CFString)
             fail("no menu item \(arguments[4])")
         }
         AXUIElementPerformAction(item, kAXPressAction as CFString)
     } else {
-        post(key: 53, flags: [])
+        AXUIElementPerformAction(menu, kAXCancelAction as CFString)
     }
+    // Wait for the menu to close, so later keys reach the app.
+    waitForMenuToClose(app)
+
+case "close-menu":
+    guard arguments.count == 2 else { fail("close-menu <pid>") }
+    let app = application(arguments[1])
+    if let menu = find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole }) {
+        AXUIElementPerformAction(menu, kAXCancelAction as CFString)
+    }
+    waitForMenuToClose(app)
 
 case "dialog", "dialog-press":
     guard arguments.count == (arguments[0] == "dialog" ? 2 : 3) else { fail("dialog <pid> | dialog-press <pid> <button-title>") }
