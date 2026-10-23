@@ -33,6 +33,8 @@
 //                                       presses the item, leaves the menu open
 //                                       with @keep, or closes it
 //   close-menu <pid>                    closes the app's open menu
+//   menu-frames <pid>                   prints the open menu's frame and its
+//                                       items' titles and frames as JSON
 //   dialog <pid>                        prints a dialog window's texts and
 //                                       buttons as JSON, or {}
 //   dialog-press <pid> <button-title>   presses a dialog window's button
@@ -337,6 +339,26 @@ case "context-menu":
     }
     // Wait for the menu to close, so later keys reach the app.
     waitForMenuToClose(app)
+
+case "menu-frames":
+    guard arguments.count == 2 else { fail("menu-frames <pid>") }
+    let app = application(arguments[1])
+    guard let menu = find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole }) else {
+        fail("no open menu")
+    }
+    func frame(_ element: AXUIElement) -> [Double] {
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        if let position = attribute(element, kAXPositionAttribute) { AXValueGetValue(position as! AXValue, .cgPoint, &origin) }
+        if let extent = attribute(element, kAXSizeAttribute) { AXValueGetValue(extent as! AXValue, .cgSize, &size) }
+        return [origin.x, origin.y, size.width, size.height].map(Double.init)
+    }
+    let items = children(menu).filter { attribute($0, kAXRoleAttribute) as? String == kAXMenuItemRole }.map { item -> [String: Any] in
+        ["title": attribute(item, kAXTitleAttribute) as? String ?? "", "frame": frame(item),
+         "enabled": (attribute(item, kAXEnabledAttribute) as? Bool) ?? true]
+    }
+    let data = try JSONSerialization.data(withJSONObject: ["frame": frame(menu), "items": items])
+    print(String(decoding: data, as: UTF8.self))
 
 case "close-menu":
     guard arguments.count == 2 else { fail("close-menu <pid>") }

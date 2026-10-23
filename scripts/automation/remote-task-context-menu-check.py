@@ -132,6 +132,11 @@ def main():
         arguments = ['context-menu', pid, identifier, label, press or '@keep']
         items = json.loads(run_driver(*arguments).stdout)
         if press is None:
+            # The app draws an open menu's window blank in its own capture,
+            # so its items' frames are kept to draw them over it.
+            frames = run_driver('menu-frames', pid, check=False)
+            if frames.returncode == 0:
+                evidence.setdefault('menuFrames', {})[name] = json.loads(frames.stdout)
             capture(f'menu-{name}')
             run_driver('close-menu', pid)
         # The open menu can end with an untitled item of its own.
