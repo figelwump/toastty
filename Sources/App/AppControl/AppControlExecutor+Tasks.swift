@@ -395,7 +395,8 @@ extension AppControlExecutor {
             prompt: args.taskString("prompt"),
             startWork: try args.taskBool("startWork") ?? false,
             base: args.taskString("base"),
-            branchPrefix: args.taskString("branchPrefix")
+            branchPrefix: args.taskString("branchPrefix"),
+            fork: try args.taskBool("fork") ?? false
         )
     }
 
@@ -640,6 +641,13 @@ extension AppControlExecutor {
         }
         if let startWork = record.startWork {
             snapshot["worktree"] = .object(worktreeSnapshot(record, startWork: startWork))
+        }
+        if let forkSource = record.forkSource {
+            snapshot["fork"] = .object([
+                "sourceSessionID": .string(forkSource.sessionID),
+                "sourceConversationID": optional(forkSource.conversationID),
+                "conversationConfirmed": .bool(record.operation.agentLaunch?.forkConversationID != nil),
+            ])
         }
         return snapshot
     }

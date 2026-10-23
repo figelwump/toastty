@@ -640,6 +640,253 @@ struct TaskStartWorkTests {
         }
     }
 
+    // MARK: - Forked tasks
+
+    @Test func forkedTasksWaitForTheCallersTurnAndForkItsConversationIntoTheirTaskSpaces() async throws {
+        let fixture = try Fixture()
+        fixture.config.defaults.startSkill = "task-start"
+        let remoteTip = try fixture.repository.pushToRemote("upstream")
+        let coordinatorTask = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Plan the parser work", workspaceID: fixture.workspaceID, agent: "claude", model: "opus", effort: "xhigh"
+        ))
+        await fixture.waitUntil("setup ends") { fixture.record(coordinatorTask.id)?.setup == .started }
+        let parent = try #require(fixture.record(coordinatorTask.id))
+        let source = try #require(parent.operation.agentLaunch?.sessionID)
+        let sourcePanel = try #require(parent.operation.taskSpace?.panelID)
+        let caller = try fixture.caller(of: parent)
+
+        // Two forks asked for in one turn: one in its own worktree, one in
+        // the project directory with its own model.
+        let inWorktree = try await fixture.coordinator.create(
+            TaskCreateRequest(text: "Split the parser", prompt: "Brief for the parser.", startWork: true, branchPrefix: "feat", fork: true),
+            caller: caller
+        )
+        let inProject = try await fixture.coordinator.create(
+            TaskCreateRequest(text: "Split the lexer", agent: "claude", model: "sonnet", fork: true),
+            caller: caller
+        )
+        #expect(inWorktree.setup == .settingUp)
+        #expect(inWorktree.parentTaskID == parent.id)
+        #expect(inWorktree.forkSource == TaskStartWork.Source(
+            sessionID: source, panelID: sourcePanel, agent: "claude", conversationID: "conversation-\(source)"
+        ))
+        // The fork keeps the caller's task's model and effort unless the
+        // request sets them.
+        #expect(inWorktree.resolved?.agent == "claude")
+        #expect(inWorktree.resolved?.model == "opus")
+        #expect(inWorktree.resolved?.effort == "xhigh")
+        #expect(inProject.resolved?.model == "sonnet")
+        #expect(inProject.resolved?.effort == "xhigh")
+
+        // Both wait for the caller's turn to end before they copy it.
+        await fixture.waitUntil("both task spaces exist") {
+            fixture.record(inWorktree.id)?.taskSpaceWorkspaceID != nil && fixture.record(inProject.id)?.taskSpaceWorkspaceID != nil
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.launcher.calls.count == 1)
+        fixture.sessions.endTurn(source)
+        await fixture.waitUntil("both forks launch") { fixture.launcher.calls.count == 3 }
+
+        let worktreeTask = try #require(fixture.record(inWorktree.id))
+        let projectTask = try #require(fixture.record(inProject.id))
+        let worktree = try #require(worktreeTask.worktree)
+        let worktreeSpace = try #require(worktreeTask.operation.taskSpace)
+        let projectSpace = try #require(projectTask.operation.taskSpace)
+        let worktreeFork = try #require(fixture.launcher.calls.first { $0.workspaceID == worktreeSpace.workspaceID })
+        let projectFork = try #require(fixture.launcher.calls.first { $0.workspaceID == projectSpace.workspaceID })
+        for fork in [worktreeFork, projectFork] {
+            #expect(fork.profileID == "claude")
+            #expect(fork.forkFromSessionID == source)
+            #expect(fork.panelID != sourcePanel)
+        }
+        #expect(worktreeFork.panelID == worktreeSpace.panelID)
+        #expect(worktreeFork.cwd == worktree.path)
+        #expect(worktreeFork.model == "opus")
+        #expect(projectFork.cwd == fixture.repository.project)
+        #expect(projectFork.model == "sonnet")
+        #expect(worktreeFork.prompt == """
+            Use the task-start skill.
+
+            You are now the agent of the task "Split the parser" (task ID \(inWorktree.id.uuidString)), in its task space \
+            split-the-parser (workspace \(worktreeSpace.workspaceID.uuidString)). Toastty started you as a fork of the \
+            conversation above. The session that had that conversation keeps running and keeps its other work.
+
+            You are in the git worktree \(worktree.path), on branch feat/split-the-parser, which starts at origin/main \
+            (\(remoteTip.prefix(12))).
+
+            You own only this task. The conversation above can plan other tasks and other work: do not do them, and do \
+            not act for the session that created this task. Report progress, questions and results to the task that \
+            created this one with `toastty task send \(parent.id.uuidString) "<message>"`.
+
+            Brief for the parser.
+
+            The task, as written:
+
+            Split the parser
+            """)
+        #expect(projectFork.prompt.contains("You are in the git worktree") == false)
+        #expect(projectFork.prompt.hasSuffix("`toastty task send \(parent.id.uuidString) \"<message>\"`.\n\nSplit the lexer"))
+
+        // Setup ends only once each fork reports its own conversation.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.record(inWorktree.id)?.setup == .settingUp)
+        #expect(AppControlExecutor.taskSnapshot(worktreeTask)["fork"] == .object([
+            "sourceSessionID": .string(source),
+            "sourceConversationID": .string("conversation-\(source)"),
+            "conversationConfirmed": .bool(false),
+        ]))
+        for task in [worktreeTask, projectTask] {
+            fixture.sessions.confirm(try #require(task.operation.agentLaunch?.sessionID))
+        }
+        await fixture.waitUntil("both tasks start") {
+            fixture.record(inWorktree.id)?.setup == .started && fixture.record(inProject.id)?.setup == .started
+        }
+        let started = try #require(fixture.record(inWorktree.id))
+        #expect(started.startWork?.state == .finished)
+        let launched = try #require(started.operation.agentLaunch)
+        #expect(launched.forkConversationID == "conversation-\(launched.sessionID)")
+        #expect(started.currentSessionID == launched.sessionID)
+
+        // The caller keeps running, untouched.
+        #expect(fixture.sessions.sessions[source]?.isActive == true)
+        #expect(fixture.sessions.closedPanels.isEmpty)
+        #expect(fixture.sessions.delivered.isEmpty)
+        #expect(fixture.launcher.calls.count == 3)
+    }
+
+    @Test func aForkFromATopLevelSessionReportsToThatSessionAndSkipsDefaults() async throws {
+        let fixture = try Fixture()
+        fixture.config.defaults = TasksConfig.Defaults(agent: "codex", model: "default-model", effort: "low")
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourcePanel = try #require(workspace.focusedPanelID)
+        fixture.sessions.sessions["shaping"] = TaskSessionInfo(
+            sessionID: "shaping", agent: .codex, panelID: sourcePanel, workspaceID: fixture.workspaceID,
+            cwd: fixture.repository.project, isActive: true, isInTurn: false, nativeConversationID: "conversation-shaping"
+        )
+
+        let created = try await fixture.coordinator.create(
+            TaskCreateRequest(text: "Fix the composer", fork: true),
+            caller: TaskCaller(sessionID: "shaping", workspaceID: fixture.workspaceID)
+        )
+        #expect(created.parentTaskID == nil)
+        #expect(created.workspaceID == fixture.workspaceID)
+        #expect(created.resolved == TaskFields(workspaceID: fixture.workspaceID, agent: "codex"))
+
+        // The caller is idle, so the fork launches at once.
+        await fixture.waitUntil("the fork launches") { fixture.launcher.calls.count == 1 }
+        let fork = try #require(fixture.launcher.calls.first)
+        #expect(fork.forkFromSessionID == "shaping")
+        #expect(fork.cwd == fixture.repository.project)
+        #expect(fork.model == nil)
+        #expect(fork.prompt.contains(
+            "`toastty action run terminal.send-text --panel \(sourcePanel.uuidString) expectedSessionID=shaping submit=true text=\"<message>\"`. "
+                + "If that session's ID changed, find the panel's current session with "
+                + "`toastty query run workspace.snapshot --workspace \(fixture.workspaceID.uuidString)`."
+        ))
+        fixture.sessions.confirm("launched-1")
+        await fixture.waitUntil("the task starts") { fixture.record(created.id)?.setup == .started }
+        #expect(fixture.sessions.closedPanels.isEmpty)
+    }
+
+    @Test func forkRefusesCallersAndAgentsItCannotUse() async throws {
+        let fixture = try Fixture()
+        func refusal(_ request: TaskCreateRequest, caller: TaskCaller) async -> String? {
+            do {
+                _ = try await fixture.coordinator.create(request, caller: caller)
+                return nil
+            } catch {
+                return (error as? TaskError)?.message
+            }
+        }
+        let fork = TaskCreateRequest(text: "Split it", workspaceID: fixture.workspaceID, fork: true)
+        #expect(await refusal(fork, caller: .unmanaged)
+            == "--fork copies the conversation of the agent session that runs it, so it runs only from a Toastty-managed Claude Code or Codex session.")
+
+        let cursorTask = try await fixture.startedTask(agent: "cursor")
+        let cursorRefusal = await refusal(fork, caller: try fixture.caller(of: cursorTask))
+        #expect(cursorRefusal?.hasSuffix("sessions cannot be forked. --fork runs only from Claude Code and Codex sessions.") == true)
+
+        let claudeTask = try await fixture.startedTask()
+        var otherAgent = fork
+        otherAgent.agent = "codex"
+        #expect(await refusal(otherAgent, caller: try fixture.caller(of: claudeTask))
+            == "A fork uses the calling session's agent, claude. Leave out --agent, or name claude.")
+        #expect(fixture.coordinator.records.records.count == 2)
+    }
+
+    @Test func anUnconfirmedForkFailsSetupAndRetryContinuesFromTheLaunchedFork() async throws {
+        let fixture = try Fixture()
+        let parent = try await fixture.startedTask(agent: "codex")
+        let source = try #require(parent.operation.agentLaunch?.sessionID)
+        fixture.sessions.endTurn(source)
+        let caller = try fixture.caller(of: parent)
+        func waitForSetup(_ id: UUID) async {
+            await fixture.waitUntil("setup ends") { fixture.record(id)?.setup != .settingUp }
+        }
+
+        // A fork that never reports its conversation fails setup, and the
+        // caller stays as it was.
+        let slow = try await fixture.coordinator.create(TaskCreateRequest(text: "Slow fork", fork: true), caller: caller)
+        await waitForSetup(slow.id)
+        guard case .setupFailed(let reason)? = fixture.record(slow.id)?.setup else {
+            Issue.record("Setup must fail without a confirmed fork")
+            return
+        }
+        #expect(reason.hasPrefix("Toastty did not see the forked conversation start within"))
+        #expect(reason.hasSuffix("The session that created the task is unchanged; check the task space's terminal, then retry."))
+        #expect(fixture.record(slow.id)?.operation.agentLaunch?.sessionID == "launched-2")
+        #expect(fixture.sessions.closedPanels.isEmpty)
+
+        // It was only slow: Retry launches nothing new and finishes once its
+        // conversation appears.
+        try fixture.coordinator.retry(taskID: slow.id)
+        fixture.sessions.confirm("launched-2")
+        await waitForSetup(slow.id)
+        #expect(fixture.record(slow.id)?.setup == .started)
+        #expect(fixture.launcher.calls.count == 2)
+
+        // A fork that exited is launched again in the same task space.
+        let exited = try await fixture.coordinator.create(TaskCreateRequest(text: "Exited fork", fork: true), caller: caller)
+        await fixture.waitUntil("the fork launches") { fixture.launcher.calls.count == 3 }
+        fixture.sessions.stop("launched-3")
+        await waitForSetup(exited.id)
+        #expect(fixture.record(exited.id)?.setup == .setupFailed(
+            reason: "The forked agent exited before its conversation started. The session that created the task is unchanged; retry to try again."
+        ))
+        let taskSpace = try #require(fixture.record(exited.id)?.operation.taskSpace)
+        try fixture.coordinator.retry(taskID: exited.id)
+        await fixture.waitUntil("the fork launches again") { fixture.launcher.calls.count == 4 }
+        let relaunch = try #require(fixture.launcher.calls.last)
+        #expect(relaunch.forkFromSessionID == source)
+        #expect(relaunch.workspaceID == taskSpace.workspaceID)
+        #expect(relaunch.panelID == taskSpace.panelID)
+        fixture.sessions.confirm("launched-4")
+        await waitForSetup(exited.id)
+        #expect(fixture.record(exited.id)?.setup == .started)
+        #expect(fixture.record(exited.id)?.operation.taskSpace == taskSpace)
+
+        // After a relaunch, a fork can run restored under a new ID before
+        // Toastty saved its launch: Retry waits for it instead of launching
+        // a second fork into its terminal.
+        let restored = try await fixture.coordinator.create(TaskCreateRequest(text: "Restored fork", fork: true), caller: caller)
+        await fixture.waitUntil("the fork launches") { fixture.launcher.calls.count == 5 }
+        await waitForSetup(restored.id)
+        let restoredSpace = try #require(fixture.record(restored.id)?.operation.taskSpace)
+        var restoredSession = try #require(fixture.sessions.sessions["launched-5"])
+        restoredSession.sessionID = "restored-fork"
+        fixture.sessions.stop("launched-5")
+        fixture.sessions.sessions["restored-fork"] = restoredSession
+        try fixture.coordinator.records.save(id: restored.id) { $0.operation.agentLaunch = nil }
+        try fixture.coordinator.retry(taskID: restored.id)
+        fixture.sessions.confirm("restored-fork")
+        await waitForSetup(restored.id)
+        #expect(fixture.record(restored.id)?.setup == .started)
+        #expect(fixture.record(restored.id)?.operation.agentLaunch?.sessionID == "restored-fork")
+        #expect(fixture.record(restored.id)?.operation.taskSpace == restoredSpace)
+        #expect(fixture.launcher.calls.count == 5)
+        #expect(fixture.sessions.closedPanels.isEmpty)
+    }
+
     // MARK: - With triage
 
     @Test func aTaskWhoseWorktreeWasMadeCannotMoveToAnotherProject() async throws {
@@ -745,9 +992,24 @@ struct TaskStartWorkTests {
         confirmed.operation.worktreeSession = .init(workspaceID: UUID(), panelID: UUID(), sessionID: "t", forked: true, nativeConversationID: "c")
         try records.insert(unconfirmed)
         try records.insert(confirmed)
+        // A forked task's setup counts as started only once its fork
+        // reported a conversation of its own.
+        let forkSource = TaskStartWork.Source(sessionID: "creator", panelID: UUID(), agent: "claude")
+        var unconfirmedFork = TaskRecord(createdAt: Date(), text: "c", title: "c", slug: "c", source: .agent(sessionID: "creator"))
+        unconfirmedFork.forkSource = forkSource
+        unconfirmedFork.operation.agentLaunch = .init(sessionID: "u", at: Date())
+        var confirmedFork = TaskRecord(createdAt: Date(), text: "d", title: "d", slug: "d", source: .agent(sessionID: "creator"))
+        confirmedFork.forkSource = forkSource
+        confirmedFork.operation.agentLaunch = .init(sessionID: "v", at: Date(), forkConversationID: "fork")
+        try records.insert(unconfirmedFork)
+        try records.insert(confirmedFork)
 
         let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
         relaunched.reconcileAfterLaunch()
+
+        #expect(relaunched.records.record(id: unconfirmedFork.id)?.setup ==
+            .setupFailed(reason: "Toastty quit before setup finished. Retry to continue."))
+        #expect(relaunched.records.record(id: confirmedFork.id)?.setup == .started)
 
         #expect(relaunched.records.record(id: unconfirmed.id)?.startWork?.state ==
             .failed(reason: "Toastty quit before the move into the worktree finished. Retry to continue."))

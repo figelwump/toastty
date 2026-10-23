@@ -70,6 +70,19 @@ struct ToasttyCLITaskTests {
         #expect(args["startWork"] == .bool(true))
         #expect(args["base"] == .string("main"))
         #expect(args["branchPrefix"] == .string("feat"))
+        #expect(args["fork"] == nil)
+
+        let fork = try ToasttyCLI.parse(arguments: ["task", "create", "x", "--fork", "--start-work"], environment: [:])
+        guard case .appControlRun(_, "task.create", let forkArgs) = fork.command else {
+            Issue.record("expected task.create")
+            return
+        }
+        #expect(forkArgs["fork"] == .bool(true))
+        #expect(forkArgs["startWork"] == .bool(true))
+        // The fork starts after the caller's turn, which --wait would hold.
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "create", "x", "--fork", "--wait"], environment: [:])
+        }
 
         #expect(throws: ToasttyCLIError.self) {
             try ToasttyCLI.parse(arguments: ["task", "create", "x", "--base", "main"], environment: [:])

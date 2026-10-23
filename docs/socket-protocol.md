@@ -347,8 +347,13 @@ Notable action-specific behavior:
 - `task.create`
   - takes `text`, repeatable absolute `files`, and optional `clientRequestID`,
     `title`, `slug`, `workspace` (UUID), `agent`, `model`, `effort`, `prompt`,
-    and `startWork` (boolean) with `base` and `branchPrefix`. It takes no
-    selectors.
+    `startWork` (boolean) with `base` and `branchPrefix`, and `fork`
+    (boolean). It takes no selectors.
+  - `fork: true` runs only from a managed Claude Code or Codex session. The
+    task's agent starts as a fork of that session's conversation after its
+    current turn ends; the caller keeps running. It uses the caller's agent,
+    and `model` and `effort` default to the caller's task's. `[defaults]` and
+    triage do not apply. `task.get` reports it under `fork`.
   - returns the task object (see `task.get`) as soon as the record is saved;
     setup continues after the response. A repeated `clientRequestID` from the
     same caller (the same managed session, or no session) returns the first
@@ -710,7 +715,9 @@ worktree request also has `worktree`: `state` (`running`, `failed` with
 `baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
 session that continues in the worktree, `conversationConfirmed`,
 `sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with
-`sourceKeptReason`). `task.get` also has `agentState` (`state`: `notRunning`,
+`sourceKeptReason`). A task created with `fork` has `fork`:
+`sourceSessionID`, `sourceConversationID`, and `conversationConfirmed`, which is
+`true` once the fork reported a conversation of its own. `task.get` also has `agentState` (`state`: `notRunning`,
 `busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`, and
 `changedAt`, when the status last changed) and `lastReply` (`text`, cut at
 16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the

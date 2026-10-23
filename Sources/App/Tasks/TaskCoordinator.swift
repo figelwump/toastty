@@ -135,6 +135,9 @@ struct TaskCreateRequest: Equatable {
     var base: String?
     /// For `startWork`: the first part of the branch name.
     var branchPrefix: String?
+    /// Start the agent as a fork of the calling session's conversation,
+    /// after that session's turn ends.
+    var fork = false
 }
 
 /// Who sent a `task.create`, captured before any asynchronous step.
@@ -313,6 +316,7 @@ final class TaskCoordinator {
             throw TaskError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
         }
         let sources = try request.files.map(attachableFile)
+        let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
 
         let workspaceID = try resolvedWorkspaceID(request.workspaceID, caller: caller)
         let projectRoot = try workspaceID.map(resolvedProjectRoot)
@@ -339,7 +343,7 @@ final class TaskCoordinator {
 
         // Triage runs only for what the caller left out. Without triage,
         // `[defaults]` fills the agent, and a task with no workspace waits
-        // for the user to pick one.
+        // for the user to pick one. A fork uses neither.
         let setup: TaskSetupState
         var resolved: TaskFields?
         let missing = TaskTriage.missingFields(
@@ -347,14 +351,28 @@ final class TaskCoordinator {
             workspaceID: workspaceID,
             pinnedAgent: pinnedProfile.map(Self.triageAgent)
         )
-        if missing.isEmpty == false, isTriageEnabled(config) {
+        let parentTaskID = caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID }
+        let startSkill = projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+        if let forkSource {
+            guard let workspaceID else {
+                throw TaskError("--fork needs the calling session's workspace, and it has closed.")
+            }
+            resolved = try forkFields(
+                pinned: pinned,
+                agent: forkSource.agent.rawValue,
+                workspaceID: workspaceID,
+                parentTask: parentTaskID.flatMap { records.record(id: $0) },
+                skill: startSkill
+            )
+            setup = .settingUp
+        } else if missing.isEmpty == false, isTriageEnabled(config) {
             setup = .routing
         } else if let workspaceID {
             resolved = try resolvedFields(
                 pinned: pinned,
                 workspaceID: workspaceID,
                 defaults: config.defaults,
-                skill: projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+                skill: startSkill
             )
             setup = .settingUp
         } else {
@@ -401,22 +419,8 @@ final class TaskCoordinator {
             copies.append((resolvedPath, destination))
             attachments.append(TaskAttachment(path: destination, displayName: originalName))
         }
-        // The launcher refuses a first message it cannot pass, and every
-        // retry would fail the same way, so the request fails now.
-        let firstMessage = TaskPrompt.compose(
-            skill: resolved?.skill,
-            firstPrompt: prompt,
-            text: text,
-            attachmentPaths: attachments.map(\.path)
-        )
-        guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
-            throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
-        }
-        guard firstMessage.contains("\u{0}") == false else {
-            throw TaskError("The task or prompt contains a NUL character.")
-        }
 
-        let record = TaskRecord(
+        var record = TaskRecord(
             id: taskID,
             clientRequestID: clientRequestID,
             createdAt: now(),
@@ -431,13 +435,43 @@ final class TaskCoordinator {
             workspaceID: workspaceID,
             projectRoot: projectRoot?.path,
             setup: setup,
-            parentTaskID: caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID },
+            parentTaskID: parentTaskID,
             startWork: startWork
         )
-        var prepared = record
-        prepared.creatorScope = caller.sessionID.flatMap { sessions?.scope(sessionID: $0) }
+        record.creatorScope = caller.sessionID.flatMap { sessions?.scope(sessionID: $0) }
+        record.forkSource = forkSource.map {
+            TaskStartWork.Source(
+                sessionID: $0.sessionID,
+                panelID: $0.panelID,
+                agent: $0.agent.rawValue,
+                conversationID: $0.nativeConversationID
+            )
+        }
+        // The launcher refuses a first message it cannot pass, and every
+        // retry would fail the same way, so the request fails now. A fork's
+        // message names its task space, which setup makes later.
+        let firstMessage = record.forkSource == nil
+            ? TaskPrompt.compose(
+                skill: resolved?.skill,
+                firstPrompt: prompt,
+                text: text,
+                attachmentPaths: attachments.map(\.path)
+            )
+            : TaskPrompt.forkedTask(
+                record: record,
+                taskSpaceWorkspaceID: UUID(),
+                sourceWorkspaceID: forkSource?.workspaceID,
+                worktree: nil,
+                base: nil
+            )
+        guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
+            throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
+        }
+        guard firstMessage.contains("\u{0}") == false else {
+            throw TaskError("The task or prompt contains a NUL character.")
+        }
         return TaskCreatePreparation(
-            record: prepared,
+            record: record,
             copies: copies,
             saveRootDirectory: projectRoot?.isNew == true,
             existing: nil
@@ -829,7 +863,8 @@ final class TaskCoordinator {
             startRouting(taskID: record.id)
         }
         for record in records.records where record.setup == .settingUp && setupAttempts[record.id] == nil {
-            if record.operation.agentLaunch != nil {
+            // A fork counts once it reported a conversation of its own.
+            if let launch = record.operation.agentLaunch, record.forkSource == nil || launch.forkConversationID != nil {
                 saveOrDefer(taskID: record.id) {
                     $0.setup = .started
                     if $0.startWork != nil { $0.startWork?.state = .finished }
@@ -964,7 +999,8 @@ final class TaskCoordinator {
         // and if an agent already runs there, the task has started.
         let taskSpace: TaskOperation.TaskSpace
         if let existing = record.operation.taskSpace, store.state.workspacesByID[existing.workspaceID] != nil {
-            if record.operation.agentLaunch != nil || hasActiveSession(existing.workspaceID) {
+            // A fork that an earlier attempt launched is checked in step 2.
+            if record.forkSource == nil, record.operation.agentLaunch != nil || hasActiveSession(existing.workspaceID) {
                 finishStarted(taskID: taskID, attempt: attempt)
                 return
             }
@@ -1011,6 +1047,18 @@ final class TaskCoordinator {
         // 2. The agent.
         guard let launcher else {
             setupFailed(taskID: taskID, attempt: attempt, reason: "The agent launcher is not available.")
+            return
+        }
+        if record.forkSource != nil {
+            guard await launchFork(
+                taskID: taskID,
+                attempt: attempt,
+                taskSpace: taskSpace,
+                directory: directory,
+                worktree: worktree,
+                launcher: launcher
+            ) else { return }
+            finishStarted(taskID: taskID, attempt: attempt)
             return
         }
         let base = records.record(id: taskID)?.operation.base
@@ -1560,7 +1608,7 @@ final class TaskCoordinator {
         return profile
     }
 
-    private func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
+    func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
         let profiles = launcher?.launchProfileSummaries() ?? []
         guard let profile = profiles.first(where: { $0.profileID == agent }) else {
             let available = profiles.map(\.profileID).joined(separator: ", ")
@@ -1574,7 +1622,7 @@ final class TaskCoordinator {
 
     /// `profile` is `nil` when triage will choose the agent; then only the
     /// value's form is checked.
-    private func checkModel(_ model: String, profile: AgentLaunchProfileSummary?) throws {
+    func checkModel(_ model: String, profile: AgentLaunchProfileSummary?) throws {
         if let profile, profile.supportsModel == false {
             throw TaskError("Agent \(profile.profileID) does not accept a model.")
         }
@@ -1583,7 +1631,7 @@ final class TaskCoordinator {
         }
     }
 
-    private func checkEffort(_ effort: String, profile: AgentLaunchProfileSummary?) throws {
+    func checkEffort(_ effort: String, profile: AgentLaunchProfileSummary?) throws {
         if let profile, profile.supportsReasoningEffort == false {
             throw TaskError("Agent \(profile.profileID) does not accept an effort.")
         }

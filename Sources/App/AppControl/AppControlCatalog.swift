@@ -497,7 +497,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. A task with no workspace waits in the Inbox until one is picked with task.set-workspace. Optional: when [triage] in tasks.toml has a command, it first chooses the workspace, agent, model, effort and first prompt the request leaves out. A repeated clientRequestID from the same caller returns the first task.",
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. With fork=true, from a Claude Code or Codex session, the agent starts as a fork of the caller's conversation once the caller's turn ends; the caller keeps running. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. A task with no workspace waits in the Inbox until one is picked with task.set-workspace. Optional: when [triage] in tasks.toml has a command, it first chooses the workspace, agent, model, effort and first prompt the request leaves out. A repeated clientRequestID from the same caller returns the first task.",
                 selectors: [],
                 parameters: [
                     .taskText(required: false),
@@ -513,6 +513,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskStartWork(required: false),
                     .taskBase(required: false),
                     .taskBranchPrefix(required: false),
+                    .taskFork(required: false),
                 ]
             )
         case .taskStartWork:
@@ -1034,6 +1035,10 @@ private extension AppControlParameterDescriptor {
 
     static func taskBranchPrefix(required: Bool) -> Self {
         .init(name: "branchPrefix", summary: "First part of the worktree's branch name, before /<slug>. Defaults to the workspace's branch_prefix in tasks.toml, else task.", valueType: .string, required: required)
+    }
+
+    static func taskFork(required: Bool) -> Self {
+        .init(name: "fork", summary: "true starts the agent as a fork of the calling Claude Code or Codex session's conversation, after the caller's current turn ends. It uses the caller's agent; model and effort default to the caller's task's. The caller keeps running.", valueType: .boolean, required: required)
     }
 
     static func taskMessage(required: Bool) -> Self {

@@ -76,6 +76,60 @@ public enum TaskPrompt {
         return sections.joined(separator: "\n\n")
     }
 
+    /// The first message of a task's agent that starts as a fork of the
+    /// conversation of the session that created the task. That conversation
+    /// can plan other tasks and other work, so the message first says which
+    /// task the fork owns, where it works, and how it reports back; then it
+    /// gives the first prompt, the task text and the files, as `compose`
+    /// does. `sourceWorkspaceID` is the creating session's workspace, where
+    /// the fork finds that session again if its ID changed.
+    public static func forkedTask(
+        record: TaskRecord,
+        taskSpaceWorkspaceID: UUID,
+        sourceWorkspaceID: UUID?,
+        worktree: TaskOperation.Worktree?,
+        base: TaskOperation.Base?
+    ) -> String {
+        let skill = record.resolved?.skill ?? record.pinned.skill
+        var sections = skill.map { [skillLine($0)] } ?? []
+        sections.append(
+            "You are now the agent of the task \"\(record.title)\" (task ID \(record.id.uuidString)), "
+                + "in its task space \(record.slug) (workspace \(taskSpaceWorkspaceID.uuidString)). "
+                + "Toastty started you as a fork of the conversation above. The session that had that "
+                + "conversation keeps running and keeps its other work."
+        )
+        if let worktree {
+            sections.append(worktreeLine(worktree, base: base))
+        }
+        sections.append(
+            "You own only this task. The conversation above can plan other tasks and other work: "
+                + "do not do them, and do not act for the session that created this task. "
+                + forkReportLine(record, sourceWorkspaceID: sourceWorkspaceID)
+        )
+        sections.append(compose(
+            firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path)
+        ))
+        return sections.joined(separator: "\n\n")
+    }
+
+    private static func forkReportLine(_ record: TaskRecord, sourceWorkspaceID: UUID?) -> String {
+        if let parentTaskID = record.parentTaskID {
+            return "Report progress, questions and results to the task that created this one with "
+                + "`toastty task send \(parentTaskID.uuidString) \"<message>\"`."
+        }
+        guard let source = record.forkSource else { return "" }
+        var line = "Report progress, questions and results to the session that created this task with "
+            + "`toastty action run terminal.send-text --panel \(source.panelID.uuidString) "
+            + "expectedSessionID=\(source.sessionID) submit=true text=\"<message>\"`."
+        if let sourceWorkspaceID {
+            line += " If that session's ID changed, find the panel's current session with "
+                + "`toastty query run workspace.snapshot --workspace \(sourceWorkspaceID.uuidString)`."
+        }
+        return line
+    }
+
     /// What Merge sends the task's agent: the skill line, then
     /// `merge_prompt`, then the pull request the user accepted. With
     /// neither set, the skill is `toastty-task-merge`. A `merge_prompt`

@@ -50,6 +50,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var parentTaskID: UUID?
     /// Set when the work moves, or starts, in its own git worktree.
     public var startWork: TaskStartWork?
+    /// Set when the task's agent starts as a fork of the conversation of the
+    /// session that created the task (`task create --fork`). That session
+    /// keeps running.
+    public var forkSource: TaskStartWork.Source?
     /// The steps setup and start-work finished, saved as each one happens.
     public var operation: TaskOperation
     /// This task's requests to be told when other tasks reach a condition.
@@ -215,8 +219,9 @@ public struct TaskRelease: Codable, Equatable, Sendable {
 /// there, and closes the old one. `task.create --start-work` makes the
 /// worktree during setup, and the task's agent starts there fresh.
 public struct TaskStartWork: Codable, Equatable, Sendable {
-    /// The session whose conversation moves into the worktree. `nil` when
-    /// the task's agent starts fresh there.
+    /// The session whose conversation moves into the worktree, or that a
+    /// new task's agent forks. `nil` when the task's agent starts fresh in
+    /// the worktree.
     public struct Source: Codable, Equatable, Sendable {
         /// Updated when Toastty restores the session under a new ID after
         /// a relaunch.
@@ -527,10 +532,15 @@ public struct TaskOperation: Codable, Equatable, Sendable {
     public struct AgentLaunch: Codable, Equatable, Sendable {
         public var sessionID: String
         public var at: Date
+        /// For an agent that forks its creator's conversation: the fork's
+        /// own conversation, once the provider reported it. Its presence
+        /// confirms the fork.
+        public var forkConversationID: String?
 
-        public init(sessionID: String, at: Date) {
+        public init(sessionID: String, at: Date, forkConversationID: String? = nil) {
             self.sessionID = sessionID
             self.at = at
+            self.forkConversationID = forkConversationID
         }
     }
 

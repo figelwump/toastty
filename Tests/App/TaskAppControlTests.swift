@@ -106,6 +106,13 @@ struct TaskAppControlTests {
                 context: context()
             )
         }
+        await expectInvalidPayload("--fork copies the conversation of the agent session that runs it, so it runs only from a Toastty-managed Claude Code or Codex session.") {
+            _ = try await executor.runActionAsync(
+                id: "task.create",
+                args: ["text": .string("x"), "workspace": .string(fixture.workspaceID.uuidString), "fork": .bool(true)],
+                context: context()
+            )
+        }
         await expectInvalidPayload("task start-work runs from the agent session whose work moves into the worktree.") {
             _ = try executor.runAction(id: "task.start-work", args: [:], context: context())
         }

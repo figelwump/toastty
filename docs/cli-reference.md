@@ -865,7 +865,7 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 `~/.toastty/tasks.toml`.
 
 ```
-toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
+toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
@@ -891,7 +891,11 @@ the agent has started (exit 0), or setup failed, the task waits for a
 workspace, or the wait timed out (exit 1). Relative `--file` and
 `--prompt-file` paths resolve against the current directory, and the CLI reads
 `--prompt-file` itself. With `--start-work`, setup makes a git worktree and
-starts the agent there; it needs a workspace.
+starts the agent there; it needs a workspace. With `--fork`, from a Claude Code
+or Codex session, the agent starts as a fork of that session's conversation
+after its current turn ends, and the calling session keeps running; `--wait`
+cannot be used with it. See
+[Fork the conversation into new tasks](tasks.md#fork-the-conversation-into-new-tasks).
 
 Without `--workspace`, and outside an agent session, the task waits in the
 Inbox for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
