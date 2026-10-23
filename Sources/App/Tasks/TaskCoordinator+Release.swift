@@ -10,8 +10,8 @@ extension TaskCoordinator {
     /// `task.release`: makes a release task for a project. Its agent starts
     /// in a new worktree on no branch, at the remote default branch's
     /// commit fetched now, never in the project checkout, which can be old,
-    /// dirty or on another branch. The agent gets `release_prompt` and the
-    /// project's To ship tasks. Shipping is detected from release tags, not
+    /// dirty or on another branch. The agent gets `release_skill`,
+    /// `release_prompt` and the project's To ship tasks. Shipping is detected from release tags, not
     /// from the agent, so a release made outside Toastty counts too.
     @discardableResult
     func release(workspaceID requestedWorkspaceID: UUID, caller: TaskCaller) throws -> TaskRecord {
@@ -26,15 +26,17 @@ extension TaskCoordinator {
         } catch {
             throw TaskError(error.localizedDescription)
         }
-        guard let releasePrompt = config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releasePrompt else {
-            throw TaskError("Set release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.")
+        guard config.canRelease(projectRoot: root, homeDirectoryPath: homeDirectoryPath) else {
+            throw TaskError("Set release_skill or release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.")
         }
+        let releaseSkill = config.releaseSkill(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)
+        let releasePrompt = config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releasePrompt
         if let running = releaseUnderWay(projectRoot: root) {
             throw TaskError("A release of \(project.title) is already under way: \(running.title).")
         }
         let children = toShipTasks(projectRoot: root)
         let resolved = try resolvedFields(
-            pinned: TaskFields(prompt: releasePrompt),
+            pinned: TaskFields(prompt: releasePrompt, skill: releaseSkill),
             workspaceID: projectID,
             defaults: config.defaults
         )
@@ -60,7 +62,7 @@ extension TaskCoordinator {
             slug: slug,
             titleSetByUser: true,
             source: caller.source,
-            pinned: TaskFields(workspaceID: projectID, prompt: releasePrompt),
+            pinned: TaskFields(workspaceID: projectID, prompt: releasePrompt, skill: releaseSkill),
             resolved: resolved,
             workspaceID: projectID,
             projectRoot: root,

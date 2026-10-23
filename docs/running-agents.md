@@ -519,8 +519,9 @@ The task's agent completes required review and automated checks and publishes a
 PR for the user's testing. A ready PR does not authorize merging.
 
 The user accepts the reviewed version with **Merge** on the task. Toastty then
-sends the project's `merge_prompt` to the task's agent, `Use toastty-task-merge.`
-unless `~/.toastty/tasks.toml` names another skill. The shipped
+sends the task's agent `Use the toastty-task-merge skill.`, unless the
+project's `merge_skill` or `merge_prompt` in `~/.toastty/tasks.toml` says
+otherwise. The shipped
 `toastty-task-merge` skill checks review threads, merge prerequisites, tasks that
 must land first, and CI, then runs `toastty task merge`, or reports what blocks
 the merge. Saying "merge it" in the session runs the same skill. See
@@ -659,7 +660,7 @@ Starting and merging a task are built in, through the shipped
 `toastty-task-start` and `toastty-task-merge` skills, so the earlier
 `worktree-create`, `worktree-done` and `worktree-cleanup` examples are gone.
 Personal copies of them keep working and are yours to keep or delete. To merge
-with your own skill, name it in the project's `merge_prompt`. The workflow guide
+with your own skill, name it in the project's `merge_skill`. The workflow guide
 (`setup guide --topic workflows`) gives an agent rules for writing a workflow
 of your own.
 

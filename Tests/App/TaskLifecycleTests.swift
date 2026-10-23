@@ -57,6 +57,19 @@ struct TaskLifecycleTests {
         #expect(fixture.record(task.id)?.mergeRequestedAt != nil)
     }
 
+    @Test func mergeNamesTheMergeSkillBeforeTheMergePrompt() async throws {
+        let fixture = try Fixture()
+        // The project's skill and the default prompt, each from its own table.
+        fixture.config.defaults.mergePrompt = "Wait for CI."
+        fixture.config.workspaces = [TasksConfig.Workspace(path: fixture.repository.project, mergeSkill: "my-merge")]
+        let task = try await taskInWorktree(fixture)
+
+        try fixture.coordinator.requestMerge(taskID: task.id)
+
+        #expect(fixture.sessions.delivered.last?.text
+            == "Use the my-merge skill.\n\nWait for CI.\n\nThe user accepted \(pullRequestURL) for merging.")
+    }
+
     @Test func mergeWaitsForABusyAgentsTurnThenSendsTheDefaultPrompt() async throws {
         let fixture = try Fixture()
         let task = try await taskInWorktree(fixture)
@@ -70,7 +83,7 @@ struct TaskLifecycleTests {
 
         fixture.sessions.report(session, .ready)
         await fixture.waitUntil("the prompt is sent") { fixture.sessions.delivered.isEmpty == false }
-        #expect(fixture.sessions.delivered.last?.text.hasPrefix("Use toastty-task-merge.") == true)
+        #expect(fixture.sessions.delivered.last?.text.hasPrefix("Use the toastty-task-merge skill.\n\n") == true)
         // The request restarts when the agent can read it, so the status it
         // reported before does not count as its answer.
         #expect(try #require(fixture.record(task.id)?.mergeRequestedAt) > accepted)
@@ -92,7 +105,7 @@ struct TaskLifecycleTests {
         #expect(launch.cwd == worktree.path)
         #expect(launch.workspaceID == task.taskSpaceWorkspaceID)
         #expect(launch.panelID != task.operation.taskSpace?.panelID)
-        #expect(launch.prompt.hasPrefix("Use toastty-task-merge."))
+        #expect(launch.prompt.hasPrefix("Use the toastty-task-merge skill.\n\n"))
     }
 
     @Test func mergeWithoutAPullRequestOrAfterCancelIsRefused() async throws {
@@ -268,12 +281,18 @@ struct TaskLifecycleTests {
 
     /// A project that releases from Toastty, with one merged task waiting
     /// for a release at `mergeCommit`.
-    private func releasingProject(_ fixture: Fixture, mergeCommit: String) throws -> TaskRecord {
-        fixture.config.defaults = TasksConfig.Defaults(agent: "claude")
+    private func releasingProject(
+        _ fixture: Fixture,
+        mergeCommit: String,
+        releaseSkill: String? = nil,
+        releasePrompt: String? = "Use toastty-release."
+    ) throws -> TaskRecord {
+        fixture.config.defaults = TasksConfig.Defaults(agent: "claude", startSkill: "task-start")
         fixture.config.workspaces = [TasksConfig.Workspace(
             path: fixture.repository.project,
             releaseTags: "v*",
-            releasePrompt: "Use toastty-release."
+            releasePrompt: releasePrompt,
+            releaseSkill: releaseSkill
         )]
         var merged = TaskRecord(
             createdAt: Date(),
@@ -314,12 +333,31 @@ struct TaskLifecycleTests {
         #expect(throws: TaskError.self) { try git(["symbolic-ref", "--quiet", "HEAD"], in: worktree.path) }
         let launch = try #require(fixture.launcher.calls.last)
         #expect(launch.cwd == worktree.path)
-        #expect(launch.prompt.contains("on no branch, at origin/main (\(tip.prefix(12)))"))
+        #expect(launch.prompt.hasPrefix("You are in the git worktree \(worktree.path), on no branch, at origin/main (\(tip.prefix(12)))"))
         #expect(launch.prompt.contains("Use toastty-release."))
+        // A release names the release skill, never the start skill.
+        #expect(launch.prompt.contains("Use the task-start skill.") == false)
         #expect(launch.prompt.contains("- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"))
 
         // One release per project at a time.
         #expect(throws: TaskError.self) { try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged) }
+    }
+
+    @Test(arguments: [nil, "Wait for my approval."] as [String?])
+    func releaseSkillStartsTheReleaseMessage(releasePrompt: String?) async throws {
+        let fixture = try Fixture()
+        let tip = try fixture.repository.pushToRemote("released")
+        _ = try releasingProject(fixture, mergeCommit: tip, releaseSkill: "toastty-release", releasePrompt: releasePrompt)
+
+        let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
+        await fixture.waitUntil("setup ends") { fixture.record(release.id)?.setup != .settingUp }
+        let launch = try #require(fixture.launcher.calls.last)
+        let worktree = try #require(fixture.record(release.id)?.worktree)
+        #expect(launch.prompt.hasPrefix("Use the toastty-release skill.\n\nYou are in the git worktree \(worktree.path), on no branch"))
+        if let releasePrompt {
+            #expect(launch.prompt.contains("\(releasePrompt)\n\nThe task, as written:\n\nRelease "))
+        }
+        #expect(launch.prompt.hasSuffix("- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"))
     }
 
     @Test func releaseFailsRatherThanBuildFromAnOldCommit() async throws {
@@ -335,6 +373,20 @@ struct TaskLifecycleTests {
         }
         #expect(reason.contains("origin"))
         #expect(fixture.record(release.id)?.worktree == nil)
+
+        // Placed again, the release routes like a new task but keeps to its
+        // own prompt rather than the start skill.
+        try git(["remote", "set-url", "origin", fixture.repository.remote], in: fixture.repository.project)
+        try fixture.coordinator.setWorkspace(taskID: release.id, choice: .open(fixture.workspaceID))
+        await fixture.waitUntil("setup ends") {
+            let setup = fixture.record(release.id)?.setup
+            return setup != .routing && setup != .settingUp
+        }
+        #expect(fixture.record(release.id)?.setup == .started)
+        #expect(fixture.record(release.id)?.resolved?.skill == nil)
+        let launch = try #require(fixture.launcher.calls.last)
+        #expect(launch.prompt.contains("Use toastty-release."))
+        #expect(launch.prompt.contains("Use the task-start skill.") == false)
     }
 
     @Test func onlyATagTheRemoteHasShipsATaskAndItsRelease() async throws {

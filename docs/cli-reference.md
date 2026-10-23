@@ -932,7 +932,7 @@ task without merging; it refuses with the reason, and `--close-pr`,
 refuse or leave. `task clean-up` retries a cleanup that stopped.
 `task ready-for-review` marks work without a pull request ready, and
 `task mark-done` finishes it. `task release` starts a release task for a
-project with `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
+project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
 [Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
 `task list --parent` lists the tasks one task started.
 

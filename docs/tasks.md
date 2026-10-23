@@ -382,7 +382,8 @@ Archived collapsed, and a detail pane with the task's text, stage, pull
 request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
 and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
-**Release…** button when its project sets `release_prompt`; the sidebar's
+**Release…** button when its project can release (see
+[Release](#release)); the sidebar's
 Status To ship lines have one too. A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
@@ -401,18 +402,20 @@ the detail pane's buttons do, with the same confirmations. **Task: Merge**
 shows `Option+Shift+M` when it acts on the selected task space.
 
 **Release <project>…** starts a release for each open project with a
-`release_prompt`, as the To ship line's **Release…** does, even when nothing
-waits to ship. It is hidden while a release of that project is under way.
+`release_skill` or a `release_prompt`, as the To ship line's **Release…**
+does, even when nothing waits to ship. It is hidden while a release of that project is under way.
 
 ## Merge a task
 
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
 menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 
-1. Toastty sends the project's `merge_prompt` to the task's agent. The default
-   is `Use toastty-task-merge.`, a skill Toastty ships. A busy agent gets it
-   once its turn ends; with no agent in the task space, Toastty starts the
-   task's agent in a new tab there. The task shows "Merging…".
+1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
+   `merge_skill` is set, then `merge_prompt` if one is set, then the pull
+   request you accepted. With neither set, the skill is `toastty-task-merge`,
+   which Toastty ships. A busy
+   agent gets the message once its turn ends; with no agent in the task
+   space, Toastty starts the task's agent in a new tab there. The task shows "Merging…".
 2. The skill checks what you cannot see at a glance: unresolved review threads,
    merge prerequisites in the description, tasks that must land first, and CI.
    If something blocks, it says why and ends its turn, and the task is back in
@@ -460,11 +463,14 @@ ready-for-review`, and the task waits in Needs you. **Mark Done**, or
 ## Release
 
 With `release_tags` set, a merged task waits in To ship until a release tag
-contains its merge commit. **Release…** on a project's To ship line makes a
-release task: Toastty fetches the remote's default branch, and starts the
-release agent with `release_prompt` in a new worktree on no branch at exactly
-that commit, never in your project checkout. The fetch must succeed. The agent
-also gets the list of tasks waiting to ship. `toastty task release` does the
+contains its merge commit. A project can release from Toastty when
+`tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release…** on
+its To ship line makes a release task: Toastty fetches the remote's default
+branch, and starts the release agent in a new worktree on no branch at exactly
+that commit, never in your project checkout. The fetch must succeed. The
+agent's first message starts with `Use the <release_skill> skill.` when a
+release skill is set, then `release_prompt` if one is set, then the list of
+tasks waiting to ship. `toastty task release` does the
 same from the CLI, and **Release <project>…** in the command palette does it
 for an open project even when its To ship list is empty.
 
@@ -474,6 +480,42 @@ release made outside Toastty counts too. When a tag contains a task's merge
 commit, the task is Done, and the Tasks view shows the tag. A shipped release
 task closes its task space and removes its worktree once its agent is at rest,
 unless the worktree's commit is on no remote branch or tag.
+
+## Skills for task events
+
+At each point where Toastty hands work to an agent, `tasks.toml` can name the
+skill the agent uses. The message then starts with one line, `Use the <name>
+skill.`, followed by that event's prompt text, if any, and the facts Toastty
+adds, such as the task text or the pull request.
+
+| Event | Triggered by | Setting | Default |
+|---|---|---|---|
+| Task starts (first message) | Create Task | `start_skill` | none |
+| Move into a worktree | the agent, from its start skill | none: the shipped `toastty-task-start` | |
+| Merge | the Merge button or the palette | `merge_skill` | `toastty-task-merge` (shipped) |
+| Release | **Release…**, the palette or `toastty task release` | `release_skill` | none |
+| Archive, clean up, done | Toastty itself | none | |
+
+```toml
+[defaults]
+start_skill = "task-start"
+merge_skill = "toastty-task-merge"
+
+[workspace."~/GiantThings/repos/emptyos"]
+release_skill = "emptyos-release"
+release_prompt = "Wait for my approval before any production change."  # optional extra text
+```
+
+- `start_skill` also starts a first message that triage or `--prompt` wrote,
+  and the first message of a fresh session that continues a moved task in its
+  worktree. A forked session already has the conversation, so it gets no
+  second skill line.
+- With only `merge_prompt` set, Merge sends that prompt as written, with no
+  skill line. Each key is looked up on its own, so a `merge_skill` in
+  `[defaults]` also comes before a project's own `merge_prompt`.
+- Toastty does not check that the skill is installed. Name a skill the task's
+  agent can load: one in `~/.toastty/skills/`, the repository's
+  `.agents/skills/`, or one Toastty ships.
 
 ## `~/.toastty/tasks.toml`
 
@@ -525,17 +567,21 @@ branch_prefix = "feat"
 - `release_tags` turns on the To ship stage for the project: a merged task
   waits there until a tag matching this pattern, such as `"v*"`, contains its
   merge commit, instead of going straight to Done. See [Release](#release).
-- `release_prompt` is what a release task's agent gets first, such as
-  `"Use toastty-release, then toastty-publish."`. Without it, Toastty shows no
-  Release button for the project.
+- `release_prompt` is text a release task's agent gets after the release
+  skill line, such as `"Wait for my approval before any production change."`.
+  A project with `release_skill`, `release_prompt` or both shows a Release
+  button; with neither, it shows none.
 - `merge` is `"agent"`, the default, or `"direct"`; see
   [Merge a task](#merge-a-task).
-- `merge_prompt` is what Merge sends to the task's agent, such as
-  `"Use worktree-done."` for a skill of your own. The default is
-  `"Use toastty-task-merge."`.
+- `merge_prompt` is text Merge sends to the task's agent after the merge skill
+  line. Set alone, it replaces the default message.
+- `start_skill`, `merge_skill` and `release_skill` name skills; see
+  [Skills for task events](#skills-for-task-events). A skill name is one word
+  with no spaces.
 
-`merge` and `merge_prompt` can also go in `[defaults]`; a workspace's own
-value wins.
+`merge`, `merge_prompt` and the three skill keys can also go in `[defaults]`;
+a workspace's own value wins. A `release_skill` in `[defaults]` lets every
+project release.
 
 An error in the file names its line, and `task create` fails with that message
 until the file is fixed.

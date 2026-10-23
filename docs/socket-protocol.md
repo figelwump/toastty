@@ -468,9 +468,9 @@ Notable action-specific behavior:
     `cleanup.problem`, and `task.archive` or `task.clean-up` continues.
 - `task.release`
   - takes the `workspaceID` selector, or the calling managed session's
-    workspace; a task space resolves to its project. The project's tasks.toml
-    section must set `release_prompt`, and no other release of it may be
-    unfinished. Makes a task with `release.childTaskIDs` (the project's To ship
+    workspace; a task space resolves to its project. tasks.toml must give the
+    project a `release_skill` (its own or from `[defaults]`) or its own
+    `release_prompt`, and no other release of it may be unfinished. Makes a task with `release.childTaskIDs` (the project's To ship
     tasks), fetches the remote's default branch (the fetch must succeed), and
     starts the default agent in a new worktree on no branch at that commit.
 - `task.adopt`

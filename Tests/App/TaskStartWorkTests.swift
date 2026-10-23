@@ -256,7 +256,9 @@ struct TaskStartWorkTests {
 
     @Test func moveWaitsForTheTurnForksIntoTheWorktreeAndClosesTheSourceOnceConfirmed() async throws {
         let fixture = try Fixture()
+        fixture.config.defaults.startSkill = "task-start"
         let task = try await fixture.startedTask()
+        #expect(fixture.launcher.calls.first?.prompt == "Use the task-start skill.\n\nComposer keeps a blank line after send")
         let source = try #require(task.operation.agentLaunch?.sessionID)
         let sourcePanel = try #require(task.operation.taskSpace?.panelID)
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
@@ -281,6 +283,8 @@ struct TaskStartWorkTests {
         #expect(fork.workspaceID == taskSpace)
         #expect(fork.panelID != sourcePanel)
         #expect(fork.prompt.contains("You are in the git worktree \(worktree.path), on branch fix/composer-keeps-a-blank-line-after-send"))
+        // The fork has the first message already.
+        #expect(fork.prompt.contains("Use the task-start skill.") == false)
         #expect(fixture.terminalCWD(workspaceID: taskSpace, panelID: fork.panelID) == worktree.path)
         #expect(fixture.store.state.workspacesByID[taskSpace]?.tabIDs.count == 2)
 
@@ -469,6 +473,7 @@ struct TaskStartWorkTests {
 
     @Test func agentThatCannotBeForkedStartsFreshWithTheTaskAndTheSourceStays() async throws {
         let fixture = try Fixture()
+        fixture.config.workspaces = [TasksConfig.Workspace(path: fixture.repository.project, startSkill: "repo-start")]
         let task = try await fixture.startedTask(agent: "cursor")
         let source = try #require(task.operation.agentLaunch?.sessionID)
         fixture.sessions.endTurn(source)
@@ -481,7 +486,8 @@ struct TaskStartWorkTests {
         #expect(fixture.launcher.calls.count == 2)
         #expect(fresh.forkFromSessionID == nil)
         #expect(fresh.profileID == "cursor")
-        #expect(fresh.prompt.contains("Composer keeps a blank line after send"))
+        #expect(fresh.prompt.hasPrefix("Use the repo-start skill.\n\nYou are in the git worktree"))
+        #expect(fresh.prompt.hasSuffix("Composer keeps a blank line after send"))
         #expect(moved.startWork?.state == .finished)
         #expect(moved.operation.worktreeSession?.forked == false)
         guard case .kept(let reason)? = moved.operation.sourceOutcome else {

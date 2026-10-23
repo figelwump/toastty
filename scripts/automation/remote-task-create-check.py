@@ -9,11 +9,13 @@ throwaway runtime home and a throwaway user home. The user home is a git
 repository, so the first terminal starts in it and it becomes the workspace's
 project root. Its `agents.toml` maps `claude` to a fake agent script that
 records its first message, and its `tasks.toml` makes that profile the
-default. The check never selects a workspace or moves focus.
+default and names a `start_skill`. The check never selects a workspace or
+moves focus.
 
 It checks that `toastty task create --wait`:
 - makes a task space nested under the workspace, linked to the task, and starts
-  the agent there with the text as written and Toastty's copy of the file;
+  the agent there with a first message that starts with the start skill line,
+  then the text as written and Toastty's copy of the file;
 - returns the first task for a repeated request ID;
 - fails at once for an unknown agent, saving nothing;
 and that after the app is killed and relaunched, the record, the task space
@@ -32,6 +34,7 @@ import uuid
 
 TIMEOUT = 60
 TASK_TEXT = 'Fix the unread dot\nIt stays on after reading.'
+START_SKILL = 'task-start'
 
 # Records the first message (the last argument) and the session, then waits.
 FAKE_AGENT = r'''#!/bin/sh
@@ -127,7 +130,7 @@ def main():
     agent.chmod(0o755)
     (user_home / '.toastty/agents.toml').write_text(
         f'[claude]\ndisplayName = "Claude Code"\nargv = {json.dumps([str(agent)])}\n')
-    (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "claude"\n')
+    (user_home / '.toastty/tasks.toml').write_text(f'[defaults]\nagent = "claude"\nstart_skill = "{START_SKILL}"\n')
     screenshot = root / 'repro shot.png'
     screenshot.write_bytes(b'png')
 
@@ -188,7 +191,8 @@ def main():
         session_file = fake_bin / 'sessions' / f"{task['setup']['sessionID']}.json"
         session = json.loads(wait_for('the fake agent to record its session', lambda: session_file.is_file() and session_file.read_text()))
         message = (fake_bin / 'sessions' / f"{task['setup']['sessionID']}.message").read_text()
-        require(TASK_TEXT in message, f'Task text not delivered as written: {message!r}')
+        require(message.startswith(f'Use the {START_SKILL} skill.\n\n{TASK_TEXT}'),
+                f'First message does not start with the skill line, then the task: {message!r}')
         attachment = task['files'][0]
         require(os.path.realpath(attachment).startswith(str(runtime_home / 'task-attachments' / task_id)),
                 f'Attachment not copied: {attachment}')

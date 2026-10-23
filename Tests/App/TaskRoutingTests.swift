@@ -82,7 +82,11 @@ struct TaskRoutingTests {
 
     @Test func triageChoosesWhatTheCallerLeftOutThenTheTaskStarts() async throws {
         let fixture = try makeFixture()
-        fixture.config.workspaces = [TasksConfig.Workspace(path: fixture.projectRoot, guidelines: "Read AGENTS.md first.")]
+        fixture.config.workspaces = [TasksConfig.Workspace(
+            path: fixture.projectRoot,
+            guidelines: "Read AGENTS.md first.",
+            startSkill: "repo-start"
+        )]
         fixture.triage.answer(.success(TaskTriage.Answer(
             workspace: fixture.workspaceID.uuidString,
             agent: "codex",
@@ -111,7 +115,8 @@ struct TaskRoutingTests {
             agent: "codex",
             model: "gpt-6.1-sol",
             effort: "high",
-            prompt: "Start with the composer views. Start work at once."
+            prompt: "Start with the composer views. Start work at once.",
+            skill: "repo-start"
         ))
         #expect(record.title == "Composer keeps a blank line")
         #expect(record.slug == "composer-blank-line")
@@ -120,11 +125,13 @@ struct TaskRoutingTests {
         #expect(fixture.store.state.workspacesByID[taskSpaceID]?.title == "composer-blank-line")
         #expect(fixture.store.state.workspacesByID[taskSpaceID]?.parentWorkspaceID == fixture.workspaceID)
 
-        // The agent gets triage's first prompt, then the text exactly as
-        // written.
+        // The agent gets the project's start skill, triage's first prompt,
+        // then the text exactly as written.
         let sent = try sentText(fixture, record)
         #expect(sent.contains("gpt-6.1-sol"))
-        #expect(sent.contains("Start with the composer views. Start work at once."))
+        let skillLine = try #require(sent.range(of: "Use the repo-start skill."))
+        let triagePrompt = try #require(sent.range(of: "Start with the composer views. Start work at once."))
+        #expect(skillLine.upperBound < triagePrompt.lowerBound)
         #expect(sent.contains("composer keeps a blank line after send, on mac and iphone"))
 
         // Triage saw the task, the open workspace with its root and

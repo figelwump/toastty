@@ -11,7 +11,8 @@ struct TasksViewSections: Equatable {
         let id: String
         let projectTitle: String
         let entries: [SidebarStatusSections.Entry]
-        /// Where Release starts a release; `nil` without `release_prompt`.
+        /// Where Release starts a release; `nil` when the project cannot
+        /// release from Toastty.
         var releaseWorkspaceID: UUID? = nil
     }
 

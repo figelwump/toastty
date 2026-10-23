@@ -61,6 +61,63 @@ struct TaskRecordTests {
     }
 
     @Test
+    func startSkillLineComesFirst() {
+        let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
+        #expect(TaskPrompt.compose(skill: "task-start", firstPrompt: nil, text: "Fix it", attachmentPaths: []) == """
+        Use the task-start skill.
+
+        Fix it
+        """)
+        // Before the worktree line and a first prompt that triage or the
+        // caller wrote.
+        #expect(TaskPrompt.compose(
+            skill: "task-start",
+            firstPrompt: "Start with the views.",
+            text: "Fix it",
+            attachmentPaths: [],
+            worktree: worktree
+        ) == """
+        Use the task-start skill.
+
+        You are in the git worktree /w/fix, on branch fix/composer.
+
+        Start with the views.
+
+        The task, as written:
+
+        Fix it
+        """)
+    }
+
+    @Test
+    func onlyAFreshMovedSessionGetsTheStartSkillAgain() {
+        let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
+        let record = TaskRecord(
+            createdAt: Date(),
+            text: "Fix it",
+            title: "Fix it",
+            slug: "fix-it",
+            source: .cli,
+            resolved: TaskFields(agent: "cursor", skill: "task-start")
+        )
+        let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
+        #expect(fresh.hasPrefix("Use the task-start skill.\n\nYou are in the git worktree /w/fix"))
+        #expect(fresh.hasSuffix("cannot continue.\n\nFix it"))
+        let forked = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: true)
+        #expect(forked.contains("skill") == false)
+    }
+
+    @Test(arguments: [
+        (nil, nil, "Use the toastty-task-merge skill.\n\nThe user accepted URL for merging."),
+        ("my-merge", nil, "Use the my-merge skill.\n\nThe user accepted URL for merging."),
+        (nil, "Use worktree-done.", "Use worktree-done.\n\nThe user accepted URL for merging."),
+        ("my-merge", "Wait for CI.", "Use the my-merge skill.\n\nWait for CI.\n\nThe user accepted URL for merging."),
+    ] as [(String?, String?, String)])
+    func mergeMessageForEachSetting(skill: String?, prompt: String?, expected: String) {
+        #expect(TaskPrompt.merge(skill: skill, prompt: prompt, pullRequestURL: "URL") == expected)
+    }
+
+    @Test
     func recordRoundTripsThroughJSON() throws {
         let record = TaskRecord(
             clientRequestID: "req-1",
@@ -70,8 +127,8 @@ struct TaskRecordTests {
             title: "Fix it",
             slug: "fix-it",
             source: .agent(sessionID: "s1"),
-            pinned: TaskFields(agent: "codex"),
-            resolved: TaskFields(agent: "codex", model: "gpt-6.1-sol", effort: "high"),
+            pinned: TaskFields(agent: "codex", skill: "toastty-release"),
+            resolved: TaskFields(agent: "codex", model: "gpt-6.1-sol", effort: "high", skill: "task-start"),
             workspaceID: UUID(),
             projectRoot: "/repo",
             setup: .setupFailed(reason: "boom"),

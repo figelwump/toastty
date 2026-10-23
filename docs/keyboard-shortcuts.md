@@ -96,7 +96,7 @@ order. Pane shortcuts and keyboard navigation still follow the pane layout.
 |---|---|
 | `Cmd+Shift+P` | Open the command palette |
 
-The palette also acts on tasks. Commands named `Task: <action>` act on the current task: the row selected in the Tasks view while it shows, otherwise the task whose task space is selected. They are the actions of the Tasks view's detail pane that apply now, and each row names the task. `Release <project>…` starts a release for each open project with a `release_prompt`. See [Tasks](tasks.md#the-command-palette).
+The palette also acts on tasks. Commands named `Task: <action>` act on the current task: the row selected in the Tasks view while it shows, otherwise the task whose task space is selected. They are the actions of the Tasks view's detail pane that apply now, and each row names the task. `Release <project>…` starts a release for each open project with a `release_skill` or a `release_prompt`. See [Tasks](tasks.md#the-command-palette).
 
 ## Search
 

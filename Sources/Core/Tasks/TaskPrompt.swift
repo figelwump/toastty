@@ -1,12 +1,19 @@
 import Foundation
 
-/// The first message a task's agent receives.
+/// The messages Toastty sends a task's agent.
 public enum TaskPrompt {
-    /// The first prompt, when there is one, then the task text exactly as
-    /// written, then the attached files. Toastty adds the text and files
-    /// itself, so nothing that writes the first prompt can drop or reword
-    /// them. The text keeps its own spacing and indentation.
+    /// The line that starts a message for a task event that names a skill.
+    public static func skillLine(_ skill: String) -> String {
+        "Use the \(skill) skill."
+    }
+
+    /// The skill line, when there is a skill, then the worktree, the first
+    /// prompt, the task text exactly as written, and the attached files.
+    /// Toastty adds the text and files itself, so nothing that writes the
+    /// first prompt can drop or reword them. The text keeps its own spacing
+    /// and indentation.
     public static func compose(
+        skill: String? = nil,
         firstPrompt: String?,
         text: String,
         attachmentPaths: [String],
@@ -14,6 +21,9 @@ public enum TaskPrompt {
         base: TaskOperation.Base? = nil
     ) -> String {
         var sections: [String] = []
+        if let skill {
+            sections.append(skillLine(skill))
+        }
         if let worktree {
             sections.append(worktreeLine(worktree, base: base))
         }
@@ -36,14 +46,17 @@ public enum TaskPrompt {
     /// The first message of the session that continues a moved task in its
     /// worktree. A fork has the whole conversation already, so it learns
     /// only where it is now. A fresh session, used when the agent cannot be
-    /// forked, also gets the task.
+    /// forked, never saw the first message, so it also gets the skill line
+    /// and the task.
     public static func movedToWorktree(
         record: TaskRecord,
         worktree: TaskOperation.Worktree,
         base: TaskOperation.Base?,
         forked: Bool
     ) -> String {
-        var sections = [worktreeLine(worktree, base: base)]
+        let skill = forked ? nil : record.resolved?.skill ?? record.pinned.skill
+        var sections = skill.map { [skillLine($0)] } ?? []
+        sections.append(worktreeLine(worktree, base: base))
         if forked {
             sections.append(
                 "Toastty moved this conversation here, and the previous session closes. "
@@ -62,6 +75,18 @@ public enum TaskPrompt {
         }
         return sections.joined(separator: "\n\n")
     }
+
+    /// What Merge sends the task's agent: the skill line, then
+    /// `merge_prompt`, then the pull request the user accepted. With
+    /// neither set, the skill is `toastty-task-merge`. A `merge_prompt`
+    /// without a skill is sent as written.
+    public static func merge(skill: String?, prompt: String?, pullRequestURL: String) -> String {
+        let skill = skill ?? (prompt == nil ? defaultMergeSkill : nil)
+        let sections = [skill.map(skillLine), prompt] + ["The user accepted \(pullRequestURL) for merging."]
+        return sections.compactMap { $0 }.joined(separator: "\n\n")
+    }
+
+    public static let defaultMergeSkill = "toastty-task-merge"
 
     private static func worktreeLine(_ worktree: TaskOperation.Worktree, base: TaskOperation.Base?) -> String {
         if worktree.isDetached {

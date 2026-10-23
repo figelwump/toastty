@@ -3,15 +3,15 @@ import Foundation
 
 /// How a Merge from the UI is carried out.
 enum TaskMergeRoute: Equatable {
-    /// The task's agent gets `merge_prompt`, checks the pull request with
-    /// its merge skill, and calls `task.merge`.
+    /// The task's agent gets the merge message, from `merge_skill` and
+    /// `merge_prompt`, checks the pull request with its merge skill, and
+    /// calls `task.merge`.
     case agent
     /// Toastty merges at once: "Merge Without Checks", or `merge = "direct"`.
     case direct
 }
 
 extension TaskCoordinator {
-    static let defaultMergePrompt = "Use toastty-task-merge."
     /// How long a merge prompt waits for a busy agent to finish its turn.
     static let mergePromptTurnTimeout: Duration = .seconds(30 * 60)
 
@@ -62,8 +62,11 @@ extension TaskCoordinator {
             try startMerge(record, target: target, expectedHead: nil)
             return
         }
-        let mergePrompt = workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt ?? Self.defaultMergePrompt
-        let prompt = "\(mergePrompt)\n\nThe user accepted \(target.pullRequest.url) for merging."
+        let prompt = TaskPrompt.merge(
+            skill: workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill,
+            prompt: workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt,
+            pullRequestURL: target.pullRequest.url
+        )
         let requestedAt = now()
         try saveMergeState(taskID: taskID) {
             $0.mergeRequestedAt = requestedAt

@@ -21,7 +21,7 @@ struct SidebarStatusSections: Equatable {
         /// When the oldest task in the lane merged.
         let oldestMergedAt: Date?
         /// The project workspace Release starts a release in; `nil` when
-        /// the project has no `release_prompt` or is not open.
+        /// the project cannot release from Toastty or is not open.
         var releaseWorkspaceID: UUID? = nil
     }
 

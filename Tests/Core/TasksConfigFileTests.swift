@@ -39,6 +39,9 @@ struct TasksConfigFileTests {
         effort = "high"
         merge = "agent"
         merge_prompt = "Use toastty-task-merge."
+        start_skill = "task-start"
+        merge_skill = "toastty-task-merge"
+        release_skill = "toastty-release"
 
         [quick_entry]
         shortcut = "opt+shift+t"
@@ -52,6 +55,9 @@ struct TasksConfigFileTests {
 
         [workspace."/srv/website"]
         merge = "direct"
+        start_skill = "website-start"
+        merge_skill = "website-merge"
+        release_skill = "website-release"
         """#)
 
         #expect(config.triage == TasksConfig.Triage(
@@ -64,7 +70,10 @@ struct TasksConfigFileTests {
             model: "claude-opus-5-5",
             effort: "high",
             merge: .agent,
-            mergePrompt: "Use toastty-task-merge."
+            mergePrompt: "Use toastty-task-merge.",
+            startSkill: "task-start",
+            mergeSkill: "toastty-task-merge",
+            releaseSkill: "toastty-release"
         ))
         #expect(config.quickEntry.shortcut == .default)
         #expect(config.workspaces == [
@@ -76,7 +85,13 @@ struct TasksConfigFileTests {
                 releaseTags: "v*",
                 releasePrompt: "Use toastty-release, then toastty-publish."
             ),
-            TasksConfig.Workspace(path: "/srv/website", merge: .direct),
+            TasksConfig.Workspace(
+                path: "/srv/website",
+                merge: .direct,
+                startSkill: "website-start",
+                mergeSkill: "website-merge",
+                releaseSkill: "website-release"
+            ),
         ])
     }
 
@@ -104,7 +119,8 @@ struct TasksConfigFileTests {
 
     @Test(arguments: [
         ("[create]\nscript = \"x\"", 1, "create_hook"),
-        ("[start]\nskill = \"task-start\"", 1, "guidelines"),
+        ("[start]\nskill = \"task-start\"", 1, "start_skill"),
+        ("[defaults]\nskill = \"task-start\"", 2, "start_skill"),
         ("[triage]\nprofile = \"claude\"", 2, "command"),
         ("[triage]\nguidance = \"x\"", 2, "renamed to guidelines"),
         ("[triage]\ntimeout-seconds = 60", 2, "timeout_seconds"),
@@ -137,6 +153,11 @@ struct TasksConfigFileTests {
         ("[workspace.\"repos/toastty\"]", 1, "absolute"),
         ("[workspace.\"/r\"]\nbranch_prefix = \"Fix\"", 2, "branch_prefix"),
         ("[workspace.\"/r\"]\nrelease_tag = \"v*\"", 2, "unknown key 'release_tag'"),
+        ("[defaults]\nstart_skill = \"task start\"", 2, "[defaults] start_skill must be a skill name with no spaces"),
+        ("[defaults]\nmerge_skill = \"  \"", 2, "merge_skill is empty"),
+        ("[defaults]\nrelease_skill = 3", 2, "release_skill must be a quoted string"),
+        ("[workspace.\"/r\"]\nrelease_skill = \"a\\tb\"", 2, "release_skill must be a skill name with no spaces"),
+        ("[workspace.\"/r\"]\nstart_skill = \"\"\"\none\ntwo\n\"\"\"", 2, "start_skill must be one line"),
         ("[quick_entry]\nshortcut = \"shift+t\"", 2, "[quick_entry] the shortcut \"shift+t\" needs Command"),
         ("[quick_entry]\nshortcut = \"opt+shift+tt\"", 2, "unknown key \"tt\""),
     ])
@@ -165,5 +186,38 @@ struct TasksConfigFileTests {
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home)?.releaseTags == "v*")
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty/", homeDirectoryPath: home) != nil)
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
+    func aProjectsSkillOverridesTheDefault() throws {
+        let config = try parse("""
+        [defaults]
+        start_skill = "task-start"
+
+        [workspace."~/repos/toastty"]
+        start_skill = "toastty-start"
+        release_skill = "toastty-release"
+
+        [workspace."~/repos/notes"]
+        release_prompt = "Tag it."
+
+        [workspace."~/repos/site"]
+        branch_prefix = "fix"
+        """)
+        let toastty = "/Users/tester/repos/toastty"
+        #expect(config.startSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-start")
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "task-start")
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == "task-start")
+        #expect(config.releaseSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-release")
+
+        // A release skill or a release prompt makes a project releasable.
+        #expect(config.canRelease(projectRoot: toastty, homeDirectoryPath: home))
+        #expect(config.canRelease(projectRoot: "/Users/tester/repos/notes", homeDirectoryPath: home))
+        #expect(config.canRelease(projectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == false)
+        // A release skill in [defaults] applies to every project.
+        var everywhere = config
+        everywhere.defaults.releaseSkill = "release"
+        #expect(everywhere.canRelease(projectRoot: "/Users/tester/repos/site", homeDirectoryPath: home))
+        #expect(everywhere.releaseSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-release")
     }
 }

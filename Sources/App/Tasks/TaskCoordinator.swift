@@ -350,7 +350,12 @@ final class TaskCoordinator {
         if missing.isEmpty == false, isTriageEnabled(config) {
             setup = .routing
         } else if let workspaceID {
-            resolved = try resolvedFields(pinned: pinned, workspaceID: workspaceID, defaults: config.defaults)
+            resolved = try resolvedFields(
+                pinned: pinned,
+                workspaceID: workspaceID,
+                defaults: config.defaults,
+                skill: projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+            )
             setup = .settingUp
         } else {
             // The agent and its settings are known now, so they are checked
@@ -398,7 +403,12 @@ final class TaskCoordinator {
         }
         // The launcher refuses a first message it cannot pass, and every
         // retry would fail the same way, so the request fails now.
-        let firstMessage = TaskPrompt.compose(firstPrompt: prompt, text: text, attachmentPaths: attachments.map(\.path))
+        let firstMessage = TaskPrompt.compose(
+            skill: resolved?.skill,
+            firstPrompt: prompt,
+            text: text,
+            attachmentPaths: attachments.map(\.path)
+        )
         guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
             throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
         }
@@ -1006,6 +1016,7 @@ final class TaskCoordinator {
         let base = records.record(id: taskID)?.operation.base
         var firstPrompt = resolved.prompt
         var prompt = TaskPrompt.compose(
+            skill: resolved.skill,
             firstPrompt: firstPrompt,
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
@@ -1019,6 +1030,7 @@ final class TaskCoordinator {
            firstPrompt != nil, record.pinned.prompt == nil {
             firstPrompt = nil
             prompt = TaskPrompt.compose(
+                skill: resolved.skill,
                 firstPrompt: nil,
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
@@ -1290,12 +1302,18 @@ final class TaskCoordinator {
                     agent: resolution.agent,
                     model: resolution.model,
                     effort: resolution.effort,
-                    prompt: resolution.prompt
+                    prompt: resolution.prompt,
+                    skill: current.pinned.skill
                 ),
                 workspaceID: workspaceID,
-                defaults: config.defaults
+                defaults: config.defaults,
+                // A release that comes back here keeps to its release skill.
+                skill: current.release == nil
+                    ? config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil
             )
             let firstMessage = TaskPrompt.compose(
+                skill: resolved.skill,
                 firstPrompt: resolved.prompt,
                 text: current.text,
                 attachmentPaths: current.attachments.map(\.path)
@@ -1506,12 +1524,18 @@ final class TaskCoordinator {
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
     /// chosen agent is left out.
-    func resolvedFields(pinned: TaskFields, workspaceID: UUID?, defaults: TasksConfig.Defaults) throws -> TaskFields {
+    /// `skill` is the project's start skill, used when `pinned` names none.
+    func resolvedFields(
+        pinned: TaskFields,
+        workspaceID: UUID?,
+        defaults: TasksConfig.Defaults,
+        skill: String? = nil
+    ) throws -> TaskFields {
         guard let agent = pinned.agent ?? defaults.agent else {
             throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
         }
         let profile = try checkedProfile(agent)
-        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt)
+        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt, skill: pinned.skill ?? skill)
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model
