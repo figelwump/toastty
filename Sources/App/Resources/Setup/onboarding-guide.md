@@ -85,7 +85,7 @@ Read the workflow guide first:
 
 Ask what they work on and which tools they use, such as an issue tracker, documents, code review, or CI. Suggest two or three ideas from the guide that match, then offer one of:
 
-- **Set up how tasks merge.** Follow the guide's worked example: the shipped skills start and merge tasks with no setup. If the user merges differently, write their own merge skill and name it in the project's `merge_prompt` in `~/.toastty/tasks.toml`, only after an explicit OK.
+- **Set up how tasks merge.** Follow the guide's worked example: the shipped skills start and merge tasks with no setup. If the user merges differently, write their own merge skill and name it in the project's `merge_skill` in `~/.toastty/tasks.toml`, only after an explicit OK.
 - **Write a workflow skill with them.** Follow the guide's steps: draft the skill, show it, and write it into the user skills directory (`$TOASTTY_USER_SKILLS_ROOT`, normally `~/.toastty/skills`) only after an explicit OK.
 - **Skip.**
 

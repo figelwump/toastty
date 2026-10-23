@@ -17,10 +17,9 @@ public struct TasksConfigParseError: LocalizedError, Equatable, Sendable {
 
 /// The settings in `~/.toastty/tasks.toml`. Every table is optional.
 ///
-/// `[triage]`, `[defaults]` agent, model and effort, and workspace
-/// `guidelines`, `create_hook` and `branch_prefix` act today. The other keys
-/// are read and checked now, so the file format is settled; merging and
-/// releases use them as they arrive.
+/// The `*_skill` keys name the skill Toastty points an agent to at each
+/// task event: the first message, Merge and Release. Toastty does not check
+/// that the agent has the skill.
 public struct TasksConfig: Equatable, Sendable {
     public enum MergeMode: String, Equatable, Sendable {
         /// Merge sends `merge_prompt` to the task's agent, which checks the
@@ -61,19 +60,28 @@ public struct TasksConfig: Equatable, Sendable {
         public var effort: String?
         public var merge: MergeMode?
         public var mergePrompt: String?
+        public var startSkill: String?
+        public var mergeSkill: String?
+        public var releaseSkill: String?
 
         public init(
             agent: String? = nil,
             model: String? = nil,
             effort: String? = nil,
             merge: MergeMode? = nil,
-            mergePrompt: String? = nil
+            mergePrompt: String? = nil,
+            startSkill: String? = nil,
+            mergeSkill: String? = nil,
+            releaseSkill: String? = nil
         ) {
             self.agent = agent
             self.model = model
             self.effort = effort
             self.merge = merge
             self.mergePrompt = mergePrompt
+            self.startSkill = startSkill
+            self.mergeSkill = mergeSkill
+            self.releaseSkill = releaseSkill
         }
     }
 
@@ -99,6 +107,9 @@ public struct TasksConfig: Equatable, Sendable {
         public var releasePrompt: String?
         public var merge: MergeMode?
         public var mergePrompt: String?
+        public var startSkill: String?
+        public var mergeSkill: String?
+        public var releaseSkill: String?
 
         public init(
             path: String,
@@ -108,7 +119,10 @@ public struct TasksConfig: Equatable, Sendable {
             releaseTags: String? = nil,
             releasePrompt: String? = nil,
             merge: MergeMode? = nil,
-            mergePrompt: String? = nil
+            mergePrompt: String? = nil,
+            startSkill: String? = nil,
+            mergeSkill: String? = nil,
+            releaseSkill: String? = nil
         ) {
             self.path = path
             self.guidelines = guidelines
@@ -118,6 +132,9 @@ public struct TasksConfig: Equatable, Sendable {
             self.releasePrompt = releasePrompt
             self.merge = merge
             self.mergePrompt = mergePrompt
+            self.startSkill = startSkill
+            self.mergeSkill = mergeSkill
+            self.releaseSkill = releaseSkill
         }
     }
 
@@ -148,6 +165,25 @@ public struct TasksConfig: Equatable, Sendable {
         return workspaces.first {
             TasksConfigFile.normalizedPath($0.path, homeDirectoryPath: homeDirectoryPath) == target
         }
+    }
+
+    /// The skill a task's first message names: the project's own, else
+    /// `[defaults]`.
+    public func startSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
+        workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.startSkill ?? defaults.startSkill
+    }
+
+    /// The skill a release task's first message names: the project's own,
+    /// else `[defaults]`.
+    public func releaseSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
+        workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.releaseSkill ?? defaults.releaseSkill
+    }
+
+    /// Whether Toastty can start a release for the project: it has a
+    /// release skill or its own `release_prompt`.
+    public func canRelease(projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> Bool {
+        releaseSkill(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath) != nil
+            || workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.releasePrompt != nil
     }
 }
 
@@ -238,14 +274,14 @@ private struct TasksConfigParser {
     /// replaced them.
     private static let replacedTables: [String: String] = [
         "create": "[create] was replaced by create_hook in a [workspace.\"<root directory>\"] table",
-        "start": "[start] was removed; describe the first prompt in [triage] guidelines instead",
+        "start": "[start] was replaced by start_skill in [defaults] or a [workspace.\"<root directory>\"] table",
     ]
     private static let replacedKeys: [String: String] = [
         "profile": "profile was replaced by command, the full command line Toastty runs for triage",
         "guidance": "guidance was renamed to guidelines",
         "timeout-seconds": "timeout-seconds was renamed to timeout_seconds",
         "script": "script was replaced by create_hook in a [workspace.\"<root directory>\"] table",
-        "skill": "skill was removed; describe the first prompt in [triage] guidelines instead",
+        "skill": "skill was replaced by start_skill",
     ]
 
     let homeDirectoryPath: String
@@ -370,13 +406,20 @@ private struct TasksConfigParser {
 
     private func defaults(_ entries: Entries) throws -> TasksConfig.Defaults {
         let table = Table.defaults
-        try Self.rejectUnknownKeys(entries, table: table, allowed: ["agent", "model", "effort", "merge", "merge_prompt"])
+        try Self.rejectUnknownKeys(
+            entries,
+            table: table,
+            allowed: ["agent", "model", "effort", "merge", "merge_prompt", "start_skill", "merge_skill", "release_skill"]
+        )
         return TasksConfig.Defaults(
             agent: try Self.selection("agent", in: entries, table: table, maximumLength: 64),
             model: try Self.selection("model", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumModelLength),
             effort: try Self.selection("effort", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength),
             merge: try Self.mergeMode(in: entries, table: table),
-            mergePrompt: try Self.text("merge_prompt", in: entries, table: table)
+            mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
+            startSkill: try Self.skill("start_skill", in: entries, table: table),
+            mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
+            releaseSkill: try Self.skill("release_skill", in: entries, table: table)
         )
     }
 
@@ -401,7 +444,10 @@ private struct TasksConfigParser {
         try Self.rejectUnknownKeys(
             entries,
             table: table,
-            allowed: ["guidelines", "create_hook", "branch_prefix", "release_tags", "release_prompt", "merge", "merge_prompt"]
+            allowed: [
+                "guidelines", "create_hook", "branch_prefix", "release_tags", "release_prompt", "merge", "merge_prompt",
+                "start_skill", "merge_skill", "release_skill",
+            ]
         )
         let branchPrefix = try Self.string("branch_prefix", in: entries, table: table)
         if let branchPrefix, TaskRecord.sanitizedSlug(branchPrefix) != branchPrefix, let line = entries["branch_prefix"]?.line {
@@ -418,7 +464,10 @@ private struct TasksConfigParser {
             releaseTags: try Self.string("release_tags", in: entries, table: table),
             releasePrompt: try Self.text("release_prompt", in: entries, table: table),
             merge: try Self.mergeMode(in: entries, table: table),
-            mergePrompt: try Self.text("merge_prompt", in: entries, table: table)
+            mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
+            startSkill: try Self.skill("start_skill", in: entries, table: table),
+            mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
+            releaseSkill: try Self.skill("release_skill", in: entries, table: table)
         )
     }
 
@@ -510,6 +559,15 @@ private struct TasksConfigParser {
                 line: entry.line,
                 message: "\(table.name) \(key) must be one word with no spaces that does not start with a dash"
             )
+        }
+        return value
+    }
+
+    /// A skill name, which goes into a message as `Use the <name> skill.`
+    private static func skill(_ key: String, in entries: Entries, table: Table) throws -> String? {
+        guard let entry = entries[key], let value = try string(key, in: entries, table: table) else { return nil }
+        guard value.contains(where: \.isWhitespace) == false else {
+            throw TasksConfigParseError(line: entry.line, message: "\(table.name) \(key) must be a skill name with no spaces")
         }
         return value
     }

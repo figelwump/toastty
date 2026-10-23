@@ -44,7 +44,7 @@ Match these to what the user works on and which tools they use. Issue trackers, 
 
 Starting and finishing a task needs no personal skill. The shipped `toastty-task-start` skill runs `toastty task start-work`, and Toastty makes the worktree and continues the conversation there. When the user presses Merge on a task, or says "merge it", the shipped `toastty-task-merge` skill checks the pull request: unresolved review threads, merge prerequisites in its description, tasks that must land first, and CI. If nothing blocks, it runs `toastty task merge`; otherwise it reports the blockers and stops. Toastty then merges at the commit the skill checked, waits for checks that still run, and after the agent's turn ends closes the task space and removes its worktree. The checks need an authenticated `gh` CLI.
 
-To change how a project merges, set its `merge_prompt` in `~/.toastty/tasks.toml` to name the user's own skill, or set `merge = "direct"` to merge without an agent. A custom merge skill decides, then calls `toastty task merge`; it does not merge with `gh` itself, so Toastty stays the one place that merges and cleans up.
+To change how a project merges, set its `merge_skill` in `~/.toastty/tasks.toml` to the user's own skill, or set `merge = "direct"` to merge without an agent. A custom merge skill decides, then calls `toastty task merge`; it does not merge with `gh` itself, so Toastty stays the one place that merges and cleans up. In the same way, `start_skill` names the skill every new task's first message starts with, and `release_skill` the one a release task starts with; Toastty does not check that the agent has the skill.
 
 ## Rules for workflow skills
 

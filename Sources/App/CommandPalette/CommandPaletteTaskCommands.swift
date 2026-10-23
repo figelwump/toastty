@@ -11,7 +11,8 @@ enum PaletteTaskCommand: Equatable, Sendable {
     case release(workspaceID: UUID)
 }
 
-/// An open project whose `release_prompt` lets the palette start a release.
+/// An open project that can release from Toastty, so the palette can start
+/// a release.
 struct PaletteTaskReleaseOption: Equatable {
     let workspaceID: UUID
     let projectTitle: String
@@ -184,15 +185,19 @@ final class CommandPaletteTaskActions {
         return board.currentTask(in: selection) { sessionRuntimeStore.workspaceStatuses(for: $0) }
     }
 
-    /// One option for each open project with a `release_prompt` and no
-    /// release under way, the origin window's projects first.
+    /// One option for each open project with a release skill or a
+    /// `release_prompt` and no release under way, the origin window's
+    /// projects first.
     func releaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
         guard let store, let coordinator, let board, let config = board.config else { return [] }
         let home = coordinator.homeDirectoryPath
         let releasableRoots = config.workspaces
-            .filter { $0.releasePrompt != nil }
+            .filter { config.canRelease(projectRoot: $0.path, homeDirectoryPath: home) }
             .map { TasksConfigFile.normalizedPath($0.path, homeDirectoryPath: home) }
-        guard releasableRoots.isEmpty == false else { return [] }
+        // A `[defaults]` release skill makes every project releasable, so
+        // any saved root qualifies.
+        let anyRootReleases = config.defaults.releaseSkill != nil
+        guard releasableRoots.isEmpty == false || anyRootReleases else { return [] }
         let state = store.state
         let originID = store.commandSelection(preferredWindowID: originWindowID)?.windowID
         let windows = state.windows.filter { $0.id == originID } + state.windows.filter { $0.id != originID }
@@ -200,7 +205,12 @@ final class CommandPaletteTaskActions {
         for window in windows {
             for workspaceID in state.topLevelWorkspaceIDs(in: window.id) {
                 guard let workspace = state.workspacesByID[workspaceID],
-                      let root = releasableRoot(of: workspace, among: releasableRoots, homeDirectoryPath: home),
+                      let root = releasableRoot(
+                          of: workspace,
+                          among: releasableRoots,
+                          anyRootReleases: anyRootReleases,
+                          homeDirectoryPath: home
+                      ),
                       options.contains(where: { $0.projectRoot == root }) == false,
                       coordinator.releaseUnderWay(projectRoot: root) == nil else { continue }
                 options.append(PaletteTaskReleaseOption(
@@ -228,14 +238,20 @@ final class CommandPaletteTaskActions {
         }
     }
 
-    /// The configured project, among those with a `release_prompt`, that the
-    /// workspace is: its saved root, or else the project holding its first
-    /// terminal's directory. Release resolves a workspace without a saved
-    /// root through git, which the palette cannot run on every keystroke.
-    private func releasableRoot(of workspace: WorkspaceState, among roots: [String], homeDirectoryPath: String) -> String? {
+    /// The releasable project that the workspace is: its saved root, or
+    /// else the configured project holding its first terminal's directory.
+    /// Release resolves a workspace without a saved root through git, which
+    /// the palette cannot run on every keystroke. With `anyRootReleases`,
+    /// every saved root is releasable.
+    private func releasableRoot(
+        of workspace: WorkspaceState,
+        among roots: [String],
+        anyRootReleases: Bool,
+        homeDirectoryPath: String
+    ) -> String? {
         if let saved = workspace.rootDirectory {
             let normalized = TasksConfigFile.normalizedPath(saved, homeDirectoryPath: homeDirectoryPath)
-            return roots.first { $0 == normalized }
+            return anyRootReleases || roots.contains(normalized) ? normalized : nil
         }
         guard let directory = TaskCoordinator.firstTerminalDirectory(in: workspace, fileManager: fileManager) else { return nil }
         let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)

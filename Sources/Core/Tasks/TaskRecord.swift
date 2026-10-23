@@ -344,6 +344,9 @@ public struct TaskFields: Codable, Equatable, Sendable {
     /// A title and slug the caller chose. Triage does not replace them.
     public var title: String?
     public var slug: String?
+    /// The skill the first message names before everything else:
+    /// `start_skill`, or `release_skill` for a release.
+    public var skill: String?
 
     public init(
         workspaceID: UUID? = nil,
@@ -352,7 +355,8 @@ public struct TaskFields: Codable, Equatable, Sendable {
         effort: String? = nil,
         prompt: String? = nil,
         title: String? = nil,
-        slug: String? = nil
+        slug: String? = nil,
+        skill: String? = nil
     ) {
         self.workspaceID = workspaceID
         self.agent = agent
@@ -361,6 +365,7 @@ public struct TaskFields: Codable, Equatable, Sendable {
         self.prompt = prompt
         self.title = title
         self.slug = slug
+        self.skill = skill
     }
 }
 

@@ -137,6 +137,7 @@ struct TaskCoordinatorTests {
 
     @Test func createStartsTheAgentInANewTaskSpace() async throws {
         let fixture = try Fixture()
+        fixture.config.defaults.startSkill = "task-start"
         let screenshot = fixture.root.appendingPathComponent("repro shot.png")
         try Data("png".utf8).write(to: screenshot)
 
@@ -171,8 +172,8 @@ struct TaskCoordinatorTests {
         #expect(taskSpace.hasBeenVisited == false)
         #expect(fixture.store.selectedWorkspace?.id == fixture.workspaceID)
 
-        // The agent got the first prompt, then the text as written, then
-        // Toastty's copy of the file.
+        // The agent got the start skill, the first prompt, then the text as
+        // written, then Toastty's copy of the file.
         let attachment = try #require(record.attachments.first)
         #expect(attachment.displayName == "repro shot.png")
         #expect(attachment.path.hasPrefix(fixture.attachmentsDirectory.path))
@@ -180,7 +181,9 @@ struct TaskCoordinatorTests {
         let panelID = try #require(record.operation.taskSpace?.panelID)
         let sent = try #require(fixture.router.sentTextByPanelID[panelID])
         #expect(sent.contains("gpt-6.1-sol"))
-        #expect(sent.contains("Fix the composer. Start work at once."))
+        let skillLine = try #require(sent.range(of: "Use the task-start skill."))
+        let firstPrompt = try #require(sent.range(of: "Fix the composer. Start work at once."))
+        #expect(skillLine.upperBound < firstPrompt.lowerBound)
         #expect(sent.contains("On Mac and iPhone."))
         // The copy's folder is named by the task ID.
         #expect(sent.contains("task-attachments/\(created.id.uuidString)/repro"))

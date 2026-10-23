@@ -1,6 +1,6 @@
 ---
 name: toastty-task-merge
-description: Use in a Toastty-managed task session when Toastty asks you to merge the task's pull request (its Merge button sends "Use toastty-task-merge."), when the user says "merge it", or when a coordinating task merges its child tasks. Checks review threads, merge prerequisites, tasks that must land first, and CI, then merges with `toastty task merge`, or reports what blocks the merge.
+description: Use in a Toastty-managed task session when Toastty asks you to merge the task's pull request (its Merge button sends "Use the toastty-task-merge skill."), when the user says "merge it", or when a coordinating task merges its child tasks. Checks review threads, merge prerequisites, tasks that must land first, and CI, then merges with `toastty task merge`, or reports what blocks the merge.
 ---
 
 # Toastty Task Merge

@@ -465,12 +465,13 @@ final class TaskBoardStore: ObservableObject {
     }
 
     /// Whether Release can start a release for the item's project: the
-    /// project is open and tasks.toml gives it a `release_prompt`.
+    /// project is open and tasks.toml gives it a release skill or a
+    /// `release_prompt`.
     func canRelease(_ item: TaskBoardItem) -> Bool {
         guard item.projectWorkspaceID != nil,
               let root = item.record?.projectRoot,
               let config else { return false }
-        return config.workspace(forProjectRoot: root)?.releasePrompt != nil
+        return config.canRelease(projectRoot: root)
     }
 
     func reloadConfig() {
