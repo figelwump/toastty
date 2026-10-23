@@ -3589,18 +3589,35 @@ struct SidebarView: View {
             sessions: sessions,
             creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
             path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace),
-            taskMenu: taskMenu(for: boardItem)
+            taskMenu: taskMenu(for: boardItem, workspace: workspace)
         )
     }
 
     /// A task space's task menu. Only a task space with a task record has
     /// one; other subspaces keep their own menu.
-    private func taskMenu(for item: TaskBoardItem?) -> [[TaskBoardPresentation.MenuItem]]? {
+    private func taskMenu(for item: TaskBoardItem?, workspace: WorkspaceState) -> [[TaskBoardPresentation.MenuItem]]? {
         guard let item, item.record != nil else { return nil }
         // The window shows the selected task space unless the Tasks view
         // covers it.
         let showsTasksView = store.window(id: windowID)?.showsTasksView ?? false
-        return TaskBoardPresentation.menuItems(item, currentWorkspaceID: showsTasksView ? nil : selectedWorkspaceID)
+        let currentWorkspaceID = showsTasksView ? nil : selectedWorkspaceID
+        return TaskBoardPresentation.menuItems(
+            item,
+            currentWorkspaceID: currentWorkspaceID,
+            showsMergeShortcut: currentWorkspaceID == workspace.id && isMergeButtonReady(workspace)
+        )
+    }
+
+    /// Whether Option+Shift+M would merge the workspace: its Merge button is
+    /// ready, as the shortcut's handler checks.
+    private func isMergeButtonReady(_ workspace: WorkspaceState) -> Bool {
+        guard case .ready? = WorkspaceMergePresentation.make(
+            workspace: workspace,
+            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+            mode: store.workspaceMergeMode,
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id)
+        ) else { return false }
+        return true
     }
 
     private func linkedParentTaskSpaceID(of item: TaskBoardItem?) -> UUID? {

@@ -86,15 +86,32 @@ enum TaskActions {
     }
 
     /// Runs a context menu's item, and shows a failure in an alert, since a
-    /// menu has nowhere to show it.
+    /// menu has nowhere to show it. The task may have moved on while the
+    /// menu was open, so an item its menu no longer offers does nothing.
     static func runFromMenu(
         _ item: TaskBoardPresentation.MenuItem,
         coordinator: TaskCoordinator,
         openTaskSpace: (UUID) -> Void
     ) {
+        guard isOffered(item, coordinator: coordinator) else { return }
         perform(failureTitle(item, coordinator: coordinator)) {
             try run(item, coordinator: coordinator, openTaskSpace: openTaskSpace)
         }
+    }
+
+    private static func isOffered(_ item: TaskBoardPresentation.MenuItem, coordinator: TaskCoordinator) -> Bool {
+        let subject: TaskBoardItem.Subject
+        switch item {
+        case .openTaskSpace, .openPullRequest: return true
+        case .trackAsTask(let workspaceID): subject = .taskSpace(workspaceID)
+        case .action(_, let taskID, _), .retry(let taskID, _), .retryTriage(let taskID), .delete(let taskID):
+            subject = .task(taskID)
+        }
+        guard let board = coordinator.board,
+              let current = board.items().first(where: { $0.id == subject }) else { return false }
+        return TaskBoardPresentation.menuItems(current, isTriageConfigured: coordinator.isTriageConfigured)
+            .joined()
+            .contains(item.withoutShortcut)
     }
 
     private static func failureTitle(_ item: TaskBoardPresentation.MenuItem, coordinator: TaskCoordinator) -> String {

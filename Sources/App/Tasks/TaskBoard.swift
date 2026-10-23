@@ -317,6 +317,9 @@ final class TaskBoardStore: ObservableObject {
     @Published private(set) var configError: String?
     /// The task each window's Tasks view shows in its detail pane.
     @Published var selectionByWindowID: [UUID: TaskBoardItem.Subject] = [:]
+    /// The rows each window's Tasks view showed last, in order; see
+    /// `tasksViewListDidChange`.
+    var tasksViewListByWindowID: [UUID: [TaskBoardItem.Subject]] = [:]
     /// A group each window's Tasks view should show next, set by the
     /// sidebar's To ship and Done counts. The view scrolls to it, expands
     /// Done, and then clears the request.

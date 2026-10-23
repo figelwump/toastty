@@ -223,21 +223,33 @@ enum TaskBoardPresentation {
             if case .delete = self { return true }
             return false
         }
+
+        /// The item without its shortcut hint, to compare a menu built
+        /// earlier with the task's menu now.
+        var withoutShortcut: Self {
+            if case .action(let action, let taskID, true) = self {
+                return .action(action, taskID: taskID)
+            }
+            return self
+        }
     }
 
     /// The task's menu, in sections: where to go, then what to do. The
     /// detail pane's actions come in its order; one that does not apply now
     /// is left out, as in the command palette. Open Task Space is left out
     /// when `currentWorkspaceID` is the task space, which the window already
-    /// shows; there Merge shows its shortcut.
+    /// shows. `showsMergeShortcut` when Option+Shift+M would merge it there.
+    /// `isTriageConfigured` reads tasks.toml, so it runs only for a task
+    /// that waits for a workspace.
     static func menuItems(
         _ item: TaskBoardItem,
         currentWorkspaceID: UUID? = nil,
-        isTriageConfigured: Bool = false
+        showsMergeShortcut: Bool = false,
+        isTriageConfigured: @autoclosure () -> Bool = false
     ) -> [[MenuItem]] {
         if item.stage.group == .inbox {
             guard let record = item.record else { return [] }
-            return [inboxMenuItems(record, isTriageConfigured: isTriageConfigured)]
+            return [inboxMenuItems(record, isTriageConfigured: isTriageConfigured())]
         }
         var navigation: [MenuItem] = []
         let isCurrent = item.taskSpaceWorkspaceID != nil && item.taskSpaceWorkspaceID == currentWorkspaceID
@@ -253,7 +265,7 @@ enum TaskBoardPresentation {
         var actions: [MenuItem] = []
         if let record = item.record {
             actions = detailActions(item).map { action in
-                .action(action, taskID: record.id, showsShortcut: action == .merge && isCurrent)
+                .action(action, taskID: record.id, showsShortcut: action == .merge && isCurrent && showsMergeShortcut)
             }
             if item.stage == .needsYou(.taskSpaceClosed) {
                 actions.append(.delete(taskID: record.id))
@@ -263,11 +275,11 @@ enum TaskBoardPresentation {
     }
 
     /// A task that has not started yet: retry what failed, or delete it.
-    static func inboxMenuItems(_ record: TaskRecord, isTriageConfigured: Bool) -> [MenuItem] {
+    static func inboxMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {
         var items: [MenuItem] = []
         if SidebarInboxRowPresentation.canRetry(record) {
             items.append(.retry(taskID: record.id, title: record.setup.isStarted ? "Retry Move" : "Retry Setup"))
-        } else if case .needsWorkspace = record.setup, isTriageConfigured {
+        } else if case .needsWorkspace = record.setup, isTriageConfigured() {
             items.append(.retryTriage(taskID: record.id))
         }
         items.append(.delete(taskID: record.id))

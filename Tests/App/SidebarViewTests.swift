@@ -1,6 +1,7 @@
 import RemoteProtocol
 @testable import ToasttyApp
 import AppKit
+import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 import XCTest
@@ -2341,6 +2342,99 @@ final class SidebarViewTests: XCTestCase {
         defer { tasks.window.orderOut(nil) }
         XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
         XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, expanded"), "\(renderedTextValues(in: tasks.hostingView))")
+    }
+
+    func testTasksViewArrowKeysMoveTheSelectionThroughTheRowsItShows() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 8, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        // One task in the collapsed Done group, which the arrows skip.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        let tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        let visible = TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false)
+        XCTAssertGreaterThan(visible.count, 6, "The list should run past the fold")
+        XCTAssertFalse(visible.contains { $0.id == .taskSpace(ids.readyUnreadID) })
+        let responder = try XCTUnwrap(tasks.window.firstResponder as? NSView, "The Tasks view should hold keyboard focus")
+
+        func press(_ keyCode: Int, modifiers: NSEvent.ModifierFlags = []) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers.union([.numericPad, .function]),
+                timestamp: 0, windowNumber: tasks.window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(keyCode)
+            ))
+            responder.keyDown(with: event)
+            pumpMainRunLoop(duration: 0.3)
+            tasks.hostingView.layoutSubtreeIfNeeded()
+        }
+
+        // Down walks the list from the first row, which shows by default.
+        for entry in visible.dropFirst() {
+            try press(kVK_DownArrow)
+            XCTAssertEqual(board.selectionByWindowID[harness.windowID], entry.id)
+        }
+        let last = try XCTUnwrap(visible.last)
+        try press(kVK_DownArrow)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], last.id, "Down should stop at the last row")
+        // The detail pane follows, and the row scrolled into view.
+        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(last.item.title),") })
+        let rowFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "\(last.item.title), ")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: rowFrame.midX, y: rowFrame.midY)),
+            "The selected row should scroll into view: \(rowFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-arrow-last-row")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-arrow-last-row")
+
+        try press(kVK_UpArrow)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
+        // Arrows with a modifier are not the list's.
+        try press(kVK_UpArrow, modifiers: .shift)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
+    }
+
+    func testTasksViewSelectsTheNextTaskWhenTheSelectedOneLeavesTheList() throws {
+        let failed = TaskRecord(
+            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        let coordinator = try XCTUnwrap(board.coordinator)
+        let tasks = hostTasksView(harness, board: board, height: 640)
+        defer { tasks.window.orderOut(nil) }
+        func visible() -> [TaskBoardItem.Subject] {
+            TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false).map(\.id)
+        }
+
+        // Marked done into the collapsed Done group: the next row takes the
+        // selection, or the previous one when it was the last.
+        let leaving = TaskBoardItem.Subject.taskSpace(ids.readyUnreadID)
+        var before = visible()
+        let index = try XCTUnwrap(before.firstIndex(of: leaving))
+        let expected = index + 1 < before.count ? before[index + 1] : before[index - 1]
+        board.selectionByWindowID[harness.windowID] = leaving
+        pumpMainRunLoop(duration: 0.3)
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertFalse(visible().contains(leaving))
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], expected)
+        let expectedTitle = try XCTUnwrap(board.items().first { $0.id == expected }?.title)
+        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(expectedTitle),") })
+
+        // A deleted Inbox task hands the selection to the row below it.
+        before = visible()
+        XCTAssertEqual(before.first, .task(failed.id))
+        board.selectionByWindowID[harness.windowID] = .task(failed.id)
+        pumpMainRunLoop(duration: 0.3)
+        try coordinator.delete(taskID: failed.id)
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], before[1])
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-selection-after-delete")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-selection-after-delete")
     }
 
     private func hostTasksView(

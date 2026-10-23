@@ -13,6 +13,18 @@ extension TaskBoardStore {
         return TasksViewSections.make(items).all.first?.item
     }
 
+    /// Keeps a window's Tasks view selection in the list it shows. When the
+    /// selected row leaves it, for example once archived or marked done into
+    /// the collapsed Done group, its neighbour takes the selection. A view
+    /// that opens again compares with the list it showed last.
+    func tasksViewListDidChange(windowID: UUID, visible: [TaskBoardItem.Subject]) {
+        let before = tasksViewListByWindowID[windowID] ?? []
+        tasksViewListByWindowID[windowID] = visible
+        guard let chosen = selectionByWindowID[windowID], visible.contains(chosen) == false,
+              let next = TasksViewSections.selection(replacing: chosen, before: before, after: visible) else { return }
+        selectionByWindowID[windowID] = next
+    }
+
     /// The task commands act on in a window: the Tasks view's selected row
     /// while the view shows, otherwise the task whose task space is the
     /// selected workspace. `nil` when neither applies.

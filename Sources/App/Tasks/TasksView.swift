@@ -50,6 +50,43 @@ struct TasksViewSections: Equatable {
     var all: [SidebarStatusSections.Entry] {
         inbox + needsYou + running + toShip.flatMap(\.entries) + done + archived
     }
+
+    /// The entries the list shows, in order: Done and Archived only while
+    /// they are expanded.
+    func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
+        inbox + needsYou + running + toShip.flatMap(\.entries)
+            + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
+    }
+
+    /// The row an arrow key selects: the next or previous visible row, or
+    /// the first or last when the selection is not among them. `nil` at
+    /// either end.
+    static func selection(
+        movingFrom selected: TaskBoardItem.Subject?,
+        by offset: Int,
+        in visible: [TaskBoardItem.Subject]
+    ) -> TaskBoardItem.Subject? {
+        guard let index = selected.flatMap(visible.firstIndex(of:)) else {
+            return offset > 0 ? visible.first : visible.last
+        }
+        let target = index + offset
+        return visible.indices.contains(target) ? visible[target] : nil
+    }
+
+    /// The row to select once `selected` leaves the list, as when it was
+    /// archived or marked done into a collapsed group: the next row it had
+    /// that still shows, or else the one before it. `nil` when the list did
+    /// not show it before, or shows nothing now.
+    static func selection(
+        replacing selected: TaskBoardItem.Subject,
+        before: [TaskBoardItem.Subject],
+        after: [TaskBoardItem.Subject]
+    ) -> TaskBoardItem.Subject? {
+        guard let index = before.firstIndex(of: selected) else { return nil }
+        let remaining = Set(after)
+        return before[(index + 1)...].first(where: remaining.contains)
+            ?? before[..<index].last(where: remaining.contains)
+    }
 }
 
 /// The full task board: a window-level mode that covers the workspace
@@ -65,6 +102,8 @@ struct TasksView: View {
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
+    /// The row an arrow key selected, to scroll into view.
+    @State private var keyboardSelection: TaskBoardItem.Subject?
 
     private static let detailWidth: CGFloat = 360
 
@@ -72,6 +111,7 @@ struct TasksView: View {
         let items = board.items()
         let sections = TasksViewSections.make(items, releasable: board.canRelease)
         let selected = board.tasksViewSelection(windowID: windowID, items: items)
+        let visibleIDs = sections.visible(isDoneExpanded: isDoneExpanded, isArchivedExpanded: isArchivedExpanded).map(\.id)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -88,6 +128,11 @@ struct TasksView: View {
                     .onAppear { revealRequestedGroup(using: proxy) }
                     .onChange(of: board.revealGroupByWindowID[windowID]) { _, _ in
                         revealRequestedGroup(using: proxy)
+                    }
+                    .onChange(of: keyboardSelection) { _, subject in
+                        guard let subject, let entry = sections.all.first(where: { $0.id == subject }) else { return }
+                        proxy.scrollTo(Self.rowIdentity(entry))
+                        keyboardSelection = nil
                     }
                 }
 
@@ -119,13 +164,27 @@ struct TasksView: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .background(ToastyTheme.surfaceBackground)
-        .onAppear { board.tasksViewDidOpen() }
+        .onAppear {
+            board.tasksViewDidOpen()
+            board.tasksViewListDidChange(windowID: windowID, visible: visibleIDs)
+        }
+        // A selected task that leaves the list, such as one just archived,
+        // hands the selection to its neighbour.
+        .onChange(of: visibleIDs) { _, ids in
+            board.tasksViewListDidChange(windowID: windowID, visible: ids)
+        }
         // Holds keyboard focus in this window while the view shows, so keys
-        // never reach the terminal underneath, and closes the view on Esc.
+        // never reach the terminal underneath, closes the view on Esc, and
+        // moves the selection with Up and Down Arrow.
         .background {
-            TasksViewKeySink {
-                _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
-            }
+            TasksViewKeySink(
+                close: { _ = store.send(.setTasksViewShown(windowID: windowID, shown: false)) },
+                move: { offset in
+                    guard let next = TasksViewSections.selection(movingFrom: selected?.id, by: offset, in: visibleIDs) else { return }
+                    board.selectionByWindowID[windowID] = next
+                    keyboardSelection = next
+                }
+            )
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
         }
@@ -306,10 +365,9 @@ struct TasksView: View {
             }
             .contextMenu {
                 if let coordinator = board.coordinator {
-                    // Only the Inbox reads tasks.toml for Retry Triage.
                     TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(
                         entry.item,
-                        isTriageConfigured: entry.item.stage.group == .inbox && coordinator.isTriageConfigured
+                        isTriageConfigured: coordinator.isTriageConfigured
                     )) { menuItem in
                         TaskActions.runFromMenu(menuItem, coordinator: coordinator) { workspaceID in
                             TaskActions.openTaskSpace(
@@ -325,13 +383,17 @@ struct TasksView: View {
             // The lazy stack kept a row's old drawing when its task moved to
             // another group while the view showed, so a row is rebuilt
             // whenever its group or status line changes.
-            .id(RowIdentity(
-                subject: entry.id,
-                group: entry.item.stage.group,
-                statusLine: TaskBoardPresentation.statusLine(entry.item),
-                hasUnreadTurn: entry.item.hasUnreadTurn
-            ))
+            .id(Self.rowIdentity(entry))
         }
+    }
+
+    private static func rowIdentity(_ entry: SidebarStatusSections.Entry) -> RowIdentity {
+        RowIdentity(
+            subject: entry.id,
+            group: entry.item.stage.group,
+            statusLine: TaskBoardPresentation.statusLine(entry.item),
+            hasUnreadTurn: entry.item.hasUnreadTurn
+        )
     }
 
     private struct RowIdentity: Hashable {
@@ -408,11 +470,21 @@ private struct TasksViewRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
         .onHover { isHovered = $0 }
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityLabel)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.statusLine(item))")
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
         .accessibilityIdentifier("tasks.view.row")
+    }
+
+    private var accessibilityLabel: String {
+        let item = entry.item
+        return "\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.statusLine(item))"
     }
 }
 
@@ -425,19 +497,24 @@ private struct TasksViewRow: View {
 /// the view, such as quick entry.
 private struct TasksViewKeySink: NSViewRepresentable {
     let close: () -> Void
+    /// Moves the selection by one row: -1 for Up Arrow, 1 for Down Arrow.
+    let move: (Int) -> Void
 
     func makeNSView(context _: Context) -> KeySinkView {
         let view = KeySinkView()
         view.close = close
+        view.move = move
         return view
     }
 
     func updateNSView(_ view: KeySinkView, context _: Context) {
         view.close = close
+        view.move = move
     }
 
     final class KeySinkView: NSView {
         var close: (() -> Void)?
+        var move: ((Int) -> Void)?
         private var observers: [NSObjectProtocol] = []
 
         override var acceptsFirstResponder: Bool { true }
@@ -466,9 +543,15 @@ private struct TasksViewKeySink: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
-            // Esc closes; other keys stop here instead of reaching the
-            // terminal or beeping.
-            if event.keyCode == 53 { close?() }
+            // Esc closes and the plain arrows move the selection; other keys
+            // stop here instead of reaching the terminal or beeping.
+            let isPlain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            switch event.keyCode {
+            case 53: close?()
+            case 125 where isPlain: move?(1)
+            case 126 where isPlain: move?(-1)
+            default: break
+            }
         }
 
         override func cancelOperation(_: Any?) {

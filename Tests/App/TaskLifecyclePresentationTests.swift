@@ -128,8 +128,8 @@ struct TaskLifecyclePresentationTests {
                 stage: stage, agent: .idle, pullRequest: pullRequest ? link : nil, merge: merge, activityAt: requestedAt
             )
         }
-        func menu(_ item: TaskBoardItem, current: UUID? = nil) -> [[Menu]] {
-            TaskBoardPresentation.menuItems(item, currentWorkspaceID: current)
+        func menu(_ item: TaskBoardItem, current: UUID? = nil, mergeShortcut: Bool = false) -> [[Menu]] {
+            TaskBoardPresentation.menuItems(item, currentWorkspaceID: current, showsMergeShortcut: mergeShortcut)
         }
 
         // Running with a pull request: go to the task space or the PR, then
@@ -140,10 +140,13 @@ struct TaskLifecyclePresentationTests {
         ])
         // The window shows the task space: no Open Task Space, and Merge
         // shows Option+Shift+M, which runs it there.
-        #expect(menu(item(.running), current: space) == [
+        #expect(menu(item(.running), current: space, mergeShortcut: true) == [
             [pullRequest],
             [.action(.merge, taskID: task.id, showsShortcut: true), .action(.mergeWithoutChecks, taskID: task.id), .action(.archive, taskID: task.id)],
         ])
+        // Without a ready Merge button the shortcut does nothing, so the
+        // hint stays off.
+        #expect(menu(item(.running), current: space).joined().contains(.action(.merge, taskID: task.id)))
         // Without a pull request, Archive stays.
         #expect(menu(item(.running, pullRequest: false)) == [
             [.openTaskSpace(workspaceID: space)],
@@ -194,6 +197,35 @@ struct TaskLifecyclePresentationTests {
         #expect(inbox(.needsWorkspace(reason: "pick one"), triage: true) == [[.retryTriage(taskID: id), .delete(taskID: id)]])
         #expect(inbox(.needsWorkspace(reason: "pick one")) == [[.delete(taskID: id)]])
         #expect(inbox(.routing) == [[.delete(taskID: id)]])
+    }
+
+    @Test
+    func theTasksViewSelectionMovesThroughTheRowsItShows() {
+        let rows = (0..<4).map { _ in TaskBoardItem.Subject.task(UUID()) }
+        let hidden = TaskBoardItem.Subject.task(UUID())
+        func move(_ selected: TaskBoardItem.Subject?, _ offset: Int) -> TaskBoardItem.Subject? {
+            TasksViewSections.selection(movingFrom: selected, by: offset, in: rows)
+        }
+        #expect(move(rows[1], 1) == rows[2])
+        #expect(move(rows[1], -1) == rows[0])
+        // Nothing past either end.
+        #expect(move(rows[3], 1) == nil)
+        #expect(move(rows[0], -1) == nil)
+        // A selection the list does not show starts from an end.
+        #expect(move(hidden, 1) == rows[0])
+        #expect(move(nil, -1) == rows[3])
+
+        func replace(_ selected: TaskBoardItem.Subject, after: [TaskBoardItem.Subject]) -> TaskBoardItem.Subject? {
+            TasksViewSections.selection(replacing: selected, before: rows, after: after)
+        }
+        // The next row takes over, or the previous one for the last row.
+        #expect(replace(rows[1], after: [rows[0], rows[2], rows[3]]) == rows[2])
+        #expect(replace(rows[3], after: [rows[0], rows[1], rows[2]]) == rows[2])
+        // A next row that left too is skipped.
+        #expect(replace(rows[1], after: [rows[0], rows[3]]) == rows[3])
+        #expect(replace(rows[1], after: []) == nil)
+        // A row the list never showed keeps its selection.
+        #expect(replace(hidden, after: rows) == nil)
     }
 
     @Test
