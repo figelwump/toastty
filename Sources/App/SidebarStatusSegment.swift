@@ -333,6 +333,7 @@ struct SidebarTaskRecordRow: View {
         .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+        .accessibilityIdentifier("sidebar.status.task")
     }
 }
 

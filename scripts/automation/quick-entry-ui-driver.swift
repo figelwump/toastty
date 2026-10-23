@@ -22,6 +22,17 @@
 //   windows-at <x> <y>                  prints the windows under a point, front first, as JSON
 //   pasteboard-text <text>              puts text on the general pasteboard
 //   pasteboard-png <path>               puts a PNG on the general pasteboard
+//   labels <pid> <identifier>           prints the labels of the elements with
+//                                       that identifier, in tree order, as JSON
+//   texts <pid> <identifier>            prints the static texts under the
+//                                       element, in tree order, as JSON
+//   context-menu <pid> <identifier> <label-prefix|-> [item-title]
+//                                       right-clicks the element, prints the
+//                                       open menu's item titles as JSON, then
+//                                       presses the item or closes the menu
+//   dialog <pid>                        prints a dialog window's texts and
+//                                       buttons as JSON, or {}
+//   dialog-press <pid> <button-title>   presses a dialog window's button
 
 import AppKit
 import ApplicationServices
@@ -80,6 +91,35 @@ func application(_ pidText: String) -> AXUIElement {
 
 func windows(of app: AXUIElement) -> [AXUIElement] {
     (attribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+}
+
+/// Visits every element under `element`, as deep as SwiftUI nests the
+/// workspace content.
+func visit(_ element: AXUIElement, depth: Int = 0, _ body: (AXUIElement) -> Void) {
+    body(element)
+    guard depth < 150 else { return }
+    for child in children(element) {
+        visit(child, depth: depth + 1, body)
+    }
+}
+
+/// An element's accessibility label: SwiftUI puts it in AXDescription,
+/// AppKit buttons and menu items in AXTitle.
+func label(_ element: AXUIElement) -> String {
+    for name in [kAXDescriptionAttribute, kAXTitleAttribute] {
+        if let text = attribute(element, name) as? String, text.isEmpty == false { return text }
+    }
+    return ""
+}
+
+func center(of element: AXUIElement) -> CGPoint? {
+    guard let positionValue = attribute(element, kAXPositionAttribute),
+          let sizeValue = attribute(element, kAXSizeAttribute) else { return nil }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin)
+    AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+    return CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
 }
 
 func element(in app: AXUIElement, identifier wanted: String) -> AXUIElement? {
@@ -193,6 +233,109 @@ case "set-value":
     }
     let error = AXUIElementSetAttributeValue(found, kAXValueAttribute as CFString, arguments[3] as CFString)
     guard error == .success else { fail("could not set the value: error \(error.rawValue)") }
+
+case "labels":
+    guard arguments.count == 3 else { fail("labels <pid> <identifier>") }
+    var labels: [String] = []
+    for window in windows(of: application(arguments[1])) {
+        visit(window) { if identifier($0) == arguments[2] { labels.append(label($0)) } }
+    }
+    let data = try JSONSerialization.data(withJSONObject: labels)
+    print(String(decoding: data, as: UTF8.self))
+
+case "texts":
+    guard arguments.count == 3 else { fail("texts <pid> <identifier>") }
+    guard let found = element(in: application(arguments[1]), identifier: arguments[2]) else {
+        fail("no element \(arguments[2])")
+    }
+    var texts: [String] = []
+    visit(found) { element in
+        if attribute(element, kAXRoleAttribute) as? String == kAXStaticTextRole,
+           let value = attribute(element, kAXValueAttribute) as? String {
+            texts.append(value)
+        }
+    }
+    let data = try JSONSerialization.data(withJSONObject: texts)
+    print(String(decoding: data, as: UTF8.self))
+
+case "context-menu":
+    guard arguments.count == 4 || arguments.count == 5, let pid = pid_t(arguments[1]) else {
+        fail("context-menu <pid> <identifier> <label-prefix|-> [item-title]")
+    }
+    let app = application(arguments[1])
+    let prefix = arguments[3] == "-" ? "" : arguments[3]
+    var target: AXUIElement?
+    for window in windows(of: app) where target == nil {
+        visit(window) { element in
+            if target == nil, identifier(element) == arguments[2], label(element).hasPrefix(prefix) { target = element }
+        }
+    }
+    guard let target, let center = center(of: target) else { fail("no element \(arguments[2]) labelled \(prefix)") }
+    // A real right-click, as a user opens the menu; AXShowMenu on a row
+    // can open its parent's menu instead.
+    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+    AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    usleep(300_000)
+    for type in [CGEventType.rightMouseDown, .rightMouseUp] {
+        guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type,
+                                  mouseCursorPosition: center, mouseButton: .right) else { fail("could not make a click") }
+        event.post(tap: .cghidEventTap)
+        usleep(60_000)
+    }
+    var menu: AXUIElement?
+    for _ in 0..<50 where menu == nil {
+        usleep(100_000)
+        menu = find(app, skippingMenuBar: true, where: { attribute($0, kAXRoleAttribute) as? String == kAXMenuRole })
+    }
+    guard let menu else { fail("no context menu opened") }
+    let items = children(menu).filter { attribute($0, kAXRoleAttribute) as? String == kAXMenuItemRole }
+    // A divider is an item without a title.
+    let titles = items.map { (attribute($0, kAXTitleAttribute) as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "—" }
+    let data = try JSONSerialization.data(withJSONObject: titles)
+    print(String(decoding: data, as: UTF8.self))
+    if arguments.count == 5 {
+        guard let item = items.first(where: { attribute($0, kAXTitleAttribute) as? String == arguments[4] }) else {
+            post(key: 53, flags: [])
+            fail("no menu item \(arguments[4])")
+        }
+        AXUIElementPerformAction(item, kAXPressAction as CFString)
+    } else {
+        post(key: 53, flags: [])
+    }
+
+case "dialog", "dialog-press":
+    guard arguments.count == (arguments[0] == "dialog" ? 2 : 3) else { fail("dialog <pid> | dialog-press <pid> <button-title>") }
+    let app = application(arguments[1])
+    // NSAlert's window is a dialog; a SwiftUI alert is a sheet on its window.
+    var dialog: AXUIElement?
+    for window in windows(of: app) where dialog == nil {
+        if ["AXDialog", "AXSystemDialog"].contains(attribute(window, kAXSubroleAttribute) as? String ?? "") {
+            dialog = window
+        } else {
+            dialog = children(window).first { attribute($0, kAXRoleAttribute) as? String == "AXSheet" }
+        }
+    }
+    guard let dialog else {
+        guard arguments[0] == "dialog" else { fail("no dialog") }
+        print("{}")
+        break
+    }
+    var texts: [String] = []
+    var buttons: [AXUIElement] = []
+    visit(dialog) { element in
+        switch attribute(element, kAXRoleAttribute) as? String {
+        case kAXStaticTextRole?: (attribute(element, kAXValueAttribute) as? String).map { texts.append($0) }
+        case kAXButtonRole?, kAXCheckBoxRole?: buttons.append(element)
+        default: break
+        }
+    }
+    if arguments[0] == "dialog-press" {
+        guard let button = buttons.first(where: { label($0) == arguments[2] }) else { fail("no button \(arguments[2])") }
+        AXUIElementPerformAction(button, kAXPressAction as CFString)
+        break
+    }
+    let data = try JSONSerialization.data(withJSONObject: ["texts": texts, "buttons": buttons.map(label)])
+    print(String(decoding: data, as: UTF8.self))
 
 case "press-menu":
     guard arguments.count == 4 else { fail("press-menu <pid> <identifier> <item-title>") }

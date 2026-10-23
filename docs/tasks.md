@@ -436,7 +436,11 @@ and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 Status To ship lines have one too. A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
-it hides the view and returns to the workspace it covered.
+it hides the view and returns to the workspace it covered. Up and Down Arrow
+move the selection through the rows the list shows, skipping collapsed Done
+and Archived, and the detail pane follows. When the selected task leaves the
+list, for example after **Archive…** or **Mark Done** into collapsed Done, the
+next row is selected, or the previous one when it was the last.
 
 ### The command palette
 
