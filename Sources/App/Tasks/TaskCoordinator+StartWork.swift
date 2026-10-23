@@ -210,7 +210,7 @@ extension TaskCoordinator {
         }
     }
 
-    private func fail(_ job: TaskJob, taskID: UUID, reason: String) {
+    func fail(_ job: TaskJob, taskID: UUID, reason: String) {
         switch job {
         case .setup(let attempt):
             setupFailed(taskID: taskID, attempt: attempt, reason: reason)
@@ -267,7 +267,7 @@ extension TaskCoordinator {
             // 5. The fork copies the conversation as it is on disk, so it
             // waits for the turn that asked for the move to end.
             guard await waitForSourceTurnToEnd(job: job, taskID: taskID, sessions: sessions) else { return }
-            let current = currentSource(taskID: taskID, sessions: sessions)
+            let current = currentSource(taskID: taskID, job: job, sessions: sessions)
             if forked, current == nil {
                 fail(job, taskID: taskID, reason: "The session to move ended before Toastty could copy its conversation. The worktree is ready at \(worktree.path); start an agent there.")
                 return
@@ -331,7 +331,7 @@ extension TaskCoordinator {
         }
         guard var target else { return }
         let sourceConversationID = records.record(id: taskID)?.startWork?.source?.conversationID
-            ?? currentSource(taskID: taskID, sessions: sessions)?.nativeConversationID
+            ?? currentSource(taskID: taskID, job: job, sessions: sessions)?.nativeConversationID
 
         // 8. A fork counts once the provider reports a conversation of its
         // own; until then the old session is the only copy.
@@ -357,7 +357,7 @@ extension TaskCoordinator {
             outcome = .kept(reason: "\(agent.displayName) sessions cannot be forked, so the conversation stays in this session.")
         } else {
             outcome = closeSource(
-                currentSource(taskID: taskID, sessions: sessions),
+                currentSource(taskID: taskID, job: job, sessions: sessions),
                 source: source,
                 requestedAt: record.startWork?.requestedAt ?? .distantPast,
                 sessions: sessions
@@ -487,7 +487,7 @@ extension TaskCoordinator {
 
     // MARK: - Sessions
 
-    private func waitForSourceTurnToEnd(
+    func waitForSourceTurnToEnd(
         job: TaskJob,
         taskID: UUID,
         sessions: any TaskSessionProviding
@@ -499,13 +499,13 @@ extension TaskCoordinator {
             guard isCurrent(job, taskID: taskID) else { return false }
             // A session that ended has nothing more to write; the launch
             // decides what that means.
-            guard let session = currentSource(taskID: taskID, sessions: sessions), session.isInTurn else {
+            guard let session = currentSource(taskID: taskID, job: job, sessions: sessions), session.isInTurn else {
                 if waited { try? await Task.sleep(for: Self.transcriptSettleDelay) }
                 return isCurrent(job, taskID: taskID)
             }
             guard clock.now < deadline else {
                 let minutes = Int(timing.sourceTurnTimeout.components.seconds / 60)
-                fail(job, taskID: taskID, reason: "The session did not finish its turn within \(minutes) minutes, so its conversation was not copied. Retry once it is idle.")
+                fail(job, taskID: taskID, reason: "\(Self.sourceName(job)) did not finish its turn within \(minutes) minutes, so its conversation was not copied. Retry once it is idle.")
                 return false
             }
             waited = true
@@ -513,10 +513,10 @@ extension TaskCoordinator {
         }
     }
 
-    /// Waits until Toastty has identified the moving session's provider
-    /// conversation, and saves it on the record. A move asked for in the
-    /// session's first seconds can arrive before that.
-    private func waitForSourceConversation(
+    /// Waits until Toastty has identified the source session's provider
+    /// conversation, and saves it on the record. A move or fork asked for in
+    /// the session's first seconds can arrive before that.
+    func waitForSourceConversation(
         job: TaskJob,
         taskID: UUID,
         sessions: any TaskSessionProviding,
@@ -524,13 +524,13 @@ extension TaskCoordinator {
     ) async -> Bool {
         while true {
             guard isCurrent(job, taskID: taskID) else { return false }
-            guard let session = currentSource(taskID: taskID, sessions: sessions) else {
-                fail(job, taskID: taskID, reason: "The session to move ended before Toastty could copy its conversation.")
+            guard let session = currentSource(taskID: taskID, job: job, sessions: sessions) else {
+                fail(job, taskID: taskID, reason: "\(Self.sourceName(job)) ended before Toastty could copy its conversation.")
                 return false
             }
             if let conversationID = session.nativeConversationID {
-                if records.record(id: taskID)?.startWork?.source?.conversationID == nil {
-                    saveOrDefer(taskID: taskID) { $0.startWork?.source?.conversationID = conversationID }
+                if records.record(id: taskID).flatMap({ Self.source(job, in: $0) })?.conversationID == nil {
+                    saveOrDefer(taskID: taskID) { Self.updateSource(job, in: &$0) { $0?.conversationID = conversationID } }
                 }
                 return true
             }
@@ -639,7 +639,7 @@ extension TaskCoordinator {
 
     /// Waits until the forked session reports a provider conversation that
     /// is not the source's. Returns its ID, or `nil` after a failure.
-    private func waitForFork(
+    func waitForFork(
         sessionID: String,
         sourceConversationID: String?,
         job: TaskJob,
@@ -651,7 +651,8 @@ extension TaskCoordinator {
         while true {
             guard isCurrent(job, taskID: taskID) else { return nil }
             guard let session = sessions.session(sessionID), session.isActive else {
-                fail(job, taskID: taskID, reason: "The forked agent exited before its conversation started. The previous session stays open; retry to try again.")
+                let outcome = Self.sourceKeptLine(job)
+                fail(job, taskID: taskID, reason: "The forked agent exited before its conversation started. \(outcome) retry to try again.")
                 return nil
             }
             if let conversationID = session.nativeConversationID, conversationID != sourceConversationID {
@@ -659,7 +660,8 @@ extension TaskCoordinator {
             }
             guard clock.now < deadline else {
                 let seconds = Int(timing.forkConfirmationTimeout.components.seconds)
-                fail(job, taskID: taskID, reason: "Toastty did not see the forked conversation start within \(seconds) seconds. The previous session stays open; check the worktree's terminal, then retry.")
+                let place = if case .setup = job { "the task space's terminal" } else { "the worktree's terminal" }
+                fail(job, taskID: taskID, reason: "Toastty did not see the forked conversation start within \(seconds) seconds. \(Self.sourceKeptLine(job)) check \(place), then retry.")
                 return nil
             }
             try? await Task.sleep(for: timing.pollInterval)
@@ -686,12 +688,12 @@ extension TaskCoordinator {
         return sessions.closeMovedSessionPane(panelID: source.panelID, agent: session.agent)
     }
 
-    /// The session the conversation moves from, as it runs now. After a
-    /// relaunch, Toastty restores it under a new ID in the same pane; that
-    /// session counts when it continues the same provider conversation, and
-    /// the record follows it.
-    private func currentSource(taskID: UUID, sessions: any TaskSessionProviding) -> TaskSessionInfo? {
-        guard let source = records.record(id: taskID)?.startWork?.source else { return nil }
+    /// The session the conversation moves from, or that a new task's agent
+    /// forks, as it runs now. After a relaunch, Toastty restores it under a
+    /// new ID in the same pane; that session counts when it continues the
+    /// same provider conversation, and the record follows it.
+    func currentSource(taskID: UUID, job: TaskJob, sessions: any TaskSessionProviding) -> TaskSessionInfo? {
+        guard let source = records.record(id: taskID).flatMap({ Self.source(job, in: $0) }) else { return nil }
         if let session = sessions.session(source.sessionID), session.isActive {
             return session
         }
@@ -701,8 +703,43 @@ extension TaskCoordinator {
               restored.nativeConversationID == conversationID else {
             return nil
         }
-        saveOrDefer(taskID: taskID) { $0.startWork?.source?.sessionID = restored.sessionID }
+        saveOrDefer(taskID: taskID) { Self.updateSource(job, in: &$0) { $0?.sessionID = restored.sessionID } }
         return restored
+    }
+
+    /// The session a job copies, as the record names it: a move's moving
+    /// session, or the session that created a forked task.
+    private static func source(_ job: TaskJob, in record: TaskRecord) -> TaskStartWork.Source? {
+        switch job {
+        case .setup: record.forkSource
+        case .startWork: record.startWork?.source
+        }
+    }
+
+    private static func updateSource(_ job: TaskJob, in record: inout TaskRecord, _ body: (inout TaskStartWork.Source?) -> Void) {
+        switch job {
+        case .setup:
+            body(&record.forkSource)
+        case .startWork:
+            guard var startWork = record.startWork else { return }
+            body(&startWork.source)
+            record.startWork = startWork
+        }
+    }
+
+    private static func sourceName(_ job: TaskJob) -> String {
+        switch job {
+        case .setup: "The session that created the task"
+        case .startWork: "The session to move"
+        }
+    }
+
+    /// A fork that failed changes nothing in the session it copies.
+    private static func sourceKeptLine(_ job: TaskJob) -> String {
+        switch job {
+        case .setup: "The session that created the task is unchanged;"
+        case .startWork: "The previous session stays open;"
+        }
     }
 
     /// The continuing session launched by an earlier attempt, if it still

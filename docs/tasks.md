@@ -103,6 +103,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
 | `--start-work` | Make a git worktree during setup and start the agent there. See [Work in a git worktree](#work-in-a-git-worktree). |
 | `--base <ref>`, `--branch-prefix <prefix>` | With `--start-work`: what the worktree starts from, and the first part of its branch name. |
+| `--fork` | From a Claude Code or Codex session: start the agent as a fork of this session's conversation. See [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks). |
 
 A value you set is never changed. A request with an agent that is not in
 `agents.toml`, a model or effort that agent does not take, a file that cannot
@@ -159,7 +160,10 @@ directory, one per root directory.
    selected, so your focus stays where it is.
 3. It starts the agent in that terminal. The agent's first message is the first
    prompt, then the task text exactly as written, then the paths of the
-   attached files. The agent session is not workspace-scoped, so it can read
+   attached files. With `--fork`, the agent starts as a fork of the calling
+   session's conversation instead (see
+   [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks)).
+   The agent session is not workspace-scoped, so it can read
    and message other tasks (see [Coordinate tasks](#coordinate-tasks)). It is
    scoped only when the session that created the task was scoped; then it
    keeps that scope.
@@ -237,6 +241,51 @@ toastty task create "Split the parser" --start-work --base feat/parser \
 Setup makes the worktree before the task space, so the task space's terminal
 and the agent both start in it. The agent's first message names the worktree
 and branch, then gives the prompt and the task text.
+
+### Fork the conversation into new tasks
+
+A fresh agent knows only what its prompt tells it. When the work took shape in
+a long conversation, the agent of that conversation can give each new task a
+copy of it instead:
+
+```bash
+toastty task create "Split the parser" --fork --start-work \
+  --branch-prefix feat --prompt-file brief.md
+```
+
+`--fork` runs only from a Claude Code or Codex session that Toastty manages.
+The new task's agent starts as a fork of the calling session's conversation.
+The calling session keeps running: Toastty does not close it or type into it.
+
+- The fork uses the caller's agent. `--agent` can name only that agent.
+  `--model` and `--effort` set the fork's model and effort. Without them, the
+  fork uses the model and effort of the caller's task when the caller is a
+  task's agent, else the settings of the agent profile. `[defaults]` and
+  triage do not apply to a fork.
+- Setup makes the worktree, with `--start-work`, and the task space at once.
+  Then it waits until the caller is not in a turn, so that the whole
+  conversation is on disk, and until Toastty has identified that conversation.
+  A fork never copies a turn that is still running. Forks that one turn asks
+  for copy the same conversation when the caller stays idle until they start.
+  If the caller starts a new turn before a fork starts, for example while a
+  slow `create_hook` runs, that fork waits for the new turn too and copies it.
+- The fork's first message starts with the start skill, if one is set. Then it
+  names the task, its ID and task space, and the worktree and branch, if any.
+  It tells the fork that it owns only this task, and how to report back: with
+  `toastty task send <parent-task-id>` when the caller is a task's agent, else
+  with `terminal.send-text` to the caller's terminal. The prompt, the task text
+  and the attached files follow.
+- `task create` returns at once. You cannot use `--wait` with `--fork`, because
+  the fork starts only after the turn that runs the command ends.
+- Setup ends when the fork reports a conversation of its own. Setup fails, with
+  the reason, when the caller does not end its turn within 10 minutes, or when
+  the fork does not report its conversation within 60 seconds. The caller does
+  not change. Retry continues from the last step that finished: it waits again
+  for a fork that still runs, or it forks again in the same task space.
+
+`task get` reports the fork under `fork`: the caller's session and conversation,
+and `conversationConfirmed`. The task records the caller's task as its parent,
+and gets the workspace scope of any task that an agent creates.
 
 ## Coordinate tasks
 

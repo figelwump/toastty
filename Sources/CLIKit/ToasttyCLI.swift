@@ -930,7 +930,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
@@ -1804,7 +1804,7 @@ public enum ToasttyCLI {
                     "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
                     "--base", "--branch-prefix",
                 ],
-                flagOptions: ["--wait", "--start-work"]
+                flagOptions: ["--wait", "--start-work", "--fork"]
             )
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task create takes the task text as one argument; quote it\n\n\(usage)")
@@ -1853,6 +1853,14 @@ public enum ToasttyCLI {
                 args["startWork"] = .bool(true)
             } else if parsed.singleValue("--base") != nil || parsed.singleValue("--branch-prefix") != nil {
                 throw ToasttyCLIError.usage("--base and --branch-prefix need --start-work\n\n\(usage)")
+            }
+            if parsed.hasFlag("--fork") {
+                // The fork starts after the caller's turn ends, and --wait
+                // would hold that turn open.
+                guard parsed.hasFlag("--wait") == false else {
+                    throw ToasttyCLIError.usage("--fork starts the agent after this session's turn ends, so it cannot --wait\n\n\(usage)")
+                }
+                args["fork"] = .bool(true)
             }
             if let promptFile = parsed.singleValue("--prompt-file") {
                 let path = absolutePath(promptFile)

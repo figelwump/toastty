@@ -20,7 +20,12 @@ It checks that:
   conversation, and closes the old pane; the fork still knows the instructions
   from before the move;
 - `task create --start-work` starts a fresh agent in a new worktree;
-- a move that fails, here on a base that does not exist, keeps the old session.
+- a move that fails, here on a base that does not exist, keeps the old session;
+- a task's agent that runs `task create --fork --start-work` keeps running and
+  unchanged, while the new task's agent starts in its own worktree as a fork
+  of that conversation: it knows a code word that only the parent's
+  conversation holds, and its provider transcript contains the parent's
+  first message.
 """
 
 import argparse
@@ -56,6 +61,19 @@ TASK_TEXT = (
     f'and reply with exactly {FORK_REPLY}.'
 )
 FRESH_TEXT = 'This is an automated Toastty check. Run no command and edit no file. Reply with exactly STARTED.'
+FORK_CODE = f'KIWI-{uuid.uuid4().hex[:6].upper()}'
+FORKING_REPLY = 'FORKING'
+FORK_CHILD_TITLE = 'This is an automated Toastty check child'
+FORK_CHILD_TEXT = 'This is an automated Toastty check. Run no command and edit no file. Follow the earlier instructions for a fork.'
+FORK_PARENT_TEXT = (
+    'This is an automated Toastty check. Do not edit files.\n'
+    f'Remember this code word: {FORK_CODE}\n'
+    '1. Now: run exactly this one shell command, and no other command: '
+    f'"$TOASTTY_CLI_PATH" task create "{FORK_CHILD_TEXT}" --fork --start-work --branch-prefix live --title "{FORK_CHILD_TITLE}"\n'
+    f'   Then reply with exactly {FORKING_REPLY} and end your turn.\n'
+    '2. Later, if a message says that you are now the agent of another task: run no command, '
+    'and reply with exactly FORKED- followed by the code word.'
+)
 
 
 def git(*arguments, cwd):
@@ -113,7 +131,8 @@ def main():
     (toastty_dir / 'tasks.toml').write_text(
         f'[defaults]\nagent = "{provider}"\n\n'
         f'[workspace.{json.dumps(str(repository))}]\ncreate_hook = "touch hook-ran"\n')
-    trusted = [repository, parent / 'project-this-is-an-automated-toastty-check-do', parent / 'project-this-is-an-automated-toastty-check-run']
+    trusted = [repository, parent / 'project-this-is-an-automated-toastty-check-do', parent / 'project-this-is-an-automated-toastty-check-run',
+               parent / 'project-this-is-an-automated-toastty-check-child']
     if provider == 'claude':
         for directory in trusted:
             queue_check.set_directory_trust(directory, True)
@@ -265,6 +284,64 @@ def main():
         require(failed['sessionID'] == plain_session, 'The task lost its session')
         step('failed move kept the session', reason=failed['worktree']['reason'])
 
+        # 4. A task's agent forks its conversation into a new task, in its own
+        # worktree, and keeps running.
+        code, out, err = run_cli('task', 'create', FORK_PARENT_TEXT, '--title', 'This is an automated Toastty check fork',
+                                 '--workspace', workspace_id, '--wait', '--timeout', '120')
+        require(code == 0, f'fork parent task create failed ({code}): {out} {err}')
+        fork_parent = json.loads(out)['result']
+        parent_id, parent_session = fork_parent['taskID'], fork_parent['setup']['sessionID']
+        parent_space = fork_parent['setup']['taskSpaceWorkspaceID']
+        parent_panels = panel_ids(instance.query('workspace.snapshot', workspaceID=parent_space))
+        step('fork parent started', taskID=parent_id, sessionID=parent_session, panels=sorted(parent_panels))
+
+        def children():
+            code, out, err = run_cli('task', 'list', '--parent', parent_id)
+            require(code == 0, f'task list failed: {out} {err}')
+            return json.loads(out)['result']['tasks']
+
+        child_id = wait_for('the forked task', answering(lambda: next((t['taskID'] for t in children()), None)),
+                            timeout=300, interval=2)
+        child = wait_for('the fork to start', answering(lambda: (lambda t: t if t['setup']['state'] != 'settingUp' else None)(task(child_id))),
+                         timeout=600, interval=2)
+        step('forked task set up', child=child)
+        require(child['setup']['state'] == 'started', f'The forked task did not start: {child}')
+        require(child['parentTaskID'] == parent_id, f'The forked task has the wrong parent: {child}')
+        require(child['fork']['sourceSessionID'] == parent_session and child['fork']['conversationConfirmed'] is True,
+                f'Fork not confirmed: {child}')
+        require(child['agent'] == provider and child['title'] == FORK_CHILD_TITLE, f'Unexpected forked task: {child}')
+        child_path = Path(child['worktree']['path'])
+        require(child['worktree']['state'] == 'finished' and child['worktree']['branch'].startswith('live/'), f'Fork worktree: {child}')
+        require(child_path.parent == parent and git('rev-parse', 'HEAD', cwd=child_path) == remote_tip, f'Fork worktree is not at the tip: {child_path}')
+        child_snapshot = instance.query('workspace.snapshot', workspaceID=child['setup']['taskSpaceWorkspaceID'])
+        require(str(child_path) in json.dumps(child_snapshot), 'The forked task space terminal is not in its worktree')
+        require(child['sessionID'] != parent_session, 'The forked task reuses the parent session')
+
+        # The fork knows the code word, which only the parent's conversation
+        # holds: Toastty's first message to it does not contain it.
+        reply = wait_for('the fork to reply with the code word',
+                         answering(lambda: (lambda r: r if r and FORK_CODE in r.get('text', '') else None)(task(child_id).get('lastReply'))),
+                         timeout=300, interval=3)
+        require(reply['text'].strip() == f'FORKED-{FORK_CODE}', f'Unexpected fork reply: {reply}')
+        transcript = fork_transcript(provider, child_id)
+        require(transcript is not None, f'No {provider} transcript names the forked task {child_id}')
+        transcript_text = transcript.read_text(errors='replace')
+        require(FORK_CODE in transcript_text and 'Remember this code word' in transcript_text,
+                f'The fork transcript {transcript} lacks the parent conversation')
+        evidence['forkTranscript'] = str(transcript)
+        step('fork continued the parent conversation', reply=reply, transcript=str(transcript))
+
+        # The parent keeps running, unchanged: same session and panes, and
+        # nothing new typed into it after its own reply.
+        parent_now = task(parent_id)
+        require(parent_now['sessionID'] == parent_session, f'The parent session changed: {parent_now}')
+        require(parent_now['agentState']['state'] in ('idle', 'busy', 'waiting'), f'The parent stopped: {parent_now}')
+        require((parent_now.get('lastReply') or {}).get('text', '').strip() == FORKING_REPLY,
+                f'The parent got another message: {parent_now.get("lastReply")}')
+        require(panel_ids(instance.query('workspace.snapshot', workspaceID=parent_space)) == parent_panels,
+                'The parent pane changed after the fork')
+        step('fork parent kept running', agentState=parent_now['agentState'])
+
         evidence['status'] = 'passed'
     except Exception as error:  # Always keep the failure evidence.
         evidence['failure'] = repr(error)
@@ -318,6 +395,23 @@ def provider_profile(provider, environment, repository):
     # arguments only to argv it can read, and refuses tool and settings
     # restrictions there.
     return version, [cli]
+
+
+def fork_transcript(provider, task_id):
+    """The provider transcript whose first message names `task_id`: the
+    forked agent's own conversation file."""
+    if provider == 'claude':
+        roots, pattern = [Path.home() / '.claude/projects'], '*.jsonl'
+    else:
+        roots, pattern = [Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'sessions'], 'rollout-*.jsonl'
+    cutoff = time.time() - 3600
+    for root in roots:
+        for path in sorted(root.rglob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
+            if path.stat().st_mtime < cutoff:
+                break
+            if f'task ID {task_id}' in path.read_text(errors='replace'):
+                return path
+    return None
 
 
 def forget_codex_trust(parent):
