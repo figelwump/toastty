@@ -304,6 +304,24 @@ struct TasksView: View {
             TasksViewRow(entry: entry, isSelected: entry.id == selectedID) {
                 board.selectionByWindowID[windowID] = entry.id
             }
+            .contextMenu {
+                if let coordinator = board.coordinator {
+                    // Only the Inbox reads tasks.toml for Retry Triage.
+                    TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(
+                        entry.item,
+                        isTriageConfigured: entry.item.stage.group == .inbox && coordinator.isTriageConfigured
+                    )) { menuItem in
+                        TaskActions.runFromMenu(menuItem, coordinator: coordinator) { workspaceID in
+                            TaskActions.openTaskSpace(
+                                workspaceID: workspaceID,
+                                fallbackWindowID: windowID,
+                                store: store,
+                                sessionRuntimeStore: sessionRuntimeStore
+                            )
+                        }
+                    }
+                }
+            }
             // The lazy stack kept a row's old drawing when its task moved to
             // another group while the view showed, so a row is rebuilt
             // whenever its group or status line changes.
@@ -584,15 +602,15 @@ private struct TasksViewDetail: View {
         }
     }
 
+    /// The task's menu as buttons: where to go on one line, what to do on
+    /// the next.
     private var actions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            navigationActions
-            if let record = item.record, let coordinator = board.coordinator {
-                let buttons = TaskBoardPresentation.detailActions(item)
-                if buttons.isEmpty == false {
+            if let coordinator = board.coordinator {
+                ForEach(Array(TaskBoardPresentation.menuItems(item).enumerated()), id: \.offset) { _, section in
                     HStack(spacing: 8) {
-                        ForEach(buttons, id: \.self) { action in
-                            taskActionButton(action, record: record, coordinator: coordinator)
+                        ForEach(section, id: \.self) { menuItem in
+                            menuButton(menuItem, coordinator: coordinator)
                         }
                     }
                 }
@@ -600,41 +618,31 @@ private struct TasksViewDetail: View {
         }
     }
 
-    private func taskActionButton(_ action: TaskBoardPresentation.DetailAction, record: TaskRecord, coordinator: TaskCoordinator) -> some View {
-        Button(action.title) {
-            perform { try TaskActions.run(action, taskID: record.id, coordinator: coordinator) }
+    private func menuButton(_ menuItem: TaskBoardPresentation.MenuItem, coordinator: TaskCoordinator) -> some View {
+        let isPrimary: Bool
+        let help: String?
+        let identifier: String
+        switch menuItem {
+        case .openTaskSpace:
+            (isPrimary, help, identifier) = (true, nil, "tasks.view.detail.open")
+        case .trackAsTask:
+            (isPrimary, help, identifier) = (false, "Give this task space a task record, so its history stays after it closes.", "tasks.view.detail.adopt")
+        case .action(let action, _, _):
+            (isPrimary, help, identifier) = (action.isPrimary, action.help, "tasks.view.detail.\(action)")
+        case .openPullRequest:
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.openPullRequest")
+        case .delete:
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.delete")
+        case .retry, .retryTriage:
+            // The Inbox card shows these in the pane.
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.retry")
         }
-        .buttonStyle(TasksViewButtonStyle(isPrimary: action.isPrimary))
-        .help(action.help)
-        .accessibilityIdentifier("tasks.view.detail.\(action)")
-    }
-
-    private var navigationActions: some View {
-        HStack(spacing: 8) {
-            if let workspaceID = item.taskSpaceWorkspaceID {
-                Button("Open Task Space") { openTaskSpace(workspaceID) }
-                    .buttonStyle(TasksViewButtonStyle(isPrimary: true))
-                    .accessibilityIdentifier("tasks.view.detail.open")
-            }
-            if let link = item.pullRequest, let url = URL(string: link.url) {
-                Button("Open PR") { NSWorkspace.shared.open(url) }
-                    .buttonStyle(TasksViewButtonStyle(isPrimary: false))
-            }
-            if case .taskSpace(let workspaceID) = item.id, let coordinator = board.coordinator {
-                Button("Track as Task") {
-                    perform { _ = try coordinator.adopt(workspaceID: workspaceID) }
-                }
-                .buttonStyle(TasksViewButtonStyle(isPrimary: false))
-                .help("Give this task space a task record, so its history stays after it closes.")
-                .accessibilityIdentifier("tasks.view.detail.adopt")
-            }
-            if let record = item.record, item.stage == .needsYou(.taskSpaceClosed), let coordinator = board.coordinator {
-                Button("Delete", role: .destructive) {
-                    perform { try coordinator.delete(taskID: record.id) }
-                }
-                .buttonStyle(TasksViewButtonStyle(isPrimary: false))
-            }
+        return Button(menuItem.title, role: menuItem.isDestructive ? .destructive : nil) {
+            perform { try TaskActions.run(menuItem, coordinator: coordinator, openTaskSpace: openTaskSpace) }
         }
+        .buttonStyle(TasksViewButtonStyle(isPrimary: isPrimary))
+        .help(help ?? "")
+        .accessibilityIdentifier(identifier)
     }
 
     /// A titled box, as the mockup draws Status and History.

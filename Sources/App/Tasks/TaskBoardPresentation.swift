@@ -133,6 +133,18 @@ enum TaskBoardPresentation {
             }
         }
 
+        /// The start of a failure alert's title, before the task's title.
+        var failureTitle: String {
+            switch self {
+            case .merge, .mergeWithoutChecks: "Unable to Merge"
+            case .cancelMerge: "Unable to Cancel the Merge of"
+            case .markDone: "Unable to Mark Done"
+            case .archive: "Unable to Archive"
+            case .cleanUp: "Unable to Clean Up"
+            case .keepAsIs: "Unable to Keep As Is"
+            }
+        }
+
         var description: String {
             switch self {
             case .merge: "merge"
@@ -179,6 +191,87 @@ enum TaskBoardPresentation {
         }
         actions.append(.archive)
         return actions
+    }
+
+    /// One item of a task's menu, with what it acts on. The detail pane
+    /// shows these as buttons, and a task's rows show them as a context menu.
+    enum MenuItem: Hashable {
+        case openTaskSpace(workspaceID: UUID)
+        case openPullRequest(number: Int, url: URL)
+        case trackAsTask(workspaceID: UUID)
+        /// `showsShortcut` while Option+Shift+M would run this action: the
+        /// task space is the one the window shows.
+        case action(DetailAction, taskID: UUID, showsShortcut: Bool = false)
+        case retry(taskID: UUID, title: String)
+        case retryTriage(taskID: UUID)
+        case delete(taskID: UUID)
+
+        var title: String {
+            switch self {
+            case .openTaskSpace: "Open Task Space"
+            case .openPullRequest(let number, _): "Open PR #\(number)"
+            case .trackAsTask: "Track as Task"
+            case .action(let action, _, let showsShortcut):
+                showsShortcut ? ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle(action.title) : action.title
+            case .retry(_, let title): title
+            case .retryTriage: "Retry Triage"
+            case .delete: "Delete Task"
+            }
+        }
+
+        var isDestructive: Bool {
+            if case .delete = self { return true }
+            return false
+        }
+    }
+
+    /// The task's menu, in sections: where to go, then what to do. The
+    /// detail pane's actions come in its order; one that does not apply now
+    /// is left out, as in the command palette. Open Task Space is left out
+    /// when `currentWorkspaceID` is the task space, which the window already
+    /// shows; there Merge shows its shortcut.
+    static func menuItems(
+        _ item: TaskBoardItem,
+        currentWorkspaceID: UUID? = nil,
+        isTriageConfigured: Bool = false
+    ) -> [[MenuItem]] {
+        if item.stage.group == .inbox {
+            guard let record = item.record else { return [] }
+            return [inboxMenuItems(record, isTriageConfigured: isTriageConfigured)]
+        }
+        var navigation: [MenuItem] = []
+        let isCurrent = item.taskSpaceWorkspaceID != nil && item.taskSpaceWorkspaceID == currentWorkspaceID
+        if let workspaceID = item.taskSpaceWorkspaceID, isCurrent == false {
+            navigation.append(.openTaskSpace(workspaceID: workspaceID))
+        }
+        if let link = item.pullRequest, let url = URL(string: link.url) {
+            navigation.append(.openPullRequest(number: link.number, url: url))
+        }
+        if case .taskSpace(let workspaceID) = item.id {
+            navigation.append(.trackAsTask(workspaceID: workspaceID))
+        }
+        var actions: [MenuItem] = []
+        if let record = item.record {
+            actions = detailActions(item).map { action in
+                .action(action, taskID: record.id, showsShortcut: action == .merge && isCurrent)
+            }
+            if item.stage == .needsYou(.taskSpaceClosed) {
+                actions.append(.delete(taskID: record.id))
+            }
+        }
+        return [navigation, actions].filter { $0.isEmpty == false }
+    }
+
+    /// A task that has not started yet: retry what failed, or delete it.
+    static func inboxMenuItems(_ record: TaskRecord, isTriageConfigured: Bool) -> [MenuItem] {
+        var items: [MenuItem] = []
+        if SidebarInboxRowPresentation.canRetry(record) {
+            items.append(.retry(taskID: record.id, title: record.setup.isStarted ? "Retry Move" : "Retry Setup"))
+        } else if case .needsWorkspace = record.setup, isTriageConfigured {
+            items.append(.retryTriage(taskID: record.id))
+        }
+        items.append(.delete(taskID: record.id))
+        return items
     }
 
     static func pullRequestLine(_ item: TaskBoardItem) -> String? {

@@ -270,7 +270,7 @@ final class CommandPaletteTaskActions {
             guard let item = board.items().first(where: { $0.id == subject }),
                   let record = item.record,
                   TaskBoardPresentation.detailActions(item).contains(action) else { return false }
-            let failureTitle = "\(Self.failureTitle(action)) \(record.title)"
+            let failureTitle = "\(action.failureTitle) \(record.title)"
             afterPaletteCloses { [presentFailure] in
                 do {
                     try TaskActions.run(action, taskID: record.id, coordinator: coordinator)
@@ -309,17 +309,6 @@ final class CommandPaletteTaskActions {
                 }
             }
             return true
-        }
-    }
-
-    private static func failureTitle(_ action: TaskBoardPresentation.DetailAction) -> String {
-        switch action {
-        case .merge, .mergeWithoutChecks: "Unable to Merge"
-        case .cancelMerge: "Unable to Cancel the Merge of"
-        case .markDone: "Unable to Mark Done"
-        case .archive: "Unable to Archive"
-        case .cleanUp: "Unable to Clean Up"
-        case .keepAsIs: "Unable to Keep As Is"
         }
     }
 }

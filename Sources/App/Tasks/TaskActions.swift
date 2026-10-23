@@ -1,6 +1,7 @@
 import AppKit
 import CoreState
 import Foundation
+import SwiftUI
 
 /// The task actions the top bar, the sidebar and the Tasks view share:
 /// each asks what it must, runs the coordinator, and shows a refusal.
@@ -59,6 +60,55 @@ enum TaskActions {
         case .keepAsIs:
             try coordinator.dismissCleanup(taskID: taskID)
         }
+    }
+
+    /// Runs one item of a task's menu, as the detail pane's buttons do.
+    /// `openTaskSpace` selects a task space; the Inbox never offers it.
+    static func run(
+        _ item: TaskBoardPresentation.MenuItem,
+        coordinator: TaskCoordinator,
+        openTaskSpace: (UUID) -> Void
+    ) throws {
+        switch item {
+        case .openTaskSpace(let workspaceID):
+            openTaskSpace(workspaceID)
+        case .openPullRequest(_, let url):
+            NSWorkspace.shared.open(url)
+        case .trackAsTask(let workspaceID):
+            _ = try coordinator.adopt(workspaceID: workspaceID)
+        case .action(let action, let taskID, _):
+            try run(action, taskID: taskID, coordinator: coordinator)
+        case .retry(let taskID, _), .retryTriage(let taskID):
+            try coordinator.retry(taskID: taskID)
+        case .delete(let taskID):
+            try coordinator.delete(taskID: taskID)
+        }
+    }
+
+    /// Runs a context menu's item, and shows a failure in an alert, since a
+    /// menu has nowhere to show it.
+    static func runFromMenu(
+        _ item: TaskBoardPresentation.MenuItem,
+        coordinator: TaskCoordinator,
+        openTaskSpace: (UUID) -> Void
+    ) {
+        perform(failureTitle(item, coordinator: coordinator)) {
+            try run(item, coordinator: coordinator, openTaskSpace: openTaskSpace)
+        }
+    }
+
+    private static func failureTitle(_ item: TaskBoardPresentation.MenuItem, coordinator: TaskCoordinator) -> String {
+        let taskID: UUID
+        let start: String
+        switch item {
+        case .openTaskSpace, .openPullRequest: return "Unable to Open"
+        case .trackAsTask: return "Unable to Track as Task"
+        case .action(let action, let id, _): (start, taskID) = (action.failureTitle, id)
+        case .retry(let id, _), .retryTriage(let id): (start, taskID) = ("Unable to Retry", id)
+        case .delete(let id): (start, taskID) = ("Unable to Delete", id)
+        }
+        guard let title = coordinator.records.record(id: taskID)?.title else { return start }
+        return "\(start) \(title)"
     }
 
     /// Selects the task space in the window that holds it, or else in
@@ -168,5 +218,23 @@ enum TaskActions {
 
     static func presentFailure(_ title: String, _ message: String) {
         WorkspaceMergeCoordinator.presentAlert(title: title, message: message)
+    }
+}
+
+/// A task's context menu items, with a divider between sections. The rows
+/// that stand for a task in the sidebar and the Tasks view all show these.
+struct TaskContextMenuItems: View {
+    let sections: [[TaskBoardPresentation.MenuItem]]
+    let run: (TaskBoardPresentation.MenuItem) -> Void
+
+    var body: some View {
+        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+            if index > 0 {
+                Divider()
+            }
+            ForEach(section, id: \.self) { item in
+                Button(item.title, role: item.isDestructive ? .destructive : nil) { run(item) }
+            }
+        }
     }
 }

@@ -454,6 +454,20 @@ shows `Option+Shift+M` when it acts on the selected task space.
 `release_skill` or a `release_prompt`, as the To ship line's **Release…**
 does, even when nothing waits to ship. It is hidden while a release of that project is under way.
 
+### Context menus
+
+Right-click a task's row to act on it: its task space row in the sidebar, its
+row in the sidebar's Status segment, or its row in the Tasks view. The menu
+lists what the detail pane offers now, with the same confirmations: **Open
+Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel
+Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** for
+a task whose task space closed. An action that does not apply is left out.
+**Open Task Space** is left out when the window already shows the task space;
+there **Merge** shows `Option+Shift+M`. A task that has not started offers the
+Inbox's Retry and Delete. A task space row keeps its workspace items, such as
+**Move to top level** and **Close workspace**, below a divider. It has no
+**Mark as done** item, since a task is done when it merges or you mark it done.
+
 ## Merge a task
 
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
