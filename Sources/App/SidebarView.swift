@@ -1078,6 +1078,9 @@ struct SidebarView: View {
                 )
             } else {
                 SidebarTaskRecordRow(item: entry.item) { openTasksView(selecting: entry.item.id) }
+                    .contextMenu {
+                        TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(entry.item), run: runTaskMenuItem)
+                    }
             }
         }
         .padding(.top, 2)
@@ -3585,8 +3588,36 @@ struct SidebarView: View {
             spawnerWorkspaceID: spawner?.workspaceID,
             sessions: sessions,
             creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
-            path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
+            path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace),
+            taskMenu: taskMenu(for: boardItem, workspace: workspace)
         )
+    }
+
+    /// A task space's task menu. Only a task space with a task record has
+    /// one; other subspaces keep their own menu.
+    private func taskMenu(for item: TaskBoardItem?, workspace: WorkspaceState) -> [[TaskBoardPresentation.MenuItem]]? {
+        guard let item, item.record != nil else { return nil }
+        // The window shows the selected task space unless the Tasks view
+        // covers it.
+        let showsTasksView = store.window(id: windowID)?.showsTasksView ?? false
+        let currentWorkspaceID = showsTasksView ? nil : selectedWorkspaceID
+        return TaskBoardPresentation.menuItems(
+            item,
+            currentWorkspaceID: currentWorkspaceID,
+            showsMergeShortcut: currentWorkspaceID == workspace.id && isMergeButtonReady(workspace)
+        )
+    }
+
+    /// Whether Option+Shift+M would merge the workspace: its Merge button is
+    /// ready, as the shortcut's handler checks.
+    private func isMergeButtonReady(_ workspace: WorkspaceState) -> Bool {
+        guard case .ready? = WorkspaceMergePresentation.make(
+            workspace: workspace,
+            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+            mode: store.workspaceMergeMode,
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id)
+        ) else { return false }
+        return true
     }
 
     private func linkedParentTaskSpaceID(of item: TaskBoardItem?) -> UUID? {
@@ -4138,15 +4169,24 @@ struct SidebarView: View {
         .background(subspaceFrameMeasurement(id: .row(row.id)))
         .id(row.id)
         .contextMenu {
-            let mergePresentation = subspaceMergeMenuPresentation(row)
-            if let mergePresentation {
-                subspaceMergeMenuItems(row, presentation: mergePresentation)
-            }
-            Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
-                toggleSubspaceDone(row)
-            }
-            if mergePresentation != nil {
-                Divider()
+            // A task's own items replace the merge items and the done mark:
+            // its Mark Done and merge are what done means for it.
+            if let taskMenu = row.taskMenu {
+                TaskContextMenuItems(sections: taskMenu, run: runTaskMenuItem)
+                if taskMenu.isEmpty == false {
+                    Divider()
+                }
+            } else {
+                let mergePresentation = subspaceMergeMenuPresentation(row)
+                if let mergePresentation {
+                    subspaceMergeMenuItems(row, presentation: mergePresentation)
+                }
+                Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
+                    toggleSubspaceDone(row)
+                }
+                if mergePresentation != nil {
+                    Divider()
+                }
             }
             Button("Move to top level") {
                 _ = store.send(
@@ -4275,6 +4315,18 @@ struct SidebarView: View {
             return nil
         }
         return presentation
+    }
+
+    private func runTaskMenuItem(_ item: TaskBoardPresentation.MenuItem) {
+        guard let coordinator = taskCoordinator else { return }
+        TaskActions.runFromMenu(item, coordinator: coordinator) { workspaceID in
+            TaskActions.openTaskSpace(
+                workspaceID: workspaceID,
+                fallbackWindowID: windowID,
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+        }
     }
 
     private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {

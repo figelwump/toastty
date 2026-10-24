@@ -97,6 +97,9 @@ enum SidebarSubspacePresentation {
         /// Absolute path of where the subspace lives; see
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
+        /// The task's menu items when the task space has a task record; see
+        /// `TaskBoardPresentation.menuItems`.
+        var taskMenu: [[TaskBoardPresentation.MenuItem]]? = nil
 
         /// The latest status update from any session in this subspace.
         /// Metadata changes do not update these times.

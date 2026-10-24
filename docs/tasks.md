@@ -436,7 +436,11 @@ and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 Status To ship lines have one too. A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
-it hides the view and returns to the workspace it covered.
+it hides the view and returns to the workspace it covered. Up and Down Arrow
+move the selection through the rows the list shows, skipping collapsed Done
+and Archived, and the detail pane follows. When the selected task leaves the
+list, for example after **Archive…** or **Mark Done** into collapsed Done, the
+next row is selected, or the previous one when it was the last.
 
 ### The command palette
 
@@ -453,6 +457,20 @@ shows `Option+Shift+M` when it acts on the selected task space.
 **Release <project>…** starts a release for each open project with a
 `release_skill` or a `release_prompt`, as the To ship line's **Release…**
 does, even when nothing waits to ship. It is hidden while a release of that project is under way.
+
+### Context menus
+
+Right-click a task's row to act on it: its task space row in the sidebar, its
+row in the sidebar's Status segment, or its row in the Tasks view. The menu
+lists what the detail pane offers now, with the same confirmations: **Open
+Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel
+Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** for
+a task whose task space closed. An action that does not apply is left out.
+**Open Task Space** is left out when the window already shows the task space;
+there **Merge** shows `Option+Shift+M`. A task that has not started offers the
+Inbox's Retry and Delete. A task space row keeps its workspace items, such as
+**Move to top level** and **Close workspace**, below a divider. It has no
+**Mark as done** item, since a task is done when it merges or you mark it done.
 
 ## Merge a task
 

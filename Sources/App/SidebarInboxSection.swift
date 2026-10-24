@@ -240,13 +240,12 @@ struct SidebarInboxSection: View {
         }
         .contextMenu {
             Button("Show Task…") { presentedTaskID = record.id }
-            if SidebarInboxRowPresentation.canRetry(record) {
-                Button(record.setup.isStarted ? "Retry Move" : "Retry Setup") { try? coordinator.retry(taskID: record.id) }
-            } else if case .needsWorkspace = record.setup, coordinator.isTriageConfigured {
-                Button("Retry Triage") { try? coordinator.retry(taskID: record.id) }
-            }
             Divider()
-            Button("Delete Task", role: .destructive) { try? coordinator.delete(taskID: record.id) }
+            TaskContextMenuItems(sections: [
+                TaskBoardPresentation.inboxMenuItems(record, isTriageConfigured: coordinator.isTriageConfigured),
+            ]) { menuItem in
+                TaskActions.runFromMenu(menuItem, coordinator: coordinator) { _ in }
+            }
         }
         .background {
             SidebarSemanticTextBridge(text: presentation.accessibilityLabel)
