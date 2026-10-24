@@ -100,12 +100,13 @@ struct NativeConversationView<Header: View, Empty: View>: View {
             }
             if conversation.events.isEmpty { empty() }
             ForEach(conversation.events, id: \.eventID) { event in
-                eventView(event).textSelection(.enabled).id(event.eventID)
+                eventView(event).textSelection(.enabled)
                     .background {
                         if viewportStore != nil, isTranscriptRow(event) {
                             NativeConversationViewportRow(eventID: event.eventID, session: viewportSession)
                         }
                     }
+                    .id(event.eventID)
             }
             ForEach(conversation.snapshot?.pendingInteractions ?? [], id: \.id) { interaction in
                 ConversationInteractionCard(interaction: interaction,
@@ -130,7 +131,9 @@ struct NativeConversationView<Header: View, Empty: View>: View {
                             value: bottom.frame(in: .named("conversation-scroll")).maxY)
                     }
                 })
-        }.padding(20)
+        }
+        .scrollTargetLayout(isEnabled: viewportStore != nil && viewportPanelID != nil)
+        .padding(20)
     }
 
     private func followTail(_ proxy: ScrollViewProxy) {
