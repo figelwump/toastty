@@ -1,6 +1,12 @@
 import Foundation
 import RemoteProtocol
 
+/// Host-side identity for input. Remote clients cannot select local authority.
+public enum ConversationInputSource: Equatable, Sendable {
+    case local
+    case remoteDevice(UUID)
+}
+
 /// Messages a remote client asked the Mac to hold while the agent works.
 ///
 /// Toastty owns this queue rather than relying on each provider's own
@@ -14,9 +20,9 @@ import RemoteProtocol
 public struct RemoteSendQueue: Sendable {
     public struct Entry: Equatable, Sendable {
         public var request: RemoteMessageSendRequest
-        /// The device that queued it. Re-checked at delivery so a device that
-        /// lost send scope or was revoked in the meantime delivers nothing.
-        public var deviceID: UUID
+        /// The caller that queued it. Remote device access is checked again
+        /// at delivery so revocation or lost send scope prevents delivery.
+        public var source: ConversationInputSource
         /// The runtime binding the client queued against. An entry never
         /// outlives its binding: a resumed or relaunched runtime is a
         /// different conversation as far as queued text is concerned.
@@ -32,8 +38,24 @@ public struct RemoteSendQueue: Sendable {
             deliveredText: String? = nil,
             enqueuedAt: Date
         ) {
+            self.init(
+                request: request,
+                source: .remoteDevice(deviceID),
+                bindingID: bindingID,
+                deliveredText: deliveredText,
+                enqueuedAt: enqueuedAt
+            )
+        }
+
+        public init(
+            request: RemoteMessageSendRequest,
+            source: ConversationInputSource,
+            bindingID: UUID,
+            deliveredText: String? = nil,
+            enqueuedAt: Date
+        ) {
             self.request = request
-            self.deviceID = deviceID
+            self.source = source
             self.bindingID = bindingID
             self.deliveredText = deliveredText
             self.enqueuedAt = enqueuedAt

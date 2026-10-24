@@ -1960,6 +1960,147 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func remoteSendRequiresCurrentPairedDeviceAuthority() throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected a current-launch prompt")
+            return
+        }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let request = RemoteMessageSendRequest(conversationID: fixture.conversationID,
+            clientRequestID: "device-authority", expectedInputEpoch: epoch, text: "Use current device authority")
+        let unpaired = RemoteDeviceRecord(name: "Unpaired", scopes: [.read, .send], createdAt: Date())
+        #expect(fixture.service.performRemoteSend(request, device: unpaired) == .rejected(reason: .sendScopeDenied))
+        #expect(delivered.isEmpty)
+        let paired = try fixture.pairInputDevice()
+        fixture.service.setDeviceSendScope(false, for: paired.id)
+        // The caller still holds its original send-enabled record.
+        #expect(paired.scopes.contains(.send))
+        #expect(fixture.service.performRemoteSend(request, device: paired) == .rejected(reason: .sendScopeDenied))
+        #expect(delivered.isEmpty)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+        fixture.service.setDeviceSendScope(true, for: paired.id)
+        #expect(fixture.service.performRemoteSend(request, device: paired) == .accepted(epoch: epoch))
+        #expect(delivered == [request.text])
+    }
+
+    @MainActor
+    @Test func localChatSendsWithoutPairingOrRemoteWrites() async throws {
+        let fixture = try RemoteBootstrapFixture(initiallyEnabled: false)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.server.startCallCount == 0)
+        #expect(fixture.service.devices.isEmpty)
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
+        let snapshot = try #require(fixture.service.conversationService.localSnapshot(
+            for: fixture.conversationID, at: fixture.confirmedAt
+        ))
+        guard case .openPrompt(let epoch) = snapshot.summary.inputAvailability else {
+            Issue.record("Expected local chat to retain its open prompt when remote writes are disabled")
+            return
+        }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, panelID, _ in
+            #expect(panelID == fixture.panelID)
+            delivered.append(text)
+            return true
+        }
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "local-only",
+            expectedInputEpoch: epoch, text: "Continue from local chat"
+        )
+        var oversized = request
+        oversized.clientRequestID = "local-oversized"
+        oversized.text = String(repeating: "x", count: RemoteGatewayProtocol.maximumRequestBodyBytes + 1)
+        #expect(await fixture.service.conversationService.sendLocal(oversized) == .rejected(reason: .invalidAttachments))
+        var invalidAttachment = request
+        invalidAttachment.clientRequestID = "local-invalid-attachment"
+        invalidAttachment.attachments = [.init(filename: "image.png", data: Data("not a PNG".utf8))]
+        #expect(await fixture.service.conversationService.sendLocal(invalidAttachment) == .rejected(reason: .invalidAttachments))
+        #expect(delivered.isEmpty)
+        #expect(await fixture.service.conversationService.sendLocal(request) == .accepted(epoch: epoch))
+        #expect(await fixture.service.conversationService.sendLocal(request) == .duplicate)
+        #expect(delivered == [request.text])
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"Continue from local chat"}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        func localReceipts() -> [ConversationUserMessagePayload] {
+            guard case .page(let page) = fixture.service.conversationService.events(
+                for: fixture.conversationID, after: nil, limit: 100
+            ) else { return [] }
+            return page.events.compactMap { event in
+                guard case .userMessage(let payload) = event.payload,
+                      payload.clientRequestID == request.clientRequestID else { return nil }
+                return payload
+            }
+        }
+        let receiptDeadline = Date().addingTimeInterval(3)
+        while localReceipts().isEmpty && Date() < receiptDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let receipts = localReceipts()
+        #expect(receipts.count == 1)
+        let receipt = try #require(receipts.first)
+        #expect(receipt.origin == .local)
+        #expect(receipt.clientRequestID == request.clientRequestID)
+        #expect(receipt.text == request.text)
+        #expect(fixture.server.startCallCount == 0)
+        #expect(fixture.service.devices.isEmpty)
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func stoppingRemoteTransportPreservesLocalInputAuthority(listenerFailure: Bool) async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        fixture.service.conversationService.setLocalPanelIDs([fixture.panelID])
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let before = try #require(fixture.service.conversationService.localSnapshot(
+            for: fixture.conversationID, at: fixture.confirmedAt
+        ))
+        let runID = fixture.service.facadeSessionList(at: fixture.confirmedAt).projectionRunID
+        guard case .openPrompt(let epoch) = before.summary.inputAvailability else {
+            Issue.record("Expected a current-launch prompt before stopping remote transport")
+            return
+        }
+        if listenerFailure {
+            fixture.server.reportFailure()
+        } else {
+            fixture.service.setEnabled(false, persist: false)
+        }
+        let after = try #require(fixture.service.conversationService.localSnapshot(
+            for: fixture.conversationID, at: fixture.confirmedAt
+        ))
+        #expect(after.summary.projectionGeneration == before.summary.projectionGeneration)
+        #expect(after.summary.inputAvailability == .openPrompt(epoch: epoch))
+        #expect(fixture.service.facadeSessionList(at: fixture.confirmedAt).projectionRunID == runID)
+        #expect(fixture.service.isReady == false)
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "after-transport-stop",
+            expectedInputEpoch: epoch, text: "Still available locally"
+        )
+        #expect(await fixture.service.conversationService.sendLocal(request) == .accepted(epoch: epoch))
+        #expect(delivered == [request.text])
+    }
+
+    @MainActor
     @Test func persistedResumeRecordStaysLockedUntilCurrentLaunchOwnershipIsConfirmed() throws {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }
@@ -2053,7 +2194,7 @@ struct RemoteAccessServiceSafetyTests {
             delivered.append(text)
             return true
         }
-        let device = RemoteDeviceRecord(name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        let device = try fixture.pairInputDevice()
         func release(_ epoch: RemoteInputEpoch) -> RemoteConversationLocalDraftReleaseResult {
             fixture.service.performLocalDraftRelease(
                 RemoteConversationLocalDraftReleaseRequest(conversationID: fixture.conversationID, expectedDraftEpoch: epoch),
@@ -2189,11 +2330,7 @@ struct RemoteAccessServiceSafetyTests {
                 expectedInputEpoch: epoch,
                 text: "Do not deliver"
             ),
-            device: RemoteDeviceRecord(
-                name: "Test iPhone",
-                scopes: [.read, .send],
-                createdAt: fixture.confirmedAt
-            )
+            device: try fixture.pairInputDevice()
         )
 
         #expect(result == .rejected(reason: .surfaceUnavailable))
@@ -2501,13 +2638,10 @@ struct RemoteAccessServiceSafetyTests {
             expectedInputEpoch: epoch,
             text: "Please continue"
         )
+        let device = try fixture.pairInputDevice()
         #expect(fixture.service.performRemoteSend(
             request,
-            device: RemoteDeviceRecord(
-                name: "Test iPhone",
-                scopes: [.read, .send],
-                createdAt: fixture.confirmedAt
-            )
+            device: device
         ).isAccepted)
 
         await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
@@ -2556,9 +2690,7 @@ struct RemoteAccessServiceSafetyTests {
             conversationID: fixture.conversationID, clientRequestID: "next-confirmed-send",
             expectedInputEpoch: nextEpoch, text: "A different next message"
         )
-        #expect(fixture.service.performRemoteSend(next, device: .init(
-            name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt
-        )).isAccepted)
+        #expect(fixture.service.performRemoteSend(next, device: device).isAccepted)
         try transcript.write(contentsOf: Self.codexLine(
             #"{"type":"user_message","message":"A different next message"}"#,
             at: "2026-08-07T10:00:06.000Z"
@@ -2718,10 +2850,9 @@ struct RemoteAccessServiceSafetyTests {
             conversationID: fixture.conversationID, clientRequestID: "compacting-turn-send",
             expectedInputEpoch: epoch, text: "Ok yeah do that"
         )
+        let device = try fixture.pairInputDevice()
         let sentAt = ContinuousClock.now
-        #expect(fixture.service.performRemoteSend(request, device: .init(
-            name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt
-        )).isAccepted)
+        #expect(fixture.service.performRemoteSend(request, device: device).isAccepted)
 
         let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
         defer { try? transcript.close() }
@@ -3044,6 +3175,7 @@ private final class RemoteBootstrapFixture {
         steerConfirmationTimeout: Duration = .seconds(180),
         codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
+        initiallyEnabled: Bool = true,
         pairNativeDevice: Bool = false,
         pushConfiguration: RemotePushConfiguration? = nil,
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
@@ -3144,8 +3276,12 @@ private final class RemoteBootstrapFixture {
             }
         )
         gatewayHandler = try #require(capturedHandler)
-        service.setEnabled(true, persist: false)
-        server.reportReady(port: 42_997)
+        if initiallyEnabled {
+            service.setEnabled(true, persist: false)
+            server.reportReady(port: 42_997)
+        } else {
+            service.conversationService.setLocalPanelIDs([panelID])
+        }
         conversationID = try #require(Self.remoteConversationID(panelID: panelID, in: store))
         guard publishResumeRecord(
             capturedAt: confirmedAt.addingTimeInterval(-60)
@@ -3165,6 +3301,27 @@ private final class RemoteBootstrapFixture {
             headers: ["authorization": "Bearer \(try #require(nativeCredential))", "tailscale-user-login": "owner@example.com"],
             body: try JSONEncoder().encode(RemoteGatewayPushRegistrationRequest(registration: registration)))
         guard case .respond(let response) = gatewayHandler.handle(request, at: .now), response.status == 200 else { throw CocoaError(.coderInvalidValue) }
+    }
+
+    func pairInputDevice() throws -> RemoteDeviceRecord {
+        let originalOrigin = service.tailnetOrigin
+        defer { service.tailnetOrigin = originalOrigin }
+        service.tailnetOrigin = "https://input-test.ts.net"
+        service.issueNativePairingOffer()
+        let offer = try #require(service.currentNativePairingOffer)
+        let exchange = RemoteGatewayNativePairingExchangeRequest(
+            deviceName: "Input test phone", offerID: offer.id, secret: offer.qrPayload.secret
+        )
+        guard case .respond(let response) = gatewayHandler.handle(.init(
+            method: "POST", path: "/v1/native-pairing/exchange",
+            headers: ["tailscale-user-login": "owner@example.com"],
+            body: try ConversationEventCoding.makeEncoder().encode(exchange)
+        ), at: .now) else { throw CocoaError(.coderInvalidValue) }
+        #expect(response.status == 200)
+        let pairing = try ConversationEventCoding.makeDecoder().decode(
+            RemoteGatewayNativePairingExchangeResponse.self, from: response.body
+        )
+        return try #require(service.devices.first { $0.id == pairing.device.id })
     }
 
     func pushConfigurationResponse() throws -> RemoteGatewayPushConfigurationResponse {
@@ -3220,6 +3377,7 @@ private final class RemoteBootstrapFixture {
     }
 
     func removeRuntimeFiles() {
+        service.conversationService.setLocalPanelIDs([])
         service.setEnabled(false, persist: false)
         try? FileManager.default.removeItem(atPath: runtimeHome)
         try? FileManager.default.removeItem(atPath: resumeRecord.sessionFilePath)
@@ -3255,7 +3413,7 @@ extension RemoteAccessServiceSafetyTests {
             delivered.append(text)
             return true
         }
-        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        let device = try fixture.pairInputDevice()
         #expect(fixture.observeCursorHook("sessionStart"))
         #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
         let binding = try #require(fixture.sessionRuntimeStore.nativeSessionBindingConfirmation(for: fixture.sessionID))
@@ -3356,7 +3514,7 @@ extension RemoteAccessServiceSafetyTests {
         let result = fixture.service.performRemoteSend(
             .init(conversationID: fixture.conversationID, clientRequestID: "cursor-local-draft",
                   expectedInputEpoch: epoch, text: "Do not deliver"),
-            device: .init(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+            device: try fixture.pairInputDevice()
         )
         #expect(result == .rejected(reason: .localDraftPresent))
         #expect(deliveries == 0)
@@ -3531,6 +3689,127 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
 extension RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func remoteEventCallbackCanDisableTrackingDuringPublication() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "disable-during-publication", at: fixture.confirmedAt
+        ))
+        let service = fixture.service.conversationService
+        let originalCallback = service.onRemoteEvent
+        defer { service.onRemoteEvent = originalCallback }
+        var callbackReturned = false
+        service.onRemoteEvent = { event in
+            originalCallback?(event)
+            guard case .conversationEvents = event else { return }
+            fixture.service.setEnabled(false, persist: false)
+            #expect(fixture.service.isEnabled == false)
+            #expect(fixture.service.isReady == false)
+            callbackReturned = true
+        }
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "disable-during-publication",
+            observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                fingerprint: "disable-publication-user",
+                payload: .transcript(.userMessage(.init(text: "Trigger publication"))))
+        ))
+        let deadline = Date().addingTimeInterval(3)
+        while (!callbackReturned || fixture.terminalRuntimeRegistry.localInputObserver != nil), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(callbackReturned)
+        #expect(fixture.service.isEnabled == false)
+        #expect(fixture.terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt) == nil)
+    }
+
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func localChangeSubscribersSurviveTrackingRestartAndInvalidateOldCursor() async throws {
+        let fixture = try RemoteBootstrapFixture(initiallyEnabled: false)
+        defer { fixture.removeRuntimeFiles() }
+        let service = fixture.service.conversationService
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var first = service.changes().makeAsyncIterator()
+        var second = service.changes().makeAsyncIterator()
+        let firstInitial = try #require(await first.next())
+        let secondInitial = try #require(await second.next())
+        #expect(firstInitial == secondInitial)
+        guard case .page(let page) = service.events(for: fixture.conversationID, after: nil, limit: 100) else {
+            Issue.record("Expected events while local tracking is active")
+            return
+        }
+        let cursor = ConversationEventCursor(projectionRunID: page.projectionRunID,
+            projectionGeneration: page.projectionGeneration, afterSequence: page.latestSequence)
+
+        service.setLocalPanelIDs([])
+        let firstStopped = try #require(await first.next())
+        let secondStopped = try #require(await second.next())
+        #expect(firstStopped > firstInitial)
+        #expect(secondStopped == firstStopped)
+        #expect(service.localConversations.isEmpty)
+        #expect(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt) == nil)
+        #expect(service.events(for: fixture.conversationID, after: cursor, limit: 100) == .conversationNotFound)
+
+        service.setLocalPanelIDs([fixture.panelID])
+        let firstRestarted = try #require(await first.next())
+        let secondRestarted = try #require(await second.next())
+        #expect(firstRestarted > firstStopped)
+        #expect(secondRestarted == firstRestarted)
+        #expect(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt) != nil)
+        #expect(service.events(for: fixture.conversationID, after: cursor, limit: 100) == .resnapshotRequired)
+        #expect(fixture.server.startCallCount == 0)
+    }
+
+    @MainActor
+    @Test func localQuestionAnswerRejectsStaleEpochAndDoesNotSubmitTwice() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, initiallyEnabled: false)
+        defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
+        let now = Date()
+        let responseID = UUID().uuidString
+        let questions = [RemoteInteractionQuestion(id: "q0", header: "Choice", question: "Choose a color",
+            options: [.init(id: "q0:o0", label: "Blue"), .init(id: "q0:o1", label: "Green")])]
+        func hook(_ phase: ClaudeQuestionHookRequest.Phase, name: ClaudeQuestionHookEvent.EventName) -> ClaudeQuestionHookRequest {
+            .init(phase: phase, sessionID: fixture.sessionID, panelID: fixture.panelID,
+                event: .init(eventName: name, nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                    promptID: "local-prompt", transcriptPath: fixture.resumeRecord.sessionFilePath,
+                    providerCallID: name == .preToolUse ? "local-question-call" : nil,
+                    questions: questions, timestamp: now),
+                responseID: phase == .begin ? responseID : nil)
+        }
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, name: .preToolUse), at: now).status == .observed)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, name: .permissionRequest), at: now).status == .pending)
+        let snapshot = try #require(fixture.service.conversationService.localSnapshot(for: fixture.conversationID, at: now))
+        let interaction = try #require(snapshot.pendingInteractions.first)
+        let request = RemoteQuestionAnswerRequest(conversationID: fixture.conversationID, interactionID: interaction.id,
+            responseID: responseID, expectedInputEpoch: interaction.inputEpoch, clientRequestID: "local-question",
+            answers: [.init(questionID: "q0", selectedOptionIDs: ["q0:o0"])])
+        var terminalSends = 0
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            terminalSends += 1
+            return true
+        }
+        var stale = request
+        stale.expectedInputEpoch = .init(bindingID: UUID(), counter: 99)
+        #expect(fixture.service.conversationService.answerLocal(stale) == .rejected(reason: .epochMismatch))
+        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
+            panelID: fixture.panelID, responseID: responseID)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).status == .pending)
+        #expect(fixture.service.conversationService.answerLocal(request) == .submitted)
+        #expect(fixture.service.conversationService.answerLocal(request) == .duplicate)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).answers == request.answers)
+        #expect(terminalSends == 0)
+        #expect(fixture.service.devices.isEmpty)
+    }
+
+    @MainActor
     @Test func claudeQuestionAnswerHoursLaterUsesExactPendingEpochAndWritePolicyWithoutTerminalInput() throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working)
         defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
@@ -3563,10 +3842,10 @@ extension RemoteAccessServiceSafetyTests {
         let request = RemoteQuestionAnswerRequest(conversationID: fixture.conversationID, interactionID: interaction.id,
             responseID: responseID, expectedInputEpoch: interaction.inputEpoch, clientRequestID: "mobile",
             answers: [.init(questionID: "q0", selectedOptionIDs: ["q0:o0"])])
-        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: now)
-        var readOnlyDevice = device
-        readOnlyDevice.scopes = [.read]
-        #expect(fixture.service.performQuestionAnswer(request, device: readOnlyDevice) == .rejected(reason: .sendScopeDenied))
+        let device = try fixture.pairInputDevice()
+        fixture.service.setDeviceSendScope(false, for: device.id)
+        #expect(fixture.service.performQuestionAnswer(request, device: device) == .rejected(reason: .sendScopeDenied))
+        fixture.service.setDeviceSendScope(true, for: device.id)
         fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
         #expect(fixture.service.performQuestionAnswer(request, device: device) == .rejected(reason: .sessionWritesDisabled))
         fixture.service.setSessionWriteEnabled(true, for: fixture.conversationID)
@@ -4084,9 +4363,88 @@ extension RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func acceptedLocalQueueSurvivesClosingChatAndDisablingRemoteAccess() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude, claudePromptStabilizationDelay: .milliseconds(20), pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        let service = fixture.service.conversationService
+        service.setLocalPanelIDs([fixture.panelID])
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "local-queue-retention", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "local-queue-retention",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                    fingerprint: fingerprint, payload: payload)
+            ))
+        }
+        observe(.transcript(.userMessage(.init(text: "Original task"))), fingerprint: "original-user", offset: 1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+        let queued = RemoteMessageSendRequest(conversationID: fixture.conversationID,
+            clientRequestID: "retained-local", expectedInputEpoch: turnEpoch,
+            text: "Run this after I close chat", deliveryMode: .queue)
+        #expect(await service.sendLocal(queued) == .queued(position: 1))
+        var removed = queued
+        removed.clientRequestID = "removed-local"
+        removed.text = "Do not run this"
+        #expect(await service.sendLocal(removed) == .queued(position: 2))
+        #expect(service.updateLocalQueue(.init(conversationID: fixture.conversationID,
+            action: .remove, clientRequestID: removed.clientRequestID)) == .updated)
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        var remote = queued
+        remote.clientRequestID = "cancelled-remote"
+        remote.text = "Remote access will be disabled"
+        #expect(fixture.service.performRemoteSend(remote, device: device) == .queued(position: 2))
+
+        service.setLocalPanelIDs([])
+        fixture.service.setEnabled(false, persist: false)
+        let retained = try #require(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt))
+        #expect(retained.summary.inputControl?.queuedMessages.map(\.clientRequestID) == [queued.clientRequestID])
+        #expect(delivered.isEmpty)
+        observe(.turnEnded(turnID: "original-turn", reason: .completed), fingerprint: "original-end", offset: 2)
+        let deadline = Date().addingTimeInterval(3)
+        while delivered.isEmpty && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(delivered == [queued.text])
+        // The accepted send still needs a provider receipt after the queue drains.
+        let awaitingReceipt = try #require(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt))
+        #expect(awaitingReceipt.summary.inputControl?.queuedMessages.isEmpty == true)
+        var hiddenSend = queued
+        hiddenSend.clientRequestID = "new-hidden-local"
+        hiddenSend.deliveryMode = .prompt
+        #expect(await service.sendLocal(hiddenSend) == .rejected(reason: .sendScopeDenied))
+        #expect(delivered == [queued.text])
+        observe(.transcript(.userMessage(.init(text: queued.text))), fingerprint: "retained-local-receipt", offset: 3)
+        let cleanupDeadline = Date().addingTimeInterval(3)
+        while service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt) != nil,
+              Date() < cleanupDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(service.localSnapshot(for: fixture.conversationID, at: fixture.confirmedAt) == nil)
+        #expect(fixture.terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(delivered == [queued.text])
+    }
+
+    @MainActor
     @Test func queuedMessagesAreRemovableAndExpireWithTheirBinding() async throws {
         let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }
+        fixture.service.conversationService.setLocalPanelIDs([fixture.panelID])
         #expect(fixture.confirmCurrentLaunchBinding())
         var delivered: [String] = []
         fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
@@ -4105,10 +4463,17 @@ extension RemoteAccessServiceSafetyTests {
         let turnEpoch = try #require(working.inputControl?.turnEpoch)
 
         for index in 1...RemoteSendQueue.capacity {
-            #expect(fixture.service.performRemoteSend(.init(
+            let request = RemoteMessageSendRequest(
                 conversationID: fixture.conversationID, clientRequestID: "q-\(index)",
                 expectedInputEpoch: turnEpoch, text: "message \(index)", deliveryMode: .queue
-            ), device: device) == .queued(position: index))
+            )
+            let result: RemoteMessageSendResult
+            if index.isMultiple(of: 2) {
+                result = await fixture.service.conversationService.sendLocal(request)
+            } else {
+                result = fixture.service.performRemoteSend(request, device: device)
+            }
+            #expect(result == .queued(position: index))
         }
         #expect(fixture.service.performRemoteSend(.init(
             conversationID: fixture.conversationID, clientRequestID: "q-overflow",
