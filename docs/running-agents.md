@@ -568,10 +568,9 @@ anything:
   worktree must be clean and at exactly the pull request's head commit. The
   pull request must target the repository's default branch.
 - Toastty refuses a pull request with merge conflicts, failing checks, or a
-  branch that GitHub requires to be updated first. It also refuses one whose
-  description lists merge prerequisites: an "Activation order", "Merge order",
-  "Rollout", or "Depends on" section, or a link to a pull request in another
-  repository. Merge that pull request yourself once its prerequisites are done.
+  branch that GitHub requires to be updated first. It does not read the
+  description: check its merge prerequisites before you click. For a task,
+  the merge skill does that check.
 - Toastty also refuses a pull request that already has auto-merge on, because
   GitHub would merge commits pushed later too. Turn auto-merge off on GitHub
   first. Branches that require a merge queue are not supported.
