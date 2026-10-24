@@ -32,11 +32,20 @@ struct RemoteSendQueueTests {
 
     @Test func entriesDeliverInOrderAndReportPositions() {
         var queue = RemoteSendQueue()
+        let remoteEntry = Self.entry("two")
+        let localEntry = RemoteSendQueue.Entry(
+            request: remoteEntry.request,
+            source: .local,
+            bindingID: remoteEntry.bindingID,
+            enqueuedAt: remoteEntry.enqueuedAt
+        )
         #expect(queue.enqueue(Self.entry("one")) == .queued(position: 1))
-        #expect(queue.enqueue(Self.entry("two")) == .queued(position: 2))
+        #expect(queue.enqueue(localEntry) == .queued(position: 2))
         #expect(queue.next(for: Self.conversationID)?.clientRequestID == "one")
+        #expect(queue.next(for: Self.conversationID)?.source == .remoteDevice(Self.deviceID))
         #expect(queue.removeFirst(for: Self.conversationID)?.clientRequestID == "one")
         #expect(queue.next(for: Self.conversationID)?.clientRequestID == "two")
+        #expect(queue.next(for: Self.conversationID)?.source == .local)
         #expect(queue.inputControlQueue(for: Self.conversationID).queuedMessages.map(\.clientRequestID) == ["two"])
     }
 
