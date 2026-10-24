@@ -577,3 +577,97 @@ final class NativeConversationViewportRowView: NSView {
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window != nil { session?.register(self) } }
     override func layout() { super.layout(); session?.geometryDidChange() }
 }
+
+#if DEBUG
+// BEGIN typed viewport snapshot diagnostic
+extension NativeConversationViewportSession {
+    struct DiagnosticSnapshot: Encodable {
+        enum Phase: Encodable {
+            case pending
+            case locating(anchor: String, layoutRevision: Int)
+            case releasing(anchor: String)
+            case correcting(anchor: String, attempts: Int, previousTop: CGFloat?, layoutRevision: Int)
+            case suspended
+            case idle
+        }
+        struct Target: Encodable {
+            let generation: Int
+            let target: String?
+            init(_ value: Materialization) { generation = value.generation; target = value.target }
+        }
+        struct Position: Encodable {
+            let followsTail: Bool
+            let anchor: String?
+            let previous: String?
+            let next: String?
+            let distance: CGFloat
+            let fraction: CGFloat
+            let width: CGFloat
+            init(_ value: NativeConversationViewportStore.Position) {
+                followsTail = value.followsTail; anchor = value.anchor
+                previous = value.previous; next = value.next
+                distance = value.distance; fraction = value.fraction; width = value.width
+            }
+        }
+        let phase: Phase
+        let token: UUID
+        let revision: Int
+        let layoutRevision: Int
+        let requested: Target
+        let published: Target
+        let lastPublishedTargetGeneration: Int
+        let acknowledgedNilGeneration: Int
+        let materializationAttempts: Int
+        let scheduled: Bool
+        let applying: Bool
+        let following: Bool
+        let followsTail: Bool
+        let userScrolling: Bool
+        let contentLoaded: Bool
+        let hasAttachedScroll: Bool
+        let saved: Position?
+        let currentStorePosition: Position?
+        let panelID: UUID?
+        let conversationID: String?
+        let activeOwner: Bool?
+        let session: String
+        let store: String?
+        let marker: String?
+        let window: String?
+        let scroll: String?
+        let clip: String?
+        let document: String?
+        let observedDocument: String?
+        let markerDelivered: Target?
+    }
+
+    // Copies stored values and object identities only. No binding or geometry evaluation.
+    func diagnosticSnapshot() -> DiagnosticSnapshot {
+        func identity(_ value: AnyObject?) -> String? { value.map { String(describing: ObjectIdentifier($0)) } }
+        let phase: DiagnosticSnapshot.Phase
+        switch restore {
+        case .pending: phase = .pending
+        case let .locating(anchor, revision): phase = .locating(anchor: anchor, layoutRevision: revision)
+        case let .releasing(anchor): phase = .releasing(anchor: anchor)
+        case let .correcting(anchor, attempts, previousTop, revision):
+            phase = .correcting(anchor: anchor, attempts: attempts, previousTop: previousTop, layoutRevision: revision)
+        case .suspended: phase = .suspended
+        case .idle: phase = .idle
+        }
+        return DiagnosticSnapshot(phase: phase, token: token, revision: revision, layoutRevision: layoutRevision,
+            requested: .init(requestedMaterialization), published: .init(materialization),
+            lastPublishedTargetGeneration: lastPublishedTargetGeneration, acknowledgedNilGeneration: acknowledgedNilGeneration,
+            materializationAttempts: materializationAttempts, scheduled: scheduled, applying: applying,
+            following: following, followsTail: followsTail, userScrolling: userScrolling,
+            contentLoaded: contentLoaded, hasAttachedScroll: hasAttachedScroll,
+            saved: saved.map(DiagnosticSnapshot.Position.init),
+            currentStorePosition: key.flatMap { store?.position(for: $0) }.map(DiagnosticSnapshot.Position.init),
+            panelID: key?.panelID, conversationID: key?.conversationID.rawValue.uuidString,
+            activeOwner: key.flatMap { key in store.map { $0.isActive(key, token: token) } },
+            session: String(describing: ObjectIdentifier(self)), store: identity(store), marker: identity(marker), window: identity(marker?.window),
+            scroll: identity(scroll), clip: identity(scroll?.contentView), document: identity(scroll?.documentView),
+            observedDocument: identity(observedDocument), markerDelivered: marker.map { .init($0.materialization) })
+    }
+}
+// END typed viewport snapshot diagnostic
+#endif

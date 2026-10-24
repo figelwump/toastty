@@ -172,12 +172,34 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         }
     }
 
+    // BEGIN typed viewport snapshot diagnostic
+    #if DEBUG
+    private enum StateMapping: String, Encodable {
+        case notDiscovered = "not-discovered", selected, matched, absent, ambiguous
+        case discoveryCapped = "discovery-capped", discoveryFailed = "discovery-failed"
+        case replacedOrUnattached = "replaced-or-unattached", replacedOrDeallocated = "replaced-or-deallocated"
+    }
+    private struct TimelineState: Encodable {
+        let mapping: StateMapping
+        let candidateCount: Int
+        let selectedMarker: String?
+        let selectedSession: String?
+        let state: NativeConversationViewportSession.DiagnosticSnapshot?
+    }
+
+    #endif
+    // END typed viewport snapshot diagnostic
     private struct TimelineRecord: Encodable {
         let elapsed: Double
         let stage: String
         let event: String
         let insideTestScrollAndReflect: Bool
         let geometry: TimelineGeometry?
+        // BEGIN typed viewport snapshot diagnostic
+        #if DEBUG
+        var restoration: TimelineState?
+        #endif
+        // END typed viewport snapshot diagnostic
         var maximum: Double?
         var targetY: Double?
         var fraction: Double?
@@ -204,6 +226,14 @@ final class CoordinatorPeekViewportTests: XCTestCase {
             weak var scroll: NSScrollView?
             weak var clip: NSClipView?
             weak var document: NSView?
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            weak var marker: NativeConversationViewportMarkerView?
+            weak var session: NativeConversationViewportSession?
+            var mapping: StateMapping = .notDiscovered
+            var candidateCount = 0
+            #endif
+            // END typed viewport snapshot diagnostic
             var tokens: [NSObjectProtocol] = []
 
             init(_ surface: Surface, scroll: NSScrollView? = nil) {
@@ -243,6 +273,69 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         private var notificationsDisabled = false
         private var replacementGap = false
         private var identityListCapped = false
+        // BEGIN typed viewport snapshot diagnostic
+        #if DEBUG
+        private final class WeakMarker {
+            weak var value: NativeConversationViewportMarkerView?
+            init(_ value: NativeConversationViewportMarkerView) { self.value = value }
+        }
+        private var collectingMarkers = false
+        private var markers: [WeakMarker] = []
+        private var markerListCapped = false
+        private var stateMappingInconclusive = false
+
+        func beginMarkerDiscovery() {
+            markers.removeAll(); markerListCapped = false; collectingMarkers = !stopped
+        }
+        func endMarkerDiscovery() { collectingMarkers = false }
+        func visit(_ view: NSView) {
+            guard collectingMarkers, let marker = view as? NativeConversationViewportMarkerView else { return }
+            guard markers.count < 128 else { markerListCapped = true; return }
+            markers.append(WeakMarker(marker))
+        }
+        private func bindState(_ scope: Scope) {
+            scope.marker = nil; scope.session = nil; scope.candidateCount = 0
+            guard let window = scope.window, let scroll = scope.scroll else {
+                scope.mapping = .replacedOrDeallocated; markers.removeAll(); return
+            }
+            let candidates = markers.compactMap(\.value).filter {
+                $0.window === window && $0.enclosingScrollView === scroll
+            }
+            scope.candidateCount = candidates.count
+            if markerListCapped { scope.mapping = .discoveryCapped }
+            else if candidates.isEmpty { scope.mapping = .absent }
+            else if candidates.count != 1 { scope.mapping = .ambiguous }
+            else if let marker = candidates.first {
+                scope.marker = marker; scope.session = marker.session; scope.mapping = .selected
+            }
+            markers.removeAll()
+        }
+        private func state(_ scope: Scope?) -> TimelineState {
+            guard let scope, scope.wasObserved else {
+                return TimelineState(mapping: .notDiscovered, candidateCount: 0,
+                    selectedMarker: nil, selectedSession: nil, state: nil)
+            }
+            var mapping = scope.mapping
+            var snapshot: NativeConversationViewportSession.DiagnosticSnapshot?
+            if mapping == .selected {
+                if let marker = scope.marker, let session = scope.session,
+                   let window = scope.window, let scroll = scope.scroll,
+                   marker.window === window, marker.enclosingScrollView === scroll,
+                   marker.session === session {
+                    let value = session.diagnosticSnapshot()
+                    // Retain mismatched sampled values, but do not claim a current mapping.
+                    mapping = value.marker == Self.identity(marker) && value.scroll == Self.identity(scroll)
+                        && value.window == Self.identity(window) && scope.clip === scroll.contentView
+                        && scope.document === scroll.documentView ? .matched : .replacedOrUnattached
+                    snapshot = value
+                } else { mapping = .replacedOrDeallocated }
+            }
+            if mapping != .matched { stateMappingInconclusive = true }
+            return TimelineState(mapping: mapping, candidateCount: scope.candidateCount,
+                selectedMarker: Self.identity(scope.marker), selectedSession: Self.identity(scope.session), state: snapshot)
+        }
+        #endif
+        // END typed viewport snapshot diagnostic
         var insideTestScrollAndReflect = false
 
         init(method: String, continueAfterFailure: Bool) {
@@ -281,8 +374,14 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                     clipPostsFrame: scope.clip?.postsFrameChangedNotifications,
                     documentPostsFrame: scope.document?.postsFrameChangedNotifications)
             }
-            return TimelineRecord(elapsed: ProcessInfo.processInfo.systemUptime - start, stage: stage,
+            var result = TimelineRecord(elapsed: ProcessInfo.processInfo.systemUptime - start, stage: stage,
                 event: event, insideTestScrollAndReflect: insideTestScrollAndReflect, geometry: geometry)
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            result.restoration = state(scope)
+            #endif
+            // END typed viewport snapshot diagnostic
+            return result
         }
 
         private func append(_ value: TimelineRecord) {
@@ -323,6 +422,11 @@ final class CoordinatorPeekViewportTests: XCTestCase {
             guard !stopped else { return }
             if let old = scopes[surface.windowID], old.scroll === scroll,
                old.clip === scroll.contentView, old.document === scroll.documentView {
+                // BEGIN typed viewport snapshot diagnostic
+                #if DEBUG
+                bindState(old)
+                #endif
+                // END typed viewport snapshot diagnostic
                 currentScope = old
                 textIdentity("discovered-existing-views", texts: texts)
                 return
@@ -332,6 +436,11 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                 replacementGap = true // New views were not observed before this existing discovery point.
             }
             let scope = Scope(surface, scroll: scroll)
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            bindState(scope)
+            #endif
+            // END typed viewport snapshot diagnostic
             scopes[surface.windowID] = scope
             currentScope = scope
             guard let clip = scope.clip, let document = scope.document else {
@@ -367,6 +476,14 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         }
 
         func failedDiscovery(texts: [NSTextView]) {
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            currentScope?.marker = nil; currentScope?.session = nil
+            currentScope?.mapping = .discoveryFailed
+            currentScope?.candidateCount = 0
+            stateMappingInconclusive = true
+            #endif
+            // END typed viewport snapshot diagnostic
             missingViews = true
             textIdentity("discovery-failed", texts: texts)
         }
@@ -407,6 +524,11 @@ final class CoordinatorPeekViewportTests: XCTestCase {
             emitted = true
             stop()
             struct Header: Encodable {
+                // BEGIN typed viewport snapshot diagnostic
+                #if DEBUG
+                var stateMappingInconclusive = false
+                #endif
+                // END typed viewport snapshot diagnostic
                 let schemaVersion = 1
                 let base = "cae0f793ea9a50ce4ce996b1fd2c4ad0aeedc59b"
                 let method: String
@@ -426,8 +548,13 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                 "encodingFailed": encodingFailed, "missingViews": missingViews,
                 "notificationsDisabled": notificationsDisabled, "replacementGap": replacementGap,
                 "identityListCapped": identityListCapped, "stoppedBeforeBodyEnd": stoppedBeforeBodyEnd]
-            let header = Header(method: method, continueAfterFailure: continueAfterFailure,
+            var header = Header(method: method, continueAfterFailure: continueAfterFailure,
                 incomplete: flags.values.contains(true), flags: flags, fixtureCount: fixtureCount, recordCount: records.count)
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            header.stateMappingInconclusive = stateMappingInconclusive
+            #endif
+            // END typed viewport snapshot diagnostic
             let fallback = Data(#"{"schemaVersion":1,"incomplete":true,"flags":{"attachmentEncodingFailed":true},"records":[]}"#.utf8)
             let oversized = Data(#"{"schemaVersion":1,"incomplete":true,"flags":{"attachmentTooLarge":true},"records":[]}"#.utf8)
             var data = (try? encoder.encode(header)) ?? Data()
@@ -458,7 +585,12 @@ final class CoordinatorPeekViewportTests: XCTestCase {
     }
 
     private func textViews(_ root: NSView) -> [NSTextView] {
-        (root as? NSTextView).map { [$0] } ?? root.subviews.flatMap(textViews)
+        // BEGIN typed viewport snapshot diagnostic
+        #if DEBUG
+        timeline?.visit(root)
+        #endif
+        // END typed viewport snapshot diagnostic
+        return (root as? NSTextView).map { [$0] } ?? root.subviews.flatMap(textViews)
     }
 
     private func scrollViews(_ root: NSView) -> [NSScrollView] {
@@ -527,7 +659,17 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // or which line is visible. A wrong-but-rendered viewport is ready.
         let deadline = ProcessInfo.processInfo.systemUptime + (waitForReadiness ? 2 : 0)
         while true {
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            timeline?.beginMarkerDiscovery()
+            #endif
+            // END typed viewport snapshot diagnostic
             let matching = textViews(surface.root).filter { $0.string.hasPrefix(terminal.tag) }
+            // BEGIN typed viewport snapshot diagnostic
+            #if DEBUG
+            timeline?.endMarkerDiscovery()
+            #endif
+            // END typed viewport snapshot diagnostic
             let attached = attachedScrollViews(matching, surface: surface)
             if historyIsReady(fixture, terminal: terminal, surface: surface),
                surface.root.window === surface.window, surface.window.contentView === surface.root,
