@@ -228,10 +228,19 @@ struct CoordinatorConversationModelTests {
             f.model.refresh()
             _ = try #require(f.model.snapshot?.summary.inputControl?.turnEpoch)
             f.observe(.turnEnded(turnID: "completed-turn", reason: .completed))
-            try await f.waitUntil("the prompt after turn completion") {
-                f.model.refresh()
-                return f.model.inputEpoch != nil
-            }
+            let pending = try #require(f.service.projectionStore.projectorState(for: f.conversationID))
+            let token = try #require(pending.pendingPromptStabilizationToken)
+            try #require(pending.state == .awaitingInput)
+            try #require(pending.inputAvailability == .unavailable(reason: .unknownProviderState))
+            // This fixture feeds the projector directly. Test the model after
+            // exact stabilization; service feed scheduling has separate coverage.
+            let emitted = f.service.projectionStore.completePromptStabilization(
+                for: f.conversationID, token: token, at: pending.updatedAt.addingTimeInterval(0.5)
+            )
+            try #require(!emitted.isEmpty)
+            f.service.syncConversations()
+            f.model.refresh()
+            _ = try #require(f.model.inputEpoch)
         }
         var requests: [RemoteMessageSendRequest] = []
         let model = CoordinatorConversationModel(service: f.service, panelID: f.panelID,
