@@ -249,6 +249,85 @@ struct TaskLifecyclePresentationTests {
     }
 
     @Test
+    func theSidebarListsEachProjectsLatestTasksToShip() {
+        let toastty = UUID(), website = UUID()
+        func shipped(
+            _ title: String,
+            mergedMinutesAgo: Double?,
+            project: UUID = toastty,
+            root: String = "/repos/toastty",
+            taskSpace: UUID? = nil,
+            stage: TaskStage = .toShip
+        ) -> TaskBoardItem {
+            var task = TaskRecord(createdAt: requestedAt.addingTimeInterval(-86_400), text: title, title: title, slug: title, source: .cli, setup: .started)
+            task.projectRoot = root
+            task.mergedAt = mergedMinutesAgo.map { requestedAt.addingTimeInterval(-$0 * 60) }
+            return TaskBoardItem(
+                id: .task(task.id), record: task, title: title, taskSpaceWorkspaceID: taskSpace,
+                projectWorkspaceID: project, projectTitle: (root as NSString).lastPathComponent,
+                stage: stage, agent: .none, activityAt: requestedAt.addingTimeInterval(-90 * 60)
+            )
+        }
+        func titles(_ items: [TaskBoardItem]) -> [String] { items.map(\.title) }
+        func card(_ items: [TaskBoardItem], projectWorkspaceID: UUID, shownTaskSpaceIDs: Set<UUID> = []) -> SidebarRecentToShip {
+            SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
+        }
+
+        // No To ship tasks: no rows, and no lane.
+        let done = shipped("released", mergedMinutesAgo: 1, stage: .done)
+        #expect(card([done], projectWorkspaceID: toastty) == SidebarRecentToShip())
+        #expect(SidebarStatusSections.make([done]).toShip.isEmpty)
+
+        // One task, and three: every task shows and nothing is hidden.
+        let one = card([shipped("menus", mergedMinutesAgo: 5), done], projectWorkspaceID: toastty)
+        #expect(titles(one.shown) == ["menus"])
+        #expect(one.hidden.isEmpty)
+        let three = [
+            shipped("oldest", mergedMinutesAgo: 60),
+            shipped("newest", mergedMinutesAgo: 1),
+            shipped("middle", mergedMinutesAgo: 30),
+        ]
+        #expect(titles(card(three, projectWorkspaceID: toastty).shown) == ["newest", "middle", "oldest"])
+        #expect(card(three, projectWorkspaceID: toastty).hidden.isEmpty)
+
+        // Five: the three newest merges show and "Show 2 more" selects the
+        // newest of the rest. A task without a merge time uses its latest
+        // change, here 90 minutes ago.
+        let five = three + [shipped("no merge time", mergedMinutesAgo: nil), shipped("ancient", mergedMinutesAgo: 600)]
+        let fiveCard = card(five, projectWorkspaceID: toastty)
+        #expect(titles(fiveCard.shown) == ["newest", "middle", "oldest"])
+        #expect(titles(fiveCard.hidden) == ["no merge time", "ancient"])
+        #expect(SidebarRecentToShip.showMoreTitle(fiveCard.hidden.count) == "Show 2 more")
+
+        // A task whose task space row the card shows, such as one whose
+        // agent works, is left out of the card's rows. A quiet task space
+        // leaves the card, so its task gets a row. In Status the task is one
+        // of the lane's rows, drawn as its task space row.
+        let openSpace = UUID()
+        let open = shipped("still open", mergedMinutesAgo: 0, taskSpace: openSpace)
+        let withOpen = card(five + [open], projectWorkspaceID: toastty, shownTaskSpaceIDs: [openSpace])
+        #expect(titles(withOpen.shown) == ["newest", "middle", "oldest"])
+        #expect(withOpen.hidden.count == 2)
+        let withQuiet = card(five + [open], projectWorkspaceID: toastty)
+        #expect(titles(withQuiet.shown) == ["still open", "newest", "middle"])
+        #expect(withQuiet.hidden.count == 3)
+        let lane = SidebarStatusSections.make(five + [open]).toShip.first
+        #expect(lane?.count == 6)
+        #expect(lane.map { titles($0.recent.shown) } == ["still open", "newest", "middle"])
+        #expect(lane?.recent.hidden.count == 3)
+
+        // Two projects keep their own rows, in the card and in Status.
+        let other = shipped("pricing", mergedMinutesAgo: 2, project: website, root: "/repos/website")
+        let both = five + [other]
+        #expect(titles(card(both, projectWorkspaceID: website).shown) == ["pricing"])
+        #expect(titles(card(both, projectWorkspaceID: toastty).shown) == ["newest", "middle", "oldest"])
+        let lanes = SidebarStatusSections.make(both).toShip
+        #expect(lanes.map(\.projectTitle) == ["toastty", "website"])
+        #expect(lanes.map { titles($0.recent.shown) } == [["newest", "middle", "oldest"], ["pricing"]])
+        #expect(lanes.map(\.recent.hidden.count) == [2, 0])
+    }
+
+    @Test
     func statusLinesNameTheMergeAndTheStoppedCleanup() {
         var item = TaskBoardItem(
             id: .task(UUID()),

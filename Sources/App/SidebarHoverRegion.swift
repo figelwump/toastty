@@ -9,6 +9,7 @@ final class SidebarHoverState {
     let workspace = CurrentValueSubject<UUID?, Never>(nil)
     let subspace = CurrentValueSubject<UUID?, Never>(nil)
     let doneToggle = CurrentValueSubject<UUID?, Never>(nil)
+    let toShipTask = CurrentValueSubject<UUID?, Never>(nil)
 }
 
 struct SidebarHoverRegion<Content: View>: View {

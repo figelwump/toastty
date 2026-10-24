@@ -32,6 +32,8 @@
 //                                       open menu's item titles as JSON, then
 //                                       presses the item, leaves the menu open
 //                                       with @keep, or closes it
+//   press-label <pid> <label-prefix>    presses the first element whose label
+//                                       starts with the prefix, in tree order
 //   close-menu <pid>                    closes the app's open menu
 //   menu-frames <pid>                   prints the open menu's frame and its
 //                                       items' titles and frames as JSON
@@ -424,6 +426,23 @@ case "press-menu":
     }
     guard let item else { fail("no menu item \(arguments[3])") }
     AXUIElementPerformAction(item, kAXPressAction as CFString)
+
+case "press-label":
+    // For SwiftUI rows and buttons that take their container's identifier.
+    guard arguments.count == 3 else { fail("press-label <pid> <label-prefix>") }
+    let app = application(arguments[1])
+    var target: AXUIElement?
+    for window in windows(of: app) where target == nil {
+        visit(window) { element in
+            if target == nil, label(element).hasPrefix(arguments[2]) {
+                target = element
+            }
+        }
+    }
+    guard let target else { fail("no element labelled \(arguments[2])") }
+    guard AXUIElementPerformAction(target, kAXPressAction as CFString) == .success else {
+        fail("\(arguments[2]) refused AXPress")
+    }
 
 case "focused":
     // The app's focused element, for diagnosing where key events go.

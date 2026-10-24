@@ -1061,7 +1061,8 @@ struct SidebarView: View {
                 if let coordinator = taskBoard.coordinator {
                     TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
                 }
-            }
+            },
+            showMoreToShip: { subject in openTasksView(selecting: subject, revealing: .toShip) }
         ) { entry in
             if let workspaceID = entry.item.taskSpaceWorkspaceID,
                let workspace = store.state.workspacesByID[workspaceID] {
@@ -1076,6 +1077,8 @@ struct SidebarView: View {
                     parentWorkspaceID: workspace.parentWorkspaceID ?? workspace.id,
                     showsSpawnerTag: false
                 )
+            } else if entry.item.stage == .toShip {
+                toShipTaskRow(entry.item)
             } else {
                 SidebarTaskRecordRow(item: entry.item) { openTasksView(selecting: entry.item.id) }
                     .contextMenu {
@@ -1086,33 +1089,113 @@ struct SidebarView: View {
         .padding(.top, 2)
     }
 
+    /// A merged task waiting for a release, under its project's To ship
+    /// line or card. Its task space has usually closed, so it opens the task
+    /// in the Tasks view.
+    private func toShipTaskRow(_ item: TaskBoardItem) -> some View {
+        let hoverID = switch item.id {
+        case .task(let id), .taskSpace(let id): id
+        }
+        return SidebarHoverRegion(id: hoverID, selection: hoverState.toShipTask) { isHovered in
+            let label = "\(item.title), \(TaskBoardPresentation.statusLine(item))"
+            let open = { openTasksView(selecting: item.id) }
+            HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
+                SubspaceRailStatusIcon(status: .toShip, isDoneTogglePreviewed: false)
+                    .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+                    .accessibilityHidden(true)
+                Self.styledSessionNameText(item.title, isEmphasized: false)
+                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minHeight: Self.sessionRowLineMinHeight, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .onTapGesture(perform: open)
+            .onHover { isHovering in
+                if isHovering {
+                    hoverState.toShipTask.value = hoverID
+                } else if hoverState.toShipTask.value == hoverID {
+                    hoverState.toShipTask.value = nil
+                }
+            }
+            .help(TaskBoardPresentation.statusLine(item))
+            .background {
+                SidebarSemanticTextBridge(text: label)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, open)
+            .accessibilityIdentifier(Self.toShipTaskRowIdentifier(item.id))
+            .contextMenu {
+                TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
+            }
+        }
+    }
+
+    static func toShipTaskRowIdentifier(_ subject: TaskBoardItem.Subject) -> String {
+        switch subject {
+        case .task(let id): "sidebar.toShip.task.\(id.uuidString)"
+        case .taskSpace(let id): "sidebar.toShip.taskSpace.\(id.uuidString)"
+        }
+    }
+
     /// Under a project card: the tasks that left it because they finished.
+    /// The latest To ship tasks show as rows, then one line with "Show N
+    /// more" and the Done count. Without To ship rows, the line counts To
+    /// ship instead, as for a To ship task whose task space row shows.
     @ViewBuilder
-    private func finishedTasksFooter(projectWorkspaceID: UUID) -> some View {
+    private func finishedTasksFooter(projectWorkspaceID: UUID, shownTaskSpaceIDs: Set<UUID>) -> some View {
         if taskBoard.isEnabled {
             let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
-            let toShip = items.filter { $0.stage == .toShip }.count
+            let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
+            let toShip = recent.shown.isEmpty ? items.filter { $0.stage == .toShip }.count : 0
             let done = items.filter { $0.stage == .done }.count
-            if toShip > 0 || done > 0 {
-                // Each count opens the Tasks view at its own group.
-                HStack(spacing: 12) {
-                    if toShip > 0 {
-                        finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
-                            Label("To ship \(toShip)", systemImage: "arrow.up.square")
-                                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+            if recent.shown.isEmpty == false || toShip > 0 || done > 0 {
+                VStack(alignment: .leading, spacing: 4) {
+                    if recent.shown.isEmpty == false {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(recent.shown) { item in
+                                toShipTaskRow(item)
+                            }
                         }
+                        .padding(.horizontal, 10)
                     }
-                    if done > 0 {
-                        finishedTasksButton(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
-                            Label("Done \(done)", systemImage: "checkmark.square")
-                                .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
+                    if recent.hidden.isEmpty == false || toShip > 0 || done > 0 {
+                        // Each count opens the Tasks view at its own group.
+                        HStack(spacing: 12) {
+                            if let firstHidden = recent.hidden.first {
+                                SidebarShowMoreToShipButton(count: recent.hidden.count) {
+                                    openTasksView(selecting: firstHidden.id, revealing: .toShip)
+                                }
+                                .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
+                            }
+                            if toShip > 0 {
+                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                    Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                                }
+                            }
+                            if done > 0 {
+                                finishedTasksButton(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
+                                    Label("Done \(done)", systemImage: "checkmark.square")
+                                        .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
+                                }
+                            }
+                            Spacer(minLength: 0)
                         }
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 18)
                     }
-                    Spacer(minLength: 0)
                 }
-                .font(ToastyTheme.fontWorkspaceSessionChip)
-                .labelStyle(.titleAndIcon)
-                .padding(.horizontal, 18)
                 .padding(.bottom, 10)
             }
         }
@@ -1394,7 +1477,7 @@ struct SidebarView: View {
                 }
 
                 subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
-                finishedTasksFooter(projectWorkspaceID: workspace.id)
+                finishedTasksFooter(projectWorkspaceID: workspace.id, shownTaskSpaceIDs: Set(subspaceRows.map(\.id)))
             }
         }
     }

@@ -412,11 +412,23 @@ the sidebar by **Projects** or by **Status**. The choice is saved for each
 window.
 
 - **Projects** is the workspace list. A task space whose task is To ship or
-  Done leaves its card unless an agent in it is working or waiting for you;
-  a footer under the card counts those tasks and opens the Tasks view.
+  Done leaves its card unless an agent in it is working or waiting for you.
+  After the card's task spaces, the project's 3 most recently merged To ship
+  tasks show as rows. A footer line after them has **Show N more** when the
+  project has more To ship tasks, and the Done count. Without To ship rows,
+  the footer counts To ship tasks instead.
 - **Status** lists task spaces by stage: Needs you, Running, To ship (one line
   for each project), and a Done count. Each row carries its project's name.
+  Under each project's To ship line, its 3 most recently merged tasks show as
+  rows, then **Show N more** when the project has more.
   Top-level workspaces show only in Projects.
+
+A To ship row opens the Tasks view with its task selected. **Show N more**
+opens the Tasks view at To ship with the first task the sidebar did not show
+selected, and the To ship and Done counts open it at their group. The newest
+merge comes first; a task with no merge time uses its latest change. A To ship
+task whose task space is still open keeps its task space row and does not show
+a second time.
 
 Both keep the Inbox at the top. Task space rows use square marks: green for a
 finished turn (filled while it is unread, when the Tasks view also shows the
@@ -461,7 +473,8 @@ does, even when nothing waits to ship. It is hidden while a release of that proj
 ### Context menus
 
 Right-click a task's row to act on it: its task space row in the sidebar, its
-row in the sidebar's Status segment, or its row in the Tasks view. The menu
+row in the sidebar's Status segment, a To ship row, or its row in the Tasks
+view. The menu
 lists what the detail pane offers now, with the same confirmations: **Open
 Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel
 Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** for
