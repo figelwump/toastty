@@ -546,4 +546,107 @@ extension TaskAppControlTests {
             #expect(message == "segment must be projects or status")
         }
     }
+
+    @Test func coordinatorPostAppendsACardThatOnlyTheCoordinatorMayPost() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let files = CoordinatorFiles(directoryURL: fixture.root.appendingPathComponent("coordinator", isDirectory: true))
+        let session = CoordinatorSessionController(
+            store: fixture.store,
+            launcher: fixture.launcher,
+            sessions: TaskStartWorkTests.FakeSessions(),
+            configLoader: { TasksConfig() },
+            files: files
+        )
+        fixture.coordinator.coordinatorSession = session
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let created = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("Fix the dot"), "workspace": .string(fixture.workspaceID.uuidString), "agent": .string("claude")],
+            context: context()
+        )
+        let id = try taskID(created.result)
+        await fixture.waitForSetup(id)
+
+        let posted = try executor.runAction(
+            id: "coordinator.post",
+            args: ["kind": .string("question"), "taskID": .string(id.uuidString), "text": .string("Which base branch?")],
+            context: context()
+        )
+        #expect(posted.result?["kind"] == .string("question"))
+        let events = files.events()
+        #expect(events.map(\.kind) == [.question])
+        #expect(events.first?.taskID == id)
+        #expect(events.first?.text == "Which base branch?")
+        #expect(FileManager.default.fileExists(atPath: files.routingFileURL.path))
+
+        // A task's own agent reports through its task, not by posting cards.
+        let agentSessionID = try #require(fixture.record(id)?.operation.agentLaunch?.sessionID)
+        await expectInvalidPayload("only the coordinator's session posts to its chat") {
+            _ = try executor.runAction(
+                id: "coordinator.post",
+                args: ["kind": .string("note"), "text": .string("hi")],
+                context: context(agentSessionID)
+            )
+        }
+        // So does a session Toastty does not know, or no longer runs.
+        await expectInvalidPayload("only the coordinator's session posts to its chat") {
+            _ = try executor.runAction(
+                id: "coordinator.post",
+                args: ["kind": .string("note"), "text": .string("hi")],
+                context: context("stopped-session")
+            )
+        }
+        await expectInvalidPayload("A packet card names its task with --task <task-id>.") {
+            _ = try executor.runAction(id: "coordinator.post", args: ["kind": .string("packet")], context: context())
+        }
+        let missing = UUID()
+        await expectInvalidPayload("No task has ID \(missing.uuidString).") {
+            _ = try executor.runAction(
+                id: "coordinator.post",
+                args: ["kind": .string("packet"), "taskID": .string(missing.uuidString)],
+                context: context()
+            )
+        }
+        #expect(files.events().count == 1)
+
+        let status = try executor.runQuery(id: "coordinator.status", args: [:])
+        #expect(status["state"] == .string("off"))
+        #expect(status["eventsFile"] == .string(files.eventsFileURL.path))
+    }
+
+    @Test func aTaskTheCoordinatorCreatesWithoutAWorkspaceIsNotPutInItsWorkspace() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let windowID = try #require(fixture.store.state.selectedWindowID)
+        let coordinatorWorkspaceID = UUID()
+        #expect(fixture.store.send(.createCoordinatorWorkspace(
+            windowID: windowID,
+            workspaceID: coordinatorWorkspaceID,
+            panelID: UUID(),
+            terminalCWD: fixture.root.path
+        )))
+        let record = try await fixture.coordinator.create(
+            TaskCreateRequest(text: "Route me", agent: "claude"),
+            caller: TaskCaller(sessionID: "coordinator-session", workspaceID: coordinatorWorkspaceID)
+        )
+        #expect(record.workspaceID == nil)
+        #expect(fixture.coordinator.workspaceChoices().open.contains { $0.id == coordinatorWorkspaceID } == false)
+
+        // Workspace indexes skip it: a workspace made after it is number 2.
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: "website", activate: false))
+        let website = try #require(fixture.store.state.windows.first?.workspaceIDs.last)
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let listed = try executor.runQuery(id: "workspace.list", args: [:])
+        guard case .array(let entries)? = listed["workspaces"] else {
+            Issue.record("workspace.list returned no workspaces")
+            return
+        }
+        let indexes = entries.compactMap { entry -> (String, AutomationJSONValue)? in
+            guard case .object(let object) = entry, case .string(let id)? = object["workspaceID"] else { return nil }
+            return (id, object["index"] ?? .null)
+        }
+        #expect(indexes.first { $0.0 == coordinatorWorkspaceID.uuidString }?.1 == .null)
+        #expect(indexes.first { $0.0 == website.uuidString }?.1 == .int(2))
+        _ = try executor.runAction(id: "workspace.select", args: ["windowID": .string(windowID.uuidString), "index": .int(2)], context: context())
+        #expect(fixture.store.state.windows.first?.selectedWorkspaceID == website)
+    }
 }

@@ -161,10 +161,13 @@ final class AppControlExecutor {
                 guard index > 0 else {
                     throw AutomationSocketError.invalidPayload("index must be greater than zero")
                 }
-                guard index <= selection.window.workspaceIDs.count else {
+                // The hidden coordinator workspace takes no index.
+                let workspacesByID = try requiredStore().state.workspacesByID
+                let indexedIDs = selection.window.workspaceIDs.filter { workspacesByID[$0]?.isCoordinator == false }
+                guard index <= indexedIDs.count else {
                     throw AutomationSocketError.invalidPayload("index does not exist")
                 }
-                targetWorkspaceID = selection.window.workspaceIDs[index - 1]
+                targetWorkspaceID = indexedIDs[index - 1]
             } else {
                 throw AutomationSocketError.invalidPayload("workspaceID or index is required")
             }
@@ -199,26 +202,35 @@ final class AppControlExecutor {
             guard let window = store.state.window(id: windowID) else {
                 throw AutomationSocketError.invalidPayload("windowID does not exist")
             }
+            // Indexes count the workspaces `workspace.list` numbers, which
+            // leave out the hidden coordinator workspace.
+            let indexedIDs = window.workspaceIDs.filter { store.state.workspacesByID[$0]?.isCoordinator == false }
             let fromIndex = try resolveRequiredIndex(
                 name: "index",
                 args: args,
-                upperBound: window.workspaceIDs.count,
+                upperBound: indexedIDs.count,
                 missingMessage: "index is required"
             )
             let toIndex = try resolveRequiredIndex(
                 name: "toIndex",
                 args: args,
-                upperBound: window.workspaceIDs.count,
+                upperBound: indexedIDs.count,
                 missingMessage: "toIndex is required"
             )
-            try enforceWorkspaceAutomationAccess(window.workspaceIDs[fromIndex - 1])
-            try enforceWorkspaceAutomationAccess(window.workspaceIDs[toIndex - 1])
+            let fromID = indexedIDs[fromIndex - 1]
+            let toID = indexedIDs[toIndex - 1]
+            try enforceWorkspaceAutomationAccess(fromID)
+            try enforceWorkspaceAutomationAccess(toID)
+            guard let rawFromIndex = window.workspaceIDs.firstIndex(of: fromID),
+                  let rawToIndex = window.workspaceIDs.firstIndex(of: toID) else {
+                throw AutomationSocketError.invalidPayload("index does not exist")
+            }
             return .init(
                 didMutateState: store.send(
                     .moveWorkspace(
                         windowID: windowID,
-                        fromIndex: fromIndex - 1,
-                        toIndex: toIndex - 1
+                        fromIndex: rawFromIndex,
+                        toIndex: rawToIndex
                     )
                 ),
                 result: nil
@@ -812,7 +824,8 @@ final class AppControlExecutor {
             }
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive:
+             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive,
+             .coordinatorPost, .coordinatorShowTerminal:
             return try runTaskAction(action, args: args)
 
         case .taskRelease:
@@ -1036,7 +1049,7 @@ final class AppControlExecutor {
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
 
-        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus:
             return try runTaskQuery(query, args: args)
         }
         }
@@ -2799,7 +2812,17 @@ private extension AppControlExecutor {
         let callerSessionID = requestContext().callerSessionID
         var entries: [AutomationJSONValue] = []
         for window in windows {
-            for (offset, workspaceID) in window.workspaceIDs.enumerated() {
+            // The hidden coordinator workspace takes no index, so indexes
+            // match `workspace.select`.
+            var nextIndex = 1
+            for workspaceID in window.workspaceIDs {
+                let index: AutomationJSONValue
+                if store.state.workspacesByID[workspaceID]?.isCoordinator == true {
+                    index = .null
+                } else {
+                    index = .int(nextIndex)
+                    nextIndex += 1
+                }
                 guard let workspace = store.state.workspacesByID[workspaceID],
                       sessionRuntimeStore.allowsWorkspaceAutomation(
                           callerSessionID: callerSessionID,
@@ -2835,11 +2858,12 @@ private extension AppControlExecutor {
                 entries.append(.object([
                     "windowID": .string(window.id.uuidString),
                     "workspaceID": .string(workspaceID.uuidString),
-                    "index": .int(offset + 1),
+                    "index": index,
                     "title": .string(workspace.title),
                     "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
                     "annotations": .array(annotationsJSON(for: workspace)),
                     "done": .bool(workspace.doneAt != nil),
+                    "isCoordinator": .bool(workspace.isCoordinator),
                     "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
                     "activeSessions": .array(activeSessions),
                     "busyTerminalCount": .int(busyTerminalCount),

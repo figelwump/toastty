@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import SwiftUI
 
@@ -381,6 +382,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private weak var store: AppStore?
     private weak var terminalRuntimeRegistry: TerminalRuntimeRegistry?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
+    private weak var coordinatorSession: CoordinatorSessionController?
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
@@ -418,6 +420,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureWebPanelRuntimeRegistry(_ webPanelRuntimeRegistry: WebPanelRuntimeRegistry) {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
+    }
+
+    func configureCoordinatorSession(_ coordinatorSession: CoordinatorSessionController) {
+        self.coordinatorSession = coordinatorSession
     }
 
     func configureMenuBridges(
@@ -563,7 +569,8 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             },
             localDocumentCloseConfirmationState: { panelID in
                 webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
-            }
+            },
+            exemptTerminalPanelIDs: Set([coordinatorSession?.panelID].compactMap { $0 })
         )
     }
 
@@ -684,6 +691,9 @@ struct ToasttyApp: App {
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
+    private let coordinatorSession: CoordinatorSessionController
+    private let coordinatorSessionObserverToken: UUID
+    private let coordinatorSessionRegistrySubscription: AnyCancellable
     private let taskBoard: TaskBoardStore
     private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
@@ -1146,7 +1156,8 @@ struct ToasttyApp: App {
                     managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     agentHookDispatcher: agentHookDispatcher,
-                    quickEntryController: quickEntryController
+                    quickEntryController: quickEntryController,
+                    taskCoordinator: taskCoordinator
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1360,6 +1371,38 @@ struct ToasttyApp: App {
             sessionExitController: sessionExitController
         )
         _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
+        let coordinatorSession = CoordinatorSessionController(
+            store: store,
+            launcher: agentLaunchService,
+            sessions: taskCoordinator.sessions!,
+            configLoader: { try TasksConfigFile.load() },
+            files: CoordinatorFiles(runtimePaths: runtimePaths),
+            isRestorePending: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.hasPendingRestoredManagedLaunch(panelID: panelID) ?? false
+            }
+        )
+        // The coordinator's transcript is projected even with remote access
+        // off, for the chat that shows it.
+        coordinatorSession.onPanelChange = { [weak remoteAccessService] panelID in
+            remoteAccessService?.conversationService.setLocalPanelIDs(panelID.map { [$0] } ?? [])
+        }
+        coordinatorSessionObserverToken = store.addActionAppliedObserver { [weak coordinatorSession] _, _, _ in
+            coordinatorSession?.setNeedsReconcile()
+        }
+        coordinatorSessionRegistrySubscription = sessionRuntimeStore.$sessionRegistry.sink { [weak coordinatorSession] _ in
+            coordinatorSession?.setNeedsReconcile()
+        }
+        taskCoordinator.coordinatorSession = coordinatorSession
+        self.coordinatorSession = coordinatorSession
+        if Self.startsCoordinatorAutomatically(
+            environment: processInfo.environment,
+            automationConfig: automationConfig,
+            runtimePaths: runtimePaths
+        ) {
+            coordinatorSession.start()
+        } else {
+            coordinatorSession.closeSavedWorkspace()
+        }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
         quickEntryController.recentModels = { [weak remoteAccessService] provider in
@@ -1446,7 +1489,8 @@ struct ToasttyApp: App {
                         managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         agentHookDispatcher: agentHookDispatcher,
-                        quickEntryController: quickEntryController
+                        quickEntryController: quickEntryController,
+                        taskCoordinator: taskCoordinator
                     )
                 }
             )
@@ -1470,6 +1514,7 @@ struct ToasttyApp: App {
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
         appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
+        appLifecycleDelegate.configureCoordinatorSession(coordinatorSession)
         Self.scheduleCodexIntegrationMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
     }
 
@@ -1838,8 +1883,29 @@ struct ToasttyApp: App {
             managedAgentResolutionContextStore: managedAgentResolutionContextStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             agentHookDispatcher: agentHookDispatcher,
-            quickEntryController: quickEntryController
+            quickEntryController: quickEntryController,
+            taskCoordinator: taskCoordinator
         )
+    }
+
+    /// The user's own Toastty starts the coordinator. Test hosts, smoke runs
+    /// and runtime-isolated dev runs do not, so they never spend the user's
+    /// agent subscription unasked; `TOASTTY_COORDINATOR_AUTOSTART=1` turns it
+    /// on for one of them, and `=0` turns it off anywhere.
+    @MainActor
+    static func startsCoordinatorAutomatically(
+        environment: [String: String],
+        automationConfig: AutomationConfig?,
+        runtimePaths: ToasttyRuntimePaths
+    ) -> Bool {
+        switch environment["TOASTTY_COORDINATOR_AUTOSTART"] {
+        case "1": return true
+        case "0": return false
+        default:
+            return automationConfig == nil
+                && isRunningUnderXCTest(environment) == false
+                && runtimePaths.isRuntimeHomeEnabled == false
+        }
     }
 
     @MainActor
@@ -1861,10 +1927,12 @@ struct ToasttyApp: App {
         managedAgentResolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         agentHookDispatcher: AgentHookDispatcher,
-        quickEntryController: QuickEntryController
+        quickEntryController: QuickEntryController,
+        taskCoordinator: TaskCoordinator
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
+        defer { taskCoordinator.coordinatorSession?.reloadConfiguration() }
 
         if let quickEntryMessage = quickEntryController.reloadShortcut() {
             warningMessages.append(quickEntryMessage)

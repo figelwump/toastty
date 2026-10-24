@@ -542,6 +542,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         sendRemoteText(commandLine, submit: true, panelID: panelID, focusPolicy: focusPolicy)
     }
 
+    /// Whether a restored panel has yet to type the command that resumes its
+    /// managed agent.
+    func hasPendingRestoredManagedLaunch(panelID: UUID) -> Bool {
+        restoredManagedLaunchesByPanelID[panelID] != nil
+    }
+
     func isReadyForManagedAgentCommand(panelID: UUID) -> Bool {
         runtimeStore.existingController(for: panelID)?.isReadyForAutomationInput() ?? false
     }

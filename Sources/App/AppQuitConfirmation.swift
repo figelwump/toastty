@@ -96,11 +96,14 @@ enum AppQuitConfirmation {
     static func assess(
         state: AppState,
         terminalAssessment: (UUID) -> TerminalCloseConfirmationAssessment?,
-        localDocumentCloseConfirmationState: (UUID) -> LocalDocumentCloseConfirmationState? = { _ in nil }
+        localDocumentCloseConfirmationState: (UUID) -> LocalDocumentCloseConfirmationState? = { _ in nil },
+        exemptTerminalPanelIDs: Set<UUID> = []
     ) -> AppQuitConfirmationAssessment {
         // Sort so any surfaced running-command detail is deterministic across
         // runs and tests instead of depending on Set iteration order.
-        let terminalPanelIDs = state.allTerminalPanelIDs.sorted { lhs, rhs in
+        // The coordinator's terminal is exempt: its agent resumes after a
+        // restart, and the user never started it.
+        let terminalPanelIDs = state.allTerminalPanelIDs.subtracting(exemptTerminalPanelIDs).sorted { lhs, rhs in
             lhs.uuidString < rhs.uuidString
         }
         let localDocumentPanelIDs = state.workspacesByID.values

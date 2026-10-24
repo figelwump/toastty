@@ -90,6 +90,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
     case taskAdopt = "task.adopt"
+    case coordinatorPost = "coordinator.post"
+    case coordinatorShowTerminal = "coordinator.show-terminal"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
     case windowSidebarSetSegment = "window.sidebar.set-segment"
@@ -649,6 +651,31 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Give a task space without a task record one, so Toastty tracks it as a task: its stage, its pull request, and its Done history after it closes. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. Returns the existing task when it has one.",
                 selectors: [.windowID, .workspaceID]
             )
+        case .coordinatorPost:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Post a card to the coordinator's chat: kind packet (a task published a review packet), task-started, question or note. Every kind but note names its task; question and note need text. Toastty appends it to coordinator/events.jsonl, and the chat shows the card from the task's live state. Only the coordinator's own session, or a caller outside any agent session, may post.",
+                selectors: [],
+                parameters: [
+                    .init(
+                        name: "kind",
+                        summary: "packet, task-started, question or note.",
+                        valueType: .string,
+                        required: true,
+                        allowedValues: CoordinatorEvent.Kind.allCases.map(\.rawValue)
+                    ),
+                    .taskID(required: false),
+                    .init(name: "text", summary: "What the card says, up to \(CoordinatorEvent.maximumTextLength) characters.", valueType: .string, required: false),
+                ]
+            )
+        case .coordinatorShowTerminal:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Show the coordinator's terminal: select its hidden workspace in the window that holds it. Fails while the coordinator workspace does not exist.",
+                selectors: []
+            )
         case .windowTasksShow:
             return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
         case .windowTasksHide:
@@ -698,6 +725,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskList = "task.list"
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
+    case coordinatorStatus = "coordinator.status"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -813,6 +841,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "List watches from task.watch: pending ones, and fired ones for a while after they fire, with the reason and whether the message was delivered. Filter by watchID, by the watched taskID, or by notifyTaskID.",
                 selectors: [],
                 parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
+            )
+        case .coordinatorStatus:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "The coordinator's state: off, waitingForWindow, waitingForRestore, starting, running or failed (with reason), its workspace, panel and session, and the paths of events.jsonl and routing.md.",
+                selectors: []
             )
         }
     }

@@ -7,11 +7,12 @@ import Foundation
 extension AppState {
     /// Workspaces of a window that are not nested under another, in window
     /// order. This is the list the sidebar shows as cards and that the
-    /// workspace switch shortcuts count.
+    /// workspace switch shortcuts count. The hidden coordinator workspace is
+    /// never in it.
     public func topLevelWorkspaceIDs(in windowID: UUID) -> [UUID] {
         guard let window = windows.first(where: { $0.id == windowID }) else { return [] }
         return window.workspaceIDs.filter { workspaceID in
-            guard let workspace = workspacesByID[workspaceID] else { return false }
+            guard let workspace = workspacesByID[workspaceID], workspace.isCoordinator == false else { return false }
             return isValidParentLink(from: workspace, in: window) == false
         }
     }
@@ -55,6 +56,7 @@ extension AppState {
         under requestedParentID: UUID
     ) -> UUID? {
         guard workspaceID != requestedParentID,
+              workspacesByID[workspaceID]?.isCoordinator != true,
               let window = windows.first(where: { $0.workspaceIDs.contains(workspaceID) }),
               window.workspaceIDs.contains(requestedParentID),
               workspacesByID[requestedParentID] != nil,
@@ -149,8 +151,10 @@ extension AppState {
 
     /// Follows parent links from `workspaceID` to a workspace with no parent.
     /// Returns `nil` when a link leaves the window, points at a missing
-    /// workspace, or loops.
+    /// workspace, or loops, and for the coordinator workspace, which nests
+    /// nothing.
     private func rootWorkspaceID(of workspaceID: UUID, in window: WindowState) -> UUID? {
+        guard workspacesByID[workspaceID]?.isCoordinator != true else { return nil }
         var visited: Set<UUID> = [workspaceID]
         var currentID = workspaceID
         while let parentID = workspacesByID[currentID]?.parentWorkspaceID {

@@ -79,7 +79,9 @@ struct SidebarPanelNavigationOrder {
             return [parentID] + orderedIDs
         }
         let sidebarWorkspaceIDs = Set(workspaceIDs)
-        workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) }
+        workspaceIDs += window.workspaceIDs.filter {
+            !sidebarWorkspaceIDs.contains($0) && state.workspacesByID[$0]?.isCoordinator == false
+        }
         var targets: [PanelNavigationTarget] = []
         var seenPanelIDs = Set<UUID>()
         var sessionPanelIDs = Set<UUID>()
