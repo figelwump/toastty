@@ -315,6 +315,14 @@ final class TaskBoardStore: ObservableObject {
     @Published private(set) var config: TasksConfig?
     /// Why tasks.toml could not be read; shown in the Tasks view.
     @Published private(set) var configError: String?
+    /// Suppresses task commands for a hidden All tasks selection while the review queue is shown.
+    @Published private(set) var coordinatorReviewWindowIDs: Set<UUID> = []
+
+    func setCoordinatorReviewShown(_ shown: Bool, windowID: UUID) {
+        guard coordinatorReviewWindowIDs.contains(windowID) != shown else { return }
+        if shown { coordinatorReviewWindowIDs.insert(windowID) }
+        else { coordinatorReviewWindowIDs.remove(windowID) }
+    }
     /// The task each window's Tasks view shows in its detail pane.
     @Published var selectionByWindowID: [UUID: TaskBoardItem.Subject] = [:]
     /// The rows each window's Tasks view showed last, in order; see

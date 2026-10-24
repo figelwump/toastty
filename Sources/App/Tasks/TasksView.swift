@@ -99,6 +99,7 @@ struct TasksView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let newTask: (() -> Void)?
     var newTaskShortcutLabel: String? = nil
+    var showsHeader = true
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
@@ -114,7 +115,7 @@ struct TasksView: View {
         let visibleIDs = sections.visible(isDoneExpanded: isDoneExpanded, isArchivedExpanded: isArchivedExpanded).map(\.id)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                if showsHeader { header }
                 if let configError = board.configError {
                     configErrorBanner(configError)
                 }
@@ -150,7 +151,8 @@ struct TasksView: View {
                         windowID: windowID,
                         store: store,
                         board: board,
-                        sessionRuntimeStore: sessionRuntimeStore
+                        sessionRuntimeStore: sessionRuntimeStore,
+                        topPadding: showsHeader ? 40 : 18
                     )
                     .id(selected.id)
                 } else {
@@ -348,9 +350,8 @@ struct TasksView: View {
     /// Shows the group the sidebar asked for, once.
     private func revealRequestedGroup(using proxy: ScrollViewProxy) {
         guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
-        if group == .done {
-            isDoneExpanded = true
-        }
+        if group == .done { isDoneExpanded = true }
+        if group == .archived { isArchivedExpanded = true }
         // After the expanded rows lay out, so the group's top lands at the
         // top of the list.
         Task { @MainActor in
@@ -602,6 +603,7 @@ private struct TasksViewDetail: View {
     @ObservedObject var store: AppStore
     @ObservedObject var board: TaskBoardStore
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    var topPadding: CGFloat = 40
 
     @State private var errorMessage: String?
 
@@ -639,7 +641,7 @@ private struct TasksViewDetail: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 40)
+            .padding(.top, topPadding)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 0)

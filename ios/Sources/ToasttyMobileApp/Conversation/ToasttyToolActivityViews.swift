@@ -1,3 +1,4 @@
+import ConversationUI
 import SwiftUI
 
 struct ToasttyToolBatchActivity: Equatable {
@@ -121,41 +122,9 @@ private struct ToasttyToolEventRow: View {
     let row: ToasttyTranscriptRow
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: row.toolIcon)
-                .font(.body)
-                .foregroundStyle(row.toolColor)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(row.toolSummary)
-                    .font(.caption.monospaced().weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                if let detail = row.toolDetail, detail.isEmpty == false {
-                    Text(detail)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background(ToasttyDesignTokens.raisedSurface)
-        .overlay {
-            RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-                style: .continuous
-            )
-            .stroke(ToasttyDesignTokens.border)
-        }
-        .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-            style: .continuous
-        ))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)")
+        ConversationToolEventRow(summary: row.toolSummary, detail: row.toolDetail,
+                                 systemImage: row.toolIcon, tint: row.toolColor)
+            .accessibilityIdentifier("toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)")
     }
 }
 

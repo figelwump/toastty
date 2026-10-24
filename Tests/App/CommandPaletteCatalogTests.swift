@@ -195,14 +195,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         let actions = CommandPaletteActionSpy()
         let originWindowID = UUID()
         var command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        XCTAssertEqual(command.title, "Show Tasks")
+        XCTAssertEqual(command.title, "Show Coordinator")
         XCTAssertEqual(command.shortcut?.symbolLabel, "⇧⌘T")
         XCTAssertTrue(actions.execute(command.invocation, originWindowID: originWindowID))
         XCTAssertEqual(actions.toggledTasksViewWindowIDs, [originWindowID])
 
-        actions.tasksViewTitleValue = "Hide Tasks"
+        actions.tasksViewTitleValue = "Hide Coordinator"
         command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        XCTAssertEqual(command.title, "Hide Tasks")
+        XCTAssertEqual(command.title, "Hide Coordinator")
 
         actions.canToggleTasksViewValue = false
         XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })

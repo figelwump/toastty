@@ -4,14 +4,16 @@ import SwiftUI
 /// A Claude permission request: what it would do, and one button per decision.
 /// The decision is the interaction's single question; a tap selects that one
 /// option and sends it, the same way a question answer is sent.
-struct ToasttyPermissionRequestContent: View {
+struct ConversationPermissionRequestContent: View {
     let interaction: RemotePendingInteraction
     let permission: RemotePermissionRequestDetail
     let decision: RemoteInteractionQuestion
     /// Present only while this phone can still answer.
-    let answerState: ToasttyInteractionAnswerState?
+    let answerState: ConversationInteractionAnswerState?
     let sentOptionID: String?
     let readOnlyMessage: String
+    let copy: ConversationInteractionCopy
+    let theme: ConversationTheme
     let onChoose: (String) -> Void
 
     private static let previewMaximumHeight: CGFloat = 220
@@ -20,13 +22,13 @@ struct ToasttyPermissionRequestContent: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(interaction.prompt)
                 .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let description = permission.description, description.isEmpty == false,
                description != interaction.prompt {
                 Text(description)
                     .font(.caption)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .foregroundStyle(theme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             preview
@@ -46,7 +48,7 @@ struct ToasttyPermissionRequestContent: View {
                 ScrollView {
                     Text(permission.preview)
                         .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .foregroundStyle(theme.secondaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -54,34 +56,36 @@ struct ToasttyPermissionRequestContent: View {
                 }
                 .frame(maxHeight: Self.previewMaximumHeight)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(ToasttyDesignTokens.raisedSurface)
+                .background(theme.raisedSurface)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .accessibilityIdentifier("toastty-mobile-permission-preview-\(interaction.id.rawValue)")
                 if permission.previewTruncated {
-                    Label("Preview shortened. Check the desktop for the full request.", systemImage: "scissors")
+                    Label(copy.shortenedPreviewMessage, systemImage: "scissors")
                         .font(.caption)
-                        .foregroundStyle(ToasttyDesignTokens.amberText)
+                        .foregroundStyle(theme.amberText)
                 }
             }
         }
     }
 
-    private func actions(_ state: ToasttyInteractionAnswerState) -> some View {
+    private func actions(_ state: ConversationInteractionAnswerState) -> some View {
         let enabled = state.connectionIsLive && Self.isChoosable(state.status)
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(decision.options, id: \.id) { option in
                 decisionButton(option, state: state, enabled: enabled)
             }
             statusView(state)
-            Label("You can also respond on the desktop", systemImage: "desktopcomputer")
-                .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+            if let message = copy.respondElsewhere {
+                Label(message, systemImage: "desktopcomputer")
+                    .font(.caption)
+                    .foregroundStyle(theme.mutedText)
+            }
         }
     }
 
     private func decisionButton(
         _ option: RemotePendingInteraction.Option,
-        state: ToasttyInteractionAnswerState,
+        state: ConversationInteractionAnswerState,
         enabled: Bool
     ) -> some View {
         let kind = ClaudeDecisionKind(optionID: option.id)
@@ -107,30 +111,30 @@ struct ToasttyPermissionRequestContent: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 36)
         }
-        .modifier(DecisionButtonStyle(kind: kind))
+        .modifier(DecisionButtonStyle(kind: kind, theme: theme))
         .disabled(enabled == false)
         .accessibilityIdentifier("toastty-mobile-permission-option-\(interaction.id.rawValue)-\(option.id)")
     }
 
     @ViewBuilder
-    private func statusView(_ state: ToasttyInteractionAnswerState) -> some View {
+    private func statusView(_ state: ConversationInteractionAnswerState) -> some View {
         switch state.status {
         case .editing where state.connectionIsLive == false:
-            Label("Reconnect to your Mac to respond", systemImage: "wifi.slash")
+            Label(copy.reconnectToRespond, systemImage: "wifi.slash")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(theme.mutedText)
         case .submitting:
             Text("Sending…")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(theme.mutedText)
         case .awaitingClaude:
-            Label("Sent · \(sentLabel ?? "decision") · waiting for Claude", systemImage: "hourglass")
+            Label("Sent · \(sentLabel ?? "decision") · waiting for \(copy.providerName)", systemImage: "hourglass")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(theme.amberText)
         case .failed(let message), .unavailable(let message):
             Label(message, systemImage: "exclamationmark.circle")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(theme.amberText)
                 .fixedSize(horizontal: false, vertical: true)
         case .editing, .resolved:
             EmptyView()
@@ -142,14 +146,14 @@ struct ToasttyPermissionRequestContent: View {
     @ViewBuilder
     private var outcome: some View {
         if let sentLabel {
-            Label("Sent from iPhone: \(sentLabel)", systemImage: "iphone")
+            Label("\(copy.sentOrigin): \(sentLabel)", systemImage: copy.sentOriginIcon)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(interaction.state == .pending
-                    ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText)
+                    ? theme.amberText : theme.secondaryText)
         } else if interaction.state == .pending {
             Label(readOnlyMessage, systemImage: "desktopcomputer")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(theme.amberText)
         }
     }
 
@@ -158,7 +162,7 @@ struct ToasttyPermissionRequestContent: View {
         return decision.options.first { $0.id == sentOptionID }?.label
     }
 
-    private static func isChoosable(_ status: ToasttyInteractionAnswerStatus) -> Bool {
+    private static func isChoosable(_ status: ConversationInteractionAnswerStatus) -> Bool {
         switch status {
         case .editing, .failed: true
         case .submitting, .awaitingClaude, .unavailable, .resolved: false
@@ -187,22 +191,23 @@ private enum ClaudePermissionOptionID: String {
 
 private struct DecisionButtonStyle: ViewModifier {
     let kind: ClaudeDecisionKind
+    let theme: ConversationTheme
 
     func body(content: Content) -> some View {
         switch kind {
         case .allowOnce:
             content
                 .buttonStyle(.borderedProminent)
-                .tint(ToasttyDesignTokens.amber)
-                .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                .tint(theme.amber)
+                .foregroundStyle(theme.inkOnAmber)
         case .alwaysAllow:
             content
                 .buttonStyle(.bordered)
-                .tint(ToasttyDesignTokens.amberText)
+                .tint(theme.amberText)
         case .deny:
             content
                 .buttonStyle(.bordered)
-                .tint(ToasttyDesignTokens.red)
+                .tint(theme.red)
         }
     }
 }

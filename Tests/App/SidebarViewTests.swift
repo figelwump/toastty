@@ -2226,7 +2226,7 @@ final class SidebarViewTests: XCTestCase {
 
         // Needs you: the agent asking for approval, the linked pull request
         // with no agent working on it, and the task triage could not place.
-        XCTAssertTrue(textValues.contains("Tasks, 3 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Coordinator, 3 need you"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
         // The finished task space leaves its card; the footer counts it.
         XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
@@ -2312,13 +2312,13 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-after-done-click")
         try attachSidebarRender(tasks.hostingView, name: "tasks-view-after-done-click")
 
-        // The Tasks row opens the view without touching Done.
+        // The Coordinator row opens the view without touching Done.
         tasks.window.makeKeyAndOrderFront(nil)
         try clickSemanticText(prefix: "Done, 1, expanded", in: tasks.hostingView)
         pumpMainRunLoop(duration: 0.3)
         XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
         harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Tasks, ", in: harness.hostingView)
+        try clickSemanticText(prefix: "Coordinator, ", in: harness.hostingView)
         pumpMainRunLoop(duration: 0.6)
         tasks.hostingView.layoutSubtreeIfNeeded()
         XCTAssertNil(board.revealGroupByWindowID[harness.windowID])

@@ -7,13 +7,16 @@ after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI or from
 an agent, moving a task into its own git worktree, the sidebar Inbox, task
-stages with the Status sidebar and the Tasks view, `~/.toastty/tasks.toml`,
+stages with the Status sidebar and Coordinator’s All tasks view, `~/.toastty/tasks.toml`,
 and optional triage.
 
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
 out, and a task without a workspace waits in the Inbox until you pick one.
 The agent's first message is the task text, followed by the attached files.
+
+Open [Coordinator](coordinator.md) for a shared agent conversation and a saved review queue.
+Its **All tasks** tab keeps the task list and actions described below.
 
 ## Quick entry
 
@@ -68,7 +71,7 @@ Other ways to open the same panel:
 
 - **File > New Task…** and **New Task…** in the command palette. Both show
   the shortcut.
-- The **＋** on the sidebar's Tasks row, and **New Task** in the Tasks view.
+- The **＋** on the sidebar's Coordinator row, and **New Task** in Coordinator.
 - **New Task from Selection…** in a terminal's context menu, with text
   selected. The selection is attached as `selection.txt`, and the terminal's
   workspace is picked.
@@ -406,7 +409,8 @@ Tasks view, gives one a record, so its history stays after it closes.
 
 ## The sidebar and the Tasks view
 
-The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
+The Coordinator row at the top of the sidebar opens the review home.
+Select **All tasks** for the task list described here. Its badge counts
 the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
 the sidebar by **Projects** or by **Status**. The choice is saved for each
 window.
@@ -447,7 +451,7 @@ and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 [Release](#release)); the sidebar's
 Status To ship lines have one too. A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
-`Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
+`Cmd+Shift+T`, or **View > Show Coordinator**, shows the Coordinator home; pressed again,
 it hides the view and returns to the workspace it covered. Up and Down Arrow
 move the selection through the rows the list shows, skipping collapsed Done
 and Archived, and the detail pane follows. When the selected task leaves the

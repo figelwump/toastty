@@ -361,6 +361,20 @@ let project = Project(
             ])
         ),
         .target(
+            name: "ConversationUI",
+            destinations: .iOS,
+            product: .staticFramework,
+            bundleId: "com.giantthings.toastty.mobile.conversation-ui",
+            deploymentTargets: deploymentTarget,
+            infoPlist: .default,
+            sources: ["../Sources/ConversationUI/**"],
+            dependencies: [.target(name: "RemoteProtocol")],
+            settings: .settings(base: [
+                "SWIFT_VERSION": "6.0",
+                "SWIFT_STRICT_CONCURRENCY": "complete",
+            ])
+        ),
+        .target(
             name: "ToasttyMobileApp",
             destinations: .iOS,
             product: .app,
@@ -380,6 +394,7 @@ let project = Project(
             dependencies: [
                 .target(name: "ToasttyMobileDomain"),
                 .target(name: "RemoteProtocol"),
+                .target(name: "ConversationUI"),
             ] + shareExtensionTargets.map { .target(name: $0.name) },
             settings: .settings(base: appSettings)
         ),

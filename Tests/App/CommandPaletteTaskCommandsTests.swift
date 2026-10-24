@@ -145,11 +145,11 @@ struct CommandPaletteTaskCommandsTests {
             "Task: Archive… — Fix the composer · Running",
         ])
 
-        // Show Tasks covers the task space without selecting anything else.
+        // Show Coordinator covers the task space without selecting anything else.
         let show = try #require(harness.commands().first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        #expect(show.title == "Show Tasks")
+        #expect(show.title == "Show Coordinator")
         #expect(show.shortcut?.symbolLabel == "⇧⌘T")
-        #expect(try harness.run("Show Tasks"))
+        #expect(try harness.run("Show Coordinator"))
         #expect(harness.window.showsTasksView)
         #expect(harness.window.selectedWorkspaceID == firstSpace)
 
@@ -161,13 +161,19 @@ struct CommandPaletteTaskCommandsTests {
             "Task: Open Task Space — Keep the sidebar order · Running",
         ])
 
+        // The review queue must not expose actions for a hidden All tasks row.
+        harness.board.setCoordinatorReviewShown(true, windowID: harness.windowID)
+        #expect(harness.taskRows().isEmpty)
+        harness.board.setCoordinatorReviewShown(false, windowID: harness.windowID)
+        #expect(harness.taskRows().isEmpty == false)
+
         // Pressed again, it returns to the task space that was showing.
-        #expect(try harness.run("Hide Tasks"))
+        #expect(try harness.run("Hide Coordinator"))
         #expect(harness.window.showsTasksView == false)
         #expect(harness.window.selectedWorkspaceID == firstSpace)
 
         // Open Task Space selects the row's task space and leaves the view.
-        #expect(try harness.run("Show Tasks"))
+        #expect(try harness.run("Show Coordinator"))
         #expect(try harness.run("Task: Open Task Space"))
         #expect(harness.window.showsTasksView == false)
         #expect(harness.window.selectedWorkspaceID == second.taskSpaceWorkspaceID)

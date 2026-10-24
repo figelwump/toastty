@@ -31,6 +31,7 @@ extension TaskBoardStore {
     func currentTask(in selection: WindowCommandSelection, statuses: (UUID) -> [WorkspaceSessionStatus]) -> TaskBoardCurrentTask? {
         guard isEnabled else { return nil }
         if selection.window.showsTasksView {
+            guard !coordinatorReviewWindowIDs.contains(selection.windowID) else { return nil }
             return tasksViewSelection(windowID: selection.windowID).map { TaskBoardCurrentTask(item: $0, source: .tasksView) }
         }
         let workspace = selection.workspace

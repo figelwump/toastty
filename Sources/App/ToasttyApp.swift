@@ -685,6 +685,8 @@ struct ToasttyApp: App {
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
     private let taskBoard: TaskBoardStore
+    private let conversationService: ConversationService
+    private let coordinatorHome: CoordinatorHomeController
     private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -1349,12 +1351,23 @@ struct ToasttyApp: App {
                 ) ?? .unavailable
             }
         )
+        let conversationService = ConversationService(
+            store: store, sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry, runtimePaths: runtimePaths
+        )
+        self.conversationService = conversationService
+        coordinatorHome = CoordinatorHomeController(
+            store: store, launcher: agentLaunchService, sessionRuntimeStore: sessionRuntimeStore,
+            runtimePaths: runtimePaths, service: conversationService, tasks: taskCoordinator,
+            board: taskBoard, pullRequests: pullRequestStateCache
+        )
         let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
+            conversationService: conversationService,
             sessionLauncher: remoteSessionLauncher,
             sessionCloseController: remoteSessionCloseController,
             sessionExitController: sessionExitController
@@ -1748,6 +1761,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 annotationStyleStore: annotationStyleStore,
                 taskCoordinator: taskCoordinator,
+                coordinatorHome: coordinatorHome,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
