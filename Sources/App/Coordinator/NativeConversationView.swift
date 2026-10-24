@@ -99,7 +99,8 @@ struct NativeConversationView<Header: View, Empty: View>: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if conversation.events.isEmpty { empty() }
-            ForEach(conversation.events, id: \.eventID) { event in
+            // Keep this predicate aligned with eventView's rendered cases.
+            ForEach(conversation.events.filter(isTranscriptRow), id: \.eventID) { event in
                 eventView(event).textSelection(.enabled).id(event.eventID)
                     .background {
                         if viewportStore != nil, isTranscriptRow(event) {
