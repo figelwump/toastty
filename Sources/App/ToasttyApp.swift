@@ -1052,6 +1052,7 @@ struct ToasttyApp: App {
             launcher: agentLaunchService,
             configLoader: { try TasksConfigFile.load() },
             attachmentsDirectoryURL: runtimePaths.taskAttachmentsDirectoryURL,
+            packetsDirectoryURL: runtimePaths.taskPacketsDirectoryURL,
             hasActiveSession: { [weak sessionRuntimeStore] workspaceID in
                 guard let registry = sessionRuntimeStore?.sessionRegistry else { return false }
                 return registry.activeSessionIDByPanelID.values.contains { sessionID in

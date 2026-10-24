@@ -192,6 +192,8 @@ final class TaskCoordinator {
     weak var launcher: (any TaskAgentLaunching)?
     let configLoader: () throws -> TasksConfig
     private let attachmentsDirectoryURL: URL
+    /// Published review packets; see `TaskPacketStore`.
+    let packets: TaskPacketStore
     private let hasActiveSession: (UUID) -> Bool
     /// Adds a task space to a session's workspace scope when that session
     /// is scoped; does nothing for an unscoped session.
@@ -258,6 +260,7 @@ final class TaskCoordinator {
         launcher: (any TaskAgentLaunching)?,
         configLoader: @escaping () throws -> TasksConfig,
         attachmentsDirectoryURL: URL,
+        packetsDirectoryURL: URL? = nil,
         hasActiveSession: @escaping (UUID) -> Bool,
         grantScope: @escaping (String, UUID) -> Void,
         worktreeCreator: TaskWorktreeCreator = TaskWorktreeCreator(),
@@ -274,6 +277,11 @@ final class TaskCoordinator {
         self.launcher = launcher
         self.configLoader = configLoader
         self.attachmentsDirectoryURL = attachmentsDirectoryURL
+        // Beside the attachments unless the caller names a folder, so a
+        // test's temporary attachments folder keeps its packets too.
+        self.packets = TaskPacketStore(rootURL: packetsDirectoryURL ?? attachmentsDirectoryURL
+            .deletingLastPathComponent()
+            .appending(path: "task-packets", directoryHint: .isDirectory))
         self.hasActiveSession = hasActiveSession
         self.grantScope = grantScope
         self.worktreeCreator = worktreeCreator
@@ -794,11 +802,12 @@ final class TaskCoordinator {
             throw TaskError("Toastty could not delete the task: \(error.localizedDescription)")
         }
         try? fileManager.removeItem(at: attachmentsDirectoryURL.appending(path: taskID.uuidString, directoryHint: .isDirectory))
+        try? fileManager.removeItem(at: packets.taskDirectoryURL(taskID: taskID))
         ToasttyLog.info("Deleted a task", category: .tasks, metadata: ["task_id": taskID.uuidString])
     }
 
-    /// Removes the attached files of tasks that have been Done or Archived
-    /// for a week; see `TaskAttachmentRetention`. Runs at launch and with
+    /// Removes the attached files and review packets of tasks that have
+    /// been Done or Archived for a week; see `TaskAttachmentRetention`. Runs at launch and with
     /// the release monitor. Skipped while tasks.toml cannot be read, since
     /// `release_tags` decides whether a merged task is finished.
     func removeExpiredAttachments() {
@@ -806,13 +815,14 @@ final class TaskCoordinator {
         let date = now()
         for record in records.records {
             let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+            let packetsURL = packets.taskDirectoryURL(taskID: record.id)
             let releaseTagsConfigured = record.projectRoot.flatMap {
                 config.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
             } != nil
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
             let step = TaskAttachmentRetention.step(
                 record,
-                hasFiles: fileManager.fileExists(atPath: directoryURL.path),
+                hasFiles: fileManager.fileExists(atPath: directoryURL.path) || fileManager.fileExists(atPath: packetsURL.path),
                 releaseTagsConfigured: releaseTagsConfigured,
                 taskSpaceOpen: taskSpaceOpen,
                 now: date
@@ -826,7 +836,9 @@ final class TaskCoordinator {
                 records.update(id: record.id) { $0.attachmentsFinishedSeenAt = nil }
             case .remove:
                 do {
-                    try fileManager.removeItem(at: directoryURL)
+                    for url in [directoryURL, packetsURL] where fileManager.fileExists(atPath: url.path) {
+                        try fileManager.removeItem(at: url)
+                    }
                 } catch {
                     ToasttyLog.warning(
                         "Could not remove a finished task's attachments",

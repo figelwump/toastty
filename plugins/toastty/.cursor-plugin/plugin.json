@@ -1,6 +1,6 @@
 {
   "name": "toastty",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Managed-session workflows and lifecycle updates for controlling and supporting Toastty from Cursor.",
   "author": {
     "name": "Giant Things"

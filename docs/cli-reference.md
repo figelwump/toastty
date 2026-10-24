@@ -83,7 +83,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's seven shipped skills and accepted
+The read-only inventory includes Toastty's eight shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -881,6 +881,8 @@ toastty task merge [<task-id>] [--head <commit>]
 toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
+toastty task packet publish [<task-id>] --file <packet.json> [--screenshot <path> ...]
+toastty task packet get [<task-id>] [--version <n>]
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
 toastty task release [--workspace <id>]
@@ -934,6 +936,12 @@ waits for checks that still run, and cleans up after the agent's turn ends.
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise
 refuse or leave. `task clean-up` retries a cleanup that stopped.
+`task packet publish` stores the next version of the task's review packet
+from a JSON file, copies the `--screenshot` files it names, and marks the task
+ready for review; `task packet get` reads the newest packet, or `--version <n>`,
+with `stale` when the worktree moved past it. Relative paths resolve against
+the current directory, and without a task ID both act on the calling agent's
+own task. See [Review packets](tasks.md#review-packets).
 `task ready-for-review` marks work without a pull request ready, and
 `task mark-done` finishes it. `task release` starts a release task for a
 project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
@@ -941,7 +949,7 @@ project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#me
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.packet.publish|task.packet.get|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.

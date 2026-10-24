@@ -15,6 +15,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 "toastty:toastty-send-diagnostics",
                 "toastty:toastty-task-merge",
                 "toastty:toastty-task-start",
+                "toastty:toastty-task-verify",
             ]
         )
         XCTAssertTrue(ToasttyAgentPluginBundle.skills.allSatisfy { $0.summary.isEmpty == false })

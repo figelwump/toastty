@@ -141,6 +141,9 @@ public enum TaskPrompt {
     }
 
     public static let defaultMergeSkill = "toastty-task-merge"
+    /// The skill a task's agent follows to publish its review packet when
+    /// no `verify_skill` names another.
+    public static let defaultVerifySkill = "toastty-task-verify"
 
     private static func worktreeLine(_ worktree: TaskOperation.Worktree, base: TaskOperation.Base?) -> String {
         if worktree.isDetached {

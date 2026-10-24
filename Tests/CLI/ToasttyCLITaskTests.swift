@@ -223,6 +223,50 @@ struct ToasttyCLITaskTests {
     }
 
     @Test
+    func packetCommandsSendThePacketTextAndAbsoluteScreenshotPaths() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-packet-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let packet = #"{"summary": "s", "look_at": "l", "not_verified": []}"#
+        try packet.write(to: directory.appendingPathComponent("packet.json"), atomically: true, encoding: .utf8)
+        let taskID = UUID().uuidString
+        func command(_ arguments: [String]) throws -> CLICommand {
+            try ToasttyCLI.parse(arguments: ["task", "packet"] + arguments, environment: ["PWD": directory.path]).command
+        }
+
+        // A task's agent publishes for its own task.
+        #expect(try command(["publish", "--file", "packet.json", "--screenshot", "after-390.png", "--screenshot", "/abs/before-390.png"])
+            == .appControlRun(kind: .action, id: "task.packet.publish", args: [
+                "packet": .string(packet),
+                "screenshots": .array([.string(directory.appendingPathComponent("after-390.png").path), .string("/abs/before-390.png")]),
+            ]))
+        #expect(try command(["publish", taskID, "--file", directory.appendingPathComponent("packet.json").path])
+            == .appControlRun(kind: .action, id: "task.packet.publish", args: ["taskID": .string(taskID), "packet": .string(packet)]))
+        #expect(try command(["get"]) == .appControlRun(kind: .action, id: "task.packet.get", args: [:]))
+        #expect(try command(["get", taskID, "--version", "2"])
+            == .appControlRun(kind: .action, id: "task.packet.get", args: ["taskID": .string(taskID), "version": .int(2)]))
+
+        for (arguments, message) in [
+            (["publish"], "task packet publish requires --file <packet.json>"),
+            (["publish", "not-a-task", "--file", "packet.json"], "task packet publish takes a task ID"),
+            (["get", "--version", "0"], "--version must be a packet version from 1"),
+            (["show"], "unknown task packet subcommand: show"),
+            ([], "task packet requires publish or get"),
+        ] {
+            do {
+                _ = try command(arguments)
+                Issue.record("expected a usage error for \(arguments)")
+            } catch ToasttyCLIError.usage(let text) {
+                #expect(text.hasPrefix(message), "\(arguments)")
+            } catch {
+                Issue.record("unexpected error \(error)")
+            }
+        }
+        #expect(throws: ToasttyCLIError.self) { try command(["publish", "--file", "missing.json"]) }
+    }
+
+    @Test
     func lifecycleVerbsMapToTheirActions() throws {
         let taskID = UUID().uuidString
         let workspaceID = UUID().uuidString

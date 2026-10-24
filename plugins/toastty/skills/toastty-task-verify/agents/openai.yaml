@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Task Verify"
+  short_description: "Write a task's review packet and publish it for the user."
+  default_prompt: "Use $toastty-task-verify to publish a review packet for this task."

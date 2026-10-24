@@ -11,6 +11,7 @@ DEFAULT_SKILLS=(
   "toastty-send-diagnostics"
   "toastty-task-merge"
   "toastty-task-start"
+  "toastty-task-verify"
 )
 
 declare -a REQUESTED_TARGETS=()

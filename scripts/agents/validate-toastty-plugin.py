@@ -18,6 +18,7 @@ EXPECTED_SKILLS = [
     "toastty-send-diagnostics",
     "toastty-task-merge",
     "toastty-task-start",
+    "toastty-task-verify",
 ]
 
 EXPECTED_CURSOR_HOOKS = [

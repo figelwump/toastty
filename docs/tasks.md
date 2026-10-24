@@ -538,6 +538,51 @@ A task without a worktree or a pull request can also be archived when you
 close its task space; see
 [Finish without a pull request](#finish-without-a-pull-request).
 
+## Review packets
+
+When a task's work is ready for you to look at, its agent publishes a review
+packet: one version of what it wants you to know before you review. The
+shipped `toastty-task-verify` skill tells the agent how to write one; the
+`toastty-task-start` skill points the agent to it.
+
+```json
+{
+  "summary": "Moves the order summary above payment on narrow screens.",
+  "look_at": "The pinned totals bar at 390 px while you scroll the payment form.",
+  "checks": [{ "name": "npm test", "ok": true, "log": "/tmp/checkout-tests.log" }],
+  "not_verified": ["Safari's sticky footer"],
+  "screenshots": [
+    { "name": "before-390", "pair": "before", "width": 390 },
+    { "name": "after-390", "pair": "after", "width": 390 }
+  ]
+}
+```
+
+```bash
+toastty task packet publish --file packet.json \
+  --screenshot before-390.png --screenshot after-390.png
+toastty task packet get [<task-id>] [--version <n>]
+```
+
+- `summary` (what changed) and `look_at` (the one place to check first) are
+  required text. `not_verified` is required too: what the agent did not check,
+  or `[]` written out when it checked everything.
+- `checks` lists each check with `ok` true or false and a `log` path or
+  excerpt. `screenshots` lists each screenshot by `name`, the file name
+  without its extension; `pair` is `"before"`, `"after"` or `null`, and a
+  before and an after with the same `width` form a pair.
+- Toastty refuses a packet with a missing field, an unknown key, or
+  screenshots that do not match the `--screenshot` files by name, and stores
+  nothing.
+- Each publish stores the next version with copies of the screenshots and the
+  worktree's commit, sets the task's `packetVersion`, and marks the task ready
+  for review, as `toastty task ready-for-review` does, so it waits in Needs you.
+- `task packet get` returns the newest packet, or an older one with
+  `--version`, with each screenshot's stored path. `stale` is `true` when
+  commits landed in the worktree after the newest packet; the agent then
+  publishes a new one when the work is ready again.
+- Without a task ID, both commands act on the calling agent's own task.
+
 ## Finish without a pull request
 
 For work that has no pull request, the agent runs `toastty task
@@ -598,6 +643,7 @@ adds, such as the task text or the pull request.
 | Move into a worktree | the agent, from its start skill | none: the shipped `toastty-task-start` | |
 | Merge | the Merge button or the palette | `merge_skill` | `toastty-task-merge` (shipped) |
 | Release | **Release…**, the palette or `toastty task release` | `release_skill` | none |
+| Review packet | the agent, when its work is ready for review | `verify_skill` | `toastty-task-verify` (shipped) |
 | Archive, clean up, done | Toastty itself | none | |
 
 ```toml
@@ -679,11 +725,12 @@ branch_prefix = "feat"
   [Merge a task](#merge-a-task).
 - `merge_prompt` is text Merge sends to the task's agent after the merge skill
   line. Set alone, it replaces the default message.
-- `start_skill`, `merge_skill` and `release_skill` name skills; see
-  [Skills for task events](#skills-for-task-events). A skill name is one word
-  with no spaces.
+- `start_skill`, `merge_skill`, `release_skill` and `verify_skill` name skills;
+  see [Skills for task events](#skills-for-task-events). A skill name is one
+  word with no spaces. Toastty sends no message for `verify_skill`: `task get`
+  shows it as `verifySkill`, and the agent follows it when its work is ready.
 
-`merge`, `merge_prompt` and the three skill keys can also go in `[defaults]`;
+`merge`, `merge_prompt` and the four skill keys can also go in `[defaults]`;
 a workspace's own value wins. A `release_skill` in `[defaults]` lets every
 project release.
 
@@ -750,6 +797,9 @@ a task that waits for a workspace, the Inbox also offers **Retry Triage**.
   that leaves Done, for example because work started again, starts a new week
   at its next finish. The record keeps the file names, and its history says
   the files were removed; such a task can no longer be retried.
+- `~/.toastty/task-packets/<task-id>/v<N>/`: each review packet as
+  `packet.json`, with its screenshots beside it. They are removed when the
+  task is deleted, and with the attachments a week after the task finished.
 - `~/.toastty/recent-workspaces.json`: the last closed top-level workspaces,
   for the workspace picker.
 
