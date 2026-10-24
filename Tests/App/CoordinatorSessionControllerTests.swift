@@ -16,9 +16,10 @@ struct CoordinatorSessionControllerTests {
         let directory: URL
         var config = TasksConfig()
         var clock = Date(timeIntervalSince1970: 1_792_800_000)
+        var restorePending = false
         private(set) var controller: CoordinatorSessionController!
 
-        init(stableRunDuration: TimeInterval = 60, maximumQuickExits: Int = 3) {
+        init(stableRunDuration: TimeInterval = 60, maximumQuickExits: Int = 3, restoreGrace: Duration = .seconds(20)) {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-coordinator-\(UUID().uuidString)", isDirectory: true)
             launcher.sessions = sessions
@@ -28,10 +29,11 @@ struct CoordinatorSessionControllerTests {
                 sessions: sessions,
                 configLoader: { [unowned self] in config },
                 files: CoordinatorFiles(directoryURL: directory),
+                isRestorePending: { [unowned self] _ in restorePending },
                 homeDirectoryPath: "/Users/tester",
                 now: { [unowned self] in clock },
                 relaunchDelay: .milliseconds(10),
-                restoreGrace: .seconds(20),
+                restoreGrace: restoreGrace,
                 terminalReadinessTimeout: .milliseconds(200),
                 stableRunDuration: stableRunDuration,
                 maximumQuickExits: maximumQuickExits
@@ -153,9 +155,9 @@ struct CoordinatorSessionControllerTests {
         await fixture.waitUntil("the start after a reload") { fixture.launcher.calls.count == 3 }
     }
 
-    @Test
-    func waitsForARestoredSessionInsteadOfTypingASecondAgent() async throws {
-        let fixture = Fixture()
+    /// A coordinator workspace saved by an earlier run, with the record
+    /// its terminal resumes from.
+    private func saveRestoredCoordinator(_ fixture: Fixture) -> (workspaceID: UUID, panelID: UUID) {
         let windowID = fixture.store.state.windows[0].id
         let workspaceID = UUID()
         let panelID = UUID()
@@ -175,6 +177,44 @@ struct CoordinatorSessionControllerTests {
                 capturedAt: fixture.clock
             )
         )))
+        return (workspaceID, panelID)
+    }
+
+    @Test
+    func aCoordinatorThatIsOffClosesItsSavedWorkspaceSoNothingResumes() async throws {
+        let fixture = Fixture()
+        _ = saveRestoredCoordinator(fixture)
+        fixture.config.coordinator = TasksConfig.Coordinator(agent: nil)
+        fixture.controller.start()
+        #expect(fixture.coordinatorWorkspace == nil)
+        #expect(fixture.launcher.calls.isEmpty)
+
+        // A run that does not start the coordinator closes it too.
+        let other = Fixture()
+        _ = saveRestoredCoordinator(other)
+        other.controller.closeSavedWorkspace()
+        #expect(other.coordinatorWorkspace == nil)
+    }
+
+    @Test
+    func aSlowRestoreIsNotRacedByAFreshLaunchAfterTheGrace() async throws {
+        let fixture = Fixture(restoreGrace: .zero)
+        _ = saveRestoredCoordinator(fixture)
+        fixture.restorePending = true
+        fixture.controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(fixture.launcher.calls.isEmpty)
+        #expect(fixture.controller.status == .waitingForRestore)
+
+        // The restore gave up without an agent: now a fresh one starts.
+        fixture.restorePending = false
+        await fixture.waitUntil("a fresh launch") { fixture.launcher.calls.count == 1 }
+    }
+
+    @Test
+    func waitsForARestoredSessionInsteadOfTypingASecondAgent() async throws {
+        let fixture = Fixture()
+        let (workspaceID, panelID) = saveRestoredCoordinator(fixture)
 
         fixture.controller.start()
         try await Task.sleep(for: .milliseconds(50))
@@ -209,5 +249,16 @@ struct CoordinatorSessionControllerTests {
         let second = try #require(fixture.coordinatorWorkspace?.id)
         #expect(second != first)
         #expect(fixture.launcher.calls[1].workspaceID == second)
+    }
+
+    @Test
+    func aCardAfterALineCutShortIsKept() throws {
+        let fixture = Fixture()
+        let files = fixture.controller.files
+        try files.prepare()
+        try Data(#"{"id":"cut"#.utf8).write(to: files.eventsFileURL)
+        let event = CoordinatorEvent(at: fixture.clock, kind: .note, taskID: nil, text: "After a crash.", sessionID: nil)
+        try files.append(event)
+        #expect(files.events() == [event])
     }
 }

@@ -39,6 +39,9 @@ final class CoordinatorSessionController {
     private let launcher: any TaskAgentLaunching
     private let sessions: any TaskSessionProviding
     private let configLoader: () throws -> TasksConfig
+    /// Whether the terminal still has to type the command that resumes its
+    /// restored agent.
+    private let isRestorePending: (UUID) -> Bool
     private let homeDirectoryPath: String
     private let now: () -> Date
     private let relaunchDelay: Duration
@@ -68,6 +71,7 @@ final class CoordinatorSessionController {
         sessions: any TaskSessionProviding,
         configLoader: @escaping () throws -> TasksConfig,
         files: CoordinatorFiles,
+        isRestorePending: @escaping (UUID) -> Bool = { _ in false },
         homeDirectoryPath: String = NSHomeDirectory(),
         now: @escaping () -> Date = Date.init,
         relaunchDelay: Duration = .seconds(2),
@@ -82,6 +86,7 @@ final class CoordinatorSessionController {
         self.sessions = sessions
         self.configLoader = configLoader
         self.files = files
+        self.isRestorePending = isRestorePending
         self.homeDirectoryPath = homeDirectoryPath
         self.now = now
         self.relaunchDelay = relaunchDelay
@@ -93,10 +98,24 @@ final class CoordinatorSessionController {
     }
 
     /// Reads `[coordinator]` and starts the agent unless it is turned off.
+    /// Runs before terminals start, so a coordinator that is off closes its
+    /// saved workspace before that terminal could resume the agent.
     func start() {
         isStarted = true
         restoreDeadline = now().addingTimeInterval(restoreGrace.timeInterval)
         reloadConfiguration()
+        if config.agent == nil {
+            closeSavedWorkspace()
+        }
+    }
+
+    /// For a run that does not start the coordinator: closes a workspace
+    /// saved by an earlier run, so its agent does not resume.
+    func closeSavedWorkspace() {
+        guard launchTask == nil, let workspaceID = store.state.coordinatorWorkspaceID else { return }
+        _ = store.send(.closeWorkspace(workspaceID: workspaceID))
+        panelID = nil
+        ToasttyLog.info("Closed the saved coordinator workspace because the coordinator is off", category: .tasks)
     }
 
     /// Applies an edited `tasks.toml` to the next session, and clears a
@@ -163,7 +182,7 @@ final class CoordinatorSessionController {
             if case .failed = status { return }
         }
         if let target, terminal(target)?.resumeRecord != nil, hasLaunchedThisRun == false,
-           let restoreDeadline, now() < restoreDeadline {
+           isRestorePending(target.panelID) || restoreDeadline.map({ now() < $0 }) == true {
             // Toastty resumes a restored agent when the terminal starts.
             // Launching now could type a second agent into that terminal.
             status = .waitingForRestore
@@ -296,7 +315,12 @@ final class CoordinatorSessionController {
                         forkFromSessionID: nil,
                         scopedWorkspaceIDs: nil,
                         beforeDispatch: { [weak self] in
-                            guard let self, self.isStarted, self.config.agent != nil, self.terminal(target) != nil else {
+                            // A restored agent may be resuming in the
+                            // meantime; reconcile then waits for it. (The
+                            // launch registers its own session before this
+                            // runs, so the registry cannot tell.)
+                            guard let self, self.isStarted, self.config.agent != nil, self.terminal(target) != nil,
+                                  self.isRestorePending(target.panelID) == false else {
                                 throw CancellationError()
                             }
                         }
@@ -311,6 +335,12 @@ final class CoordinatorSessionController {
                 ])
             } catch is CancellationError {
                 self.status = .off
+                // Counted like a failed start, so a cancel that repeats
+                // cannot loop.
+                if self.isStarted, self.config.agent != nil {
+                    self.quickExits += 1
+                    self.stopIfExitingRepeatedly()
+                }
             } catch AgentLaunchError.commandDeliveryUncertain {
                 // Part of the command may be in the terminal; typing it again
                 // could run two agents.

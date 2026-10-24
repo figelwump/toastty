@@ -588,6 +588,14 @@ extension TaskAppControlTests {
                 context: context(agentSessionID)
             )
         }
+        // So does a session Toastty does not know, or no longer runs.
+        await expectInvalidPayload("only the coordinator's session posts to its chat") {
+            _ = try executor.runAction(
+                id: "coordinator.post",
+                args: ["kind": .string("note"), "text": .string("hi")],
+                context: context("stopped-session")
+            )
+        }
         await expectInvalidPayload("A packet card names its task with --task <task-id>.") {
             _ = try executor.runAction(id: "coordinator.post", args: ["kind": .string("packet")], context: context())
         }
@@ -622,5 +630,23 @@ extension TaskAppControlTests {
         )
         #expect(record.workspaceID == nil)
         #expect(fixture.coordinator.workspaceChoices().open.contains { $0.id == coordinatorWorkspaceID } == false)
+
+        // Workspace indexes skip it: a workspace made after it is number 2.
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: "website", activate: false))
+        let website = try #require(fixture.store.state.windows.first?.workspaceIDs.last)
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let listed = try executor.runQuery(id: "workspace.list", args: [:])
+        guard case .array(let entries)? = listed["workspaces"] else {
+            Issue.record("workspace.list returned no workspaces")
+            return
+        }
+        let indexes = entries.compactMap { entry -> (String, AutomationJSONValue)? in
+            guard case .object(let object) = entry, case .string(let id)? = object["workspaceID"] else { return nil }
+            return (id, object["index"] ?? .null)
+        }
+        #expect(indexes.first { $0.0 == coordinatorWorkspaceID.uuidString }?.1 == .null)
+        #expect(indexes.first { $0.0 == website.uuidString }?.1 == .int(2))
+        _ = try executor.runAction(id: "workspace.select", args: ["windowID": .string(windowID.uuidString), "index": .int(2)], context: context())
+        #expect(fixture.store.state.windows.first?.selectedWorkspaceID == website)
     }
 }

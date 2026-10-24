@@ -743,7 +743,8 @@ returns `PANEL_READ_DENIED` to every session except its own.
 order, without selecting or focusing anything. Each entry has `windowID`,
 `workspaceID`, 1-based `index` within its window, `title`, `isSelected`,
 `annotations` (the same shape as `workspace.snapshot`), `done` (the task space
-done mark), and `terminalCwds`,
+done mark), `isCoordinator` (true for the hidden
+[coordinator](coordinator.md) workspace), and `terminalCwds`,
 the sorted working directories of the workspace's terminal panels across all
 tabs. `activeSessions` lists each managed agent session in the workspace as
 `{sessionID, agent, panelID}`, `busyTerminalCount` counts terminals running a

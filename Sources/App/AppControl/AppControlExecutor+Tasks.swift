@@ -125,7 +125,11 @@ extension AppControlExecutor {
         case .coordinatorPost:
             return try runCoordinatorPost(args: args, coordinator: coordinator)
         case .coordinatorShowTerminal:
-            guard let session = coordinator.coordinatorSession, session.showTerminal() else {
+            guard let session = coordinator.coordinatorSession, let workspaceID = session.workspaceID else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            try enforceWorkspaceAutomationAccess(workspaceID)
+            guard session.showTerminal() else {
                 throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
             }
             return .init(didMutateState: true, result: Self.coordinatorStatusSnapshot(session))
@@ -300,8 +304,10 @@ extension AppControlExecutor {
         guard let session = coordinator.coordinatorSession else {
             throw AutomationSocketError.invalidPayload("the coordinator is not available in this Toastty instance")
         }
-        let caller = callerManagedSession()
-        if let caller, caller.workspaceID != (try requiredStore().state.coordinatorWorkspaceID) {
+        // A caller with a session ID must be the running coordinator; one
+        // with none is outside every agent session, such as the user's shell.
+        let callerSessionID = requestContext().callerSessionID
+        if let callerSessionID, session.status != .running(sessionID: callerSessionID) {
             throw AutomationSocketError.invalidPayload("only the coordinator's session posts to its chat")
         }
         guard let kind = args.taskString("kind") else {
@@ -314,7 +320,7 @@ extension AppControlExecutor {
                 kind: kind,
                 taskID: taskID,
                 text: args.taskString("text"),
-                sessionID: caller?.sessionID,
+                sessionID: callerSessionID,
                 at: Date()
             )
             try session.files.append(event)

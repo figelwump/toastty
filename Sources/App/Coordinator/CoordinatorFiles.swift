@@ -58,11 +58,17 @@ struct CoordinatorFiles {
         try prepare()
         var line = try event.jsonLine()
         line.append(UInt8(ascii: "\n"))
-        let descriptor = open(eventsFileURL.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+        let descriptor = open(eventsFileURL.path, O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: eventsFileURL.path])
         }
         defer { close(descriptor) }
+        // A line cut short by a crash would swallow this one; end it first.
+        var lastByte: UInt8 = 0
+        let size = lseek(descriptor, 0, SEEK_END)
+        if size > 0, pread(descriptor, &lastByte, 1, size - 1) == 1, lastByte != UInt8(ascii: "\n") {
+            line.insert(UInt8(ascii: "\n"), at: 0)
+        }
         let written = line.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
         guard written == line.count else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: eventsFileURL.path])

@@ -382,6 +382,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private weak var store: AppStore?
     private weak var terminalRuntimeRegistry: TerminalRuntimeRegistry?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
+    private weak var coordinatorSession: CoordinatorSessionController?
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
@@ -419,6 +420,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureWebPanelRuntimeRegistry(_ webPanelRuntimeRegistry: WebPanelRuntimeRegistry) {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
+    }
+
+    func configureCoordinatorSession(_ coordinatorSession: CoordinatorSessionController) {
+        self.coordinatorSession = coordinatorSession
     }
 
     func configureMenuBridges(
@@ -564,7 +569,8 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             },
             localDocumentCloseConfirmationState: { panelID in
                 webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
-            }
+            },
+            exemptTerminalPanelIDs: Set([coordinatorSession?.panelID].compactMap { $0 })
         )
     }
 
@@ -1370,7 +1376,10 @@ struct ToasttyApp: App {
             launcher: agentLaunchService,
             sessions: taskCoordinator.sessions!,
             configLoader: { try TasksConfigFile.load() },
-            files: CoordinatorFiles(runtimePaths: runtimePaths)
+            files: CoordinatorFiles(runtimePaths: runtimePaths),
+            isRestorePending: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.hasPendingRestoredManagedLaunch(panelID: panelID) ?? false
+            }
         )
         // The coordinator's transcript is projected even with remote access
         // off, for the chat that shows it.
@@ -1391,6 +1400,8 @@ struct ToasttyApp: App {
             runtimePaths: runtimePaths
         ) {
             coordinatorSession.start()
+        } else {
+            coordinatorSession.closeSavedWorkspace()
         }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
@@ -1503,6 +1514,7 @@ struct ToasttyApp: App {
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
         appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
+        appLifecycleDelegate.configureCoordinatorSession(coordinatorSession)
         Self.scheduleCodexIntegrationMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
     }
 
