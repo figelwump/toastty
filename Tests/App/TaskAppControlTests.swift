@@ -526,7 +526,7 @@ extension TaskAppControlTests {
         }
     }
 
-    @Test func windowActionsShowTheTasksViewAndSwitchTheSidebar() throws {
+    @Test func windowActionsShowAndHideTheTasksView() throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
         let windowID = try #require(fixture.store.state.windows.first?.id)
@@ -536,15 +536,6 @@ extension TaskAppControlTests {
         #expect(fixture.store.window(id: windowID)?.showsTasksView == true)
         _ = try executor.runAction(id: "window.tasks.hide", args: args)
         #expect(fixture.store.window(id: windowID)?.showsTasksView == false)
-
-        _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("status")]) { $1 })
-        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .status)
-        do {
-            _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("stages")]) { $1 })
-            Issue.record("an unknown segment should fail")
-        } catch AutomationSocketError.invalidPayload(let message) {
-            #expect(message == "segment must be projects or status")
-        }
     }
 
     @Test func coordinatorPostAppendsACardThatOnlyTheCoordinatorMayPost() async throws {

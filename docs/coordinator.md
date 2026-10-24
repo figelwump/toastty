@@ -6,8 +6,10 @@ project, follows the tasks, and tells you when one needs you. The work itself
 happens in the tasks, each with its own agent. See [Tasks](tasks.md).
 
 This first version has no chat view. You talk to the coordinator in its
-terminal: run `toastty coordinator show-terminal` to select it. A later version
-adds a chat beside the sidebar.
+terminal: click **Coordinator** at the top of the sidebar, or run
+`toastty coordinator show-terminal`. A later version adds a chat beside the
+sidebar. The sidebar's **Needs you** list shows the tasks waiting for you; see
+[The sidebar and the Tasks view](tasks.md#the-sidebar-and-the-tasks-view).
 
 ## How it runs
 

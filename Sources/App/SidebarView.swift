@@ -528,7 +528,7 @@ struct SessionStatusBadge: View {
 /// it while computing its order, where state writes are not allowed, and the
 /// pin must be in place in the same update that reads the jumped-to row.
 /// The task board as of the sidebar's last body pass. Built once per pass
-/// and read by the header, the Status segment, card footers and rows, so a
+/// and read by the header, Needs you, card footers and rows, so a
 /// redraw does not rebuild the board for every card. A plain reference for
 /// the same reason as `SubspaceOrderMemory`.
 @MainActor
@@ -584,6 +584,10 @@ struct SidebarView: View {
     @ObservedObject var taskBoard: TaskBoardStore
     /// Opens the quick entry panel; `nil` hides the Tasks row's ＋.
     let newTask: (@MainActor () -> Void)?
+    /// Opens the coordinator chat, at a task's packet when given one. nil
+    /// while Toastty has no chat view; the Coordinator row then shows the
+    /// coordinator's terminal.
+    let openCoordinatorChat: (@MainActor (UUID?) -> Void)?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -600,6 +604,7 @@ struct SidebarView: View {
     let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
+    @State private var packetLookAtCache = SidebarPacketLookAtCache()
     @State private var renameDraftTitle = ""
     @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
@@ -768,6 +773,7 @@ struct SidebarView: View {
         taskCoordinator: TaskCoordinator? = nil,
         taskBoard: TaskBoardStore = .disabled,
         newTask: (@MainActor () -> Void)? = nil,
+        openCoordinatorChat: (@MainActor (UUID?) -> Void)? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -784,6 +790,7 @@ struct SidebarView: View {
         self.taskCoordinator = taskCoordinator
         self.taskBoard = taskBoard
         self.newTask = newTask
+        self.openCoordinatorChat = openCoordinatorChat
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
@@ -811,6 +818,9 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
+                        if taskBoard.isEnabled {
+                            needsYouSection
+                        }
                         if let taskCoordinator {
                             // Inbox tasks have no running task space yet, so
                             // they sit above every card.
@@ -820,9 +830,10 @@ struct SidebarView: View {
                                 workspaceTitle: { store.state.workspacesByID[$0]?.title }
                             )
                         }
-                        if taskBoard.isEnabled, sidebarSegment == .status {
-                            statusSegmentContent
-                        } else if store.window(id: windowID) != nil {
+                        if taskBoard.isEnabled {
+                            projectsHeading
+                        }
+                        if store.window(id: windowID) != nil {
                             // Subspaces render inside their parent's card, so
                             // the card list, its numbering, and drag reordering
                             // all work on the top-level workspaces only.
@@ -897,7 +908,7 @@ struct SidebarView: View {
                     VStack(spacing: 0) {
                         sidebarTitlebarCover
                         if taskBoard.isEnabled {
-                            tasksHeader
+                            coordinatorHeader
                         }
                     }
                 }
@@ -1021,21 +1032,60 @@ struct SidebarView: View {
         taskBoardSnapshot.windowItems = TaskBoard.items(all, in: windowID, state: store.state)
     }
 
-    private var sidebarSegment: SidebarSegment {
-        store.window(id: windowID)?.sidebarSegment ?? .projects
+    private var coordinatorHeader: some View {
+        let coordinatorWorkspaceID = store.state.coordinatorWorkspaceID
+        return SidebarCoordinatorHeader(
+            needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count,
+            isSelected: coordinatorWorkspaceID != nil && selectedWorkspaceID == coordinatorWorkspaceID,
+            openCoordinator: openCoordinator,
+            newTask: newTask.map { action in { action() } }
+        )
     }
 
-    private var tasksHeader: some View {
-        SidebarTasksHeader(
-            needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count,
-            isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
-            segment: sidebarSegment,
-            openTasksView: { openTasksView(selecting: nil) },
-            newTask: newTask.map { action in { action() } },
-            selectSegment: { segment in
-                _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
-            }
+    /// The coordinator chat once it exists; until then, the coordinator's
+    /// terminal in its hidden workspace.
+    private func openCoordinator() {
+        cancelWorkspaceRename()
+        if let openCoordinatorChat {
+            openCoordinatorChat(nil)
+        } else {
+            taskCoordinator?.coordinatorSession?.showTerminal()
+        }
+    }
+
+    private var needsYouSection: some View {
+        let packets = taskCoordinator?.packets
+        let rows = SidebarNeedsYouRow.rows(taskBoardSnapshot.windowItems) { record in
+            packets.flatMap { packetLookAtCache.lookAt(record, packets: $0) }
+        }
+        return SidebarNeedsYouSection(
+            rows: rows,
+            openPacket: openCoordinatorChat.map { action in { taskID in
+                cancelWorkspaceRename()
+                action(taskID)
+            } },
+            openTaskSpace: { workspaceID in
+                TaskActions.openTaskSpace(
+                    workspaceID: workspaceID,
+                    fallbackWindowID: windowID,
+                    store: store,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+            },
+            merge: { taskID in runTaskMenuItem(.action(.merge, taskID: taskID)) },
+            run: runTaskMenuItem
         )
+    }
+
+    private var projectsHeading: some View {
+        Text("PROJECTS")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .kerning(0.8)
+            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+            .padding(.horizontal, 8)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
@@ -1047,46 +1097,6 @@ struct SidebarView: View {
             taskBoard.revealGroupByWindowID[windowID] = group
         }
         _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
-    }
-
-    /// The Status segment: Needs you, Running, To ship and Done, below the
-    /// Inbox the sidebar always shows.
-    private var statusSegmentContent: some View {
-        let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)
-        return SidebarStatusSegment(
-            sections: sections,
-            openTasksGroup: { group in openTasksView(selecting: nil, revealing: group) },
-            release: { workspaceID in
-                if let coordinator = taskBoard.coordinator {
-                    TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
-                }
-            },
-            showMoreToShip: { subject in openTasksView(selecting: subject, revealing: .toShip) }
-        ) { entry in
-            if let workspaceID = entry.item.taskSpaceWorkspaceID,
-               let workspace = store.state.workspacesByID[workspaceID] {
-                subspaceRow(
-                    subspaceRowModel(
-                        workspace: workspace,
-                        spawner: nil,
-                        windowWorkspaceIDs: windowWorkspaceIDs,
-                        projectTag: entry.item.projectTitle,
-                        isLinkedChild: entry.isLinkedChild
-                    ),
-                    parentWorkspaceID: workspace.parentWorkspaceID ?? workspace.id,
-                    showsSpawnerTag: false
-                )
-            } else if entry.item.stage == .toShip {
-                toShipTaskRow(entry.item)
-            } else {
-                SidebarTaskRecordRow(item: entry.item) { openTasksView(selecting: entry.item.id) }
-                    .contextMenu {
-                        TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(entry.item), run: runTaskMenuItem)
-                    }
-            }
-        }
-        .padding(.top, 2)
     }
 
     /// A merged task waiting for a release, under its project's To ship
@@ -1242,12 +1252,6 @@ struct SidebarView: View {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
             return SidebarScrollGeometry.Content(isDragging: true)
         }
-        // The pills point at session rows in project cards, which the Status
-        // segment does not draw.
-        guard taskBoard.isEnabled == false || sidebarSegment == .projects else {
-            return SidebarScrollGeometry.Content()
-        }
-
         var content = SidebarScrollGeometry.Content()
         // Derive IDs and attention from the same status pass for both pills.
         for workspaceID in store.window(id: windowID)?.workspaceIDs ?? [] {

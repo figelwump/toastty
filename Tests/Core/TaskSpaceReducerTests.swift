@@ -174,21 +174,18 @@ struct TaskWindowStateTests {
     }
 
     @Test
-    func theSidebarSegmentIsSavedButTheTasksViewIsNot() throws {
+    func theTasksViewIsNotSaved() throws {
         var (state, windowID, _) = state()
-        #expect(state.windows[0].sidebarSegment == .projects)
-        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state))
-        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state) == false)
         _ = AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state)
 
         let decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(state.windows[0]))
-        #expect(decoded.sidebarSegment == .status)
         #expect(decoded.showsTasksView == false)
 
-        // Windows saved before segments existed open on Projects.
+        // A window saved with the sidebar segment that the Needs you list
+        // replaced still opens.
         var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state.windows[0])) as? [String: Any])
-        object.removeValue(forKey: "sidebarSegment")
+        object["sidebarSegment"] = "status"
         let older = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(older.sidebarSegment == .projects)
+        #expect(older.id == windowID)
     }
 }

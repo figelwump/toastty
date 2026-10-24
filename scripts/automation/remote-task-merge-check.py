@@ -344,12 +344,8 @@ def main():
         require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
         require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
         step('A merged and cleaned up', cleanup=merged['cleanup'])
-        # Both places offer Release for the lane: the Status sidebar and the
-        # Tasks view (mockups 13 B and 14e).
-        action('window.sidebar.set-segment', windowID=window_id, segment='status')
+        # The Tasks view offers Release for the lane (mockup 14e).
         open_tasks_view()
-        require(run_tool(helper, 'exists', pid, f'sidebar.status.toShip.{project_title}.release', check=False).returncode == 0,
-                'The Status sidebar has no Release button for the project')
         capture('2-to-ship')
 
         # 2. Release from the To ship lane; a pushed tag ships both.

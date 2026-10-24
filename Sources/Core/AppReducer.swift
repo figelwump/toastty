@@ -1234,12 +1234,6 @@ public struct AppReducer {
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
 
-        case .setSidebarSegment(let windowID, let segment):
-            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
-                  state.windows[windowIndex].sidebarSegment != segment else { return false }
-            state.windows[windowIndex].sidebarSegment = segment
-            return true
-
         case .setTasksViewShown(let windowID, let shown):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
                   state.windows[windowIndex].showsTasksView != shown else { return false }
