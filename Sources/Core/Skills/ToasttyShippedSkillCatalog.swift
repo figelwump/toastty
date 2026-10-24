@@ -17,6 +17,10 @@ public enum ToasttyShippedSkillCatalog {
             summary: "Control Toastty workspaces, panels, terminals, and managed agents."
         ),
         ToasttyShippedSkillDescriptor(
+            name: "toastty-coordinator",
+            summary: "Run the coordinator: route requests to tasks, follow them, and post cards to its chat."
+        ),
+        ToasttyShippedSkillDescriptor(
             name: "toastty-open-markdown",
             summary: "Open plans and Markdown files for review inside Toastty."
         ),

@@ -913,6 +913,9 @@ public enum ToasttyCLI {
         case "task":
             return try parseTaskCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
 
+        case "coordinator":
+            return try parseCoordinatorCommand(Array(remainingArguments.dropFirst()), options: options)
+
         default:
             throw ToasttyCLIError.usage("unknown command: \(command)\n\n\(usage)")
         }
@@ -951,6 +954,9 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
+      toastty [--json] [--socket-path <path>] coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>]
+      toastty [--json] [--socket-path <path>] coordinator status
+      toastty [--json] [--socket-path <path>] coordinator show-terminal
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1788,6 +1794,52 @@ public enum ToasttyCLI {
 
     /// `toastty task <verb>`: a shorter form of `action run task.<verb>` and
     /// `query run task.<verb>`, with file paths resolved here.
+    private static func parseCoordinatorCommand(_ arguments: [String], options: CLIOptions) throws -> CLIInvocation {
+        guard let verb = arguments.first else {
+            throw ToasttyCLIError.usage("coordinator requires a subcommand\n\n\(usage)")
+        }
+        let remaining = Array(arguments.dropFirst())
+        switch verb {
+        case "post":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--task", "--text"])
+            guard let kind = parsed.positionals.first else {
+                throw ToasttyCLIError.usage("coordinator post requires a kind: packet, task-started, question or note\n\n\(usage)")
+            }
+            guard parsed.positionals.count <= 2 else {
+                throw ToasttyCLIError.usage("coordinator post takes the text as one argument; quote it\n\n\(usage)")
+            }
+            let texts = [parsed.positionals.dropFirst().first, parsed.singleValue("--text")].compactMap { $0 }
+            guard texts.count <= 1 else {
+                throw ToasttyCLIError.usage("coordinator post takes the text as an argument or --text, not both\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = ["kind": .string(kind)]
+            if let taskID = parsed.singleValue("--task") {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("coordinator post --task takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            if let text = texts.first {
+                args["text"] = .string(text)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.post", args: args))
+
+        case "status", "show-terminal":
+            guard remaining.isEmpty else {
+                throw ToasttyCLIError.usage("coordinator \(verb) takes no arguments\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: verb == "status"
+                    ? .appControlRun(kind: .query, id: "coordinator.status", args: [:])
+                    : .appControlRun(kind: .action, id: "coordinator.show-terminal", args: [:])
+            )
+
+        default:
+            throw ToasttyCLIError.usage("unknown coordinator subcommand: \(verb)\n\n\(usage)")
+        }
+    }
+
     private static func parseTaskCommand(
         _ arguments: [String],
         options: CLIOptions,

@@ -113,6 +113,22 @@ struct TasksConfigFileTests {
     }
 
     @Test
+    func coordinatorDefaultsToClaudeAndCanBeTurnedOff() throws {
+        #expect(try parse("").coordinator == TasksConfig.Coordinator(agent: "claude"))
+        #expect(try parse("[coordinator]").coordinator == TasksConfig.Coordinator(agent: "claude"))
+        #expect(try parse("[coordinator]\nagent = \"None\"").coordinator.agent == nil)
+        #expect(try parse("""
+        [coordinator]
+        agent = "codex"
+        model = "gpt-6.1-sol"
+        effort = "high"
+        """).coordinator == TasksConfig.Coordinator(agent: "codex", model: "gpt-6.1-sol", effort: "high"))
+        // A model alone keeps the default agent.
+        #expect(try parse("[coordinator]\nmodel = \"claude-opus-5-5\"").coordinator
+            == TasksConfig.Coordinator(agent: "claude", model: "claude-opus-5-5"))
+    }
+
+    @Test
     func triageTimeoutDefaults() throws {
         #expect(try parse("[triage]\ncommand = \"x\"").triage?.timeoutSeconds == TasksConfig.Triage.defaultTimeoutSeconds)
     }
@@ -159,6 +175,9 @@ struct TasksConfigFileTests {
         ("[workspace.\"/r\"]\nrelease_skill = \"a\\tb\"", 2, "release_skill must be a skill name with no spaces"),
         ("[workspace.\"/r\"]\nverify_skill = \"my verify\"", 2, "verify_skill must be a skill name with no spaces"),
         ("[workspace.\"/r\"]\nstart_skill = \"\"\"\none\ntwo\n\"\"\"", 2, "start_skill must be one line"),
+        ("[coordinator]\nprompt = \"x\"", 2, "[coordinator] contains unknown key 'prompt'"),
+        ("[coordinator]\nagent = \"my agent\"", 2, "one word"),
+        ("[coordinator]\nagent = \"none\"\neffort = \"high\"", 3, "takes no model or effort"),
         ("[quick_entry]\nshortcut = \"shift+t\"", 2, "[quick_entry] the shortcut \"shift+t\" needs Command"),
         ("[quick_entry]\nshortcut = \"opt+shift+tt\"", 2, "unknown key \"tt\""),
     ])

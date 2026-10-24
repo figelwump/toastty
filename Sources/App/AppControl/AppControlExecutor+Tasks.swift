@@ -6,7 +6,8 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .windowTasksShow, .windowTasksHide,
+             .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -15,7 +16,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isTaskQuery: Bool {
         switch self {
-        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches: true
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus: true
         default: false
         }
     }
@@ -124,6 +125,17 @@ extension AppControlExecutor {
             }
             try perform { try coordinator.cancelWatch(id: watchID) }
             return .init(didMutateState: true, result: ["watchID": .string(watchID.uuidString), "cancelled": .bool(true)])
+        case .coordinatorPost:
+            return try runCoordinatorPost(args: args, coordinator: coordinator)
+        case .coordinatorShowTerminal:
+            guard let session = coordinator.coordinatorSession, let workspaceID = session.workspaceID else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            try enforceWorkspaceAutomationAccess(workspaceID)
+            guard session.showTerminal() else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            return .init(didMutateState: true, result: Self.coordinatorStatusSnapshot(session))
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }
@@ -382,9 +394,84 @@ extension AppControlExecutor {
                     && watchIsVisible(entry, coordinator: coordinator)
             }
             return ["watches": .array(watches.map { .object(Self.watchSnapshot($0.watch, notifyTaskID: $0.notifyTaskID)) })]
+        case .coordinatorStatus:
+            guard let session = coordinator.coordinatorSession else {
+                throw AutomationSocketError.invalidPayload("the coordinator is not available in this Toastty instance")
+            }
+            return Self.coordinatorStatusSnapshot(session)
         default:
             throw AutomationSocketError.invalidPayload("unsupported task query: \(query.rawValue)")
         }
+    }
+
+    // MARK: - Coordinator
+
+    /// `coordinator.post`. Cards are the coordinator's own: a task's agent
+    /// reports through its task (a packet, a stage), not by posting.
+    private func runCoordinatorPost(
+        args: [String: AutomationJSONValue],
+        coordinator: TaskCoordinator
+    ) throws -> AppControlActionOutcome {
+        guard let session = coordinator.coordinatorSession else {
+            throw AutomationSocketError.invalidPayload("the coordinator is not available in this Toastty instance")
+        }
+        // A caller with a session ID must be the running coordinator; one
+        // with none is outside every agent session, such as the user's shell.
+        let callerSessionID = requestContext().callerSessionID
+        if let callerSessionID, session.status != .running(sessionID: callerSessionID) {
+            throw AutomationSocketError.invalidPayload("only the coordinator's session posts to its chat")
+        }
+        guard let kind = args.taskString("kind") else {
+            throw AutomationSocketError.invalidPayload("kind is required")
+        }
+        let taskID = try args.taskString("taskID").map { _ in try visibleTask(args: args, coordinator: coordinator).id }
+        let event: CoordinatorEvent
+        do {
+            event = try CoordinatorEvent.validated(
+                kind: kind,
+                taskID: taskID,
+                text: args.taskString("text"),
+                sessionID: callerSessionID,
+                at: Date()
+            )
+            try session.files.append(event)
+        } catch let error as CoordinatorEventError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        } catch {
+            throw AutomationSocketError.invalidPayload("Toastty could not save the card: \(error.localizedDescription)")
+        }
+        var result: [String: AutomationJSONValue] = [
+            "eventID": .string(event.id.uuidString),
+            "kind": .string(event.kind.rawValue),
+            "at": .string(event.at.ISO8601Format()),
+        ]
+        if let taskID = event.taskID { result["taskID"] = .string(taskID.uuidString) }
+        return .init(didMutateState: false, result: result)
+    }
+
+    static func coordinatorStatusSnapshot(_ session: CoordinatorSessionController) -> [String: AutomationJSONValue] {
+        func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        var result: [String: AutomationJSONValue] = [
+            "workspaceID": optional(session.workspaceID?.uuidString),
+            "panelID": optional(session.panelID?.uuidString),
+            "eventsFile": .string(session.files.eventsFileURL.path),
+            "routingFile": .string(session.files.routingFileURL.path),
+            "sessionID": .null,
+            "reason": .null,
+        ]
+        switch session.status {
+        case .off: result["state"] = .string("off")
+        case .waitingForWindow: result["state"] = .string("waitingForWindow")
+        case .waitingForRestore: result["state"] = .string("waitingForRestore")
+        case .starting: result["state"] = .string("starting")
+        case .running(let sessionID):
+            result["state"] = .string("running")
+            result["sessionID"] = .string(sessionID)
+        case .failed(let reason):
+            result["state"] = .string("failed")
+            result["reason"] = .string(reason)
+        }
+        return result
     }
 
     /// The record snapshot plus what only the running app knows: the agent's

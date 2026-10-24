@@ -269,6 +269,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// back through its operation, so either side can be rebuilt from the
     /// other after a crash.
     public var taskID: UUID?
+    /// The hidden workspace that runs the coordinator's agent. The sidebar,
+    /// the workspace switch shortcuts and task project choices leave it
+    /// out; Toastty creates it and starts the coordinator there.
+    public var isCoordinator: Bool
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -297,7 +301,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         primaryAnnotationKey: String? = nil,
         doneAt: Date? = nil,
         rootDirectory: String? = nil,
-        taskID: UUID? = nil
+        taskID: UUID? = nil,
+        isCoordinator: Bool = false
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -323,6 +328,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.doneAt = doneAt
         self.rootDirectory = rootDirectory
         self.taskID = taskID
+        self.isCoordinator = isCoordinator
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         normalizeSidebarSessionPanelOrder()
@@ -668,6 +674,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case doneAt
         case rootDirectory
         case taskID
+        case isCoordinator
     }
 
     public init(from decoder: any Decoder) throws {
@@ -728,6 +735,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
         rootDirectory = (try? container.decodeIfPresent(String.self, forKey: .rootDirectory)) ?? nil
         taskID = (try? container.decodeIfPresent(UUID.self, forKey: .taskID)) ?? nil
+        isCoordinator = (try? container.decodeIfPresent(Bool.self, forKey: .isCoordinator)) ?? false
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -747,6 +755,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
         try container.encodeIfPresent(rootDirectory, forKey: .rootDirectory)
         try container.encodeIfPresent(taskID, forKey: .taskID)
+        if isCoordinator {
+            try container.encode(true, forKey: .isCoordinator)
+        }
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

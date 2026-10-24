@@ -239,6 +239,9 @@ final class TaskCoordinator {
     /// The live view of every task's stage, for queries that report it and
     /// for stage watches.
     weak var board: TaskBoardStore?
+    /// The coordinator's agent session, which `coordinator.*` actions reach
+    /// through the task coordinator.
+    weak var coordinatorSession: CoordinatorSessionController?
     /// The one owner of merges and their cleanup. Set once it exists.
     weak var merges: WorkspaceMergeCoordinator?
     /// Unsaved local documents in a workspace, which closing it would lose.
@@ -1501,7 +1504,7 @@ final class TaskCoordinator {
         store.state.windows
             .flatMap(\.workspaceIDs)
             .compactMap { store.state.workspacesByID[$0] }
-            .filter { $0.parentWorkspaceID == nil }
+            .filter { $0.parentWorkspaceID == nil && $0.isCoordinator == false }
     }
 
     /// A workspace's saved root, else its first terminal's git root, else
@@ -1549,11 +1552,17 @@ final class TaskCoordinator {
     /// calling agent's own. A subspace resolves to its parent. `nil` when
     /// neither is known; triage or the user chooses it later.
     private func resolvedWorkspaceID(_ requested: UUID?, caller: TaskCaller) throws -> UUID? {
-        guard let candidate = requested ?? caller.workspaceID else {
+        // The coordinator's hidden workspace is no project: a task the
+        // coordinator creates without a workspace goes to triage.
+        let callerWorkspaceID = caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.isCoordinator == true ? nil : $0 }
+        guard let candidate = requested ?? callerWorkspaceID else {
             return nil
         }
         guard let workspace = store.state.workspacesByID[candidate] else {
             throw TaskError("No open workspace has ID \(candidate.uuidString).")
+        }
+        guard workspace.isCoordinator == false else {
+            throw TaskError("The coordinator's workspace is not a project. Name the task's workspace, or leave it out for triage.")
         }
         let rootID = store.state.subspaceParentIDsByWorkspaceID()[candidate] ?? workspace.id
         guard store.state.workspacesByID[rootID] != nil else {

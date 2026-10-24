@@ -69,6 +69,12 @@ public enum AppAction: Equatable, Sendable {
         title: String,
         terminalCWD: String
     )
+    /// Creates the hidden coordinator workspace at the end of `windowID`,
+    /// without selecting it. Refused while another coordinator workspace is
+    /// open. The one terminal starts in `terminalCWD` with no profile
+    /// binding, so no profile startup command competes with the agent
+    /// Toastty launches there.
+    case createCoordinatorWorkspace(windowID: UUID, workspaceID: UUID, panelID: UUID, terminalCWD: String)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -201,6 +207,8 @@ public extension AppAction {
             return "createBackgroundTerminalTab"
         case .createTaskSpace:
             return "createTaskSpace"
+        case .createCoordinatorWorkspace:
+            return "createCoordinatorWorkspace"
         case .createWindow:
             return "createWindow"
         case .closeWindow:

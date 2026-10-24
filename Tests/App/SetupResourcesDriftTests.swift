@@ -18,7 +18,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             names,
             ToasttyAgentPluginBundle.skills.map(\.name).sorted()
         )
-        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 8)
+        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 9)
         // ToasttyAgentPluginBundle.read rejects symlinks, and one inside a
         // skill folder silently breaks delivery for every managed agent.
         let symlinks = try symbolicLinks(under: shippedSkillsURL())

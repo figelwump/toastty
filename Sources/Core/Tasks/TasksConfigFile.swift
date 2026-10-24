@@ -98,6 +98,24 @@ public struct TasksConfig: Equatable, Sendable {
         }
     }
 
+    /// The coordinator: one agent session that Toastty starts at launch in a
+    /// hidden workspace, and starts again when it exits.
+    public struct Coordinator: Equatable, Sendable {
+        public static let defaultAgent = "claude"
+
+        /// The agent profile to run; nil when the file turns the
+        /// coordinator off with `agent = "none"`.
+        public var agent: String?
+        public var model: String?
+        public var effort: String?
+
+        public init(agent: String? = defaultAgent, model: String? = nil, effort: String? = nil) {
+            self.agent = agent
+            self.model = model
+            self.effort = effort
+        }
+    }
+
     /// Settings for the tasks of one project, matched on the project's root
     /// directory.
     public struct Workspace: Equatable, Sendable {
@@ -147,6 +165,7 @@ public struct TasksConfig: Equatable, Sendable {
     public var triage: Triage?
     public var defaults: Defaults
     public var quickEntry: QuickEntry
+    public var coordinator: Coordinator
     /// In file order.
     public var workspaces: [Workspace]
 
@@ -154,11 +173,13 @@ public struct TasksConfig: Equatable, Sendable {
         triage: Triage? = nil,
         defaults: Defaults = Defaults(),
         quickEntry: QuickEntry = QuickEntry(),
+        coordinator: Coordinator = Coordinator(),
         workspaces: [Workspace] = []
     ) {
         self.triage = triage
         self.defaults = defaults
         self.quickEntry = quickEntry
+        self.coordinator = coordinator
         self.workspaces = workspaces
     }
 
@@ -263,6 +284,7 @@ private struct TasksConfigParser {
         case triage
         case defaults
         case quickEntry
+        case coordinator
         case workspace(path: String)
 
         var name: String {
@@ -270,6 +292,7 @@ private struct TasksConfigParser {
             case .triage: "[triage]"
             case .defaults: "[defaults]"
             case .quickEntry: "[quick_entry]"
+            case .coordinator: "[coordinator]"
             case .workspace(let path): "[workspace.\"\(path)\"]"
             }
         }
@@ -282,7 +305,7 @@ private struct TasksConfigParser {
 
     private typealias Entries = [String: (value: Value, line: Int)]
 
-    private static let expectedTables = "[triage], [defaults], [quick_entry] or [workspace.\"<root directory>\"]"
+    private static let expectedTables = "[triage], [defaults], [quick_entry], [coordinator] or [workspace.\"<root directory>\"]"
 
     /// Tables and keys from an earlier draft of this file, with what
     /// replaced them.
@@ -382,6 +405,8 @@ private struct TasksConfigParser {
                 config.defaults = try defaults(entries)
             case .quickEntry:
                 config.quickEntry = try quickEntry(entries)
+            case .coordinator:
+                config.coordinator = try coordinator(entries)
             case .workspace(let path):
                 config.workspaces.append(try workspace(path: path, entries))
             }
@@ -454,6 +479,25 @@ private struct TasksConfigParser {
         }
     }
 
+    private func coordinator(_ entries: Entries) throws -> TasksConfig.Coordinator {
+        let table = Table.coordinator
+        try Self.rejectUnknownKeys(entries, table: table, allowed: ["agent", "model", "effort"])
+        let agent = try Self.selection("agent", in: entries, table: table, maximumLength: 64)
+        let model = try Self.selection("model", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumModelLength)
+        let effort = try Self.selection("effort", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength)
+        guard agent?.lowercased() != "none" else {
+            if let line = entries["model"]?.line ?? entries["effort"]?.line {
+                throw TasksConfigParseError(line: line, message: "[coordinator] sets agent = \"none\", so it takes no model or effort")
+            }
+            return TasksConfig.Coordinator(agent: nil)
+        }
+        return TasksConfig.Coordinator(
+            agent: agent ?? TasksConfig.Coordinator.defaultAgent,
+            model: model,
+            effort: effort
+        )
+    }
+
     private func workspace(path: String, _ entries: Entries) throws -> TasksConfig.Workspace {
         let table = Table.workspace(path: path)
         try Self.rejectUnknownKeys(
@@ -498,6 +542,7 @@ private struct TasksConfigParser {
         case "triage": return .triage
         case "defaults": return .defaults
         case "quick_entry": return .quickEntry
+        case "coordinator": return .coordinator
         default: break
         }
         if let replacement = replacedTables[name] {

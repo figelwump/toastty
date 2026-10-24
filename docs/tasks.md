@@ -8,7 +8,8 @@ after setup fails.
 This page covers the quick entry panel, creating tasks from the CLI or from
 an agent, moving a task into its own git worktree, the sidebar Inbox, task
 stages with the Status sidebar and the Tasks view, `~/.toastty/tasks.toml`,
-and optional triage.
+and optional triage. The coordinator, an agent session that routes your
+requests to tasks, has its own page: [Coordinator](coordinator.md).
 
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
@@ -683,7 +684,8 @@ effort = "high"
 `[defaults]` fills the agent, model and effort that a request leaves out. The default model and effort apply only with the default agent; a task
 whose agent is another one gets that agent's own defaults.
 
-`[triage]` is described in [Optional: triage](#optional-triage).
+`[triage]` is described in [Optional: triage](#optional-triage), and
+`[coordinator]` in [Coordinator](coordinator.md#configure-it).
 
 ```toml
 [quick_entry]

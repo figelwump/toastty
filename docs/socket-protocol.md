@@ -262,6 +262,8 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.archive`
 - `task.release`
 - `task.adopt`
+- `coordinator.post`
+- `coordinator.show-terminal`
 - `window.tasks.show`
 - `window.tasks.hide`
 - `window.sidebar.set-segment`
@@ -516,6 +518,17 @@ Notable action-specific behavior:
     session reaches only workspaces in its scope. A task space that already has
     a record returns that task; a top-level workspace fails with
     `INVALID_PAYLOAD`.
+- `coordinator.post`
+  - requires `args.kind`: `packet`, `task-started`, `question` or `note`. Every
+    kind but `note` requires `taskID`; `question` and `note` require `text`, at
+    most 4000 characters. Appends one JSON line to `coordinator/events.jsonl`
+    and returns `eventID`, `kind`, `at` and `taskID`. A managed caller outside
+    the coordinator's workspace gets `INVALID_PAYLOAD`. See
+    [Coordinator](coordinator.md#cards).
+- `coordinator.show-terminal`
+  - selects the hidden coordinator workspace in its window and returns the
+    `coordinator.status` object; `INVALID_PAYLOAD` while that workspace does
+    not exist.
 - `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
   - take the `windowID` selector. `window.sidebar.set-segment` requires
     `segment` (`projects` or `status`). All three are listed only when the task
@@ -721,6 +734,11 @@ Common query IDs include:
 - `task.list`
 - `task.workspace-choices`
 - `task.watches`
+- `coordinator.status`
+
+`coordinator.status` returns `state` (`off`, `waitingForWindow`,
+`waitingForRestore`, `starting`, `running` or `failed`), `reason` for a
+failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,

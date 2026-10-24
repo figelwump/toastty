@@ -323,4 +323,28 @@ struct ToasttyCLITaskTests {
             }
         }
     }
+
+    @Test
+    func coordinatorCommandsMapToTheirActions() throws {
+        func command(_ arguments: [String]) throws -> CLICommand {
+            try ToasttyCLI.parse(arguments: ["coordinator"] + arguments, environment: [:]).command
+        }
+        let taskID = UUID().uuidString
+        #expect(try command(["post", "packet", "--task", taskID])
+            == .appControlRun(kind: .action, id: "coordinator.post", args: ["kind": .string("packet"), "taskID": .string(taskID)]))
+        #expect(try command(["post", "question", "Which base?", "--task", taskID])
+            == .appControlRun(kind: .action, id: "coordinator.post", args: [
+                "kind": .string("question"),
+                "taskID": .string(taskID),
+                "text": .string("Which base?"),
+            ]))
+        #expect(try command(["post", "note", "--text", "Fresh session."])
+            == .appControlRun(kind: .action, id: "coordinator.post", args: ["kind": .string("note"), "text": .string("Fresh session.")]))
+        #expect(try command(["status"]) == .appControlRun(kind: .query, id: "coordinator.status", args: [:]))
+        #expect(try command(["show-terminal"]) == .appControlRun(kind: .action, id: "coordinator.show-terminal", args: [:]))
+
+        for arguments in [["post"], ["post", "note", "a", "b"], ["post", "note", "a", "--text", "b"], ["post", "packet", "--task", "abc"], ["status", "x"], ["open"]] {
+            #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }
+        }
+    }
 }
