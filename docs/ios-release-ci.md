@@ -260,7 +260,7 @@ over SSH stdin to a temporary broker rather than xcodebuild command arguments.
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope head \
-  --run-label ios-release-live --live-gateway -- \
+  --live-gateway -- \
   -only-testing:ToasttyMobileDomainTests/LiveGatewayIntegrationTests/testLiveGatewayContractPagingCloseAndReconnect
 ```
 
@@ -275,7 +275,7 @@ Finally, revoke only the dedicated test client's credential:
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope head \
-  --run-label ios-release-revoke --live-gateway \
+  --live-gateway \
   --allow-destructive-live-revocation -- \
   -only-testing:ToasttyMobileDomainTests/LiveGatewayIntegrationTests/testDestructiveRevocationClosesSocketAndRejectsCurrentDevice
 ```

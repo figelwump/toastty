@@ -6,7 +6,7 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 `.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets all automatic checks; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
 
-- Desktop sources, tests, scripts, and build inputs select the full macOS Debug test suite and an unsigned Release build.
+- Desktop sources, tests, scripts, and build inputs select the remote runner contract fixtures, the full macOS Debug test suite, and an unsigned Release build.
 - Native iOS sources select Debug and Release simulator tests. Automatic Debug runs app/domain tests plus four fixture UI methods; Release runs app/domain tests. Both exclude the provisional numeric domain performance budget while retaining its large-page correctness check. Shared protocol changes select both platforms.
 - Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
 - Documentation-only PR changes skip app jobs.
@@ -32,6 +32,41 @@ Use `--require-remote` when the remote path itself must succeed. Supported smoke
 - `shortcut-trace`
 
 Use `--scope`, `--ref`, and `--run-label` when you need a non-default export scope or stable artifact label. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI env is injected there.
+
+Remote wrappers generate a unique label by default. An explicit `--run-label`
+must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
+letter or number. Each label is for one run: the wrappers refuse existing local
+artifact directories and remote run or worktree directories. Choose a new label
+for a retry. Exclusive directory creation prevents collisions among updated
+wrappers, including validation and test runs that share the remote worktree
+root. Older wrappers in other worktrees can still replace explicit labels.
+
+By default, artifact transfers keep result bundles, build logs, screenshots,
+recordings, runtime metadata, and other evidence. They omit known build product,
+intermediate, dependency, and compiler cache directories under `Derived/` and
+`run/Derived/`. Use `--full-artifacts` at the start of a run to also copy those
+directories, including app binaries and dSYMs. This option controls the local
+copy; `--keep-remote` separately retains the remote files. A failed evidence
+copy makes the wrapper fail and retains the remote run for inspection. Early
+Computer Use exits also retain remote evidence. No historical artifacts are
+removed by these options.
+
+Each allocated local run writes `run-metadata.json` next to `result.json`. It
+records the local source commit, scope, dirty state, selected check family,
+execution target, fallback reason, artifact mode, exit code, intended remote
+paths, whether allocation was confirmed, and
+phase durations in whole seconds. Test and smoke phases include their builds;
+Computer Use records build/launch and agent time separately. Wrapper retries
+are zero; test attempt counts remain unknown and must be read from `.xcresult`.
+For `head` and `ref`, the resolved commit is also used for the Git archive.
+`working-tree` transfers are mutable and are not a pinned snapshot of dirty
+files. Ignored dependencies such as Ghostty remain outside the source commit.
+The existing result and ownership schemas remain unchanged.
+Missing or invalid results cannot authorize remote removal. Invalid result
+bytes are retained as `result.remote.json` when available. A failed Git
+worktree removal stops cleanup and fails the wrapper; it does not fall back to
+recursive worktree deletion. Collection and directory cleanup failures add
+`infrastructureFailureSummary` while preserving an existing check failure.
 
 For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` copies local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree. Keep the local worktree bootstrapped before invoking that path.
 
@@ -229,7 +264,7 @@ Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects the existi
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
-  --run-label ios-release-tests -- \
+  -- \
   -scheme ToasttyMobileApp-Release -configuration Release \
   ENABLE_TESTABILITY=YES ONLY_ACTIVE_ARCH=YES \
   -only-testing:ToasttyMobileAppTests \
@@ -240,7 +275,7 @@ For a focused remote check of the PR UI tier, pass its exact test identifiers to
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
-  --run-label ios-ui-smoke -- \
+  -- \
   -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction \
   -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble
 ```

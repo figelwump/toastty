@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 FIXTURE_ROOT="$TEST_ROOT/worktree"
 mkdir -p "$FIXTURE_ROOT/scripts/remote" "$FIXTURE_ROOT/scripts/dev" "$TEST_ROOT/bin"
-cp "$ROOT_DIR/scripts/remote/"{test.sh,live-gateway-test-environment.sh,ios-simulator-run.sh} "$FIXTURE_ROOT/scripts/remote/"
+cp "$ROOT_DIR/scripts/remote/"{test.sh,live-gateway-test-environment.sh,ios-simulator-run.sh,run-support.sh} "$FIXTURE_ROOT/scripts/remote/"
 
 cat >"$FIXTURE_ROOT/scripts/dev/bootstrap-worktree.sh" <<'BOOTSTRAP'
 #!/usr/bin/env bash

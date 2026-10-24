@@ -75,7 +75,7 @@ provisional thresholds.
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
-  --run-label ios-ci-performance-repeat -- \
+  -- \
   -configuration Release ENABLE_TESTABILITY=YES \
   -only-testing:ToasttyMobileDomainTests/ConversationRuntimePerformanceTests \
   -test-iterations 3 -test-repetition-relaunch-enabled YES

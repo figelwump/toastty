@@ -40,6 +40,7 @@ mkdir -p \
 
 cp "$ROOT_DIR/scripts/automation/runtime-ownership.sh" "$FIXTURE_ROOT/scripts/automation/runtime-ownership.sh"
 cp "$ROOT_DIR/scripts/remote/validate.sh" "$FIXTURE_ROOT/scripts/remote/validate.sh"
+cp "$ROOT_DIR/scripts/remote/run-support.sh" "$FIXTURE_ROOT/scripts/remote/run-support.sh"
 
 cat >"$FIXTURE_ROOT/scripts/dev/bootstrap-worktree.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -110,7 +111,9 @@ run_case() {
   local minimum_elapsed_seconds="$7"
   local run_label="cleanup-self-test-${case_name}"
   local remote_run_root="$TEST_ROOT/run-${case_name}"
-  local socket_path="$TEST_ROOT/tmp/toastty-${run_label}.sock"
+  local socket_token
+  socket_token="$(printf '%s' "$run_label" | shasum | cut -c 1-12)"
+  local socket_path="$TEST_ROOT/tmp/tt-v-${socket_token}.sock"
   local validation_command_b64
   local runner_pid
   local runner_exit_code=0
