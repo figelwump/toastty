@@ -238,8 +238,9 @@ archive job.
 workflow, event, result, and required successful job names. It is retained with the release artifacts for 90 days.
 This records evidence at gate time; a later CI rerun does not revoke that record.
 Simulator logs retain the 14-day policy. No separate release test
-artifacts are produced. The secret-free gate, dispatcher, and release-script
-suites run on Linux PR CI when these scripts or workflows change.
+artifacts are produced. The portable release-evidence and dispatcher fixtures
+run on Linux PR CI when these scripts or workflows change. Mac-dependent release and device-plist fixtures stay in the full manual
+macOS job.
 
 The workflow retains the signed IPA, compressed Xcode archive (including app
 dSYMs), export options, release metadata, and sanitized

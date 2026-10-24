@@ -720,7 +720,8 @@ test("manual workflow and names-only manifest expose all release inputs", () => 
   assert.match(mobileFilters, /'\.tool-versions'/);
   assert.match(mobileFilters, /'\.github\/workflows\/ios-testflight\.yml'/);
   assert.match(mobileFilters, /'scripts\/\*\*'/);
-  assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
+  assert.match(mobileWorkflow, /ios\/Tests\/ReleaseScriptTests\/require-ios-ci\.test\.mjs/);
+  assert.match(mobileWorkflow, /ios\/Tests\/ReleaseScriptTests\/ios-testflight\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
   assert.match(workflow, /require-ios-ci\.mjs/);
   assert.match(workflow, /artifacts\/ios-release\/\*\*\/Toastty\.xcarchive\.tar\.gz/);

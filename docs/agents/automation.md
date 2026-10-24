@@ -8,7 +8,7 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 PRs run short checks on disposable Linux runners. `.github/ci-paths.yml` selects:
 
-- **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run dispatcher, release-script, and remote runner contracts with fake tools. They do not build or launch either app.
+- **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run portable dispatcher, release-evidence, and remote runner contracts with fake tools. They do not build or launch either app.
 - **Web panel tests** for web-panel sources, generated bundles, and shared CI configuration. Each package's `npm test` also checks generated bundle synchronization.
 - Documentation-only and native macOS source changes skip these jobs. CI selection and gate tests still run on every PR.
 
@@ -16,7 +16,9 @@ The separate `.github/workflows/push-worker.yml` runs the existing checks and bu
 
 Branch protection on `main` still requires the **CI gate** check. For PRs, it requires selection and the selected Linux checks to pass. For manual runs, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
 
-Use **Run workflow** to request full validation on a branch or the exact `main` release commit. A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
+Use **Run workflow** to request full validation on a branch or the exact `main` release commit. Mac-only release-script and device-plist fixtures use `sips` and Apple plist tools, so they stay in the manual macOS job. The workflow tests check that every script fixture is assigned to Linux or manual macOS coverage.
+
+A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
 
 Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green lightweight PR gate does not establish native build or runtime coverage. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
 

@@ -153,7 +153,7 @@ test('manual native validation retains both configurations, full UI, and perform
   }
 });
 
-test('script fixtures run on Linux without native toolchain setup', () => {
+test('script fixtures run on Linux or manual Mac without losing test files', () => {
   const job = workflow.jobs.scripts;
   assert.equal(job['runs-on'], 'ubuntu-latest');
   const command = job.steps.find((step) => step.run).run;
@@ -161,7 +161,10 @@ test('script fixtures run on Linux without native toolchain setup', () => {
     assert.ok(command.includes(`${directory}/`));
   }
   assert.ok(!job.steps.some((step) => /tuist|xcodebuild/.test(step.run ?? '')));
-  const globs = command.split(/\s+/).filter((part) => part.endsWith('.mjs'));
+  assert.ok(!command.includes('ios-testflight.test.mjs'));
+  assert.ok(!command.includes('validate-device-build.test.mjs'));
+  const macCommand = workflow.jobs.macos.steps.find((step) => step.name === 'Test Mac release and device scripts').run;
+  const globs = `${command} ${macCommand}`.split(/\s+/).filter((part) => part.endsWith('.mjs'));
   for (const directory of ['ios/Tests/ScriptTests', 'ios/Tests/ReleaseScriptTests', 'Tests/RemoteScripts']) {
     for (const entry of readdirSync(new URL(`${directory}/`, root), { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith('.mjs')) {

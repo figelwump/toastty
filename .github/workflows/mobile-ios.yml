@@ -122,6 +122,9 @@ jobs:
       - name: Test Mac push build configuration
         run: node --test Tests/BuildConfig/PushManifestTests.mjs
 
+      - name: Test Mac release and device scripts
+        run: node --test ios/Tests/ReleaseScriptTests/ios-testflight.test.mjs ios/Tests/ScriptTests/validate-device-build.test.mjs
+
       - name: Generate macOS project
         run: TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
 
@@ -174,8 +177,15 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Test dispatcher, release, and remote runner contracts
-        run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs Tests/RemoteScripts/*Tests.mjs
+      - name: Test portable dispatcher, release evidence, and remote runner contracts
+        run: >-
+          node --test
+          ios/Tests/ScriptTests/native-device.test.mjs
+          ios/Tests/ScriptTests/physical-device.test.mjs
+          ios/Tests/ScriptTests/toastty-ios.test.mjs
+          ios/Tests/ReleaseScriptTests/require-ios-ci.test.mjs
+          ios/Tests/ReleaseScriptTests/select-ios-xcode.test.mjs
+          Tests/RemoteScripts/*Tests.mjs
 
   web:
     name: Web panel tests
