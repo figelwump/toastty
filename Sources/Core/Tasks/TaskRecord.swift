@@ -88,6 +88,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// When the user cancelled a merge. A `task.merge` from the same agent
     /// turn is refused after it.
     public var mergeCancelledAt: Date?
+    /// A decision made in the review surface. Its durable review record
+    /// supplies the accepted head; an agent cannot replace it with a later one.
+    public var reviewActionIntentID: UUID?
     /// The steps that closed the task space and removed its worktree after
     /// a merge, an archive, or a release, and why they stopped if they did.
     public var cleanup: TaskCleanup?

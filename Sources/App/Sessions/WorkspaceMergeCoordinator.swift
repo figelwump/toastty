@@ -273,10 +273,11 @@ final class WorkspaceMergeCoordinator {
         pullRequest: WorkspacePullRequestLink,
         repoPath: String,
         thenCleanUp: Bool,
-        expectedHead: String? = nil
+        expectedHead: String? = nil,
+        expectedBaseRefName: String? = nil
     ) -> Task<Void, Never>? {
         guard requests[workspaceID]?.isRunning != true else { return nil }
-        let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp))
+        let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp), expectedBaseRefName: expectedBaseRefName)
         update(workspaceID, request)
         return Task { [weak self] in
             await self?.runMerge(
@@ -684,7 +685,7 @@ final class WorkspaceMergeCoordinator {
                     "--pr-url", request.pullRequest.url,
                     "--workspace", workspaceID.uuidString,
                     "--repo", request.repoPath,
-                ] + extraArguments,
+                ] + extraArguments + (action == "merge" ? request.expectedBaseRefName.map { ["--expected-base", $0] } ?? [] : []),
                 directory: request.repoPath,
                 timeout: Self.scriptTimeout
             )

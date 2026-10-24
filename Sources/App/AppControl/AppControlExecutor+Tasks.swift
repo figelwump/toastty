@@ -54,7 +54,11 @@ extension AppControlExecutor {
         case .taskMerge:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let merged = try perform {
-                try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller())
+                let intentID = try args.taskString("reviewIntentID").map { raw -> UUID in
+                    guard let value = UUID(uuidString: raw) else { throw TaskError("reviewIntentID must be a UUID.") }
+                    return value
+                }
+                return try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller(), reviewIntentID: intentID)
             }
             return .init(didMutateState: true, result: Self.taskSnapshot(merged))
         case .taskCancelMerge:
@@ -286,6 +290,11 @@ extension AppControlExecutor {
         includeReply: Bool
     ) -> [String: AutomationJSONValue] {
         var snapshot = Self.taskSnapshot(record, stage: stage)
+        if let link = WorkspacePullRequestLink(annotationURL: record.pullRequestURL),
+           let pr = coordinator.board?.pullRequests?.state(for: link) {
+            snapshot["pullRequestHead"] = pr.headSHA.map(AutomationJSONValue.string) ?? .null
+            snapshot["pullRequestBase"] = pr.baseRefName.map(AutomationJSONValue.string) ?? .null
+        }
         snapshot["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
         let status = coordinator.agentStatus(of: record)
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
@@ -340,7 +349,7 @@ extension AppControlExecutor {
         return result
     }
 
-    private func requiredTaskCoordinator() throws -> TaskCoordinator {
+    func requiredTaskCoordinator() throws -> TaskCoordinator {
         guard let taskCoordinator else {
             throw AutomationSocketError.invalidPayload("tasks are not available in this Toastty instance")
         }
@@ -477,7 +486,7 @@ extension AppControlExecutor {
         return snapshot
     }
 
-    private func visibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
+    func visibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
         guard let raw = args.taskString("taskID"), let taskID = UUID(uuidString: raw) else {
             throw AutomationSocketError.invalidPayload("taskID must be a task ID")
         }
@@ -490,7 +499,7 @@ extension AppControlExecutor {
     /// An unscoped caller sees every task. A workspace-scoped session sees
     /// the tasks it created and those whose workspace or task space is in
     /// its scope.
-    private func callerMaySee(_ record: TaskRecord) -> Bool {
+    func callerMaySee(_ record: TaskRecord) -> Bool {
         callerMaySee(Self.visibility(of: record))
     }
 

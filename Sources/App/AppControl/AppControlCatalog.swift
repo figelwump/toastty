@@ -90,6 +90,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
     case taskAdopt = "task.adopt"
+    case coordinatorReviewPublish = "coordinator.review.publish"
+    case coordinatorReviewReport = "coordinator.review.report"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
     case windowSidebarSetSegment = "window.sidebar.set-segment"
@@ -588,7 +590,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 kind: .action,
                 summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance and hands the merge to Toastty's merge owner, then returns. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Refused after the user cancelled the merge, for the agent turn that was checking it.",
                 selectors: [],
-                parameters: [.taskID(required: false), .taskHead(required: false)]
+                parameters: [.taskID(required: false), .taskHead(required: false), .init(name: "reviewIntentID", summary: "The persisted user review intent, when this merge follows a review approval.", valueType: .uuid, required: false)]
             )
         case .taskCancelMerge:
             return .init(
@@ -597,6 +599,28 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Stop a merge the user accepted while the task's agent checks it or Toastty waits for GitHub's checks. Clears the acceptance and the task space's done mark. Refused while Toastty is merging or after the pull request merged.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
+            )
+        case .coordinatorReviewPublish:
+            return .init(
+                id: rawValue, kind: .action,
+                summary: "Publish a structured review brief for a task's exact PR head. Repeated task/PR/head publications update the same unaccepted brief. User approval is available only through the native review surface. Evidence files are copied into runtime storage.",
+                selectors: [], parameters: [
+                    .taskID(required: true), .taskHead(required: true),
+                    .init(name: "baseRefName", summary: "The destination branch described by the review brief.", valueType: .string, required: true),
+                    .init(name: "brief", summary: "JSON brief with behaviorChange, decisionNeeded, verification, gaps, recommendation, evidence and priority. Accepts an object or JSON string.", valueType: .string, required: true),
+                    .init(name: "evidenceFiles", summary: "JSON list of {evidenceIndex, filePath} regular files to copy for brief evidence entries.", valueType: .string, required: false),
+                ]
+            )
+        case .coordinatorReviewReport:
+            return .init(
+                id: rawValue, kind: .action,
+                summary: "Report progress for an existing user review intent. Reports are advisory; only native PR observation confirms a merge. This cannot approve a change.",
+                selectors: [], parameters: [
+                    .init(name: "reviewID", summary: "Review record ID.", valueType: .uuid, required: true),
+                    .init(name: "intentID", summary: "The user decision's intent ID.", valueType: .uuid, required: true),
+                    .init(name: "outcome", summary: "Agent-reported progress.", valueType: .string, required: true, allowedValues: ["queued", "checking", "blocked", "failed", "headChanged", "merged", "changesRequested"]),
+                    .init(name: "detail", summary: "Result or blocker, at most 8000 characters.", valueType: .string, required: true),
+                ]
             )
         case .taskCleanUp:
             return .init(
@@ -698,6 +722,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskList = "task.list"
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
+    case coordinatorReviewGet = "coordinator.review.get"
+    case coordinatorReviewList = "coordinator.review.list"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -814,6 +840,16 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
             )
+        case .coordinatorReviewGet:
+            return .init(id: rawValue, kind: .query, summary: "Read a visible persisted review and its decision, delivery and observed outcome.", selectors: [], parameters: [
+                .init(name: "reviewID", summary: "Review record ID.", valueType: .uuid, required: true),
+            ])
+        case .coordinatorReviewList:
+            return .init(id: rawValue, kind: .query, summary: "Page through visible persisted reviews. Agent reports and observed PR outcomes remain distinct. Optional taskID filters the result; follow nextAfter with after until null.", selectors: [], parameters: [
+                .taskID(required: false),
+                .init(name: "limit", summary: "Maximum records, 1 to 100; default 20. Pages also have a byte budget.", valueType: .integer, required: false),
+                .init(name: "after", summary: "Last review ID from the preceding page.", valueType: .uuid, required: false),
+            ])
         }
     }
 }

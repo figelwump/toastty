@@ -35,7 +35,10 @@ if args[:2] == ["repo", "view"]:
                       "mergeCommitAllowed": state.get("merge_commit_allowed", True),
                       "squashMergeAllowed": True, "rebaseMergeAllowed": True}))
 elif args[:2] == ["pr", "view"]:
-    print(json.dumps(next(p for p in state["prs"] if p["number"] == int(args[2]))))
+    pr = dict(next(p for p in state["prs"] if p["number"] == int(args[2])))
+    if args[-1] == "headRefOid,baseRefName" and state.get("retarget_before_merge"):
+        pr["baseRefName"] = state["retarget_before_merge"]
+    print(json.dumps(pr))
 elif args[:2] == ["pr", "list"]:
     if state.get("fail_pr_list"):
         sys.exit("could not read open pull requests")
@@ -181,7 +184,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
         return branch, path
 
-    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None):
+    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None, expected_base=None):
         """Runs the script as Toastty does, from the workspace's checkout: the
         task's worktree unless `repo` says otherwise. `head` is a waiting
         merge's accepted commit; `expect_head` the commit a merge skill checked."""
@@ -192,7 +195,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
              "--pr-url", url or f"https://github.com/test/repo/pull/{number}",
              "--workspace", workspace or workspace_id(number), "--repo", str(repo or self.root / f"task-{number}"),
              *(["--head", head] if head else []),
-             *(["--expect-head", expect_head] if expect_head else [])],
+             *(["--expect-head", expect_head] if expect_head else []),
+             *(["--expected-base", expected_base] if expected_base else [])],
             env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -225,6 +229,27 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(result["head"], head)
         self.assertEqual(self.actions(), [self.merge_call(1, head)])
         self.assertTrue(path.exists())
+
+    def test_reviewed_base_must_match_on_initial_merge_and_while_waiting(self):
+        self.task(1, state="OPEN")
+        head = self.prs[0]["headRefOid"]
+        # Same commit, different destination: a different change was reviewed.
+        result = self.run_script("merge", 1, expected_base="release")
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("reviewed base release", result["detail"])
+        self.assertEqual(self.actions(), [])
+        result = self.run_script("merge", 1, head=head, expected_base="release")
+        self.assertEqual(result["status"], "refused", result)
+        self.assertEqual(self.actions(), [])
+        self.assertEqual(self.run_script("merge", 1, expected_base="main")["status"], "merged")
+
+    def test_reviewed_base_is_checked_again_immediately_before_the_merge_api(self):
+        self.task(1, state="OPEN")
+        self.extra_state["retarget_before_merge"] = "release"
+        result = self.run_script("merge", 1, expected_base="main")
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("destination changed", result["detail"])
+        self.assertEqual(self.actions(), [])
 
     def test_merge_refuses_when_the_checkout_moved_past_the_checked_commit(self):
         _, path = self.task(1, state="OPEN")
