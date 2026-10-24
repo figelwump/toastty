@@ -53,4 +53,12 @@ struct WorkspaceMergeRequestTests {
         #expect(WorkspacePullRequestLink(annotationURL: "https://github.com/o/r/pull/x") == nil)
         #expect(WorkspacePullRequestLink(annotationURL: nil) == nil)
     }
+    @Test func reviewedDestinationSurvivesPersistenceWithTheAcceptedHead() throws {
+        let link = try #require(WorkspacePullRequestLink(annotationURL: "https://github.com/owner/project/pull/7"))
+        let request = WorkspaceMergeRequest(pullRequest: link, repoPath: "/work/task", phase: .awaitingChecks(acceptedHead: String(repeating: "a", count: 40), thenCleanUp: true), expectedBaseRefName: "release")
+        let restored = try JSONDecoder().decode(WorkspaceMergeRequest.self, from: JSONEncoder().encode(request))
+        #expect(restored == request)
+        #expect(restored.expectedBaseRefName == "release")
+    }
+
 }

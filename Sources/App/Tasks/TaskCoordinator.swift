@@ -239,6 +239,9 @@ final class TaskCoordinator {
     weak var board: TaskBoardStore?
     /// The one owner of merges and their cleanup. Set once it exists.
     weak var merges: WorkspaceMergeCoordinator?
+    /// Installed by the Coordinator home. A persisted review intent fails
+    /// closed while its review service is unavailable.
+    weak var coordinatorReviewActions: CoordinatorReviewActions?
     /// Unsaved local documents in a workspace, which closing it would lose.
     var unsavedDocumentCount: (UUID) -> Int = { _ in 0 }
     /// Merge prompts waiting for a busy agent's turn to end.

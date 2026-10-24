@@ -913,6 +913,9 @@ public enum ToasttyCLI {
         case "task":
             return try parseTaskCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
 
+        case "coordinator":
+            return try parseCoordinatorReviewCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
+
         default:
             throw ToasttyCLIError.usage("unknown command: \(command)\n\n\(usage)")
         }
@@ -936,7 +939,11 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
-      toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
+      toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>] [--review-intent <id>]
+      toastty [--json] [--socket-path <path>] coordinator review publish <task-id> --head <commit> --base <branch> --brief-file <path> [--evidence-file <index=path> ...]
+      toastty [--json] [--socket-path <path>] coordinator review get <review-id>
+      toastty [--json] [--socket-path <path>] coordinator review list [--task <task-id>] [--limit <count>] [--after <review-id>]
+      toastty [--json] [--socket-path <path>] coordinator review report <review-id> --intent <id> --outcome <state> --detail <text>
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
@@ -1784,6 +1791,88 @@ public enum ToasttyCLI {
         return parsed
     }
 
+    private static func parseCoordinatorReviewCommand(
+        _ arguments: [String], options: CLIOptions, environment: [String: String]
+    ) throws -> CLIInvocation {
+        guard arguments.first == "review", arguments.count >= 2 else {
+            throw ToasttyCLIError.usage("coordinator requires review publish|get|list|report\n\n\(usage)")
+        }
+        let verb = arguments[1]
+        let flags: Set<String>
+        switch verb {
+        case "publish": flags = ["--head", "--base", "--brief-file", "--evidence-file"]
+        case "report": flags = ["--intent", "--outcome", "--detail"]
+        case "list": flags = ["--task", "--limit", "--after"]
+        case "get": flags = []
+        default: throw ToasttyCLIError.usage("Unsupported coordinator review subcommand: \(verb)")
+        }
+        let parsed = try parseCommandArguments(Array(arguments.dropFirst(2)), valueOptions: flags)
+        var args: [String: AutomationJSONValue] = [:]
+        if verb == "list" {
+            guard parsed.positionals.isEmpty else { throw ToasttyCLIError.usage("coordinator review list takes no positional arguments") }
+            if let taskID = parsed.singleValue("--task") {
+                guard UUID(uuidString: taskID) != nil else { throw ToasttyCLIError.usage("--task must be a task UUID") }
+                args["taskID"] = .string(taskID)
+            }
+            if let raw = parsed.singleValue("--limit") {
+                guard let limit = Int(raw), (1...100).contains(limit) else { throw ToasttyCLIError.usage("--limit must be from 1 to 100") }
+                args["limit"] = .int(limit)
+            }
+            if let after = parsed.singleValue("--after") {
+                guard UUID(uuidString: after) != nil else { throw ToasttyCLIError.usage("--after must be a review UUID") }
+                args["after"] = .string(after)
+            }
+        } else {
+            guard parsed.positionals.count == 1, let id = parsed.positionals.first, UUID(uuidString: id) != nil else {
+                throw ToasttyCLIError.usage("coordinator review \(verb) requires one UUID")
+            }
+            args[verb == "publish" ? "taskID" : "reviewID"] = .string(id)
+        }
+        if verb == "publish" {
+            guard let head = parsed.singleValue("--head"), CoordinatorReviewItem.isValidCommitID(head),
+                  let base = parsed.singleValue("--base"), !base.isEmpty,
+                  let file = parsed.singleValue("--brief-file") else {
+                throw ToasttyCLIError.usage("publish requires a full --head commit, --base branch and --brief-file")
+            }
+            let directory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
+            func absolutePath(_ value: String) -> String {
+                let expanded = (value as NSString).expandingTildeInPath
+                return expanded.hasPrefix("/") ? expanded : URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(expanded).standardizedFileURL.path
+            }
+            guard let data = FileManager.default.contents(atPath: absolutePath(file)), data.count <= 262_144,
+                  let brief = String(data: data, encoding: .utf8) else {
+                throw ToasttyCLIError.runtime("Could not read a UTF-8 brief of at most 256 KiB")
+            }
+            args["head"] = .string(head)
+            args["baseRefName"] = .string(base)
+            args["brief"] = .string(brief)
+            var indexes = Set<Int>()
+            let evidence = try parsed.values("--evidence-file").map { input -> AutomationJSONValue in
+                let parts = input.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2, let index = Int(parts[0]), index >= 0, !parts[1].isEmpty, indexes.insert(index).inserted else {
+                    throw ToasttyCLIError.usage("--evidence-file requires a unique evidence index followed by =path")
+                }
+                return .object(["evidenceIndex": .int(index), "filePath": .string(absolutePath(String(parts[1])))])
+            }
+            if !evidence.isEmpty { args["evidenceFiles"] = .array(evidence) }
+        }
+        if verb == "report" {
+            guard let intent = parsed.singleValue("--intent"), UUID(uuidString: intent) != nil,
+                  let outcome = parsed.singleValue("--outcome"), CoordinatorReviewAction.AgentOutcome.State(rawValue: outcome) != nil,
+                  let detail = parsed.singleValue("--detail"), !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  detail.count <= CoordinatorReviewAction.maximumFeedbackLength else {
+                throw ToasttyCLIError.usage("report requires --intent UUID, --outcome and nonempty --detail (at most 8000 characters)")
+            }
+            args["intentID"] = .string(intent)
+            args["outcome"] = .string(outcome)
+            args["detail"] = .string(detail)
+        }
+        return CLIInvocation(options: options, command: .appControlRun(
+            kind: verb == "get" || verb == "list" ? .query : .action,
+            id: "coordinator.review.\(verb)", args: args
+        ))
+    }
+
     /// `toastty task <verb>`: a shorter form of `action run task.<verb>` and
     /// `query run task.<verb>`, with file paths resolved here.
     private static func parseTaskCommand(
@@ -2007,7 +2096,7 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.workspace-choices", args: args))
 
         case "merge", "cancel-merge", "ready-for-review":
-            let parsed = try parseCommandArguments(remaining, valueOptions: verb == "merge" ? ["--head"] : [])
+            let parsed = try parseCommandArguments(remaining, valueOptions: verb == "merge" ? ["--head", "--review-intent"] : [])
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task \(verb) takes at most one task ID\n\n\(usage)")
             }
@@ -2020,6 +2109,10 @@ public enum ToasttyCLI {
             }
             if let head = parsed.singleValue("--head") {
                 args["head"] = .string(head)
+            }
+            if let intent = parsed.singleValue("--review-intent") {
+                guard UUID(uuidString: intent) != nil else { throw ToasttyCLIError.usage("--review-intent must be a UUID") }
+                args["reviewIntentID"] = .string(intent)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
 

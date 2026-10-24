@@ -19,7 +19,7 @@ final class PullRequestStateCache: ObservableObject {
     }
 
     static let requestTimeout: TimeInterval = 30
-    nonisolated static let viewFields = "state,isDraft,headRefOid,mergeCommit"
+    nonisolated static let viewFields = "state,isDraft,headRefOid,baseRefName,mergeCommit"
     /// Also whether the pull request is ready to merge, for the Merge
     /// button. `statusCheckRollup` only tells failing checks from running
     /// ones, but a token that cannot read checks fails the whole request, so
@@ -121,6 +121,7 @@ final class PullRequestStateCache: ObservableObject {
             state: state,
             isDraft: object["isDraft"] as? Bool ?? false,
             headSHA: object["headRefOid"] as? String,
+            baseRefName: object["baseRefName"] as? String,
             mergeCommit: mergeCommit,
             mergeability: mergeability(from: object)
         )

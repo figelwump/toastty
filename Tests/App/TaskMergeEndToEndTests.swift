@@ -11,6 +11,50 @@ import Testing
 @MainActor
 struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     @Test
+    func reviewedApprovalUsesTheAcceptedHeadAndRetainsEvidenceAfterCleanup() async throws {
+        try await withScenario { scenario in
+            let root = URL(fileURLWithPath: scenario.repo).deletingLastPathComponent()
+            let source = URL(fileURLWithPath: scenario.worktree).appendingPathComponent(".review-evidence")
+            try "Verification for the reviewed commit.".write(to: source, atomically: true, encoding: .utf8)
+            let exclude = URL(fileURLWithPath: scenario.repo).appendingPathComponent(".git/info/exclude")
+            let existing = (try? String(contentsOf: exclude, encoding: .utf8)) ?? ""
+            try (existing + "\n.review-evidence\n").write(to: exclude, atomically: true, encoding: .utf8)
+            let reviews = CoordinatorReviewStore(fileURL: root.appendingPathComponent("reviews.json"))
+            let actions = CoordinatorReviewActions(store: reviews, tasks: scenario.tasks, pullRequests: scenario.pullRequests)
+            scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
+                sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID,
+                workspaceID: scenario.taskSpaceID, cwd: scenario.worktree,
+                isActive: true, isInTurn: false, nativeConversationID: "review-agent"
+            )
+            scenario.reportAgent(.ready)
+            let item = try reviews.upsertPublication(CoordinatorReviewItem(
+                taskID: scenario.taskID, taskTitle: "Fix task 7", projectRoot: scenario.repo,
+                repository: scenario.pullRequest.repository, pullRequestURL: scenario.pullRequest.url, headSHA: scenario.head, baseRefName: "main",
+                brief: .init(behaviorChange: "Fix task 7.", decisionNeeded: "Approve this commit.", recommendation: "Merge after review.", evidence: [.init(kind: .report, label: "Verification")])
+            ), evidenceFiles: [.init(evidenceIndex: 0, fileURL: source)])
+            try await actions.approveAndMerge(reviewID: item.id, expectedRevision: item.revision)
+            await scenario.waitUntil("the review request is delivered") { reviews.item(id: item.id)?.userAction?.deliveryState == .delivered }
+            let intent = try #require(reviews.item(id: item.id)?.userAction?.intentID)
+            #expect(scenario.fakeSessions.delivered.last?.text.contains(scenario.head) == true)
+            scenario.reportAgent(.working)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: .unmanaged, reviewIntentID: intent)
+            try actions.report(reviewID: item.id, intentID: intent, outcome: .queued, detail: "The guarded merge request was accepted.")
+            await scenario.waitUntil("the fixture PR merges") { FileManager.default.fileExists(atPath: scenario.mergedMarker) }
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            #expect(reviews.item(id: item.id)?.observedOutcome.state == .merged)
+            scenario.reportAgent(.ready)
+            await scenario.waitUntil("cleanup removes the task worktree") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(!FileManager.default.fileExists(atPath: scenario.worktree))
+            let restored = CoordinatorReviewStore(fileURL: root.appendingPathComponent("reviews.json"))
+            let saved = try #require(restored.item(id: item.id))
+            #expect(saved.observedOutcome.state == .merged)
+            #expect(saved.userAction?.intentID == intent)
+            let evidence = try #require(restored.managedEvidenceURL(for: saved.brief.evidence[0]))
+            #expect(try String(contentsOf: evidence, encoding: .utf8) == "Verification for the reviewed commit.")
+        }
+    }
+
+    @Test
     func taskMergeWaitsForTheAgentsTurnThenCleansUp() async throws {
         try await withScenario { scenario in
             let merged = try scenario.watch(.merged)

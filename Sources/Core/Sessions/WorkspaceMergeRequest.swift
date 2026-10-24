@@ -71,11 +71,14 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// the repository's main checkout from it.
     public let repoPath: String
     public var phase: Phase
+    /// A reviewed change includes its destination branch as well as its head.
+    public var expectedBaseRefName: String?
 
-    public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase) {
+    public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase, expectedBaseRefName: String? = nil) {
         self.pullRequest = pullRequest
         self.repoPath = repoPath
         self.phase = phase
+        self.expectedBaseRefName = expectedBaseRefName
     }
 
     /// The request after a change to its workspace, or `nil` when it no longer

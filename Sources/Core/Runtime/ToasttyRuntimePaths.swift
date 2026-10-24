@@ -108,6 +108,15 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
     }
 
+    /// Review decisions and copied evidence outlive a task's worktree.
+    public var coordinatorReviewsFileURL: URL {
+        configDirectoryURL.appending(path: "coordinator-reviews.json", directoryHint: .notDirectory)
+    }
+
+    public var coordinatorReviewEvidenceDirectoryURL: URL {
+        configDirectoryURL.appending(path: "coordinator-review-evidence", directoryHint: .isDirectory)
+    }
+
     public var defaultLogFileURL: URL {
         if let runtimeHomeURL {
             return runtimeHomeURL

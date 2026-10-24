@@ -154,6 +154,7 @@ class Context:
     clicked_head: str | None = None
     # For a merge click: the commit the caller checked, which HEAD must be.
     expected_head: str | None = None
+    expected_base: str | None = None
 
 
 def real(path: str) -> str:
@@ -248,6 +249,9 @@ def refresh_merge_state(ctx: Context) -> None:
 def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
     """Returns the status, a description, and the accepted commit."""
     pr, number = ctx.pr, ctx.pr["number"]
+    if ctx.expected_base is not None and pr["baseRefName"] != ctx.expected_base:
+        raise Refusal(f"the PR now targets {pr['baseRefName']}, not the reviewed base {ctx.expected_base}; "
+                      "review the changed destination before merging")
     if accepted is None:
         # The click: what merges is the version in the clicked workspace, as
         # it was before this script fetched or asked GitHub anything.
@@ -318,6 +322,10 @@ def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
     # GitHub's merge API merges now or fails; unlike `gh pr merge`, it never
     # turns on auto-merge or adds the PR to a merge queue. `sha` makes GitHub
     # refuse if the head is no longer the accepted commit.
+    if ctx.expected_base is not None:
+        latest = json.loads(run(["gh", "pr", "view", str(number), "--json", "headRefOid,baseRefName"], cwd=ctx.repo))
+        if latest.get("baseRefName") != ctx.expected_base or latest.get("headRefOid") != accepted:
+            raise Refusal("the PR head or destination changed after the review checks; review it again")
     ok, output = succeeds(["gh", "api", "--method", "PUT", f"repos/{ctx.repo_slug}/pulls/{number}/merge",
                            "-f", f"sha={accepted}", "-f", f"merge_method={method}"], cwd=ctx.repo)
     if not ok:
@@ -600,7 +608,7 @@ def load(options: argparse.Namespace) -> Context:
         repo_info=repo_info, pr=pr, worktree=worktree,
         other_worktrees=[w.path for w in worktrees if worktree is None or w.path != worktree.path],
         workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head,
-        expected_head=options.expect_head)
+        expected_head=options.expect_head, expected_base=options.expected_base)
 
 
 def main() -> None:
@@ -612,11 +620,14 @@ def main() -> None:
     parser.add_argument("--repo", required=True, help="any checkout of the repository")
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
     parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
+    parser.add_argument("--expected-base", help="with merge: the destination branch the user reviewed")
     options = parser.parse_args()
     if options.head and options.action != "merge":
         parser.error("--head is only for merge")
     if options.expect_head and (options.action != "merge" or options.head):
         parser.error("--expect-head is only for a merge without --head")
+    if options.expected_base is not None and options.action != "merge":
+        parser.error("--expected-base is only for merge")
     report: dict = {}
     try:
         ctx = load(options)
