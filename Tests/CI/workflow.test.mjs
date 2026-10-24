@@ -14,34 +14,32 @@ const selected = (path) => Object.entries(filters)
   .map(([name]) => name).sort();
 
 for (const [path, expected] of [
-  ['Sources/App/SidebarView.swift', ['macos']],
-  ['Sources/Core/Sessions/SessionStatus.swift', ['macos']],
-  ['Sources/CLI/main.swift', ['macos']],
-  ['Sources/App/.fixtures/example.json', ['macos']],
-  ['Tests/App/ExampleTests.swift', ['macos']],
-  ['Tests/Core/ExampleTests.swift', ['macos']],
-  ['ios/Sources/ToasttyMobileApp/Example.swift', ['ios']],
-  ['ios/Project.swift', ['ios']],
-  ['Sources/RemoteProtocol/RemoteSessionModels.swift', ['ios', 'macos']],
-  ['Tests/RemoteProtocol/Fixtures/example.json', ['ios', 'macos']],
-  ['WebPanels/LocalDocumentApp/src/index.jsx', ['ios', 'macos', 'web']],
-  ['WebPanels/ScratchpadApp/package-lock.json', ['ios', 'macos', 'web']],
-  ['Sources/App/Resources/WebPanels/scratchpad-panel/index.html', ['ios', 'macos', 'web']],
-  ['Tuist/Package.resolved', ['macos']],
-  ['Project.swift', ['macos']],
-  ['.secrets', ['macos']],
-  ['Tests/BuildConfig/PushManifestTests.mjs', ['macos']],
-  ['scripts/dev/bootstrap-worktree.sh', ['macos']],
-  ['scripts/remote/test.sh', ['ios', 'macos']],
-  ['examples/skills/worktree-create/scripts/open-toastty-worktree-session.sh', ['macos']],
-  ['.github/workflows/mobile-ios.yml', ['ios', 'macos', 'web']],
-  ['.github/ci-paths.yml', ['ios', 'macos', 'web']],
-  ['Tests/CI/workflow.test.mjs', ['ios', 'macos', 'web']],
-  ['.node-version', ['ios', 'macos', 'web']],
+  ['Sources/App/SidebarView.swift', []],
+  ['Sources/Core/Sessions/SessionStatus.swift', []],
+  ['Tests/App/ExampleTests.swift', []],
+  ['ios/Sources/ToasttyMobileApp/Example.swift', ['scripts']],
+  ['ios/scripts/toastty-ios.mjs', ['scripts']],
+  ['ios/Tests/ReleaseScriptTests/require-ios-ci.test.mjs', ['scripts']],
+  ['Sources/RemoteProtocol/RemoteSessionModels.swift', []],
+  ['WebPanels/LocalDocumentApp/src/index.jsx', ['web']],
+  ['WebPanels/ScratchpadApp/package-lock.json', ['web']],
+  ['Sources/App/Resources/WebPanels/scratchpad-panel/index.html', ['web']],
+  ['Tests/RemoteScripts/RunnerWrapperTests.mjs', ['scripts']],
+  ['scripts/dev/bootstrap-worktree.sh', ['scripts']],
+  ['scripts/remote/test.sh', ['scripts']],
+  ['.github/workflows/mobile-ios.yml', ['scripts', 'web']],
+  ['.github/workflows/ios-testflight.yml', ['scripts']],
+  ['.github/ci-paths.yml', ['scripts', 'web']],
+  ['Tests/CI/workflow.test.mjs', ['scripts', 'web']],
+  ['.secrets', ['scripts']],
+  ['.node-version', ['scripts', 'web']],
+  ['.tool-versions', ['scripts', 'web']],
+  ['.github/ios-xcode-version', ['scripts']],
+  ['.github/ios-release-ci-jobs.json', ['scripts']],
   ['docs/remote-access.md', []],
   ['README.md', []],
 ]) {
-  test(`selects applicable checks for ${path}`, () => {
+  test(`selects applicable Linux checks for ${path}`, () => {
     assert.deepEqual(selected(path), expected);
   });
 }
@@ -52,108 +50,126 @@ test('only PR runs cancel superseded runs', () => {
   assert.ok(workflow.concurrency.group.includes("github.event_name == 'pull_request' && github.ref || github.run_id"));
 });
 
-test('every PR gets a gate; pushes target main and manual runs remain available', () => {
+test('every PR gets a gate and full validation remains manual without main reruns', () => {
   assert.ok(Object.hasOwn(workflow.on, 'pull_request'));
   assert.equal(workflow.on.pull_request, null);
-  assert.deepEqual(workflow.on.push, { branches: ['main'] });
+  assert.equal(Object.hasOwn(workflow.on, 'push'), false);
+  for (const path of ['.github/workflows/push-worker.yml', '.github/workflows/ios-testflight.yml']) {
+    assert.equal(Object.hasOwn(parse(read(path)).on, 'push'), false, path);
+  }
   assert.ok(Object.hasOwn(workflow.on, 'workflow_dispatch'));
   // Branch protection on main requires this exact check name.
   assert.equal(workflow.jobs.gate.name, 'CI gate');
   assert.equal(workflow.jobs.gate.if, 'always()');
-  assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['changes', 'ios', 'macos', 'web']);
+  assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['changes', 'ios', 'macos', 'scripts', 'web']);
 });
 
 test('selection outputs drive each job and use the tested filters', () => {
   const filter = workflow.jobs.changes.steps.find((step) => step.id === 'filter');
   assert.equal(filter.with.filters, '.github/ci-paths.yml');
   assert.equal(filter.if, "github.event_name == 'pull_request'");
-  for (const name of ['ios', 'macos', 'web']) {
+  for (const name of ['scripts', 'web']) {
     assert.equal(workflow.jobs.changes.outputs[name], `\${{ steps.filter.outputs.${name} }}`);
     assert.equal(workflow.jobs[name].if,
-      `github.event_name != 'pull_request' || needs.changes.outputs.${name} == 'true'`);
+      `github.event_name == 'workflow_dispatch' || needs.changes.outputs.${name} == 'true'`);
+  }
+  for (const name of ['ios', 'macos']) {
+    assert.equal(workflow.jobs[name].if, "github.event_name == 'workflow_dispatch'");
   }
 });
 
 const gateStep = workflow.jobs.gate.steps[0];
 const gate = (overrides = {}) => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', gateStep.run], {
   env: { ...process.env, CHANGES_RESULT: 'success', FULL_RUN: 'false',
-    IOS_SELECTED: 'false', MACOS_SELECTED: 'false', WEB_SELECTED: 'false',
-    IOS_RESULT: 'skipped', MACOS_RESULT: 'skipped', WEB_RESULT: 'skipped', ...overrides },
+    SCRIPTS_SELECTED: 'false', WEB_SELECTED: 'false',
+    IOS_RESULT: 'skipped', MACOS_RESULT: 'skipped', SCRIPTS_RESULT: 'skipped', WEB_RESULT: 'skipped', ...overrides },
   encoding: 'utf8',
 });
 
 test('gate accepts documentation-only changes and completed selected jobs', () => {
   assert.equal(gate().status, 0);
-  assert.equal(gate({ MACOS_SELECTED: 'true', MACOS_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ SCRIPTS_SELECTED: 'true', SCRIPTS_RESULT: 'success' }).status, 0);
 });
 
 test('gate rejects failed selection and any failed or cancelled job', () => {
   for (const state of ['failure', 'cancelled', 'skipped']) {
     assert.notEqual(gate({ CHANGES_RESULT: state }).status, 0);
   }
-  for (const name of ['IOS', 'MACOS', 'WEB']) {
+  for (const name of ['IOS', 'MACOS', 'SCRIPTS', 'WEB']) {
     for (const state of ['failure', 'cancelled']) {
       assert.notEqual(gate({ [`${name}_RESULT`]: state }).status, 0);
     }
-    assert.notEqual(gate({ [`${name}_SELECTED`]: 'true' }).status, 0);
+    if (['SCRIPTS', 'WEB'].includes(name)) {
+      assert.notEqual(gate({ [`${name}_SELECTED`]: 'true' }).status, 0);
+    }
   }
 });
 
-test('main pushes and manual runs require every job to pass', () => {
-  assert.notEqual(gate({ FULL_RUN: 'true' }).status, 0);
-  // Path selection is skipped outside PRs, so its outputs arrive empty.
-  const unselected = { IOS_SELECTED: '', MACOS_SELECTED: '', WEB_SELECTED: '' };
-  assert.notEqual(gate({ FULL_RUN: 'true', ...unselected, MACOS_RESULT: 'success' }).status, 0);
-  assert.equal(gate({ FULL_RUN: 'true', ...unselected, IOS_RESULT: 'success',
-    MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
-  assert.equal(gate({ FULL_RUN: 'true', IOS_RESULT: 'success',
-    MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
+test('PR gate rejects absent or malformed selection outputs', () => {
+  for (const name of ['SCRIPTS_SELECTED', 'WEB_SELECTED']) {
+    for (const value of ['', 'yes', 'undefined']) {
+      assert.notEqual(gate({ [name]: value }).status, 0);
+    }
+  }
 });
 
-test('automatic iOS runs keep functional coverage; manual runs include full UI and budgets', () => {
+test('release evidence job names match the full manual workflow', () => {
+  const names = Object.entries(workflow.jobs).filter(([id]) => id !== 'changes').flatMap(([, job]) => {
+    const configurations = job.strategy?.matrix.configuration;
+    return configurations ? configurations.map((configuration) =>
+      job.name.replace('${{ matrix.configuration }}', configuration)) : [job.name];
+  });
+  assert.deepEqual(JSON.parse(read('.github/ios-release-ci-jobs.json')).sort(), names.sort());
+});
+
+test('manual full validation requires every job to pass', () => {
+  assert.notEqual(gate({ FULL_RUN: 'true' }).status, 0);
+  // Path selection is skipped outside PRs, so its outputs arrive empty.
+  const unselected = { SCRIPTS_SELECTED: '', WEB_SELECTED: '' };
+  assert.notEqual(gate({ FULL_RUN: 'true', ...unselected, MACOS_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ FULL_RUN: 'true', ...unselected, IOS_RESULT: 'success',
+    MACOS_RESULT: 'success', SCRIPTS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ FULL_RUN: 'true', IOS_RESULT: 'success',
+    MACOS_RESULT: 'success', SCRIPTS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
+});
+
+test('manual native validation retains both configurations, full UI, and performance budgets', () => {
   const iosJob = workflow.jobs.ios;
+  assert.deepEqual(iosJob.strategy.matrix.configuration, ['Debug', 'Release']);
   const command = iosJob.steps.find((step) => step.name === 'Test native client').run;
-  // Every CI invocation gives a failed test one more attempt; hosted runners
-  // can time out the job's first UI launch under load.
-  const prefix = 'node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure ';
-  assert.ok(command.startsWith(prefix), command);
-
-  const evaluate = (expression, eventName, configuration) => {
-    const match = expression.match(/^\$\{\{ (.+) \}\}$/);
-    assert.ok(match, expression);
-    return Function('github', 'matrix', `return ${match[1]}`)(
-      { event_name: eventName }, { configuration },
-    );
-  };
-
-  for (const [eventName, configuration, selector, timeout] of [
-    ['pull_request', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
-    ['pull_request', 'Release', '--skip-performance-budgets', 45],
-    ['push', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
-    ['push', 'Release', '--skip-performance-budgets', 45],
-    ['workflow_dispatch', 'Debug', '', 90],
-    ['workflow_dispatch', 'Release', '', 45],
-  ]) {
-    assert.equal(evaluate(command.slice(prefix.length), eventName, configuration), selector);
-    assert.equal(evaluate(iosJob['timeout-minutes'], eventName, configuration), timeout);
+  assert.equal(command, 'node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure');
+  for (const configuration of ['Debug', 'Release']) {
     const result = spawnSync(process.execPath, [
       new URL('ios/scripts/toastty-ios.mjs', root).pathname,
-      'test', '--retry-tests-on-failure', ...selector.split(' ').filter(Boolean), '--dry-run',
+      'test', '--retry-tests-on-failure', '--dry-run',
     ], {
-      env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration },
-      encoding: 'utf8',
+      env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration }, encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
     const args = JSON.parse(result.stdout).steps.at(-1).args;
-    assert.equal(args.some((arg) => arg.startsWith('-skip-testing:')), eventName !== 'workflow_dispatch');
-    assert.equal(args.some((arg) => arg.startsWith('-only-testing:ToasttyMobileUITests/')),
-      configuration === 'Debug' && eventName !== 'workflow_dispatch');
-    assert.ok(!args.includes('-skip-testing:ToasttyMobileAppTests'));
-    assert.ok(!args.includes('-skip-testing:ToasttyMobileDomainTests'));
+    assert.ok(!args.some((arg) => arg.startsWith('-skip-testing:')));
+    assert.ok(!args.some((arg) => arg.startsWith('-only-testing:ToasttyMobileUITests/')));
     assert.deepEqual(args.slice(-4), ['-retry-tests-on-failure', '-test-iterations', '2', 'test']);
   }
 });
 
+test('script fixtures run on Linux without native toolchain setup', () => {
+  const job = workflow.jobs.scripts;
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  const command = job.steps.find((step) => step.run).run;
+  for (const directory of ['ios/Tests/ScriptTests', 'ios/Tests/ReleaseScriptTests', 'Tests/RemoteScripts']) {
+    assert.ok(command.includes(`${directory}/`));
+  }
+  assert.ok(!job.steps.some((step) => /tuist|xcodebuild/.test(step.run ?? '')));
+  const globs = command.split(/\s+/).filter((part) => part.endsWith('.mjs'));
+  for (const directory of ['ios/Tests/ScriptTests', 'ios/Tests/ReleaseScriptTests', 'Tests/RemoteScripts']) {
+    for (const entry of readdirSync(new URL(`${directory}/`, root), { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.mjs')) {
+        assert.ok(picomatch(globs)(`${directory}/${entry.name}`), `Uncovered fixture: ${directory}/${entry.name}`);
+      }
+    }
+  }
+});
 
 test('every web-panel package is covered by the web test command', () => {
   const command = workflow.jobs.web.steps.find((step) => step.run).run;
@@ -176,7 +192,8 @@ test('TestFlight requires exact-source CI before signed archive and has no test 
   assert.deepEqual(Object.keys(releaseWorkflow.jobs), ['testflight']);
   assert.deepEqual(Object.keys(releaseWorkflow.on.workflow_dispatch.inputs), ['upload']);
   assert.deepEqual(job.permissions, { contents: 'read', actions: 'read' });
-  assert.equal(job.if, "${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}");
+  assert.deepEqual(Object.keys(releaseWorkflow.on), ['workflow_dispatch']);
+  assert.equal(job.if, undefined);
   const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
   assert.equal(checkout.with.ref, '${{ github.sha }}');
   const gateIndex = job.steps.findIndex((step) => step.id === 'ci');
@@ -204,14 +221,14 @@ test('iOS CI and archiving select the same pinned Xcode before generation', () =
     const install = job.steps.findIndex((step) => step.name === 'Install pinned Tuist');
     assert.ok(pin >= 0 && install > pin);
   }
-  assert.deepEqual(selected('.github/ios-xcode-version'), ['ios']);
+  assert.deepEqual(selected('.github/ios-xcode-version'), ['scripts']);
   for (const script of ['require-ios-ci.mjs', 'select-ios-xcode.sh', 'ios-testflight.sh']) {
-    assert.deepEqual(selected(`scripts/ci/${script}`), ['ios', 'macos']);
+    assert.deepEqual(selected(`scripts/ci/${script}`), ['scripts']);
   }
 });
 
 test('full CI gate blocks every non-success graph result, including abandoned runners', () => {
-  for (const name of ['IOS', 'MACOS', 'WEB']) {
+  for (const name of ['IOS', 'MACOS', 'SCRIPTS', 'WEB']) {
     for (const result of ['skipped', 'failure', 'cancelled', 'abandoned', '', 'pending']) {
       assert.notEqual(gate({ FULL_RUN: 'true', IOS_RESULT: 'success', MACOS_RESULT: 'success',
         WEB_RESULT: 'success', [`${name}_RESULT`]: result }).status, 0);

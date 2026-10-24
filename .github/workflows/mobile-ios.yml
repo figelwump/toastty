@@ -2,27 +2,23 @@ name: Toastty CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
-# Runs for the same PR supersede each other. Pushes to main and manual runs each get
-# their own group, so none is cancelled or replaced while pending and every merged
-# commit is tested.
+# New PR commits cancel superseded checks. Manual full validations keep distinct
+# groups so each requested source can finish and retain release evidence.
 concurrency:
   group: mobile-ios-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
-    name: Select build graphs
+    name: Select checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      ios: ${{ steps.filter.outputs.ios }}
-      macos: ${{ steps.filter.outputs.macos }}
+      scripts: ${{ steps.filter.outputs.scripts }}
       web: ${{ steps.filter.outputs.web }}
     steps:
       - name: Check out repository
@@ -38,7 +34,7 @@ jobs:
           npm ci --prefix Tests/CI --no-audit --no-fund
           npm test --prefix Tests/CI
 
-      - name: Select affected graphs
+      - name: Select affected checks
         id: filter
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
@@ -48,9 +44,9 @@ jobs:
   ios:
     name: iOS tests (${{ matrix.configuration }})
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ios == 'true'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 90 || 45 }}
+    timeout-minutes: ${{ matrix.configuration == 'Debug' && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,14 +77,11 @@ jobs:
           echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
           test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
-      - name: Test dispatcher and release scripts
-        run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs
-
       - name: Test native client
-        # Full UI and hardware-sensitive budgets remain available on manual runs.
+        # Explicit validation includes the full UI suite and performance budgets.
         # Hosted runners can time out the first UI launch under load, so every
         # failed test gets one more attempt; the uploaded xcresult keeps both.
-        run: node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure ${{ github.event_name != 'workflow_dispatch' && (matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets') || '' }}
+        run: node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure
 
       - name: Upload iOS test artifacts
         if: always()
@@ -102,7 +95,7 @@ jobs:
   macos:
     name: macOS contract tests
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.macos == 'true'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -128,9 +121,6 @@ jobs:
 
       - name: Test Mac push build configuration
         run: node --test Tests/BuildConfig/PushManifestTests.mjs
-
-      - name: Test remote runner contracts
-        run: node --test Tests/RemoteScripts/*Tests.mjs
 
       - name: Generate macOS project
         run: TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
@@ -169,10 +159,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  scripts:
+    name: Script tests
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Test dispatcher, release, and remote runner contracts
+        run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs Tests/RemoteScripts/*Tests.mjs
+
   web:
     name: Web panel tests
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -198,21 +206,27 @@ jobs:
       - changes
       - ios
       - macos
+      - scripts
       - web
     runs-on: ubuntu-latest
     steps:
-      - name: Require selected graph checks
+      - name: Require selected checks
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
           WEB_RESULT: ${{ needs.web.result }}
-          IOS_SELECTED: ${{ needs.changes.outputs.ios }}
-          MACOS_SELECTED: ${{ needs.changes.outputs.macos }}
+          SCRIPTS_RESULT: ${{ needs.scripts.result }}
+          SCRIPTS_SELECTED: ${{ needs.changes.outputs.scripts }}
           WEB_SELECTED: ${{ needs.changes.outputs.web }}
-          FULL_RUN: ${{ github.event_name != 'pull_request' }}
+          FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           test "$CHANGES_RESULT" = success
+          if [[ "$FULL_RUN" != true ]]; then
+            for selected in "$SCRIPTS_SELECTED" "$WEB_SELECTED"; do
+              case "$selected" in true|false) ;; *) exit 1 ;; esac
+            done
+          fi
           require_result() {
             if [[ "$FULL_RUN" == true || "$1" == true ]]; then
               test "$2" = success
@@ -220,6 +234,7 @@ jobs:
               case "$2" in success|skipped) ;; *) return 1 ;; esac
             fi
           }
-          require_result "$IOS_SELECTED" "$IOS_RESULT"
-          require_result "$MACOS_SELECTED" "$MACOS_RESULT"
+          require_result false "$IOS_RESULT"
+          require_result false "$MACOS_RESULT"
+          require_result "$SCRIPTS_SELECTED" "$SCRIPTS_RESULT"
           require_result "$WEB_SELECTED" "$WEB_RESULT"

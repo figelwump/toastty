@@ -668,7 +668,7 @@ test("asset catalog supplies the Toastty amber AccentColor expected by actool", 
   });
 });
 
-test("workflow and names-only manifest expose all release inputs without enabling push upload", () => {
+test("manual workflow and names-only manifest expose all release inputs", () => {
   const workflow = fs.readFileSync(workflowPath, "utf8");
   const mobileWorkflow = fs.readFileSync(mobileWorkflowPath, "utf8");
   const mobileFilters = read(".github/ci-paths.yml");
@@ -685,7 +685,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
 
   assert.match(workflow, /default: false/);
   assert.match(workflow, /environment: testflight/);
-  assert.match(workflow, /vars\.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true'/);
+  assert.doesNotMatch(workflow, /TOASTTY_IOS_TESTFLIGHT_ON_PUSH/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.event_name == 'workflow_dispatch' && inputs\.upload == true/);
   assert.match(workflow, /inputs\.upload && github\.ref != 'refs\/heads\/main'/);
   assert.doesNotMatch(workflow, /run_tests/);
@@ -713,14 +713,13 @@ test("workflow and names-only manifest expose all release inputs without enablin
     assert.match(configuredWorkflow, /echo "\$TUIST_BIN_DIR" >> "\$GITHUB_PATH"/);
     assert.match(configuredWorkflow, /test "\$\("\$TUIST_BIN_DIR\/tuist" version\)" = "\$TUIST_VERSION"/);
   }
-  assert.match(workflow, /Tests\/RemoteProtocol\/\*\*/);
   assert.match(workflow, /\.node-version/);
   assert.match(workflow, /\.tool-versions/);
   assert.match(mobileWorkflow, /filters: \.github\/ci-paths\.yml/);
   assert.match(mobileFilters, /'\.node-version'/);
   assert.match(mobileFilters, /'\.tool-versions'/);
   assert.match(mobileFilters, /'\.github\/workflows\/ios-testflight\.yml'/);
-  assert.match(mobileFilters, /'scripts\/ci\/\*\*'/);
+  assert.match(mobileFilters, /'scripts\/\*\*'/);
   assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
   assert.match(workflow, /require-ios-ci\.mjs/);
