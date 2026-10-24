@@ -123,6 +123,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
 
     private struct Position {
         let offset: CGFloat
+        // Full messages are unique in this fixture, including messages with a repeated second line.
+        let fullMessage: String
+        let lineRange: NSRange
         let visibleText: String
         let glyphY: CGFloat
     }
@@ -266,15 +269,28 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         let lineGlyphs = layout.glyphRange(forCharacterRange: textLine, actualCharacterRange: nil)
         let lineRect = layout.boundingRect(forGlyphRange: lineGlyphs, in: container)
         let lineY = text.convert(lineRect, to: clip).minY - clip.bounds.minY
-        return Position(offset: clip.bounds.minY, visibleText: content.substring(with: textLine), glyphY: lineY)
+        return Position(offset: clip.bounds.minY, fullMessage: content as String, lineRange: textLine,
+            visibleText: content.substring(with: textLine), glyphY: lineY)
     }
 
     private func assertPosition(_ expected: Position, _ fixture: Fixture, terminal: Terminal, stage: String,
                                 file: StaticString = #filePath, line: UInt = #line) throws {
         let actual = try position(fixture, terminal: terminal, stage: stage, file: file, line: line)
-        XCTAssertEqual(actual.offset, expected.offset, accuracy: 4, "Actual clip offset (\(stage))", file: file, line: line)
-        XCTAssertEqual(actual.visibleText, expected.visibleText, "Rendered visible line (\(stage))", file: file, line: line)
-        XCTAssertEqual(actual.glyphY, expected.glyphY, accuracy: 4, "Rendered line position within viewport (\(stage))", file: file, line: line)
+        assertPosition(expected, actual, stage: stage, file: file, line: line)
+    }
+
+    private func assertPosition(_ expected: Position, _ actual: Position, stage: String,
+                                file: StaticString = #filePath, line: UInt = #line) {
+        func describe(_ position: Position) -> String {
+            let firstLine = String(position.fullMessage.prefix(80).prefix { $0 != "\n" })
+            return "firstLine=\(firstLine.debugDescription) utf16Length=\((position.fullMessage as NSString).length) lineRange=\(position.lineRange) offset=\(position.offset)"
+        }
+        let context = "stage=\(String(stage.prefix(120))) expected={\(describe(expected))} actual={\(describe(actual))}"
+        // Compare reading content and viewport-relative geometry; keep raw offsets for diagnostics.
+        XCTAssertTrue(actual.fullMessage == expected.fullMessage, "Rendered message identity (\(context))", file: file, line: line)
+        XCTAssertEqual(actual.lineRange, expected.lineRange, "Rendered logical line range (\(context))", file: file, line: line)
+        XCTAssertEqual(actual.visibleText, expected.visibleText, "Rendered visible line (\(context))", file: file, line: line)
+        XCTAssertEqual(actual.glyphY, expected.glyphY, accuracy: 4, "Rendered line position within viewport (\(context))", file: file, line: line)
     }
 
     func testActualHomeSwitchesEmptyDraftPeeksAndRetainsBothViewports() throws {
@@ -374,14 +390,11 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         f.show(a); settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
         let unchanged = try position(f, terminal: a, surface: otherSurface, stage: "second window after first-window switches")
-        XCTAssertEqual(unchanged.offset, other.offset, accuracy: 4)
-        XCTAssertEqual(unchanged.visibleText, other.visibleText)
+        assertPosition(other, unchanged, stage: "second window after first-window switches")
         f.controller.peeks.close(in: otherID); settle(otherHost)
         f.controller.peeks.openSession(a.sessionID, in: otherID); settle(otherHost)
         let reopened = try position(f, terminal: a, surface: otherSurface, stage: "second window after close and reopen")
-        XCTAssertEqual(reopened.offset, other.offset, accuracy: 4)
-        XCTAssertEqual(reopened.visibleText, other.visibleText)
-        XCTAssertEqual(reopened.glyphY, other.glyphY, accuracy: 4)
+        assertPosition(other, reopened, stage: "second window after close and reopen")
     }
 
     func testExternalClipScrollWinsOverAppendAndDeferredWorkFromReplacedPeek() throws {
