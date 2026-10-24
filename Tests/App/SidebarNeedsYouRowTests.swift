@@ -80,6 +80,7 @@ struct SidebarNeedsYouRowTests {
         #expect(packetRow.detail == "The pinned totals bar at 390px.")
         #expect(packetRow.packetVersion == 2)
         #expect(packetRow.accessibilityLabel == "fix-dot, review, in toastty, The pinned totals bar at 390px.")
+        #expect(packetRow.identifier == "sidebar.needsYou.task.\(withPacket.id.uuidString)")
 
         // Without a packet, the status line; the reader is not asked.
         let plain = SidebarNeedsYouRow.make(item(.needsYou(.review))) { _ in
@@ -108,7 +109,7 @@ struct SidebarNeedsYouRowTests {
     }
 
     @Test
-    func aPacketsLookAtIsReadOncePerVersion() throws {
+    func aPacketsLookAtIsReadOncePerVersionOffTheMainThread() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-packets-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let packets = TaskPacketStore(rootURL: root)
@@ -124,9 +125,16 @@ struct SidebarNeedsYouRowTests {
         }
         try write("first")
         let cache = SidebarPacketLookAtCache()
+        // The first call starts the read and shows nothing yet.
+        #expect(cache.lookAt(task, packets: packets) == nil)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while cache.loadedCount == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(cache.lookAt(task, packets: packets) == "first")
         try write("changed on disk")
         #expect(cache.lookAt(task, packets: packets) == "first")
+        #expect(cache.loadedCount == 1)
 
         task.packetVersion = nil
         #expect(cache.lookAt(task, packets: packets) == nil)

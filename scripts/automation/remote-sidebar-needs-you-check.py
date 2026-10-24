@@ -158,25 +158,25 @@ def main():
         require(label_starting('Group the sidebar by') is None, f'The Projects | Status switcher is still there: {labels()}')
         row = wait_for('the Needs you row', lambda: label_starting(f'{TITLE}, review'))
         require(label_starting('Needs you, 1'), f'No Needs you header: {labels()}')
-        require(exists(f'sidebar.needsYou.{TITLE}.primary'), 'The row has no primary action')
+        require(exists(f'sidebar.needsYou.task.{task_id}.primary'), 'The row has no primary action')
         step('needs you row', coordinator=coordinator, row=row)
         capture('needs-you-review')
 
         # 2. Merge asks in the row; Cancel leaves the task alone.
-        run_tool(helper, 'press', pid, f'sidebar.needsYou.{TITLE}.primary')
-        wait_for('the merge question', lambda: exists(f'sidebar.needsYou.{TITLE}.confirmMerge'))
+        run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.primary')
+        wait_for('the merge question', lambda: exists(f'sidebar.needsYou.task.{task_id}.confirmMerge'))
         require('Merge PR #1?' in run_tool(driver, 'texts', pid, '*').stdout, 'The row does not ask before it merges')
         capture('needs-you-merge-question')
-        run_tool(driver, 'press-label', pid, 'Cancel')
-        wait_for('the question to close', lambda: exists(f'sidebar.needsYou.{TITLE}.confirmMerge') is False)
+        run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.cancelMerge')
+        wait_for('the question to close', lambda: exists(f'sidebar.needsYou.task.{task_id}.confirmMerge') is False)
         time.sleep(1)
         require(not cli_json('task', 'get', task_id).get('mergeRequestedAt'), 'Cancel accepted the merge')
         step('cancel kept the task')
 
         # 3. Merge, then Merge in the row, accepts the merge.
-        run_tool(helper, 'press', pid, f'sidebar.needsYou.{TITLE}.primary')
-        wait_for('the merge question', lambda: exists(f'sidebar.needsYou.{TITLE}.confirmMerge'))
-        run_tool(helper, 'press', pid, f'sidebar.needsYou.{TITLE}.confirmMerge')
+        run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.primary')
+        wait_for('the merge question', lambda: exists(f'sidebar.needsYou.task.{task_id}.confirmMerge'))
+        run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.confirmMerge')
         accepted = wait_for('the merge to be accepted', lambda: cli_json('task', 'get', task_id).get('mergeRequestedAt'),
                             interval=1)
         step('merge accepted', mergeRequestedAt=accepted)

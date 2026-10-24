@@ -7,7 +7,7 @@ after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI or from
 an agent, moving a task into its own git worktree, the sidebar Inbox, task
-stages with the Status sidebar and the Tasks view, `~/.toastty/tasks.toml`,
+stages with the sidebar's Needs you list and the Tasks view, `~/.toastty/tasks.toml`,
 and optional triage. The coordinator, an agent session that routes your
 requests to tasks, has its own page: [Coordinator](coordinator.md).
 
@@ -427,6 +427,10 @@ creates a task. Below it, from top to bottom:
   tasks show as rows. A footer line after them has **Show N more** when the
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
+
+The sidebar no longer opens the Tasks view or offers Release. Open the Tasks
+view with **View > Show Tasks** (`Cmd+Shift+T`) or a card's Done count, and
+release from its To ship group or the command palette.
 
 A To ship row opens the Tasks view with its task selected. **Show N more**
 opens the Tasks view at To ship with the first task the sidebar did not show

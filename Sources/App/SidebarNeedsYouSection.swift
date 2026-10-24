@@ -31,10 +31,12 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             }
         }
 
-        var isProminent: Bool {
+        var isMerge: Bool {
             if case .merge = self { return true }
             return false
         }
+
+        var isProminent: Bool { isMerge }
     }
 
     let id: TaskBoardItem.Subject
@@ -52,6 +54,15 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     var taskID: UUID? {
         if case .task(let id) = id { return id }
         return nil
+    }
+
+    /// The start of the row's Accessibility identifiers, from its task or
+    /// task space ID, which two rows never share.
+    var identifier: String {
+        switch id {
+        case .task(let id): "sidebar.needsYou.task.\(id.uuidString)"
+        case .taskSpace(let id): "sidebar.needsYou.taskSpace.\(id.uuidString)"
+        }
     }
 
     var accessibilityLabel: String {
@@ -121,24 +132,37 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     }
 }
 
-/// Reads each packet's `look_at` once per version. A packet never changes
-/// after it is published, so a new version is the only reason to read again.
+/// Reads each packet's `look_at` once per version, off the main thread: a
+/// row shows its status line until the read finishes, then redraws. A packet
+/// never changes after it is published, so a new version is the only reason
+/// to read again.
 @MainActor
-final class SidebarPacketLookAtCache {
+final class SidebarPacketLookAtCache: ObservableObject {
     private struct Key: Hashable {
         let taskID: UUID
         let version: Int
     }
 
     private var values: [Key: String?] = [:]
+    private var pending: Set<Key> = []
+    /// Changes when a read finishes, so the sidebar redraws.
+    @Published private(set) var loadedCount = 0
 
     func lookAt(_ record: TaskRecord, packets: TaskPacketStore) -> String? {
         guard let version = record.packetVersion else { return nil }
         let key = Key(taskID: record.id, version: version)
         if let cached = values[key] { return cached }
-        let value = try? packets.read(taskID: record.id, version: version).lookAt
-        values[key] = value
-        return value
+        guard pending.insert(key).inserted else { return nil }
+        Task { @MainActor [weak self] in
+            let value = await Task.detached(priority: .utility) {
+                try? packets.read(taskID: key.taskID, version: key.version).lookAt
+            }.value
+            guard let self else { return }
+            self.values[key] = value
+            self.pending.remove(key)
+            self.loadedCount += 1
+        }
+        return nil
     }
 }
 
@@ -185,12 +209,14 @@ struct SidebarNeedsYouSection: View {
                 ForEach(rows) { row in
                     SidebarNeedsYouRowView(
                         row: row,
-                        isConfirmingMerge: confirmingMergeID == row.id,
+                        isConfirmingMerge: confirmingMergeID == row.id && row.primary?.isMerge == true,
                         open: { open(row) },
                         primary: { runPrimary(row) },
                         confirmMerge: {
                             confirmingMergeID = nil
-                            if let taskID = row.taskID { merge(taskID) }
+                            // The row's action now, which may have changed
+                            // while the question showed.
+                            if case .merge(let taskID, _)? = row.primary { merge(taskID) }
                         },
                         cancelMerge: { confirmingMergeID = nil },
                         openPacket: openPacket.flatMap { action in row.packetVersion == nil ? nil : row.taskID.map { id in { action(id) } } },
@@ -200,6 +226,12 @@ struct SidebarNeedsYouSection: View {
             }
         }
         .padding(.bottom, 6)
+        .onChange(of: rows) { _, rows in
+            // A question left showing would come back when its row does.
+            if let confirmingMergeID, rows.contains(where: { $0.id == confirmingMergeID && $0.primary?.isMerge == true }) == false {
+                self.confirmingMergeID = nil
+            }
+        }
     }
 
     /// The row's body opens the packet in the coordinator chat, or, before
@@ -321,7 +353,7 @@ private struct SidebarNeedsYouRowView: View {
             if let primaryAction = row.primary {
                 Button(primaryAction.title, action: primary)
                     .buttonStyle(SidebarNeedsYouButtonStyle(isProminent: primaryAction.isProminent))
-                    .accessibilityIdentifier("sidebar.needsYou.\(row.title).primary")
+                    .accessibilityIdentifier("\(row.identifier).primary")
             }
             Menu {
                 menuItems
@@ -334,7 +366,7 @@ private struct SidebarNeedsYouRowView: View {
             .buttonStyle(SidebarNeedsYouButtonStyle(isProminent: false))
             .fixedSize()
             .accessibilityLabel("More actions for \(row.title)")
-            .accessibilityIdentifier("sidebar.needsYou.\(row.title).menu")
+            .accessibilityIdentifier("\(row.identifier).menu")
             Spacer(minLength: 0)
         }
     }
@@ -355,13 +387,14 @@ private struct SidebarNeedsYouRowView: View {
                 .foregroundStyle(ToastyTheme.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 4) {
+                // No Return or Esc shortcut: a sidebar row has no focus of
+                // its own, so either would act from the terminal.
                 Button("Merge", action: confirmMerge)
                     .buttonStyle(SidebarNeedsYouButtonStyle(isProminent: true))
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("sidebar.needsYou.\(row.title).confirmMerge")
+                    .accessibilityIdentifier("\(row.identifier).confirmMerge")
                 Button("Cancel", action: cancelMerge)
                     .buttonStyle(SidebarNeedsYouButtonStyle(isProminent: false))
-                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("\(row.identifier).cancelMerge")
                 Spacer(minLength: 0)
             }
         }

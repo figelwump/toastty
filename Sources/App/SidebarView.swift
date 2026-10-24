@@ -604,7 +604,7 @@ struct SidebarView: View {
     let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
-    @State private var packetLookAtCache = SidebarPacketLookAtCache()
+    @StateObject private var packetLookAtCache = SidebarPacketLookAtCache()
     @State private var renameDraftTitle = ""
     @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
