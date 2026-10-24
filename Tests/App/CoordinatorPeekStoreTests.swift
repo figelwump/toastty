@@ -121,6 +121,13 @@ struct CoordinatorPeekStoreTests {
             try #require(service.conversationID(for: panelID))
         }
 
+        func openPrompt(for model: CoordinatorConversationModel, in terminal: Terminal) throws -> RemoteInputEpoch {
+            let id = try conversationID(terminal.panelID)
+            service.projectionStore.bootstrapConfirmedOpenPrompt(for: id, at: Date())
+            model.refresh()
+            return try #require(model.inputEpoch)
+        }
+
         private static func makeTerminal(store: AppStore, runtime: SessionRuntimeStore,
             windowID: UUID, title: String, cwd: String) throws -> Terminal {
             let before = Set(store.state.workspacesByID.keys)
@@ -392,17 +399,24 @@ struct CoordinatorPeekStoreTests {
         let viewer = try f.viewerWindow()
         f.peeks.openTask(first.record.id, in: viewer)
         let firstModel = try #require(f.peeks.inspections[viewer]?.conversation)
+        let firstBinding = try f.openPrompt(for: firstModel, in: first.current).bindingID
         firstModel.draft = "First unfinished reply"
         let file = RemoteMessageAttachment(filename: "evidence.txt", data: Data("details".utf8))
         firstModel.attachments = [file]
+        #expect(firstModel.canSend)
 
         f.peeks.close(in: viewer)
         #expect(f.service.localPanelIDs == [f.coordinator.panelID])
         f.peeks.openTask(first.record.id, in: viewer)
         #expect(f.peeks.inspections[viewer]?.conversation === firstModel)
+        #expect(try f.openPrompt(for: firstModel, in: first.current).bindingID == firstBinding)
+        #expect(!firstModel.hasDraftFromPreviousSession)
+        #expect(firstModel.canSend)
         f.peeks.openTask(second.record.id, in: viewer)
         let secondModel = try #require(f.peeks.inspections[viewer]?.conversation)
+        let secondBinding = try f.openPrompt(for: secondModel, in: second.current).bindingID
         secondModel.attachments = [RemoteMessageAttachment(filename: "second.txt", data: Data("file only".utf8))]
+        #expect(secondModel.canSend)
         f.peeks.openTask(UUID(), in: viewer)
         #expect(f.peeks.inspections[viewer]?.unavailableReason != nil)
 
@@ -410,9 +424,15 @@ struct CoordinatorPeekStoreTests {
         #expect(f.peeks.inspections[viewer]?.conversation === firstModel)
         #expect(firstModel.draft == "First unfinished reply")
         #expect(firstModel.attachments == [file])
+        #expect(try f.openPrompt(for: firstModel, in: first.current).bindingID == firstBinding)
+        #expect(!firstModel.hasDraftFromPreviousSession)
+        #expect(firstModel.canSend)
         f.peeks.openTask(second.record.id, in: viewer)
         #expect(f.peeks.inspections[viewer]?.conversation === secondModel)
         #expect(secondModel.attachments.count == 1)
+        #expect(try f.openPrompt(for: secondModel, in: second.current).bindingID == secondBinding)
+        #expect(!secondModel.hasDraftFromPreviousSession)
+        #expect(secondModel.canSend)
     }
 
     @Test
