@@ -397,6 +397,11 @@ public struct AppState: Codable, Equatable, Sendable {
         windows.first(where: { $0.id == windowID })
     }
 
+    /// The hidden workspace the coordinator runs in, if one is open.
+    public var coordinatorWorkspaceID: UUID? {
+        workspacesByID.values.first(where: \.isCoordinator)?.id
+    }
+
     public func windowHasAnyUnreadNotifications(windowID: UUID) -> Bool {
         guard let window = window(id: windowID) else { return false }
         return window.workspaceIDs.contains { workspaceID in

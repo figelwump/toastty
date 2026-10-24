@@ -187,6 +187,24 @@ public struct AppReducer {
             state.windows[windowIndex].workspaceIDs.append(workspaceID)
             return true
 
+        case .createCoordinatorWorkspace(let windowID, let workspaceID, let panelID, let terminalCWD):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.coordinatorWorkspaceID == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: "Coordinator",
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.isCoordinator = true
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
         case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
                 title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",
@@ -2240,8 +2258,15 @@ public struct AppReducer {
         }
 
         if window.selectedWorkspaceID == workspaceID {
-            let nextIndex = min(workspaceIndex, window.workspaceIDs.count - 1)
-            window.selectedWorkspaceID = window.workspaceIDs[nextIndex]
+            // Fall back to a workspace the sidebar shows; the hidden
+            // coordinator only when nothing else is left.
+            let candidates = window.workspaceIDs.filter { state.workspacesByID[$0]?.isCoordinator == false }
+            if candidates.isEmpty {
+                window.selectedWorkspaceID = window.workspaceIDs[min(workspaceIndex, window.workspaceIDs.count - 1)]
+            } else {
+                let following = window.workspaceIDs[min(workspaceIndex, window.workspaceIDs.count)...]
+                window.selectedWorkspaceID = following.first(where: candidates.contains) ?? candidates.last
+            }
         }
 
         state.windows[windowIndex] = window

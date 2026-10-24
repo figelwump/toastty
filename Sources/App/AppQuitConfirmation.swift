@@ -100,7 +100,10 @@ enum AppQuitConfirmation {
     ) -> AppQuitConfirmationAssessment {
         // Sort so any surfaced running-command detail is deterministic across
         // runs and tests instead of depending on Set iteration order.
-        let terminalPanelIDs = state.allTerminalPanelIDs.sorted { lhs, rhs in
+        // The coordinator's agent resumes after a restart, and the user
+        // never started it, so it does not hold up a quit.
+        let coordinatorPanelIDs = state.coordinatorWorkspaceID.flatMap { state.workspacesByID[$0]?.allTerminalPanelIDs } ?? []
+        let terminalPanelIDs = state.allTerminalPanelIDs.subtracting(coordinatorPanelIDs).sorted { lhs, rhs in
             lhs.uuidString < rhs.uuidString
         }
         let localDocumentPanelIDs = state.workspacesByID.values

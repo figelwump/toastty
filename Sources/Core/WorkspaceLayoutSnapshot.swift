@@ -175,6 +175,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var doneAt: Date?
     public var rootDirectory: String?
     public var taskID: UUID?
+    public var isCoordinator: Bool
 
     public init(
         id: UUID,
@@ -190,7 +191,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         primaryAnnotationKey: String? = nil,
         doneAt: Date? = nil,
         rootDirectory: String? = nil,
-        taskID: UUID? = nil
+        taskID: UUID? = nil,
+        isCoordinator: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -209,6 +211,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.doneAt = doneAt
         self.rootDirectory = rootDirectory
         self.taskID = taskID
+        self.isCoordinator = isCoordinator
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -229,6 +232,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         doneAt = workspace.doneAt
         rootDirectory = workspace.rootDirectory
         taskID = workspace.taskID
+        isCoordinator = workspace.isCoordinator
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -286,7 +290,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             primaryAnnotationKey: primaryAnnotationKey,
             doneAt: doneAt,
             rootDirectory: rootDirectory,
-            taskID: taskID
+            taskID: taskID,
+            isCoordinator: isCoordinator
         )
     }
 }
@@ -307,6 +312,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case doneAt
         case rootDirectory
         case taskID
+        case isCoordinator
         case layoutTree
         case panels
         case focusedPanelID
@@ -357,6 +363,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
         rootDirectory = (try? container.decodeIfPresent(String.self, forKey: .rootDirectory)) ?? nil
         taskID = (try? container.decodeIfPresent(UUID.self, forKey: .taskID)) ?? nil
+        isCoordinator = (try? container.decodeIfPresent(Bool.self, forKey: .isCoordinator)) ?? false
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -376,6 +383,9 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
         try container.encodeIfPresent(rootDirectory, forKey: .rootDirectory)
         try container.encodeIfPresent(taskID, forKey: .taskID)
+        if isCoordinator {
+            try container.encode(true, forKey: .isCoordinator)
+        }
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }

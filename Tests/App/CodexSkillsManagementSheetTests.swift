@@ -9,6 +9,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             ToasttyAgentPluginBundle.skills.map { "toastty:\($0.name)" },
             [
                 "toastty:toastty-capabilities",
+                "toastty:toastty-coordinator",
                 "toastty:toastty-open-markdown",
                 "toastty:toastty-read-terminal",
                 "toastty:toastty-scratchpad",

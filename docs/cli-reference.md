@@ -712,6 +712,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
 - `task.get`, `task.list`, `task.workspace-choices`, `task.watches` (see [`task`](#task))
+- `coordinator.status` (see [`coordinator`](#coordinator))
 
 `agent.profile.state` requires `profileID` and reports the executable that
 profile would run in Toastty's launch environment, skipping Toastty's command
@@ -949,6 +950,22 @@ Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait
 ```
+
+### `coordinator`
+
+```text
+toastty coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>]
+toastty coordinator status
+toastty coordinator show-terminal
+```
+
+`coordinator post` adds a card to the coordinator's chat. Every kind except
+`note` names its task, and `question` and `note` need text. Only the
+coordinator's own session, or a command outside any agent session, may post.
+`coordinator status` reports whether the coordinator runs, and where its files
+are. `coordinator show-terminal` selects its hidden workspace. These are short
+forms of `action run coordinator.post|coordinator.show-terminal` and
+`query run coordinator.status`. See [Coordinator](coordinator.md).
 
 ### `notify`
 
