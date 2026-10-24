@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 const repository = 'figelwump/toastty';
 const workflowID = 340799440;
 const workflowPath = '.github/workflows/mobile-ios.yml';
-const trustedEvents = ['push', 'workflow_dispatch'];
+const trustedEvents = ['workflow_dispatch'];
+const requiredJobs = JSON.parse(readFileSync(new URL('../../.github/ios-release-ci-jobs.json', import.meta.url), 'utf8'));
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 function requireEvidence(condition, message) {
@@ -39,7 +40,7 @@ function validateRun(run, sha) {
 }
 function requireSuccess(result) {
   requireEvidence(result?.status === 'completed' && result.conclusion === 'success',
-    'The latest trusted CI run and its CI gate must be completed/success.');
+    'The latest full CI run and its required jobs must be completed/success.');
 }
 
 try {
@@ -50,7 +51,7 @@ try {
   requireEvidence(head === values.sha, 'Checked-out source differs from the release SHA.');
   const prefix = `repos/${repository}/actions`;
   // Never filter by success: a newer failed/pending run must block older green evidence.
-  const runs = completeList(api(`${prefix}/workflows/${workflowID}/runs?branch=main&head_sha=${head}&per_page=100`), 'workflow_runs')
+  const runs = completeList(api(`${prefix}/workflows/${workflowID}/runs?branch=main&head_sha=${head}&event=workflow_dispatch&per_page=100`), 'workflow_runs')
     .filter((run) => trustedEvents.includes(run.event));
   requireEvidence(runs.length > 0, 'No trusted main CI run exists for this source.');
   for (const run of runs) validateRun(run, head);
@@ -63,12 +64,14 @@ try {
     'Current run differs from the selected run.');
   requireSuccess(current);
   const jobs = completeList(api(`${endpoint}/attempts/${current.run_attempt}/jobs?per_page=100`), 'jobs');
-  // Main CI gate already requires every graph, including both native configurations.
-  const gates = jobs.filter((job) => job.name === 'CI gate');
-  requireEvidence(gates.length === 1 && gates[0].run_id === current.id
-    && gates[0].run_attempt === current.run_attempt && gates[0].head_sha === head,
-  'Missing or mismatched CI gate for the current run attempt.');
-  requireSuccess(gates[0]);
+  // A successful lightweight PR gate or legacy run is not release evidence.
+  for (const name of requiredJobs) {
+    const matches = jobs.filter((job) => job.name === name);
+    requireEvidence(matches.length === 1 && matches[0].run_id === current.id
+      && matches[0].run_attempt === current.run_attempt && matches[0].head_sha === head,
+    `Missing or mismatched ${name} for the current full run attempt.`);
+    requireSuccess(matches[0]);
+  }
   const latest = api(endpoint);
   validateRun(latest, head);
   requireEvidence(latest.id === current.id && latest.run_attempt === current.run_attempt,
@@ -80,12 +83,13 @@ try {
     run_url: `https://github.com/${repository}/actions/runs/${current.id}/attempts/${current.run_attempt}`,
     run_attempt: current.run_attempt, head_sha: head, head_branch: current.head_branch,
     event: current.event, status: current.status, conclusion: current.conclusion,
+    required_jobs: requiredJobs,
   };
   mkdirSync(path.dirname(values.output), { recursive: true });
   writeFileSync(values.output, `${JSON.stringify(evidence, null, 2)}\n`);
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `verified_sha=${head}\n`);
   console.log(`Trusted CI verified: ${evidence.run_url} at ${head}`);
 } catch (error) {
-  console.error(`CI evidence rejected: ${error.message}\nWait for successful Toastty CI on this exact main commit, then retry TestFlight. No tests were dispatched.`);
+  console.error(`CI evidence rejected: ${error.message}\nRun full Toastty CI manually on this exact main commit, wait for success, then retry TestFlight. No tests were dispatched.`);
   process.exitCode = 1;
 }

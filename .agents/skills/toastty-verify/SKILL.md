@@ -21,6 +21,18 @@ Use this as the Toastty verification decision layer. Keep detailed command seman
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
 6. Report the exact command family, scope, remote/local target, fallback status, result, and any artifact paths.
 
+## CI Coverage
+
+PR CI runs selected Linux script and web-panel checks. It does not build or test
+native apps, and merged commits do not trigger another CI run. Continue to select
+native build, test, and runtime checks below for the changed behavior. A green
+`CI gate` on a PR does not replace this verification.
+
+Full hosted native validation is available by manually dispatching `Toastty CI`.
+Before TestFlight, that full run must pass on the exact `main` release commit;
+follow `docs/ios-release-ci.md`. It retains macOS checks and both iOS
+configurations, including full Debug UI and performance budgets.
+
 ## Decision Tree
 
 Use the least disruptive path that covers the risk.

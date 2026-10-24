@@ -2,7 +2,7 @@
 
 ## Status
 
-The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. Automatic `Toastty CI` PR and `main` jobs exclude its numeric assertions because hosted simulator load makes the threshold unreliable. Manual CI, the default dispatcher, and controlled remote runs retain them. Budget changes require recorded target, toolchain, and measurement evidence; a noisy or isolated run is not sufficient justification by itself.
+The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. PR CI runs Linux checks without native simulator jobs. Full manual `Toastty CI`, the default dispatcher, and controlled remote runs retain the numeric assertions. Hosted simulator load can still affect the threshold. Budget changes require recorded target, toolchain, and measurement evidence; a noisy or isolated run is not sufficient justification by itself.
 
 ## Budget
 
@@ -47,7 +47,7 @@ The hardware and toolchain records were captured separately through the required
 
 Use repeated clean remote runs when calibrating this provisional gate. Keep the input and measurement boundaries stable so later results remain comparable.
 
-Run the budget test before TestFlight and after changes to event decoding or reduction. Automatic `Toastty CI` jobs pass `--skip-performance-budgets` to exclude only `testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets`; `testFiveThousandEventDecodeAndReducePreservesEventsAndCursor` still verifies catch-up completion, retained events, unknown-event handling, and cursor advancement. Manual dispatch of `Toastty CI` retains the budget test in Debug and Release. The separate `iOS TestFlight` workflow reuses successful trusted main CI for the exact release SHA and does not repeat simulator tests. Run manual `Toastty CI` for the budget check before TestFlight.
+Run the budget test before TestFlight and after changes to event decoding or reduction. Full manual `Toastty CI` retains the budget test in Debug and Release. Focused dispatcher checks can use `--skip-performance-budgets` to exclude only `testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets`; `testFiveThousandEventDecodeAndReducePreservesEventsAndCursor` still verifies catch-up completion, retained events, unknown-event handling, and cursor advancement. The separate `iOS TestFlight` workflow reuses successful trusted main CI for the exact release SHA and does not repeat simulator tests. Run manual `Toastty CI` for the budget check before TestFlight.
 
 During the September 2026 CI investigation, one GitHub Release run measured
 1.0715 seconds while another run of the same commit passed. The failing test
