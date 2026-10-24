@@ -82,7 +82,9 @@ final class CoordinatorConversationModel: ObservableObject {
     }
 
     var canSend: Bool {
-        hasSendableDraft && (inputEpoch != nil || snapshot?.summary.inputControl?.canQueue == true)
+        hasSendableDraft && (inputEpoch != nil
+            || (snapshot?.summary.inputControl?.canQueue == true
+                && snapshot?.summary.inputControl?.turnEpoch != nil))
     }
 
     var canSteer: Bool {

@@ -3794,6 +3794,13 @@ extension RemoteAccessServiceSafetyTests {
         model.refresh()
         #expect(model.draftHold != nil)
         #expect(!model.canSend)
+        let heldPrompt = RemoteMessageSendRequest(conversationID: fixture.conversationID,
+            clientRequestID: "visible-retained-local-draft", expectedInputEpoch: originalEpoch,
+            text: model.draft, deliveryMode: .prompt)
+        #expect(await service.sendLocal(heldPrompt) == .rejected(reason: .localDraftPresent))
+        model.refresh()
+        #expect(model.draftHold?.epoch == heldEpoch)
+        #expect(model.draft == hidden.text)
         #expect(delivered.isEmpty)
 
         // A real input binding replacement remains stale, even while hidden.

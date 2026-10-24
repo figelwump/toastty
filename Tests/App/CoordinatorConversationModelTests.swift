@@ -218,6 +218,102 @@ struct CoordinatorConversationModelTests {
         #expect(f.model.answerStates[expired.id]?.canSubmit != true)
     }
 
+    @Test(arguments: [false, true])
+    func idleTerminalDraftDisablesSendUntilItsInspectedHoldIsReleased(afterCompletedTurn: Bool) async throws {
+        let f = try Fixture()
+        defer { f.service.setLocalPanelIDs([]) }
+        _ = try f.rebind()
+        if afterCompletedTurn {
+            f.observe(.transcript(.userMessage(.init(text: "Complete this work"))))
+            f.model.refresh()
+            _ = try #require(f.model.snapshot?.summary.inputControl?.turnEpoch)
+            f.observe(.turnEnded(turnID: "completed-turn", reason: .completed))
+            try await f.waitUntil("the prompt after turn completion") {
+                f.model.refresh()
+                return f.model.inputEpoch != nil
+            }
+        }
+        var requests: [RemoteMessageSendRequest] = []
+        let model = CoordinatorConversationModel(service: f.service, panelID: f.panelID,
+            sendMessage: { request in
+                requests.append(request)
+                return .accepted(epoch: request.expectedInputEpoch)
+            })
+        model.refresh()
+        model.draft = "Keep this native reply"
+        let file = RemoteMessageAttachment(filename: "note.txt", data: Data("Evidence".utf8))
+        model.attachments = [file]
+        #expect(model.canSend)
+
+        f.service.noteLocalInput(panelID: f.panelID)
+        model.refresh()
+        let hold = try #require(model.draftHold)
+        #expect(model.inputEpoch == nil)
+        #expect(model.snapshot?.summary.inputControl?.turnEpoch == nil)
+        #expect(model.snapshot?.summary.inputControl?.canQueue == true)
+        #expect(!model.canSend)
+        #expect(!model.canSteer)
+        await model.send()
+        #expect(requests.isEmpty)
+        #expect(model.draft == "Keep this native reply")
+        #expect(model.attachments == [file])
+        #expect(model.notice == nil)
+
+        model.releaseTerminalDraft(expected: hold)
+        let releasedEpoch = try #require(model.inputEpoch)
+        #expect(model.draftHold == nil)
+        #expect(model.canSend)
+        await model.send()
+        #expect(requests.count == 1)
+        #expect(requests.first?.deliveryMode == .prompt)
+        #expect(requests.first?.expectedInputEpoch == releasedEpoch)
+        #expect(requests.first?.text == "Keep this native reply")
+        #expect(requests.first?.attachments == [file])
+        #expect(model.draft.isEmpty && model.attachments.isEmpty)
+    }
+
+    @Test
+    func terminalTypingDuringRunningTurnKeepsQueueEnabledWhileSteeringIsBlocked() async throws {
+        let f = try Fixture()
+        defer { f.service.setLocalPanelIDs([]) }
+        _ = try f.rebind()
+        f.observe(.transcript(.userMessage(.init(text: "Start the work"))))
+        var requests: [RemoteMessageSendRequest] = []
+        var deliveries = 0
+        f.terminals.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        f.terminals.setAutomationSendTextHandlerForTesting { _, _, _, _ in deliveries += 1; return true }
+        let model = CoordinatorConversationModel(service: f.service, panelID: f.panelID,
+            sendMessage: { request in
+                requests.append(request)
+                return await f.service.sendLocal(request)
+            })
+        model.refresh()
+        model.draft = "Follow up after this turn"
+        let turnEpoch = try #require(model.snapshot?.summary.inputControl?.turnEpoch)
+        #expect(model.inputEpoch == nil)
+        #expect(model.canSteer)
+
+        f.service.noteLocalInput(panelID: f.panelID)
+        model.refresh()
+        #expect(model.inputEpoch == nil)
+        #expect(model.snapshot?.summary.inputControl?.turnEpoch == turnEpoch)
+        #expect(model.snapshot?.summary.inputControl?.canQueue == true)
+        #expect(!model.canSteer)
+        #expect(model.canSend)
+        await model.send(steer: true)
+        #expect(requests.isEmpty)
+        #expect(model.draft == "Follow up after this turn")
+        await model.send()
+        #expect(requests.count == 1)
+        #expect(requests.first?.deliveryMode == .queue)
+        #expect(requests.first?.expectedInputEpoch == turnEpoch)
+        #expect(requests.first?.text == "Follow up after this turn")
+        #expect(model.snapshot?.summary.inputControl?.queuedMessages.map(\.clientRequestID)
+            == requests.map(\.clientRequestID))
+        #expect(deliveries == 0)
+        #expect(model.draft.isEmpty)
+    }
+
     @Test
     func draftReleaseConfirmationCannotApplyToAChangedSessionHold() throws {
         let f = try Fixture()
