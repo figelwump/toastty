@@ -576,12 +576,17 @@ final class CoordinatorPeekViewportTests: XCTestCase {
 
     private var timeline: Timeline?
     // END viewport timeline diagnostic
-    private func settle(_ host: NSView, duration: TimeInterval = 0.35) {
+    private func settle(_ host: NSView, duration: TimeInterval = 0.35) async {
         let until = Date().addingTimeInterval(duration)
         while Date() < until {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            pump(host)
+            await Task.yield()
         }
+    }
+
+    private func pump(_ host: NSView) {
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
     }
 
     private func textViews(_ root: NSView) -> [NSTextView] {
@@ -701,7 +706,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
     }
 
     private func scroll(_ fixture: Fixture, terminal: Terminal, fraction: CGFloat, stage: String,
-                        file: StaticString = #filePath, line: UInt = #line) throws {
+                        file: StaticString = #filePath, line: UInt = #line) async throws {
         let scroll = try scrollView(fixture, terminal: terminal, stage: stage, file: file, line: line)
         let document = try XCTUnwrap(scroll.documentView, file: file, line: line)
         let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
@@ -738,7 +743,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // BEGIN viewport timeline diagnostic
         timeline?.mark("after-didEndLiveScroll")
         // END viewport timeline diagnostic
-        settle(fixture.host)
+        await settle(fixture.host)
     }
 
     private func position(_ fixture: Fixture, terminal: Terminal, surface requestedSurface: Surface? = nil,
@@ -796,7 +801,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         XCTAssertEqual(actual.glyphY, expected.glyphY, accuracy: 4, "Rendered line position within viewport (\(context))", file: file, line: line)
     }
 
-    func testActualHomeSwitchesEmptyDraftPeeksAndRetainsBothViewports() throws {
+    func testActualHomeSwitchesEmptyDraftPeeksAndRetainsBothViewports() async throws {
         // BEGIN viewport timeline diagnostic
         let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
         timeline = recorder
@@ -817,8 +822,8 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // END viewport timeline diagnostic
         let a = try f.terminal("VIEWPORT-A")
         let b = try f.terminal("VIEWPORT-B")
-        f.show(a); settle(f.host)
-        try scroll(f, terminal: a, fraction: 0.31, stage: "A choose off-bottom position")
+        f.show(a); await settle(f.host)
+        try await scroll(f, terminal: a, fraction: 0.31, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(first, stage: "A initial reading position")
@@ -827,28 +832,28 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         XCTAssertEqual(originalInspection.panelID, a.panelID)
         let oldModel = try XCTUnwrap(originalInspection.conversation)
         XCTAssertEqual(oldModel.draft, "")
-        f.show(b); settle(f.host)
-        try scroll(f, terminal: b, fraction: 0.63, stage: "B choose off-bottom position")
+        f.show(b); await settle(f.host)
+        try await scroll(f, terminal: b, fraction: 0.63, stage: "B choose off-bottom position")
         let second = try position(f, terminal: b, stage: "B initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(second, stage: "B initial reading position")
         // END viewport timeline diagnostic
-        f.show(a); settle(f.host)
+        f.show(a); await settle(f.host)
         _ = try scrollView(f, terminal: a, stage: "A reopened model identity")
         let reopenedInspection = try XCTUnwrap(f.controller.peeks.inspections[f.windowID])
         XCTAssertEqual(reopenedInspection.panelID, a.panelID)
         let reopenedModel = try XCTUnwrap(reopenedInspection.conversation)
         XCTAssertFalse(reopenedModel === oldModel, "Reopening an empty-draft Peek must use a new model.")
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
-        f.show(b); settle(f.host)
+        f.show(b); await settle(f.host)
         try assertPosition(second, f, terminal: b, stage: "B after switching back")
-        f.controller.peeks.close(in: f.windowID); settle(f.host)
-        f.show(a); settle(f.host)
+        f.controller.peeks.close(in: f.windowID); await settle(f.host)
+        f.show(a); await settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after close and reopen")
-        try appendAndCheckOffBottom(f, terminal: a, expected: first)
-        try scroll(f, terminal: a, fraction: 1, stage: "A move to bottom")
+        try await appendAndCheckOffBottom(f, terminal: a, expected: first)
+        try await scroll(f, terminal: a, fraction: 1, stage: "A move to bottom")
         try f.append(a, text: "VIEWPORT-A new tail\n" + String(repeating: "More tail text\n", count: 15))
-        settle(f.host)
+        await settle(f.host)
         let scroll = try scrollView(f, terminal: a, stage: "A bottom viewport")
         let document = try XCTUnwrap(scroll.documentView)
         // BEGIN viewport timeline diagnostic
@@ -861,14 +866,14 @@ final class CoordinatorPeekViewportTests: XCTestCase {
     }
 
     private func appendAndCheckOffBottom(_ fixture: Fixture, terminal: Terminal, expected: Position,
-                                        file: StaticString = #filePath, line: UInt = #line) throws {
+                                        file: StaticString = #filePath, line: UInt = #line) async throws {
         try fixture.append(terminal, text: "\(terminal.tag) appended while reading earlier text")
-        settle(fixture.host)
+        await settle(fixture.host)
         try assertPosition(expected, fixture, terminal: terminal, stage: "after off-bottom append",
             file: file, line: line)
     }
 
-    func testActualHomeRestoresPositionWithinSingleLongMessage() throws {
+    func testActualHomeRestoresPositionWithinSingleLongMessage() async throws {
         // BEGIN viewport timeline diagnostic
         let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
         timeline = recorder
@@ -889,32 +894,32 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // END viewport timeline diagnostic
         let a = try f.terminal("LONG-A", singleMessage: true)
         let b = try f.terminal("LONG-B", singleMessage: true)
-        f.show(a); settle(f.host)
-        try scroll(f, terminal: a, fraction: 0.27, stage: "A choose off-bottom position")
+        f.show(a); await settle(f.host)
+        try await scroll(f, terminal: a, fraction: 0.27, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(first, stage: "A initial reading position")
         // END viewport timeline diagnostic
         XCTAssertFalse(first.visibleText.contains("line 000"))
-        f.show(b); settle(f.host)
-        try scroll(f, terminal: b, fraction: 0.69, stage: "B choose off-bottom position")
+        f.show(b); await settle(f.host)
+        try await scroll(f, terminal: b, fraction: 0.69, stage: "B choose off-bottom position")
         let second = try position(f, terminal: b, stage: "B initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(second, stage: "B initial reading position")
         // END viewport timeline diagnostic
-        f.show(a); settle(f.host)
+        f.show(a); await settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
-        f.show(b); settle(f.host)
+        f.show(b); await settle(f.host)
         try assertPosition(second, f, terminal: b, stage: "B after switching back")
-        f.controller.peeks.close(in: f.windowID); settle(f.host)
-        f.show(a); settle(f.host)
+        f.controller.peeks.close(in: f.windowID); await settle(f.host)
+        f.show(a); await settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after close and reopen")
-        try appendAndCheckOffBottom(f, terminal: a, expected: first)
+        try await appendAndCheckOffBottom(f, terminal: a, expected: first)
         // BEGIN viewport timeline diagnostic
         timeline?.finishBody()
         // END viewport timeline diagnostic
     }
-    func testSameConversationHasIndependentViewportsInTwoHomeWindows() throws {
+    func testSameConversationHasIndependentViewportsInTwoHomeWindows() async throws {
         // BEGIN viewport timeline diagnostic
         let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
         timeline = recorder
@@ -935,8 +940,8 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // END viewport timeline diagnostic
         let a = try f.terminal("WINDOW-A", singleMessage: true)
         let b = try f.terminal("WINDOW-B", singleMessage: true)
-        f.show(a); settle(f.host)
-        try scroll(f, terminal: a, fraction: 0.22, stage: "A choose off-bottom position")
+        f.show(a); await settle(f.host)
+        try await scroll(f, terminal: a, fraction: 0.22, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(first, stage: "A initial reading position")
@@ -958,7 +963,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         timeline?.fixture(otherSurface)
         // END viewport timeline diagnostic
         f.controller.peeks.openSession(a.sessionID, in: otherID)
-        settle(otherHost)
+        await settle(otherHost)
         let scroll = try scrollView(f, terminal: a, surface: otherSurface, stage: "second window initial viewport")
         let document = try XCTUnwrap(scroll.documentView)
         // BEGIN viewport timeline diagnostic
@@ -993,22 +998,22 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // BEGIN viewport timeline diagnostic
         timeline?.mark("after-didEndLiveScroll")
         // END viewport timeline diagnostic
-        settle(otherHost)
+        await settle(otherHost)
         let other = try position(f, terminal: a, surface: otherSurface, stage: "second window initial reading position")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(other, stage: "second window initial reading position")
         // END viewport timeline diagnostic
         XCTAssertNotEqual(first.visibleText, other.visibleText)
-        f.show(b); settle(f.host)
-        f.show(a); settle(f.host)
+        f.show(b); await settle(f.host)
+        f.show(a); await settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
         let unchanged = try position(f, terminal: a, surface: otherSurface, stage: "second window after first-window switches")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(unchanged, stage: "second window after first-window switches")
         // END viewport timeline diagnostic
         assertPosition(other, unchanged, stage: "second window after first-window switches")
-        f.controller.peeks.close(in: otherID); settle(otherHost)
-        f.controller.peeks.openSession(a.sessionID, in: otherID); settle(otherHost)
+        f.controller.peeks.close(in: otherID); await settle(otherHost)
+        f.controller.peeks.openSession(a.sessionID, in: otherID); await settle(otherHost)
         let reopened = try position(f, terminal: a, surface: otherSurface, stage: "second window after close and reopen")
         // BEGIN viewport timeline diagnostic
         timeline?.sample(reopened, stage: "second window after close and reopen")
@@ -1019,7 +1024,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // END viewport timeline diagnostic
     }
 
-    func testExternalClipScrollWinsOverAppendAndDeferredWorkFromReplacedPeek() throws {
+    func testExternalClipScrollWinsOverAppendAndDeferredWorkFromReplacedPeek() async throws {
         // BEGIN viewport timeline diagnostic
         let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
         timeline = recorder
@@ -1040,7 +1045,7 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // END viewport timeline diagnostic
         let a = try f.terminal("DEFERRED-A", singleMessage: true)
         let b = try f.terminal("DEFERRED-B", singleMessage: true)
-        f.show(a); settle(f.host)
+        f.show(a); await settle(f.host)
         let scroll = try scrollView(f, terminal: a, stage: "A bottom viewport")
         let document = try XCTUnwrap(scroll.documentView)
         let maximum = document.bounds.height - scroll.contentView.bounds.height
@@ -1075,11 +1080,11 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         XCTAssertLessThan(expected.offset, maximum - 100)
         try f.append(a, text: "DEFERRED-A appended during navigation")
         f.host.layoutSubtreeIfNeeded()
-        f.show(b); settle(f.host, duration: 0.02)
-        f.show(a); settle(f.host)
+        f.show(b); await settle(f.host, duration: 0.02)
+        f.show(a); await settle(f.host)
         try assertPosition(expected, f, terminal: a, stage: "A after switching back")
         // The replaced view's queued work must not later push this mount down.
-        settle(f.host)
+        await settle(f.host)
         try assertPosition(expected, f, terminal: a, stage: "A after deferred work drains")
         // BEGIN viewport timeline diagnostic
         timeline?.finishBody()
