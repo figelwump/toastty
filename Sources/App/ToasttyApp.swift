@@ -975,7 +975,8 @@ struct ToasttyApp: App {
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator,
-            webPanelRuntimeRegistry: webPanelRuntimeRegistry
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            taskSpaceCloseAsker: .live(sessionRuntimeStore: sessionRuntimeStore)
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)

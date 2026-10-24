@@ -2540,6 +2540,24 @@ struct WorkspaceView: View {
             webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
         }
 
+        // Closing a task space's only tab asks about its task, in place of
+        // the tab's own confirmation. A save in progress still refuses.
+        let taskSpaceCloseAsker = TaskSpaceCloseAsker.live(sessionRuntimeStore: sessionRuntimeStore)
+        if shouldBypassInteractiveConfirmation == false,
+           workspace.tabIDs.count <= 1,
+           closeAssessment.allowsDestructiveConfirmation,
+           let answer = taskSpaceCloseAsker.ask(
+               closingWorkspaceID: workspaceID,
+               warning: { closeAssessment.requiresConfirmation ? closeAssessment.confirmationMessage : nil }
+           ) {
+            pendingWorkspaceTabClose = nil
+            if answer.choice != nil,
+               store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID), source: .ui("workspace_tab_close")) {
+                taskSpaceCloseAsker.taskSpaceClosed(answer)
+            }
+            return
+        }
+
         guard closeAssessment.requiresConfirmation else {
             pendingWorkspaceTabClose = nil
             _ = store.send(
