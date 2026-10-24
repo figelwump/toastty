@@ -16,6 +16,12 @@ ends. Do not merge with `gh`, close this workspace, or remove the worktree.
 Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, and stop.
 
+When the request includes a review ID, intent ID and approved commit/destination, keep that
+exact change throughout the procedure. Follow the repository's own merge
+guidance and additional skills. A different head or destination needs a new review; do not update
+or push the branch as part of this approval. Pass the intent with the final
+command as `--review-intent <intent-id>`. The app refuses a missing or mismatched intent for a saved review approval.
+
 ## Check the pull request
 
 Work in this task's checkout (`git rev-parse --show-toplevel`). Read the pull
@@ -58,13 +64,26 @@ If nothing blocks, run:
 "$TOASTTY_CLI_PATH" task merge --head <headRefOid>
 ```
 
-It returns at once. Report the pull request, the commit, and whether Toastty
-merges it now or after the checks that are still running. Then end your turn
-and run nothing else: Toastty cleans up after this turn ends.
+For a review request, require `headRefOid` to equal its approved commit, and add
+`--review-intent <intent-id>`. It returns at once. Report the pull request and
+commit as an accepted merge request; delivery is not proof that it merged.
+For a review request, report it before ending the turn:
+
+```bash
+"$TOASTTY_CLI_PATH" coordinator review report <review-id> --intent <intent-id> \
+  --outcome queued --detail "Toastty accepted the merge request for the approved commit."
+```
+
+Toastty confirms the PR state separately. Then end your turn and run nothing
+else: Toastty cleans up after this turn ends.
 
 If something blocks, report each blocker with its link and end your turn. Do
 not run `task merge`. The task then waits for the user in the Tasks view, who can
 fix the blocker and press Merge again, or choose Merge Without Checks.
+For a review request, also use `coordinator review report` with its intent ID,
+`--outcome blocked` and the concrete reason before ending the turn. Use
+`--outcome headChanged` when the approved version changed. Do not report a
+merge as confirmed merely because its command returned.
 
 If `task merge` refuses because the user cancelled the merge, do not retry it.
 

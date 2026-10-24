@@ -210,12 +210,31 @@ struct WorkspaceMergeCoordinatorTests {
 
         #expect(fixture.runner.checkCalls.count == 3)
         #expect(fixture.runner.checkCalls.first == [
-            "gh", "pr", "view", MergeFixture.pullRequest.url, "--json", "state,isDraft,headRefOid,mergeCommit",
+            "gh", "pr", "view", MergeFixture.pullRequest.url, "--json", "state,isDraft,headRefOid,baseRefName,mergeCommit",
         ])
         #expect(fixture.runner.scriptCalls.last == fixture.arguments("clean-up"))
         #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
         #expect(fixture.notifications.first?.body.hasPrefix("fix-question-lifetime: closed") == true)
         #expect(fixture.failureAlerts.isEmpty)
+    }
+
+    @Test
+    func aReviewedBaseIsRetainedOnInitialAndWaitingMergeAttempts() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks")]
+        await fixture.coordinator.merge(
+            workspaceID: fixture.taskWorkspaceID, pullRequest: MergeFixture.pullRequest,
+            repoPath: "/work/fix-question", thenCleanUp: false,
+            expectedHead: MergeFixture.acceptedHead, expectedBaseRefName: "main"
+        )?.value
+        #expect(fixture.request?.expectedBaseRefName == "main")
+        try await fixture.waitUntil { fixture.runner.scriptCalls.count >= 2 }
+        for call in fixture.runner.scriptCalls {
+            let index = try #require(call.firstIndex(of: "--expected-base"))
+            #expect(call[index + 1] == "main")
+        }
+        fixture.markDone(false)
     }
 
     @Test

@@ -517,6 +517,11 @@ its task space when no agent there is working and the worktree is clean at the
 merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
 
+Review briefs and approvals in the Coordinator surface use the same task agent
+and merge owner, with a persisted accepted commit and delivery status. See
+[Coordinator reviews](coordinator-reviews.md) for publishing briefs and reporting
+results. Quick task entry continues to create tasks directly.
+
 ## Archive a task
 
 **Archive…** closes a task without merging. Toastty first says what it will

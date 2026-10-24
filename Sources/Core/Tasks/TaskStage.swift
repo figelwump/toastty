@@ -256,6 +256,7 @@ public struct TaskPullRequestState: Equatable, Sendable {
     public var state: State
     public var isDraft: Bool
     public var headSHA: String?
+    public var baseRefName: String?
     public var mergeCommit: String?
     /// Whether GitHub would merge it now, and why not. `nil` when the
     /// answer did not say.
@@ -265,12 +266,14 @@ public struct TaskPullRequestState: Equatable, Sendable {
         state: State,
         isDraft: Bool = false,
         headSHA: String? = nil,
+        baseRefName: String? = nil,
         mergeCommit: String? = nil,
         mergeability: PullRequestMergeability? = nil
     ) {
         self.state = state
         self.isDraft = isDraft
         self.headSHA = headSHA
+        self.baseRefName = baseRefName
         self.mergeCommit = mergeCommit
         self.mergeability = mergeability
     }

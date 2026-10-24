@@ -18,6 +18,10 @@ final class AppControlExecutor {
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     let taskCoordinator: TaskCoordinator?
+    weak var installedCoordinatorReviewActions: CoordinatorReviewActions?
+    var coordinatorReviewActions: CoordinatorReviewActions? {
+        installedCoordinatorReviewActions ?? taskCoordinator?.coordinatorReviewActions
+    }
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -56,13 +60,15 @@ final class AppControlExecutor {
             if action.isTaskAction, taskCoordinator == nil {
                 return nil
             }
+            if action.isCoordinatorReviewAction, coordinatorReviewActions == nil { return nil }
             return action.descriptor
         }
     }
 
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
         AppControlQueryID.allCases.compactMap { query in
-            query.isTaskQuery && taskCoordinator == nil ? nil : query.descriptor
+            if query.isCoordinatorReviewQuery && coordinatorReviewActions == nil { return nil }
+            return query.isTaskQuery && taskCoordinator == nil ? nil : query.descriptor
         }
     }
 
@@ -815,6 +821,9 @@ final class AppControlExecutor {
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive:
             return try runTaskAction(action, args: args)
 
+        case .coordinatorReviewPublish, .coordinatorReviewReport:
+            return try runCoordinatorReviewAction(action, args: args)
+
         case .taskRelease:
             return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
 
@@ -1038,6 +1047,8 @@ final class AppControlExecutor {
 
         case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
             return try runTaskQuery(query, args: args)
+        case .coordinatorReviewGet, .coordinatorReviewList:
+            return try runCoordinatorReviewQuery(query, args: args)
         }
         }
     }

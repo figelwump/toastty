@@ -31,7 +31,7 @@ extension TaskCoordinator {
     /// turn ends. Returns at once. With `expectedHead`, the merge is
     /// refused unless the checkout is still at the commit the skill checked.
     @discardableResult
-    func merge(taskID: UUID, expectedHead: String?, caller: TaskCaller) throws -> TaskRecord {
+    func merge(taskID: UUID, expectedHead: String?, caller: TaskCaller, reviewIntentID: UUID? = nil) throws -> TaskRecord {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
@@ -41,8 +41,20 @@ extension TaskCoordinator {
             }
         }
         let target = try mergeTarget(record)
+        var acceptedBase: String?
+        if let acceptedIntent = record.reviewActionIntentID {
+            guard let actions = coordinatorReviewActions else {
+                throw TaskError("The saved review decision is unavailable. Open Coordinator before merging this reviewed change.")
+            }
+            acceptedBase = try actions.validateMerge(
+                taskID: taskID, pullRequestURL: target.pullRequest.url,
+                intentID: acceptedIntent, suppliedIntentID: reviewIntentID, expectedHead: expectedHead
+            )
+        } else if reviewIntentID != nil {
+            throw TaskError("This task has no matching review approval.")
+        }
         try checkNotCancelled(record, caller: caller)
-        return try startMerge(record, target: target, expectedHead: expectedHead)
+        return try startMerge(record, target: target, expectedHead: expectedHead, expectedBaseRefName: acceptedBase)
     }
 
     /// Merge from the UI: the top bar's button and its shortcut, the
@@ -54,6 +66,10 @@ extension TaskCoordinator {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
         let target = try mergeTarget(record)
+        // This is a new native Merge action, independent of a review card.
+        // It keeps the established task flow and replaces an older decision.
+        try saveMergeState(taskID: taskID) { $0.reviewActionIntentID = nil }
+        coordinatorReviewActions?.supersedeDelivery(taskID: taskID)
         let config = try? configLoader()
         let workspaceConfig = record.projectRoot.flatMap { config?.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath) }
         let mode = workspaceConfig?.merge ?? config?.defaults.merge ?? .agent
@@ -110,6 +126,7 @@ extension TaskCoordinator {
             break
         }
         mergeDeliveryTasks.removeValue(forKey: taskID)?.cancel()
+        try coordinatorReviewActions?.cancelDelivery(taskID: taskID)
         try saveMergeState(taskID: taskID) {
             $0.mergeRequestedAt = nil
             $0.mergeCancelledAt = self.now()
@@ -327,7 +344,7 @@ extension TaskCoordinator {
     }
 
     @discardableResult
-    private func startMerge(_ record: TaskRecord, target: MergeTarget, expectedHead: String?) throws -> TaskRecord {
+    private func startMerge(_ record: TaskRecord, target: MergeTarget, expectedHead: String?, expectedBaseRefName: String? = nil) throws -> TaskRecord {
         guard let merges else {
             throw TaskError("Merging is not available in this Toastty instance.")
         }
@@ -349,7 +366,8 @@ extension TaskCoordinator {
             pullRequest: target.pullRequest,
             repoPath: target.repoPath,
             thenCleanUp: true,
-            expectedHead: expectedHead
+            expectedHead: expectedHead,
+            expectedBaseRefName: expectedBaseRefName
         ) != nil else {
             throw TaskError("A merge of \(record.title) is already under way.")
         }

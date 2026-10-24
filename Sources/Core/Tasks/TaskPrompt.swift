@@ -142,6 +142,42 @@ public enum TaskPrompt {
 
     public static let defaultMergeSkill = "toastty-task-merge"
 
+    /// A review action states the user's intent and accepted version. The
+    /// task agent discovers its repository's procedure in its own context.
+    public static func reviewedMerge(
+        skill: String?, prompt: String?, pullRequestURL: String,
+        approvedHead: String, approvedBase: String, reviewID: UUID, intentID: UUID
+    ) -> String {
+        let sections: [String?] = [
+            skill.map(skillLine), prompt,
+            "The user approved \(pullRequestURL) at commit \(approvedHead), targeting \(approvedBase), for merging. "
+                + "Follow this repository's instructions and merge skills. Check its prerequisites, "
+                + "review threads and required checks. Do not change or push the branch as part of this approval. "
+                + "A different head or destination branch needs a new review.",
+            "Review ID: \(reviewID.uuidString)\nIntent ID: \(intentID.uuidString)",
+            "When the checks pass, use Toastty's guarded merge operation:\n"
+                + "\"$TOASTTY_CLI_PATH\" task merge --head \(approvedHead) --review-intent \(intentID.uuidString)",
+            "Report checking, blocked, failed, or merged with the reason:\n"
+                + "\"$TOASTTY_CLI_PATH\" coordinator review report \(reviewID.uuidString) "
+                + "--intent \(intentID.uuidString) --outcome <outcome> --detail \"<result or blocker>\"\n"
+                + "A report is advisory. Toastty confirms the PR state separately. "
+                + "Report before ending your turn; cleanup can close this task session.",
+        ]
+        return sections.compactMap { $0 }.joined(separator: "\n\n")
+    }
+
+    public static func reviewChanges(
+        pullRequestURL: String, reviewedHead: String, feedback: String, reviewID: UUID, intentID: UUID
+    ) -> String {
+        "The user requests changes to \(pullRequestURL), reviewed at commit \(reviewedHead):\n\n"
+            + feedback + "\n\n"
+            + "Follow this repository's instructions. This request does not approve a merge. "
+            + "When the changes are ready, publish new verification evidence and a new review brief. "
+            + "Report progress or blockers with:\n"
+            + "\"$TOASTTY_CLI_PATH\" coordinator review report \(reviewID.uuidString) "
+            + "--intent \(intentID.uuidString) --outcome <checking|blocked|failed|changesRequested> --detail \"<result>\""
+    }
+
     private static func worktreeLine(_ worktree: TaskOperation.Worktree, base: TaskOperation.Base?) -> String {
         if worktree.isDetached {
             var line = "You are in the git worktree \(worktree.path), on no branch"
