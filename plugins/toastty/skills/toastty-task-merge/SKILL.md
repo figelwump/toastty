@@ -31,10 +31,12 @@ Stop and report, without merging, when:
   waits for them;
 - the base is not the repository's default branch. The base pull request merges
   first, and GitHub then retargets this one;
-- the description lists merge prerequisites: an "Activation order", "Merge
-  order", "Rollout", or "Depends on" section, or a link to a pull request in
-  another repository. Name each one. Green CI or a merged linked pull request
-  does not confirm them; the user does;
+- the description says something must happen before this pull request
+  merges, such as another pull request merging first or an artifact being
+  rebuilt. Read the whole description and judge what each step means: a
+  rollout or deploy plan for after the merge does not block it. Name each
+  prerequisite. Green CI or a merged linked pull request does not confirm
+  them; the user does;
 - a review thread is unresolved. Query `reviewThreads` (`id`, `isResolved`, the
   first comment's `url`) with `gh api graphql`, fetch every page, and require the
   last page to have `hasNextPage: false`. A failed or partial query blocks the

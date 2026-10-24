@@ -160,7 +160,6 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "headRefOid": head, "baseRefName": "main", "isCrossRepository": False,
             "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "url": f"https://github.com/test/repo/pull/{number}",
             "statusCheckRollup": [{"name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            "body": "",
         })
         self.workspaces.append({
             "workspaceID": workspace_id(number), "title": branch,
@@ -345,17 +344,6 @@ class WorkspacePullRequestTests(unittest.TestCase):
         result = self.run_script("merge", 3, url="https://github.com/other/repo/pull/3")
         self.assertIn("is not this repository's PR #3", result["detail"])
         self.assertEqual(self.actions(), [])
-
-    def test_merge_refuses_a_pr_whose_description_lists_prerequisites(self):
-        self.task(1, state="OPEN")
-        self.prs[-1]["body"] = "## Summary\nFix.\n\n## Activation order\n1. Rebuild GhosttyKit.\n2. Merge this PR."
-        self.task(2, state="OPEN")
-        self.prs[-1]["body"] = "Needs https://github.com/other/fork/pull/1 merged first."
-        self.task(3, state="OPEN")
-        self.prs[-1]["body"] = "Follows #1 and https://github.com/test/repo/pull/2; see Test/Repo#2."
-        self.assertIn("Activation order section", self.run_script("merge", 1)["detail"])
-        self.assertIn("other/fork#1", self.run_script("merge", 2)["detail"])
-        self.assertEqual(self.run_script("merge", 3)["status"], "merged")
 
     def test_merge_reports_an_already_merged_pr_only_at_the_worktree_head(self):
         self.task(1)

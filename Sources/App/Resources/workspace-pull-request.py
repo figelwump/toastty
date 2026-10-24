@@ -20,10 +20,9 @@ ACTION is one of:
             done, which is how the user cancels a waiting merge. --expect-head,
             without --head, also requires the checkout's HEAD to be that commit:
             the version a merge skill checked. Either way it
-            refuses, changing nothing, unless the PR targets the default branch,
-            has no conflicts or failing checks, and its description lists no merge
-            prerequisites: an "Activation order", "Merge order", "Rollout", or
-            "Depends on" section, or a link to a PR in another repository. A draft
+            refuses, changing nothing, unless the PR targets the default branch
+            and has no conflicts or failing checks. It does not read the PR's
+            description: a merge skill, or the user, judges what it asks. A draft
             is marked ready first. The merge method is the first one the
             repository allows: merge commit, squash, then rebase.
   clean-up  After the PR merged: closes the workspace, removes the worktree, and
@@ -71,7 +70,7 @@ from dataclasses import dataclass
 
 PR_FIELDS = (
     "number,state,isDraft,headRefName,headRefOid,baseRefName,isCrossRepository,"
-    "mergeable,mergeStateStatus,statusCheckRollup,url,body,mergeCommit,autoMergeRequest"
+    "mergeable,mergeStateStatus,statusCheckRollup,url,mergeCommit,autoMergeRequest"
 )
 # The order to pick a merge method in, among the ones the repository allows.
 MERGE_METHODS = (("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"),
@@ -83,12 +82,7 @@ MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 # exit. When it ended live work, wait this long before rechecking the worktree so
 # a final write from a dying command shows up as uncommitted changes.
 CLOSE_GRACE_SECONDS = 2.0
-# A PR description section or label line that orders this merge after other work.
-PREREQUISITE_SECTION = re.compile(
-    r"^\s{0,3}(?:[-*]\s+)?(?:#{1,6}\s*|\*\*)?(activation order|merge order|rollout|depends on)\b(?:\*\*)?\s*(?::|$|\*\*|(?=#\d|https?://|[\w.-]+/[\w.-]+#\d))",
-    re.IGNORECASE | re.MULTILINE)
 PR_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)", re.IGNORECASE)
-PR_REFERENCE = re.compile(r"(?<![\w./-])([\w.-]+/[\w.-]+)#(\d+)\b")
 
 
 class Refusal(Exception):
@@ -238,27 +232,6 @@ def check_summary(pr: dict) -> tuple[list[str], list[str]]:
     return failing, pending
 
 
-def merge_prerequisites(body: str, repo_slug: str) -> str | None:
-    """Describes merge prerequisites the PR description lists, or None. Links to
-    PRs in this repository alone do not count; stacked PRs are handled by base."""
-    found: list[str] = []
-    for match in PREREQUISITE_SECTION.finditer(body):
-        name = match.group(1).capitalize()
-        if f"{name} section" not in found:
-            found.append(f"{name} section")
-    links: list[str] = []
-    for pattern in (PR_URL, PR_REFERENCE):
-        for slug, number in pattern.findall(body):
-            link = f"{slug}#{number}"
-            if slug.lower() != repo_slug.lower() and link not in links:
-                links.append(link)
-    if links:
-        found.append("links " + ", ".join(links))
-    if not found:
-        return None
-    return "its description lists merge prerequisites (" + "; ".join(found) + ")"
-
-
 def refresh_merge_state(ctx: Context) -> None:
     """`gh` reports UNKNOWN until GitHub computes mergeability, which a request
     triggers; ask once more if it is still computing."""
@@ -318,9 +291,6 @@ def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
         reasons.append(f"its branch is behind {ctx.default_branch} and must be updated")
     if failing:
         reasons.append("failing checks: " + ", ".join(failing))
-    prerequisites = merge_prerequisites(pr.get("body") or "", ctx.repo_slug)
-    if prerequisites:
-        reasons.append(prerequisites + "; merge it yourself once they are done")
     if reasons:
         raise Refusal("; ".join(reasons))
     method = next((flag for key, flag in MERGE_METHODS if ctx.repo_info.get(key)), None)
