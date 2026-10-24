@@ -3730,6 +3730,99 @@ extension RemoteAccessServiceSafetyTests {
 
     @MainActor
     @Test(.timeLimit(.minutes(1)))
+    func retainedDraftObservationPreservesBindingWithoutAuthorizingHiddenInput() async throws {
+        let fixture = try RemoteBootstrapFixture(initiallyEnabled: false)
+        defer { fixture.removeRuntimeFiles() }
+        let service = fixture.service.conversationService
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let model = CoordinatorConversationModel(service: service, panelID: fixture.panelID)
+        model.refresh()
+        let originalEpoch = try #require(model.inputEpoch)
+        model.draft = "Retain this reply while another Peek is visible"
+        #expect(model.canSend)
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+
+        service.setLocalPanelIDs([], retainingDraftPanels: [fixture.panelID])
+        model.refresh()
+        #expect(service.localConversations.isEmpty)
+        #expect(service.localSnapshot(for: fixture.conversationID, at: Date()) != nil)
+        #expect(fixture.terminalRuntimeRegistry.localInputObserver != nil)
+        #expect(model.inputEpoch?.bindingID == originalEpoch.bindingID)
+        #expect(!model.hasDraftFromPreviousSession)
+        let hidden = RemoteMessageSendRequest(conversationID: fixture.conversationID,
+            clientRequestID: "hidden-retained-draft", expectedInputEpoch: originalEpoch, text: model.draft)
+        #expect(await service.sendLocal(hidden) == .rejected(reason: .sendScopeDenied))
+        for mode: RemoteMessageDeliveryMode in [.queue, .steer] {
+            var request = hidden
+            request.clientRequestID += "-\(mode.rawValue)"
+            request.deliveryMode = mode
+            #expect(await service.sendLocal(request) == .rejected(reason: .sendScopeDenied))
+        }
+        var withFile = hidden
+        withFile.clientRequestID += "-attachment"
+        withFile.attachments = [.init(filename: "note.txt", data: Data("note".utf8))]
+        #expect(await service.sendLocal(withFile) == .rejected(reason: .sendScopeDenied))
+        #expect(service.interruptLocal(.init(conversationID: fixture.conversationID,
+            expectedTurnEpoch: originalEpoch)) == .rejected(reason: .sendScopeDenied))
+        #expect(service.updateLocalQueue(.init(conversationID: fixture.conversationID,
+            action: .resume)) == .conversationNotFound)
+        #expect(service.answerLocal(.init(conversationID: fixture.conversationID,
+            interactionID: .init(rawValue: "hidden-question"), responseID: "hidden-response", expectedInputEpoch: originalEpoch,
+            clientRequestID: "hidden-answer", answers: [])) == .rejected(reason: .sendScopeDenied))
+        #expect(delivered.isEmpty)
+
+        service.setLocalPanelIDs([fixture.panelID], retainingDraftPanels: [fixture.panelID])
+        model.refresh()
+        #expect(model.draft == hidden.text)
+        #expect(model.inputEpoch?.bindingID == originalEpoch.bindingID)
+        #expect(!model.hasDraftFromPreviousSession)
+        #expect(model.canSend)
+
+        // Retained observation must still see input typed in the backing terminal.
+        service.setLocalPanelIDs([], retainingDraftPanels: [fixture.panelID])
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        model.refresh()
+        let heldEpoch = try #require(model.draftHold?.epoch)
+        #expect(service.releaseLocalDraft(.init(conversationID: fixture.conversationID,
+            expectedDraftEpoch: heldEpoch)) == .rejected(reason: .sendScopeDenied))
+        service.setLocalPanelIDs([fixture.panelID], retainingDraftPanels: [fixture.panelID])
+        model.refresh()
+        #expect(model.draftHold != nil)
+        #expect(!model.canSend)
+        let heldPrompt = RemoteMessageSendRequest(conversationID: fixture.conversationID,
+            clientRequestID: "visible-retained-local-draft", expectedInputEpoch: originalEpoch,
+            text: model.draft, deliveryMode: .prompt)
+        #expect(await service.sendLocal(heldPrompt) == .rejected(reason: .localDraftPresent))
+        model.refresh()
+        #expect(model.draftHold?.epoch == heldEpoch)
+        #expect(model.draft == hidden.text)
+        #expect(delivered.isEmpty)
+
+        // A real input binding replacement remains stale, even while hidden.
+        service.setLocalPanelIDs([], retainingDraftPanels: [fixture.panelID])
+        service.projectionStore.noteBinding(for: fixture.conversationID, reason: .runtimeResumed,
+            bindingID: UUID(), at: Date())
+        service.projectionStore.bootstrapConfirmedOpenPrompt(for: fixture.conversationID, at: Date())
+        service.setLocalPanelIDs([fixture.panelID], retainingDraftPanels: [fixture.panelID])
+        model.refresh()
+        #expect(model.inputEpoch?.bindingID != originalEpoch.bindingID)
+        #expect(model.hasDraftFromPreviousSession)
+        #expect(!model.canSend)
+        #expect(delivered.isEmpty)
+
+        service.setLocalPanelIDs([])
+        #expect(service.localSnapshot(for: fixture.conversationID, at: Date()) == nil)
+        #expect(fixture.terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(fixture.server.startCallCount == 0)
+    }
+
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
     func localChangeSubscribersSurviveTrackingRestartAndInvalidateOldCursor() async throws {
         let fixture = try RemoteBootstrapFixture(initiallyEnabled: false)
         defer { fixture.removeRuntimeFiles() }

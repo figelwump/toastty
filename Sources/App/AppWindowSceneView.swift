@@ -12,6 +12,7 @@ struct AppWindowSceneView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let annotationStyleStore: AnnotationStyleStore
     var taskCoordinator: TaskCoordinator? = nil
+    var coordinatorHome: CoordinatorHomeController? = nil
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -99,6 +100,7 @@ struct AppWindowSceneView: View {
                     sessionRuntimeStore: sessionRuntimeStore,
                     annotationStyleStore: annotationStyleStore,
                     taskCoordinator: taskCoordinator,
+                    coordinatorHome: coordinatorHome,
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,

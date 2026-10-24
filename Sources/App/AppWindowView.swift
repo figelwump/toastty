@@ -12,6 +12,7 @@ struct AppWindowView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let annotationStyleStore: AnnotationStyleStore
     var taskCoordinator: TaskCoordinator? = nil
+    var coordinatorHome: CoordinatorHomeController? = nil
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -78,6 +79,8 @@ struct AppWindowView: View {
         )
     }
 
+    @StateObject private var coordinatorViewports = NativeConversationViewportStore()
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -90,6 +93,7 @@ struct AppWindowView: View {
                         annotationStyleStore: annotationStyleStore,
                         taskCoordinator: taskCoordinator,
                         taskBoard: taskBoard,
+                        coordinatorReviews: coordinatorHome?.reviews,
                         newTask: taskBoard.newTask,
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
@@ -130,14 +134,16 @@ struct AppWindowView: View {
                 // it, so terminals stay attached while it shows.
                 .overlay {
                     if showsTasksView, taskBoard.isEnabled {
-                        TasksView(
-                            windowID: windowID,
-                            store: store,
-                            board: taskBoard,
-                            sessionRuntimeStore: sessionRuntimeStore,
-                            newTask: taskBoard.newTask.map { action in { action() } },
-                            newTaskShortcutLabel: taskBoard.newTaskShortcutLabel()
-                        )
+                        if let coordinatorHome {
+                            CoordinatorHomeSurface(windowID: windowID, store: store, board: taskBoard,
+                                sessionRuntimeStore: sessionRuntimeStore, controller: coordinatorHome,
+                                peeks: coordinatorHome.peeks, viewportStore: coordinatorViewports)
+                        } else {
+                            TasksView(windowID: windowID, store: store, board: taskBoard,
+                                sessionRuntimeStore: sessionRuntimeStore,
+                                newTask: taskBoard.newTask.map { action in { action() } },
+                                newTaskShortcutLabel: taskBoard.newTaskShortcutLabel())
+                        }
                     }
                 }
             }

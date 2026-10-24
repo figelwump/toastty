@@ -1,8 +1,8 @@
 import CoreState
 import SwiftUI
 
-/// The top of the sidebar while the task system is on: the Tasks row, which
-/// opens the Tasks view and counts the tasks waiting for the user, with the
+/// The top of the sidebar while the task system is on: the Coordinator row,
+/// which opens the review home and counts decisions that need attention, with the
 /// ＋ that opens quick entry; and the Projects | Status switcher.
 struct SidebarTasksHeader: View {
     let needsYouCount: Int
@@ -32,7 +32,7 @@ struct SidebarTasksHeader: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                         .frame(width: 14)
-                    Text("Tasks")
+                    Text("Coordinator")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(ToastyTheme.primaryText)
                     if needsYouCount > 0 {
@@ -124,9 +124,9 @@ struct SidebarTasksHeader: View {
 
     static func tasksRowAccessibilityLabel(needsYouCount: Int) -> String {
         switch needsYouCount {
-        case 0: "Tasks"
-        case 1: "Tasks, 1 needs you"
-        default: "Tasks, \(needsYouCount) need you"
+        case 0: "Coordinator"
+        case 1: "Coordinator, 1 needs you"
+        default: "Coordinator, \(needsYouCount) need you"
         }
     }
 }

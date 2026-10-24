@@ -58,8 +58,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case sendDiagnostics
     case reloadConfiguration
 
-    private static let showTasksTitle = "Show Tasks"
-    private static let hideTasksTitle = "Hide Tasks"
+    private static let showTasksTitle = "Show Coordinator"
+    private static let hideTasksTitle = "Hide Coordinator"
     private static let showSidebarTitle = "Show Sidebar"
     private static let hideSidebarTitle = "Hide Sidebar"
     private static let showRightPanelTitle = "Show Right Panel"
@@ -468,7 +468,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .newTask:
             return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
         case .toggleTasksView:
-            return ["tasks", "task", "show", "hide", "view", "board", "toggle"]
+            return ["coordinator", "review", "tasks", "task", "show", "hide", "view", "board", "toggle"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleRightPanel:

@@ -582,6 +582,7 @@ struct SidebarView: View {
     let taskCoordinator: TaskCoordinator?
     /// Every task's stage. Observed: a stage change moves rows and marks.
     @ObservedObject var taskBoard: TaskBoardStore
+    let coordinatorReviews: CoordinatorReviewStore?
     /// Opens the quick entry panel; `nil` hides the Tasks row's ＋.
     let newTask: (@MainActor () -> Void)?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
@@ -767,6 +768,7 @@ struct SidebarView: View {
         annotationStyleStore: AnnotationStyleStore,
         taskCoordinator: TaskCoordinator? = nil,
         taskBoard: TaskBoardStore = .disabled,
+        coordinatorReviews: CoordinatorReviewStore? = nil,
         newTask: (@MainActor () -> Void)? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
@@ -783,6 +785,7 @@ struct SidebarView: View {
         self.annotationStyleStore = annotationStyleStore
         self.taskCoordinator = taskCoordinator
         self.taskBoard = taskBoard
+        self.coordinatorReviews = coordinatorReviews
         self.newTask = newTask
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
@@ -1025,9 +1028,20 @@ struct SidebarView: View {
         store.window(id: windowID)?.sidebarSegment ?? .projects
     }
 
+    @ViewBuilder
     private var tasksHeader: some View {
+        if let coordinatorReviews {
+            CoordinatorDecisionBadge(reviews: coordinatorReviews, board: taskBoard) { count in
+                tasksHeader(needsYouCount: count)
+            }
+        } else {
+            tasksHeader(needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count)
+        }
+    }
+
+    private func tasksHeader(needsYouCount: Int) -> some View {
         SidebarTasksHeader(
-            needsYouCount: taskBoardSnapshot.windowItems.filter(\.stage.needsUser).count,
+            needsYouCount: needsYouCount,
             isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
             segment: sidebarSegment,
             openTasksView: { openTasksView(selecting: nil) },

@@ -21,12 +21,13 @@ final class ConversationService {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private(set) var localPanelIDs: Set<UUID> = []
+    private var retainedDraftPanelIDs: Set<UUID> = []
     private var remoteTrackingEnabled = false
     private var isTracking = false
     private var demandReconciliationTask: Task<Void, Never>?
     private var retainedPanelIDs: Set<UUID> {
         let conversations = sendQueue.conversationIDs.union(pendingSendConfirmationWork.keys.map(\.conversationID))
-        return Set(conversations.compactMap { panelIDByConversationID[$0] })
+        return Set(conversations.compactMap { panelIDByConversationID[$0] }).union(retainedDraftPanelIDs)
     }
     private var publicationDepth = 0
     private var revision: UInt64 = 0
@@ -129,10 +130,12 @@ final class ConversationService {
         self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
     }
 
-    /// The app supplies the coordinator and currently open Peek panel IDs.
-    func setLocalPanelIDs(_ panelIDs: Set<UUID>) {
-        guard localPanelIDs != panelIDs else { return }
+    /// Displayed panels authorize local input. Retained drafts only keep observation
+    /// alive, so navigation does not discard their input binding or miss local input.
+    func setLocalPanelIDs(_ panelIDs: Set<UUID>, retainingDraftPanels: Set<UUID> = []) {
+        guard localPanelIDs != panelIDs || retainedDraftPanelIDs != retainingDraftPanels else { return }
         localPanelIDs = panelIDs
+        retainedDraftPanelIDs = retainingDraftPanels
         updateTracking()
     }
 

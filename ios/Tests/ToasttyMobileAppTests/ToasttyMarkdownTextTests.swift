@@ -1,3 +1,4 @@
+import ConversationUI
 import Foundation
 import SwiftUI
 import XCTest
@@ -141,6 +142,31 @@ final class ToasttyMarkdownTextTests: XCTestCase {
         XCTAssertEqual(inlineCode?.foregroundColor, ToasttyDesignTokens.amberText)
         XCTAssertEqual(inlineCode?.backgroundColor, ToasttyDesignTokens.chipSurface)
         XCTAssertNil(inlineCode?.link, "Inline code must not be promoted to an external link")
+    }
+
+    func testSharedRendererAppliesEachHostThemeWithoutChangingLinkDestinations() throws {
+        let source = "`value` [task](toastty://task/task-1) [session](toastty://session/session-1) [web](https://example.com)"
+        var alternate = ConversationTheme.toastty
+        alternate.amberText = .purple
+        alternate.externalLink = .pink
+        alternate.chipSurface = .orange
+
+        let alternateBlocks = ConversationMarkdownText.blocks(source, theme: alternate)
+        let phoneBlocks = ToasttyMarkdownText.blocks(source)
+        let alternateContent = try XCTUnwrap(alternateBlocks.first).content
+        let phoneContent = try XCTUnwrap(phoneBlocks.first).content
+        let alternateCode = alternateContent.runs.first { $0.inlinePresentationIntent?.contains(.code) == true }
+        let phoneCode = phoneContent.runs.first { $0.inlinePresentationIntent?.contains(.code) == true }
+        XCTAssertEqual(alternateCode?.foregroundColor, .purple)
+        XCTAssertEqual(alternateCode?.backgroundColor, .orange)
+        XCTAssertEqual(phoneCode?.foregroundColor, ToasttyDesignTokens.amberText)
+        XCTAssertEqual(phoneCode?.backgroundColor, ToasttyDesignTokens.chipSurface)
+        XCTAssertEqual(alternateContent.runs.first { $0.link?.scheme == "https" }?.foregroundColor, .pink)
+        XCTAssertEqual(phoneContent.runs.first { $0.link?.scheme == "https" }?.foregroundColor, ToasttyDesignTokens.externalLink)
+        for link in ["toastty://task/task-1", "toastty://session/session-1"] {
+            XCTAssertNotNil(alternateContent.runs.first { $0.link?.absoluteString == link })
+            XCTAssertNotNil(phoneContent.runs.first { $0.link?.absoluteString == link })
+        }
     }
 
     private func inlineCodeRuns(in attributed: AttributedString) -> [String] {
