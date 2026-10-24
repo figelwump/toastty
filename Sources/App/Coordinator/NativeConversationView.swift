@@ -33,22 +33,23 @@ struct NativeConversationView<Header: View, Empty: View>: View {
             header()
             Divider()
             if let viewportStore, let viewportPanelID {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        transcript.background {
-                            NativeConversationViewportMarker(session: viewportSession, store: viewportStore,
-                                panelID: viewportPanelID, conversationID: conversation.snapshot?.summary.conversationID,
-                                eventIDs: conversation.events.filter(isTranscriptRow).map(\.eventID),
-                                isHistoryLoaded: conversation.snapshot.map {
-                                    (conversation.events.last?.sequence ?? 0) >= $0.summary.latestSequence
-                                } ?? false,
-                                scrollTo: { proxy.scrollTo($0, anchor: .top) })
-                        }
+                let materialization = viewportSession.materialization
+                ScrollView {
+                    transcript.background {
+                        NativeConversationViewportMarker(session: viewportSession, store: viewportStore,
+                            panelID: viewportPanelID, conversationID: conversation.snapshot?.summary.conversationID,
+                            eventIDs: conversation.events.filter(isTranscriptRow).map(\.eventID),
+                            isHistoryLoaded: conversation.snapshot.map {
+                                (conversation.events.last?.sequence ?? 0) >= $0.summary.latestSequence
+                            } ?? false,
+                            materialization: materialization)
                     }
-                    .overlay(alignment: .bottomTrailing) {
-                        if !viewportSession.followsTail, conversation.snapshot?.pendingInteractions.isEmpty == false {
-                            Button("Agent needs a response ↓") { viewportSession.revealTail() }.padding(12)
-                        }
+                }
+                .scrollPosition(id: viewportSession.positionBinding(for: materialization, store: viewportStore,
+                    panelID: viewportPanelID, conversationID: conversation.snapshot?.summary.conversationID), anchor: .top)
+                .overlay(alignment: .bottomTrailing) {
+                    if !viewportSession.followsTail, conversation.snapshot?.pendingInteractions.isEmpty == false {
+                        Button("Agent needs a response ↓") { viewportSession.revealTail() }.padding(12)
                     }
                 }
             } else {
@@ -101,12 +102,13 @@ struct NativeConversationView<Header: View, Empty: View>: View {
             if conversation.events.isEmpty { empty() }
             // Keep this predicate aligned with eventView's rendered cases.
             ForEach(conversation.events.filter(isTranscriptRow), id: \.eventID) { event in
-                eventView(event).textSelection(.enabled).id(event.eventID)
+                eventView(event).textSelection(.enabled)
                     .background {
                         if viewportStore != nil, isTranscriptRow(event) {
                             NativeConversationViewportRow(eventID: event.eventID, session: viewportSession)
                         }
                     }
+                    .id(event.eventID)
             }
             ForEach(conversation.snapshot?.pendingInteractions ?? [], id: \.id) { interaction in
                 ConversationInteractionCard(interaction: interaction,
@@ -131,7 +133,9 @@ struct NativeConversationView<Header: View, Empty: View>: View {
                             value: bottom.frame(in: .named("conversation-scroll")).maxY)
                     }
                 })
-        }.padding(20)
+        }
+        .scrollTargetLayout(isEnabled: viewportStore != nil && viewportPanelID != nil)
+        .padding(20)
     }
 
     private func followTail(_ proxy: ScrollViewProxy) {

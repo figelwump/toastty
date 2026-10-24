@@ -48,6 +48,15 @@ reopening Peek preserves that position even when the draft is empty. New
 messages follow the view while it is at the bottom. Reading earlier text keeps
 the view in place.
 
+Peek uses a temporary SwiftUI scroll-position identity to request a saved row.
+After the row attaches, it clears that identity and waits for the current marker
+view to receive the cleared value and lay out. AppKit then restores the position
+within the row. The clear acknowledgment does not prove that SwiftUI has canceled
+all internal adjustments. This replacement still needs the complete hosted
+viewport suite and native validation; the earlier filter-only candidate failed
+multi-message restoration. Streaming growth, stability and performance also
+remain unverified.
+
 Each window owns its Peek selection. Toastty tracks the union of those panels
 and the Coordinator panel. Closing Peek releases viewing demand. An unfinished
 draft, attachment or send keeps conversation observation active until it is

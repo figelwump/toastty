@@ -55,7 +55,16 @@ final class NativeConversationViewportStore: ObservableObject {
 /// survives its removal, while this object and its weak row registry do not.
 @MainActor
 final class NativeConversationViewportSession: ObservableObject {
+    struct Materialization: Equatable {
+        let generation: Int
+        let target: String?
+    }
     @Published private(set) var followsTail = true
+    @Published private(set) var materialization = Materialization(generation: 0, target: nil)
+    private var requestedMaterialization = Materialization(generation: 0, target: nil)
+    private var lastPublishedTargetGeneration = 0
+    private var acknowledgedNilGeneration = 0
+    private var materializationAttempts = 0
     private var following = true
     private var store: NativeConversationViewportStore?
     private var key: NativeConversationViewportStore.Key?
@@ -75,10 +84,10 @@ final class NativeConversationViewportSession: ObservableObject {
     private var rows = NSHashTable<NativeConversationViewportRowView>.weakObjects()
     private var eventIDs: [String] = []
     private var contentLoaded = false
-    private var scrollTo: ((String) -> Void)?
     private enum Restore {
         case pending
-        case locating(anchor: String, attempts: Int, layoutRevision: Int)
+        case locating(anchor: String, layoutRevision: Int)
+        case releasing(anchor: String)
         case correcting(anchor: String, attempts: Int, previousTop: CGFloat?, layoutRevision: Int)
         case suspended
         case idle
@@ -92,13 +101,11 @@ final class NativeConversationViewportSession: ObservableObject {
     private var observations: [NSObjectProtocol] = []
 
     func configure(store: NativeConversationViewportStore, panelID: UUID,
-                   conversationID: RemoteConversationID?, eventIDs: [String], isHistoryLoaded: Bool,
-                   scrollTo: @escaping (String) -> Void) {
+                   conversationID: RemoteConversationID?, eventIDs: [String], isHistoryLoaded: Bool) {
         let loadingChanged = contentLoaded != isHistoryLoaded
         let eventsChanged = self.eventIDs != eventIDs
         self.eventIDs = eventIDs
         self.contentLoaded = isHistoryLoaded
-        self.scrollTo = scrollTo
         let next = conversationID.map { NativeConversationViewportStore.Key(panelID: panelID, conversationID: $0) }
         if self.store !== store || key != next {
             if let key, let previous = self.store { previous.detach(key, token: token) }
@@ -106,6 +113,8 @@ final class NativeConversationViewportSession: ObservableObject {
             key = next
             token = UUID()
             revision += 1
+            requestMaterialization(nil, invalidateScope: true)
+            materializationAttempts = 0
             saved = next.flatMap { store.attach($0, token: token) }
             restore = .pending
             userScrolling = false
@@ -118,6 +127,49 @@ final class NativeConversationViewportSession: ObservableObject {
         scheduleLayout()
     }
 
+    func positionBinding(for snapshot: Materialization, store: NativeConversationViewportStore,
+                         panelID: UUID, conversationID: RemoteConversationID?) -> Binding<String?> {
+        let owner = ObjectIdentifier(store)
+        let key = conversationID.map { NativeConversationViewportStore.Key(panelID: panelID, conversationID: $0) }
+        return Binding(get: { [weak self] in
+            guard let self, let currentStore = self.store, ObjectIdentifier(currentStore) == owner,
+                  self.key == key, self.attached, self.contentLoaded,
+                  snapshot == self.requestedMaterialization, snapshot == self.materialization,
+                  case .locating = self.restore else { return nil }
+            return snapshot.target
+        }, set: { _ in
+            // SwiftUI identity readback is observation, not reading intent or a saved position.
+        })
+    }
+
+    private var materializationReleased: Bool {
+        requestedMaterialization.target == nil &&
+            (lastPublishedTargetGeneration == 0 || acknowledgedNilGeneration > lastPublishedTargetGeneration)
+    }
+
+    private func requestMaterialization(_ target: String?, invalidateScope: Bool = false) {
+        guard invalidateScope || requestedMaterialization.target != target else { return }
+        let snapshot = Materialization(generation: requestedMaterialization.generation + 1, target: target)
+        requestedMaterialization = snapshot
+        let currentToken = token
+        Task { @MainActor [weak self] in
+            guard let self, self.token == currentToken, self.requestedMaterialization == snapshot else { return }
+            if snapshot.target != nil { self.lastPublishedTargetGeneration = snapshot.generation }
+            self.materialization = snapshot
+        }
+    }
+
+    func markerDidLayout(_ marker: NativeConversationViewportMarkerView, materialization snapshot: Materialization) {
+        guard self.marker === marker, attached else { return }
+        if snapshot.target == nil, snapshot == materialization, snapshot == requestedMaterialization,
+           acknowledgedNilGeneration < snapshot.generation {
+            acknowledgedNilGeneration = snapshot.generation
+        }
+        // This acknowledges our cleared value in the mounted view, not cancellation
+        // of every internal SwiftUI adjustment. Correction still needs runtime proof.
+        geometryDidChange()
+    }
+
     private var isSuspended: Bool {
         if case .suspended = restore { return true }
         return false
@@ -128,18 +180,22 @@ final class NativeConversationViewportSession: ObservableObject {
         restore = .pending
         following = saved?.followsTail ?? following
         revision += 1
+        requestMaterialization(nil, invalidateScope: true)
+        materializationAttempts = 0
         userScrolling = false
         applying = false
         publishFollowing()
     }
 
     func attach(_ marker: NativeConversationViewportMarkerView) {
+        if self.marker !== marker { reloadPosition() }
         self.marker = marker
         if let key, let store, !store.isActive(key, token: token) {
             saved = store.attach(key, token: token)
             restore = .pending
             following = saved?.followsTail ?? true
             revision += 1
+            materializationAttempts = 0
             publishFollowing()
         }
         scheduleLayout()
@@ -149,6 +205,7 @@ final class NativeConversationViewportSession: ObservableObject {
         guard self.marker === marker else { return }
         if let key, let store { store.detach(key, token: token) }
         revision += 1
+        requestMaterialization(nil, invalidateScope: true)
         self.marker = nil
         scroll = nil
         observedDocument = nil
@@ -174,6 +231,7 @@ final class NativeConversationViewportSession: ObservableObject {
 
     func revealTail() {
         revision += 1
+        requestMaterialization(nil)
         restore = .idle
         following = true
         // Explicit intent survives a switch even before the layout pass that
@@ -253,6 +311,7 @@ final class NativeConversationViewportSession: ObservableObject {
     private func noteUserIntent() {
         guard attached, contentLoaded else { return }
         revision += 1
+        requestMaterialization(nil)
         restore = .idle
         following = false
         publishFollowing()
@@ -310,26 +369,29 @@ final class NativeConversationViewportSession: ObservableObject {
         let clip = currentScroll.contentView
         switch restore {
         case .pending:
+            guard materializationReleased else { return }
             if following { restore = .idle; setTop(maximumTop(document, clip)); capture() }
             else {
                 let anchor = [saved?.anchor, saved?.next, saved?.previous].compactMap { $0 }
                     .first { eventIDs.contains($0) } ?? eventIDs.first
                 guard let anchor else { return }
-                restore = .locating(anchor: anchor, attempts: 0, layoutRevision: layoutRevision)
-                scrollTo?(anchor)
-                scheduleLayout()
+                beginLocating(anchor)
             }
-        case .locating(let anchor, let attempts, let lastLayout):
+        case .locating(let anchor, let lastLayout):
             if visibleRow(anchor, in: currentScroll) != nil {
-                restore = .correcting(anchor: anchor, attempts: 0, previousTop: nil, layoutRevision: layoutRevision)
-                correct(anchor: anchor, attempts: 0, previousTop: nil, document: document, clip: clip)
+                restore = .releasing(anchor: anchor)
+                requestMaterialization(nil)
+                if materializationReleased { scheduleLayout() }
             } else if lastLayout != layoutRevision {
-                guard attempts < 8 else { restore = .suspended; return }
-                restore = .locating(anchor: anchor, attempts: attempts + 1, layoutRevision: layoutRevision)
-                scrollTo?(anchor)
-                // Retry only after actual row/layout changes, never eight
-                // consecutive Task hops before LazyVStack can materialize it.
+                guard materializationAttempts < 8 else { suspendRestoration(); return }
+                materializationAttempts += 1
+                restore = .locating(anchor: anchor, layoutRevision: layoutRevision)
+                // Keep one identity request alive across real layout changes.
             }
+        case .releasing(let anchor):
+            guard materializationReleased else { return }
+            restore = .correcting(anchor: anchor, attempts: 0, previousTop: nil, layoutRevision: layoutRevision)
+            correct(anchor: anchor, attempts: 0, previousTop: nil, document: document, clip: clip)
         case .correcting(let anchor, let attempts, let previousTop, let lastLayout):
             guard lastLayout != layoutRevision else { return }
             correct(anchor: anchor, attempts: attempts, previousTop: previousTop, document: document, clip: clip)
@@ -343,15 +405,28 @@ final class NativeConversationViewportSession: ObservableObject {
         }
     }
 
+    private func beginLocating(_ anchor: String) {
+        guard materializationReleased else { return }
+        guard materializationAttempts < 8 else { suspendRestoration(); return }
+        materializationAttempts += 1
+        restore = .locating(anchor: anchor, layoutRevision: layoutRevision)
+        requestMaterialization(anchor)
+    }
+
+    private func suspendRestoration() {
+        restore = .suspended
+        requestMaterialization(nil)
+    }
+
     private func visibleRow(_ anchor: String, in scroll: NSScrollView) -> NativeConversationViewportRowView? {
         rows.allObjects.first { $0.eventID == anchor && $0.window != nil &&
             $0.enclosingScrollView === scroll && $0.bounds.height > 0 }
     }
 
     private func correct(anchor: String, attempts: Int, previousTop: CGFloat?, document: NSView, clip: NSClipView) {
+        guard materializationReleased else { return }
         guard let scroll, let row = visibleRow(anchor, in: scroll) else {
-            restore = .locating(anchor: anchor, attempts: 0, layoutRevision: layoutRevision)
-            scrollTo?(anchor)
+            beginLocating(anchor)
             return
         }
         let frame = row.convert(row.bounds, to: document)
@@ -369,7 +444,7 @@ final class NativeConversationViewportSession: ObservableObject {
             restore = .idle
             capture()
         } else if attempts >= 8 {
-            restore = .suspended
+            suspendRestoration()
         } else {
             restore = .correcting(anchor: anchor, attempts: attempts + 1,
                 previousTop: top, layoutRevision: layoutRevision)
@@ -395,7 +470,7 @@ final class NativeConversationViewportSession: ObservableObject {
         return clip.constrainBoundsRect(document.convert(visible, to: clip))
     }
     private func setTop(_ top: CGFloat) {
-        guard attached, let scroll, let document = scroll.documentView else { return }
+        guard attached, materializationReleased, let scroll, let document = scroll.documentView else { return }
         let clip = scroll.contentView
         let target = constrainedBounds(forTop: top, document: document, clip: clip)
         lastGeometry = geometry
@@ -446,20 +521,25 @@ struct NativeConversationViewportMarker: NSViewRepresentable {
     let conversationID: RemoteConversationID?
     let eventIDs: [String]
     let isHistoryLoaded: Bool
-    let scrollTo: (String) -> Void
+    let materialization: NativeConversationViewportSession.Materialization
 
     func makeNSView(context: Context) -> NativeConversationViewportMarkerView {
         NativeConversationViewportMarkerView(session: session)
     }
     func updateNSView(_ view: NativeConversationViewportMarkerView, context: Context) {
         session.configure(store: store, panelID: panelID, conversationID: conversationID,
-            eventIDs: eventIDs, isHistoryLoaded: isHistoryLoaded, scrollTo: scrollTo)
+            eventIDs: eventIDs, isHistoryLoaded: isHistoryLoaded)
+        if view.materialization != materialization {
+            view.materialization = materialization
+            view.needsLayout = true
+        }
     }
     static func dismantleNSView(_ view: NativeConversationViewportMarkerView, coordinator: ()) { view.session.detach(view) }
 }
 
 final class NativeConversationViewportMarkerView: NSView {
     let session: NativeConversationViewportSession
+    var materialization = NativeConversationViewportSession.Materialization(generation: 0, target: nil)
     init(session: NativeConversationViewportSession) { self.session = session; super.init(frame: .zero); setAccessibilityElement(false) }
     required init?(coder: NSCoder) { nil }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -468,7 +548,7 @@ final class NativeConversationViewportMarkerView: NSView {
         if newWindow == nil { session.detach(self) }
         super.viewWillMove(toWindow: newWindow)
     }
-    override func layout() { super.layout(); session.geometryDidChange() }
+    override func layout() { super.layout(); session.markerDidLayout(self, materialization: materialization) }
 }
 
 struct NativeConversationViewportRow: NSViewRepresentable {
