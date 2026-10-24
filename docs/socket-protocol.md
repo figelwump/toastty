@@ -256,6 +256,8 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.cancel-merge`
 - `task.clean-up`
 - `task.ready-for-review`
+- `task.packet.publish`
+- `task.packet.get`
 - `task.mark-done`
 - `task.archive`
 - `task.release`
@@ -460,6 +462,35 @@ Notable action-specific behavior:
   - `task.ready-for-review` takes optional `taskID` and sets
     `readyForReviewAt`. `task.mark-done` requires `taskID`, sets `doneAt`, and
     marks the task space done.
+- `task.packet.publish`
+  - takes optional `taskID` (the calling agent's own task when left out),
+    `packet` (a JSON object, or its text) and `screenshots` (absolute paths,
+    one string or a list). The packet needs `summary` and `look_at` as
+    non-empty text and `not_verified` as a list of strings, which may be `[]`;
+    it may have `checks` (`name`, `ok` boolean, optional `log`) and
+    `screenshots` (`name`, `pair` `before`, `after` or `null`, optional
+    `width`). Any other key, or Toastty's own `task_id`, `version`,
+    `created_at` and `head_commit`, is refused. Each screenshot needs exactly
+    one file whose name without its extension is the screenshot's name, and
+    every file must be named; files are PNG, JPEG, GIF or WebP up to 20 MB.
+    A refusal is `INVALID_PAYLOAD` and stores nothing.
+  - runs through `app_control.run_action` only. It reads the task's worktree
+    `HEAD`, stores the packet as the next version under
+    `~/.toastty/task-packets/<task-id>/v<N>/` with copies of the screenshots,
+    sets `packetVersion`, `packetHeadCommit` and `readyForReviewAt`, and
+    returns the task object with `packet`: the stored packet, as
+    `task.packet.get` returns it.
+- `task.packet.get`
+  - takes optional `taskID` and `version` (an integer from 1). Changes
+    nothing; it is an action because it reads git, and runs through
+    `app_control.run_action` only. Returns `taskID`, `version`, `createdAt`,
+    `headCommit`, `summary`, `look_at`, `checks`, `not_verified`,
+    `screenshots` (each with `name`, `pair`, `width` and the stored `path`),
+    `latestVersion`, `currentHead` (the worktree's `HEAD` now, or `null`), and
+    `stale`: `true` when the newest packet's `headCommit` and `currentHead`
+    both exist and differ. `INVALID_PAYLOAD` when the task has no packet, the
+    version does not exist, or the packets were removed a week after the task
+    finished.
 - `task.archive`
   - requires `args.taskID`; takes booleans `closePullRequest`,
     `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
@@ -718,6 +749,8 @@ and `setup` with
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
+`packetVersion` and `packetHeadCommit` (the newest review packet and the
+worktree's commit then, or `null`),
 `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
 `group` (`inbox`, `needsYou`, `running`, `toShip`, `done`, or `archived`),
@@ -735,7 +768,9 @@ session that continues in the worktree, `conversationConfirmed`,
 `sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with
 `sourceKeptReason`). A task created with `fork` has `fork`:
 `sourceSessionID`, `sourceConversationID`, and `conversationConfirmed`, which is
-`true` once the fork reported a conversation of its own. `task.get` also has `agentState` (`state`: `notRunning`,
+`true` once the fork reported a conversation of its own. `task.get` also has
+`verifySkill`, the skill the task's agent follows to publish a review packet
+(`verify_skill` from `tasks.toml`, else `toastty-task-verify`), `agentState` (`state`: `notRunning`,
 `busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`, and
 `changedAt`, when the status last changed) and `lastReply` (`text`, cut at
 16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the

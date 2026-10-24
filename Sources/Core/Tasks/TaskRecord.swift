@@ -70,6 +70,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// Set by an agent whose work has no pull request, when it is ready for
     /// the user to look at.
     public var readyForReviewAt: Date?
+    /// The newest review packet the task's agent published, and the
+    /// worktree's commit then. See `TaskPacket`.
+    public var packetVersion: Int?
+    public var packetHeadCommit: String?
     /// When the pull request was seen merged, and the commit it made. The
     /// commit is what a release tag must contain for the task to ship.
     public var mergedAt: Date?

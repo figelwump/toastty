@@ -86,6 +86,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCancelMerge = "task.cancel-merge"
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
+    case taskPacketPublish = "task.packet.publish"
+    case taskPacketGet = "task.packet.get"
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
@@ -615,6 +617,29 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Mark a task's work, which has no pull request, ready for the user to review. The task waits in Needs you until the user marks it done. Without taskID, a task's agent marks its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
+            )
+        case .taskPacketPublish:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Publish the next version of a task's review packet: summary, look_at (the one thing to check first), checks [{name, ok, log}], not_verified (what was not checked; [] must be written out) and screenshots [{name, pair before|after|null, width}]. Refuses a packet without summary, look_at or not_verified, with an unknown key, or whose screenshots do not match the given files by name. Toastty copies the screenshots, stores the packet under ~/.toastty/task-packets/<task-id>/v<N>/ with the worktree's commit, and marks the task ready for review, as task.ready-for-review does. Without taskID, a task's agent publishes for its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "packet", summary: "The packet, as a JSON object or its text.", valueType: .string, required: true),
+                    .init(name: "screenshots", summary: "Absolute path of a screenshot the packet names; its file name without the extension is the screenshot's name. Repeat for more.", valueType: .string, required: false, repeatable: true),
+                ]
+            )
+        case .taskPacketGet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Return a task's review packet, the newest unless version names an older one, with each screenshot's stored path, latestVersion, the worktree's currentHead, and stale: true when commits landed in the worktree after the newest packet was published. Changes nothing; it is an action because it reads git. Without taskID, a task's agent reads its own task's packet.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "version", summary: "Packet version to read, from 1.", valueType: .integer, required: false),
+                ]
             )
         case .taskMarkDone:
             return .init(

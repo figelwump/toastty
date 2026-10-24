@@ -943,6 +943,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
+      toastty [--json] [--socket-path <path>] task packet publish [<task-id>] --file <packet.json> [--screenshot <path> ...]
+      toastty [--json] [--socket-path <path>] task packet get [<task-id>] [--version <n>]
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
@@ -2075,6 +2077,9 @@ public enum ToasttyCLI {
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
 
+        case "packet":
+            return try parseTaskPacketCommand(remaining, options: options, environment: environment)
+
         case "clean-up", "mark-done":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
             guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
@@ -2203,6 +2208,70 @@ public enum ToasttyCLI {
 
         default:
             throw ToasttyCLIError.usage("unknown task subcommand: \(verb)\n\n\(usage)")
+        }
+    }
+
+    /// `toastty task packet publish|get`. The packet file is read here and
+    /// sent as text; Toastty checks it. Screenshot paths are resolved here,
+    /// and Toastty copies the files.
+    private static func parseTaskPacketCommand(
+        _ arguments: [String],
+        options: CLIOptions,
+        environment: [String: String]
+    ) throws -> CLIInvocation {
+        guard let verb = arguments.first else {
+            throw ToasttyCLIError.usage("task packet requires publish or get\n\n\(usage)")
+        }
+        let workingDirectory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
+        func absolutePath(_ path: String) -> String {
+            let expanded = (path as NSString).expandingTildeInPath
+            guard expanded.hasPrefix("/") == false else { return expanded }
+            return URL(filePath: workingDirectory, directoryHint: .isDirectory)
+                .appending(path: expanded)
+                .standardizedFileURL
+                .path(percentEncoded: false)
+        }
+        func taskIDArgument(_ positionals: [String]) throws -> [String: AutomationJSONValue] {
+            guard positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task packet \(verb) takes at most one task ID\n\n\(usage)")
+            }
+            guard let taskID = positionals.first else { return [:] }
+            guard UUID(uuidString: taskID) != nil else {
+                throw ToasttyCLIError.usage("task packet \(verb) takes a task ID\n\n\(usage)")
+            }
+            return ["taskID": .string(taskID)]
+        }
+        switch verb {
+        case "publish":
+            let parsed = try parseCommandArguments(Array(arguments.dropFirst()), valueOptions: ["--file", "--screenshot"])
+            var args = try taskIDArgument(parsed.positionals)
+            guard let file = parsed.singleValue("--file") else {
+                throw ToasttyCLIError.usage("task packet publish requires --file <packet.json>\n\n\(usage)")
+            }
+            let path = absolutePath(file)
+            guard let data = FileManager.default.contents(atPath: path), let text = String(data: data, encoding: .utf8) else {
+                throw ToasttyCLIError.runtime("could not read --file \(path) as UTF-8 text")
+            }
+            args["packet"] = .string(text)
+            let screenshots = parsed.values("--screenshot").map(absolutePath)
+            if screenshots.isEmpty == false {
+                args["screenshots"] = .array(screenshots.map(AutomationJSONValue.string))
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.packet.publish", args: args))
+
+        case "get":
+            let parsed = try parseCommandArguments(Array(arguments.dropFirst()), valueOptions: ["--version"])
+            var args = try taskIDArgument(parsed.positionals)
+            if let rawVersion = parsed.singleValue("--version") {
+                guard let version = Int(rawVersion), version > 0 else {
+                    throw ToasttyCLIError.usage("--version must be a packet version from 1\n\n\(usage)")
+                }
+                args["version"] = .int(version)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.packet.get", args: args))
+
+        default:
+            throw ToasttyCLIError.usage("unknown task packet subcommand: \(verb)\n\n\(usage)")
         }
     }
 

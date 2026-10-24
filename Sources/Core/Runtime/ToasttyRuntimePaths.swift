@@ -33,6 +33,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let recentWorkspacesFileName = "recent-workspaces.json"
     private static let taskRecordsFileName = "task-records.json"
     private static let taskAttachmentsDirectoryName = "task-attachments"
+    private static let taskPacketsDirectoryName = "task-packets"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -106,6 +107,11 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     /// Toastty's copies of task attachments, in one folder per task.
     public var taskAttachmentsDirectoryURL: URL {
         configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// Review packets that tasks' agents published, in one folder per task.
+    public var taskPacketsDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.taskPacketsDirectoryName, directoryHint: .isDirectory)
     }
 
     public var defaultLogFileURL: URL {

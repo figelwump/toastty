@@ -825,7 +825,7 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive,
-             .coordinatorPost, .coordinatorShowTerminal:
+             .taskPacketPublish, .taskPacketGet, .coordinatorPost, .coordinatorShowTerminal:
             return try runTaskAction(action, args: args)
 
         case .taskRelease:
@@ -875,6 +875,18 @@ final class AppControlExecutor {
                 return try prepareTaskCreate(args: args)
             }
             return try await finishTaskCreate(coordinator, preparation)
+        }
+        if AppControlActionID.resolve(rawID) == .taskPacketPublish {
+            let (coordinator, preparation) = try withRequestContext(context) {
+                try preparePacketPublish(args: args)
+            }
+            return try await finishPacketPublish(coordinator, preparation)
+        }
+        if AppControlActionID.resolve(rawID) == .taskPacketGet {
+            let (coordinator, taskID, version) = try withRequestContext(context) {
+                try preparePacketGet(args: args)
+            }
+            return try await finishPacketGet(coordinator, taskID: taskID, version: version)
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {
             let (coordinator, taskID, options) = try withRequestContext(context) {

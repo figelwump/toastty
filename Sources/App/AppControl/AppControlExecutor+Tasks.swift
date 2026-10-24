@@ -5,8 +5,9 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive, .taskRelease,
-             .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .windowTasksShow, .windowTasksHide,
+             .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -75,6 +76,8 @@ extension AppControlExecutor {
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskArchive:
             throw AutomationSocketError.invalidPayload("task.archive checks git before it returns; send it through app_control.run_action")
+        case .taskPacketPublish, .taskPacketGet:
+            throw AutomationSocketError.invalidPayload("\(action.rawValue) reads git before it returns; send it through app_control.run_action")
         case .taskSend:
             let record = try visibleTask(args: args, coordinator: coordinator)
             guard let text = args.taskString("text") else {
@@ -177,6 +180,106 @@ extension AppControlExecutor {
         }
     }
 
+    /// `task.packet.publish`: the packet and its files are checked now, in
+    /// this request's context; git and the copies run after an await.
+    func preparePacketPublish(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskPacketPublishPreparation) {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+        let packetJSON: Data
+        switch args["packet"] {
+        case .string(let text)?:
+            packetJSON = Data(text.utf8)
+        case .object(let object)?:
+            packetJSON = try JSONEncoder().encode(AutomationJSONValue.object(object))
+        default:
+            throw AutomationSocketError.invalidPayload("packet is required: the packet as a JSON object or its text")
+        }
+        let screenshots = try Self.taskStrings("screenshots", args: args)
+        if let relative = screenshots.first(where: { $0.hasPrefix("/") == false }) {
+            throw AutomationSocketError.invalidPayload("screenshots must be absolute paths: \(relative)")
+        }
+        let preparation = try perform {
+            try coordinator.preparePacketPublish(taskID: record.id, packetJSON: packetJSON, screenshotPaths: screenshots)
+        }
+        return (coordinator, preparation)
+    }
+
+    func finishPacketPublish(_ coordinator: TaskCoordinator, _ preparation: TaskPacketPublishPreparation) async throws -> AppControlActionOutcome {
+        do {
+            let (record, packet) = try await coordinator.finishPacketPublish(preparation)
+            var result = Self.taskSnapshot(record)
+            result["packet"] = .object(Self.packetSnapshot(packet, directory: coordinator.packets.versionDirectoryURL(
+                taskID: record.id,
+                version: packet.version ?? 0
+            )))
+            return .init(didMutateState: true, result: result)
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    func preparePacketGet(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, Int?) {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+        let version: Int?
+        switch args["version"] {
+        case nil, .null?:
+            version = nil
+        case .int(let value)?:
+            version = value
+        case .string(let value)?:
+            guard let parsed = Int(value) else { throw AutomationSocketError.invalidPayload("version must be a whole number") }
+            version = parsed
+        default:
+            throw AutomationSocketError.invalidPayload("version must be a whole number")
+        }
+        return (coordinator, record.id, version)
+    }
+
+    func finishPacketGet(_ coordinator: TaskCoordinator, taskID: UUID, version: Int?) async throws -> AppControlActionOutcome {
+        do {
+            let reading = try await coordinator.packet(taskID: taskID, version: version)
+            var result = Self.packetSnapshot(reading.packet, directory: coordinator.packets.versionDirectoryURL(
+                taskID: taskID,
+                version: reading.packet.version ?? 0
+            ))
+            result["taskID"] = .string(taskID.uuidString)
+            result["latestVersion"] = reading.latestVersion.map(AutomationJSONValue.int) ?? .null
+            result["currentHead"] = reading.currentHead.map(AutomationJSONValue.string) ?? .null
+            result["stale"] = .bool(reading.stale)
+            return .init(didMutateState: false, result: result)
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    /// A stored packet in the shape the agent wrote it, with Toastty's
+    /// fields and each screenshot's stored path.
+    static func packetSnapshot(_ packet: TaskPacket, directory: URL) -> [String: AutomationJSONValue] {
+        func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        return [
+            "version": packet.version.map(AutomationJSONValue.int) ?? .null,
+            "createdAt": optional(packet.createdAt.map { ISO8601DateFormatter().string(from: $0) }),
+            "headCommit": optional(packet.headCommit),
+            "summary": .string(packet.summary),
+            "look_at": .string(packet.lookAt),
+            "checks": .array(packet.checks.map { check in
+                .object(["name": .string(check.name), "ok": .bool(check.ok), "log": optional(check.log)])
+            }),
+            "not_verified": .array(packet.notVerified.map(AutomationJSONValue.string)),
+            "screenshots": .array(packet.screenshots.map { screenshot in
+                .object([
+                    "name": .string(screenshot.name),
+                    "pair": optional(screenshot.pair?.rawValue),
+                    "width": screenshot.width.map(AutomationJSONValue.int) ?? .null,
+                    "path": optional(screenshot.file.map {
+                        directory.appending(path: $0, directoryHint: .notDirectory).path(percentEncoded: false)
+                    }),
+                ])
+            }),
+        ]
+    }
+
     /// `task.release`, once the caller's access to the workspace is checked.
     func runTaskRelease(workspaceID: UUID) throws -> AppControlActionOutcome {
         let coordinator = try requiredTaskCoordinator()
@@ -218,9 +321,17 @@ extension AppControlExecutor {
             } else {
                 record = try visibleTask(args: args, coordinator: coordinator)
             }
-            return liveTaskSnapshot(
+            var snapshot = liveTaskSnapshot(
                 record, coordinator: coordinator, stage: Self.stagesByTaskID(coordinator.board)[record.id], includeReply: true
             )
+            // The skill the agent follows to publish its review packet. Only
+            // task.get reads tasks.toml for it; task.list stays cheap.
+            let config = try? coordinator.configLoader()
+            snapshot["verifySkill"] = .string(
+                config?.verifySkill(forProjectRoot: record.projectRoot, homeDirectoryPath: coordinator.homeDirectoryPath)
+                    ?? TaskPrompt.defaultVerifySkill
+            )
+            return snapshot
         case .taskList:
             let includeReply = try args.taskBool("includeReply") ?? false
             let stages = Self.stagesByTaskID(coordinator.board)
@@ -702,6 +813,8 @@ extension AppControlExecutor {
             "mergedAt": date(record.mergedAt),
             "mergeCommit": optional(record.mergeCommit),
             "readyForReviewAt": date(record.readyForReviewAt),
+            "packetVersion": record.packetVersion.map(AutomationJSONValue.int) ?? .null,
+            "packetHeadCommit": optional(record.packetHeadCommit),
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),
             "shippedAt": date(record.shippedAt),

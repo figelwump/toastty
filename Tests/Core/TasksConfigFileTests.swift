@@ -173,6 +173,7 @@ struct TasksConfigFileTests {
         ("[defaults]\nmerge_skill = \"  \"", 2, "merge_skill is empty"),
         ("[defaults]\nrelease_skill = 3", 2, "release_skill must be a quoted string"),
         ("[workspace.\"/r\"]\nrelease_skill = \"a\\tb\"", 2, "release_skill must be a skill name with no spaces"),
+        ("[workspace.\"/r\"]\nverify_skill = \"my verify\"", 2, "verify_skill must be a skill name with no spaces"),
         ("[workspace.\"/r\"]\nstart_skill = \"\"\"\none\ntwo\n\"\"\"", 2, "start_skill must be one line"),
         ("[coordinator]\nprompt = \"x\"", 2, "[coordinator] contains unknown key 'prompt'"),
         ("[coordinator]\nagent = \"my agent\"", 2, "one word"),
@@ -238,5 +239,20 @@ struct TasksConfigFileTests {
         everywhere.defaults.releaseSkill = "release"
         #expect(everywhere.canRelease(projectRoot: "/Users/tester/repos/site", homeDirectoryPath: home))
         #expect(everywhere.releaseSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-release")
+    }
+
+    @Test
+    func theVerifySkillComesFromTheProjectThenDefaultsThenToastty() throws {
+        let config = try parse("""
+        [defaults]
+        verify_skill = "team-verify"
+
+        [workspace."~/repos/toastty"]
+        verify_skill = "toastty-verify"
+        """)
+        #expect(config.verifySkill(forProjectRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home) == "toastty-verify")
+        #expect(config.verifySkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "team-verify")
+        #expect(config.verifySkill(forProjectRoot: nil, homeDirectoryPath: home) == "team-verify")
+        #expect(TasksConfig().verifySkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "toastty-task-verify")
     }
 }

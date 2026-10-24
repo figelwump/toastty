@@ -63,6 +63,7 @@ public struct TasksConfig: Equatable, Sendable {
         public var startSkill: String?
         public var mergeSkill: String?
         public var releaseSkill: String?
+        public var verifySkill: String?
 
         public init(
             agent: String? = nil,
@@ -72,7 +73,8 @@ public struct TasksConfig: Equatable, Sendable {
             mergePrompt: String? = nil,
             startSkill: String? = nil,
             mergeSkill: String? = nil,
-            releaseSkill: String? = nil
+            releaseSkill: String? = nil,
+            verifySkill: String? = nil
         ) {
             self.agent = agent
             self.model = model
@@ -82,6 +84,7 @@ public struct TasksConfig: Equatable, Sendable {
             self.startSkill = startSkill
             self.mergeSkill = mergeSkill
             self.releaseSkill = releaseSkill
+            self.verifySkill = verifySkill
         }
     }
 
@@ -128,6 +131,7 @@ public struct TasksConfig: Equatable, Sendable {
         public var startSkill: String?
         public var mergeSkill: String?
         public var releaseSkill: String?
+        public var verifySkill: String?
 
         public init(
             path: String,
@@ -140,7 +144,8 @@ public struct TasksConfig: Equatable, Sendable {
             mergePrompt: String? = nil,
             startSkill: String? = nil,
             mergeSkill: String? = nil,
-            releaseSkill: String? = nil
+            releaseSkill: String? = nil,
+            verifySkill: String? = nil
         ) {
             self.path = path
             self.guidelines = guidelines
@@ -153,6 +158,7 @@ public struct TasksConfig: Equatable, Sendable {
             self.startSkill = startSkill
             self.mergeSkill = mergeSkill
             self.releaseSkill = releaseSkill
+            self.verifySkill = verifySkill
         }
     }
 
@@ -198,6 +204,14 @@ public struct TasksConfig: Equatable, Sendable {
     /// else `[defaults]`.
     public func releaseSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
         workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.releaseSkill ?? defaults.releaseSkill
+    }
+
+    /// The skill that tells a task's agent how to write its review packet:
+    /// the project's own, else `[defaults]`, else `toastty-task-verify`.
+    public func verifySkill(forProjectRoot projectRoot: String?, homeDirectoryPath: String = NSHomeDirectory()) -> String {
+        projectRoot.flatMap { workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.verifySkill }
+            ?? defaults.verifySkill
+            ?? TaskPrompt.defaultVerifySkill
     }
 
     /// Whether Toastty can start a release for the project: it has a
@@ -434,7 +448,7 @@ private struct TasksConfigParser {
         try Self.rejectUnknownKeys(
             entries,
             table: table,
-            allowed: ["agent", "model", "effort", "merge", "merge_prompt", "start_skill", "merge_skill", "release_skill"]
+            allowed: ["agent", "model", "effort", "merge", "merge_prompt", "start_skill", "merge_skill", "release_skill", "verify_skill"]
         )
         return TasksConfig.Defaults(
             agent: try Self.selection("agent", in: entries, table: table, maximumLength: 64),
@@ -444,7 +458,8 @@ private struct TasksConfigParser {
             mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
             startSkill: try Self.skill("start_skill", in: entries, table: table),
             mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
-            releaseSkill: try Self.skill("release_skill", in: entries, table: table)
+            releaseSkill: try Self.skill("release_skill", in: entries, table: table),
+            verifySkill: try Self.skill("verify_skill", in: entries, table: table)
         )
     }
 
@@ -490,7 +505,7 @@ private struct TasksConfigParser {
             table: table,
             allowed: [
                 "guidelines", "create_hook", "branch_prefix", "release_tags", "release_prompt", "merge", "merge_prompt",
-                "start_skill", "merge_skill", "release_skill",
+                "start_skill", "merge_skill", "release_skill", "verify_skill",
             ]
         )
         let branchPrefix = try Self.string("branch_prefix", in: entries, table: table)
@@ -511,7 +526,8 @@ private struct TasksConfigParser {
             mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
             startSkill: try Self.skill("start_skill", in: entries, table: table),
             mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
-            releaseSkill: try Self.skill("release_skill", in: entries, table: table)
+            releaseSkill: try Self.skill("release_skill", in: entries, table: table),
+            verifySkill: try Self.skill("verify_skill", in: entries, table: table)
         )
     }
 

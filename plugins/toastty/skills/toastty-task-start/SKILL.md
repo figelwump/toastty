@@ -80,3 +80,9 @@ reaches it.
 
 After you open a pull request from the worktree, set the workspace's
 `github-pr` annotation as `toastty-capabilities` describes.
+
+## Ready for review
+
+When the work is ready for the user to look at, publish a review packet. Run
+`"$TOASTTY_CLI_PATH" task get` and follow the skill it names in `verifySkill`,
+which is `toastty-task-verify` unless the project names its own.

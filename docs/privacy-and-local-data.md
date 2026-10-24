@@ -66,6 +66,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Toastty's copies of files attached to a task. They are removed when the
     task is deleted, or a week after Toastty first sees the task Done or
     Archived with its task space closed. The task record keeps the file names.
+- `~/.toastty/task-packets/<task-id>/v<N>/`
+  - The review packets a task's agent published: its summary, what to look
+    at, the checks it ran and their log paths, what it did not verify, the
+    worktree's commit, and copies of its screenshots. They are removed with
+    the task's attachments.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.
@@ -177,6 +182,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/recent-right-panel-items.json`
   - `<runtime-home>/task-records.json`
   - `<runtime-home>/task-attachments/`
+  - `<runtime-home>/task-packets/`
   - `<runtime-home>/recent-workspaces.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`

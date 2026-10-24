@@ -21,7 +21,7 @@ Tell the user what will happen:
 - Shell integration comes first because it keeps Toastty's launcher shim ahead of later shell startup changes.
 - You will dry-run, show the plan, then ask before writing files.
 - Codex may need global status hooks; other supported managed agents get status integration at launch. Cursor receives a launch-scoped plugin, so Toastty does not change `~/.cursor/hooks.json`.
-- Toastty makes seven shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
+- Toastty makes eight shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
 - After setup, you can help them pick a workflow: a skill that has agents use Toastty's workspaces, panels, and agent launches the way they work.
 
 ## Available Setup Commands In This Build
