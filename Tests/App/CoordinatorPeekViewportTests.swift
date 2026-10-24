@@ -130,6 +130,325 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         let glyphY: CGFloat
     }
 
+    // BEGIN viewport timeline diagnostic
+    private struct TimelineView: Encodable {
+        let identity: String
+        let window: String?
+        let frame: [Double]
+        let bounds: [Double]
+    }
+
+    private struct TimelineGeometry: Encodable {
+        let surfaceID: UUID
+        let window: String?
+        let windowNumber: Int?
+        let windowFrame: [Double]?
+        let surface: TimelineView?
+        let scroll: TimelineView?
+        let clip: TimelineView?
+        let document: TimelineView?
+        let currentClip: String?
+        let currentDocument: String?
+        let clipPostsBounds: Bool?
+        let clipPostsFrame: Bool?
+        let documentPostsFrame: Bool?
+    }
+
+    private struct TimelinePosition: Encodable {
+        let offset: Double
+        let messagePrefix: String
+        let messageUTF16Length: Int
+        let lineRange: [Int]
+        let visibleText: String
+        let glyphY: Double
+
+        init(_ value: Position) {
+            offset = Double(value.offset)
+            messagePrefix = String(value.fullMessage.prefix(80))
+            messageUTF16Length = (value.fullMessage as NSString).length
+            lineRange = [value.lineRange.location, value.lineRange.length]
+            visibleText = String(value.visibleText.prefix(160))
+            glyphY = Double(value.glyphY)
+        }
+    }
+
+    private struct TimelineRecord: Encodable {
+        let elapsed: Double
+        let stage: String
+        let event: String
+        let insideTestScrollAndReflect: Bool
+        let geometry: TimelineGeometry?
+        var maximum: Double?
+        var targetY: Double?
+        var fraction: Double?
+        var requestBasis: String?
+        var expected: TimelinePosition?
+        var actual: TimelinePosition?
+        var sameFullMessage: Bool?
+        var textIdentities: [String]?
+        var textCount: Int?
+        var notificationObject: String?
+        var screenVisibleFrame: [Double]?
+        var contentBounds: [Double]?
+        var backingScale: Double?
+    }
+
+    @MainActor
+    private final class Timeline {
+        @MainActor
+        private final class Scope {
+            let id: UUID
+            let wasObserved: Bool
+            weak var window: NSWindow?
+            weak var surface: NSView?
+            weak var scroll: NSScrollView?
+            weak var clip: NSClipView?
+            weak var document: NSView?
+            var tokens: [NSObjectProtocol] = []
+
+            init(_ surface: Surface, scroll: NSScrollView? = nil) {
+                id = surface.windowID
+                wasObserved = scroll != nil
+                window = surface.window
+                self.surface = surface.root
+                self.scroll = scroll
+                clip = scroll?.contentView
+                document = scroll?.documentView
+            }
+
+            func removeObservers() {
+                tokens.forEach(NotificationCenter.default.removeObserver)
+                tokens.removeAll()
+            }
+        }
+
+        let method: String
+        let continueAfterFailure: Bool
+        private let start = ProcessInfo.processInfo.systemUptime
+        private let encoder = JSONEncoder()
+        private var records: [Data] = []
+        private var encodedBytes = 0
+        private var scopes: [UUID: Scope] = [:]
+        private var currentScope: Scope?
+        private var stage = "setup"
+        private var stopped = false
+        private var emitted = false
+        private var stoppedBeforeBodyEnd = false
+        private(set) var bodyReachedEnd = false
+        private var fixtureCount = 0
+        private var recordLimitReached = false
+        private var byteLimitReached = false
+        private var encodingFailed = false
+        private var missingViews = false
+        private var notificationsDisabled = false
+        private var replacementGap = false
+        private var identityListCapped = false
+        var insideTestScrollAndReflect = false
+
+        init(method: String, continueAfterFailure: Bool) {
+            self.method = method
+            self.continueAfterFailure = continueAfterFailure
+            mark("method-begin")
+        }
+
+        private static func identity(_ object: AnyObject?) -> String? {
+            object.map { String(describing: ObjectIdentifier($0)) }
+        }
+
+        private static func rect(_ value: NSRect) -> [Double] {
+            [Double(value.minX), Double(value.minY), Double(value.width), Double(value.height)]
+        }
+
+        private static func view(_ value: NSView?) -> TimelineView? {
+            value.map { TimelineView(identity: identity($0)!, window: identity($0.window),
+                frame: rect($0.frame), bounds: rect($0.bounds)) }
+        }
+
+        private func record(_ event: String, scope: Scope? = nil) -> TimelineRecord {
+            let scope = scope ?? currentScope
+            let geometry = scope.map { scope in
+                if scope.window == nil || scope.surface == nil { missingViews = true }
+                if scope.wasObserved && (scope.scroll == nil || scope.clip == nil || scope.document == nil) { missingViews = true }
+                if scope.scroll != nil && (scope.clip !== scope.scroll?.contentView || scope.document !== scope.scroll?.documentView) {
+                    replacementGap = true
+                }
+                return TimelineGeometry(surfaceID: scope.id, window: Self.identity(scope.window),
+                    windowNumber: scope.window?.windowNumber, windowFrame: scope.window.map { Self.rect($0.frame) },
+                    surface: Self.view(scope.surface), scroll: Self.view(scope.scroll), clip: Self.view(scope.clip),
+                    document: Self.view(scope.document), currentClip: Self.identity(scope.scroll?.contentView),
+                    currentDocument: Self.identity(scope.scroll?.documentView),
+                    clipPostsBounds: scope.clip?.postsBoundsChangedNotifications,
+                    clipPostsFrame: scope.clip?.postsFrameChangedNotifications,
+                    documentPostsFrame: scope.document?.postsFrameChangedNotifications)
+            }
+            return TimelineRecord(elapsed: ProcessInfo.processInfo.systemUptime - start, stage: stage,
+                event: event, insideTestScrollAndReflect: insideTestScrollAndReflect, geometry: geometry)
+        }
+
+        private func append(_ value: TimelineRecord) {
+            guard !stopped else { return }
+            guard records.count < 512 else { recordLimitReached = true; stop(); return }
+            guard let data = try? encoder.encode(value) else { encodingFailed = true; stop(); return }
+            // Reserve 16 KiB for the fixed header and JSON framing.
+            guard encodedBytes + data.count + 1 <= 245760 else { byteLimitReached = true; stop(); return }
+            encodedBytes += data.count + 1
+            records.append(data)
+        }
+
+        func begin(_ value: String, surface: Surface) {
+            guard !stopped else { return }
+            stage = value
+            currentScope = scopes[surface.windowID]
+            mark("stage-begin")
+        }
+
+        func mark(_ event: String) {
+            guard !stopped else { return }
+            append(record(event))
+        }
+
+        func fixture(_ surface: Surface) {
+            guard !stopped else { return }
+            fixtureCount += 1
+            let scope = Scope(surface)
+            var value = record("fixture-window", scope: scope)
+            value.screenVisibleFrame = surface.window.screen.map { Self.rect($0.visibleFrame) }
+            value.contentBounds = surface.window.contentView.map { Self.rect($0.bounds) }
+            value.backingScale = Double(surface.window.backingScaleFactor)
+            if surface.window.screen == nil { missingViews = true }
+            append(value)
+        }
+
+        func discovered(_ surface: Surface, scroll: NSScrollView, texts: [NSTextView]) {
+            guard !stopped else { return }
+            if let old = scopes[surface.windowID], old.scroll === scroll,
+               old.clip === scroll.contentView, old.document === scroll.documentView {
+                currentScope = old
+                textIdentity("discovered-existing-views", texts: texts)
+                return
+            }
+            if let old = scopes[surface.windowID] {
+                old.removeObservers()
+                replacementGap = true // New views were not observed before this existing discovery point.
+            }
+            let scope = Scope(surface, scroll: scroll)
+            scopes[surface.windowID] = scope
+            currentScope = scope
+            guard let clip = scope.clip, let document = scope.document else {
+                missingViews = true; mark("discovery-missing-clip-or-document"); return
+            }
+            if !clip.postsBoundsChangedNotifications || !clip.postsFrameChangedNotifications || !document.postsFrameChangedNotifications {
+                notificationsDisabled = true
+            }
+            for (name, object) in [(NSView.boundsDidChangeNotification, clip as NSView),
+                                   (NSView.frameDidChangeNotification, clip as NSView),
+                                   (NSView.frameDidChangeNotification, document)] {
+                scope.tokens.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self, weak scope] notification in
+                    let event = notification.name.rawValue
+                    let sender = (notification.object as? NSView).map { String(describing: ObjectIdentifier($0)) }
+                    MainActor.assumeIsolated {
+                        guard let self, let scope, !self.stopped else { return }
+                        var value = self.record(event, scope: scope)
+                        value.notificationObject = sender
+                        self.append(value)
+                    }
+                })
+            }
+            textIdentity("discovered-views", texts: texts)
+        }
+
+        func textIdentity(_ event: String, texts: [NSTextView]) {
+            guard !stopped else { return }
+            var value = record(event)
+            value.textCount = texts.count
+            value.textIdentities = texts.prefix(128).map { Self.identity($0)! }
+            if texts.count > 128 { identityListCapped = true }
+            append(value)
+        }
+
+        func failedDiscovery(texts: [NSTextView]) {
+            missingViews = true
+            textIdentity("discovery-failed", texts: texts)
+        }
+
+        func request(maximum: CGFloat, fraction: CGFloat?, basis: String) {
+            guard !stopped else { return }
+            var value = record(fraction == nil ? "tail-check-maximum" : "scroll-request")
+            value.maximum = Double(maximum)
+            value.fraction = fraction.map(Double.init)
+            value.targetY = fraction.map { Double(maximum * $0) }
+            value.requestBasis = basis
+            append(value)
+        }
+
+        func sample(_ value: Position, stage: String, expected: Position? = nil) {
+            guard !stopped else { return }
+            self.stage = stage
+            var result = record(expected == nil ? "computed-position" : "comparison")
+            result.actual = TimelinePosition(value)
+            result.expected = expected.map(TimelinePosition.init)
+            result.sameFullMessage = expected.map { $0.fullMessage == value.fullMessage }
+            append(result)
+        }
+
+        func finishBody() {
+            stoppedBeforeBodyEnd = stopped
+            mark("method-body-end")
+            bodyReachedEnd = true
+        }
+
+        func stop() {
+            scopes.values.forEach { $0.removeObservers() }
+            stopped = true
+        }
+
+        func attachment() -> XCTAttachment? {
+            guard !emitted else { return nil }
+            emitted = true
+            stop()
+            struct Header: Encodable {
+                let schemaVersion = 1
+                let base = "cae0f793ea9a50ce4ce996b1fd2c4ad0aeedc59b"
+                let method: String
+                let continueAfterFailure: Bool
+                let incomplete: Bool
+                let flags: [String: Bool]
+                let fixtureCount: Int
+                let recordCount: Int
+                let maxRecords = 512
+                let maxEncodedRecordBytes = 245760
+                let maxEncodedBytes = 262144
+                let coordinates = "rect arrays are x,y,width,height in each view's existing coordinate system"
+                let limits = "Callback delivery may be deferred; not write time. Exact discovered views only; gaps before discovery/replacement. Object addresses may be reused after deallocation. No writer attribution. Test-scroll interval does not identify synchronous notification writers. Position text is a bounded summary. Process termination can prevent attachment emission."
+            }
+            let flags = ["bodyDidNotReachEnd": !bodyReachedEnd, "fixtureMissing": fixtureCount == 0,
+                "recordLimitReached": recordLimitReached, "byteLimitReached": byteLimitReached,
+                "encodingFailed": encodingFailed, "missingViews": missingViews,
+                "notificationsDisabled": notificationsDisabled, "replacementGap": replacementGap,
+                "identityListCapped": identityListCapped, "stoppedBeforeBodyEnd": stoppedBeforeBodyEnd]
+            let header = Header(method: method, continueAfterFailure: continueAfterFailure,
+                incomplete: flags.values.contains(true), flags: flags, fixtureCount: fixtureCount, recordCount: records.count)
+            let fallback = Data(#"{"schemaVersion":1,"incomplete":true,"flags":{"attachmentEncodingFailed":true},"records":[]}"#.utf8)
+            let oversized = Data(#"{"schemaVersion":1,"incomplete":true,"flags":{"attachmentTooLarge":true},"records":[]}"#.utf8)
+            var data = (try? encoder.encode(header)) ?? Data()
+            if data.last == UInt8(ascii: "}") {
+                data.removeLast()
+                data.append(Data(",\"records\":[".utf8))
+                for (index, record) in records.enumerated() {
+                    if index > 0 { data.append(UInt8(ascii: ",")) }
+                    data.append(record)
+                }
+                data.append(Data("]}".utf8))
+            } else { data = fallback }
+            let attachment = XCTAttachment(data: data.count <= 262144 ? data : oversized, uniformTypeIdentifier: "public.json")
+            attachment.name = "peek-test-timeline-\(method)"
+            attachment.lifetime = .keepAlways
+            return attachment
+        }
+    }
+
+    private var timeline: Timeline?
+    // END viewport timeline diagnostic
     private func settle(_ host: NSView, duration: TimeInterval = 0.35) {
         let until = Date().addingTimeInterval(duration)
         while Date() < until {
@@ -201,6 +520,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                             stage: String, waitForReadiness: Bool = true,
                             file: StaticString = #filePath, line: UInt = #line) throws -> NSScrollView {
         let surface = requestedSurface ?? fixture.surface
+        // BEGIN viewport timeline diagnostic
+        timeline?.begin(stage, surface: surface)
+        // END viewport timeline diagnostic
         // Readiness never depends on an offset, an expected retained position,
         // or which line is visible. A wrong-but-rendered viewport is ready.
         let deadline = ProcessInfo.processInfo.systemUptime + (waitForReadiness ? 2 : 0)
@@ -213,6 +535,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                attached.count == 1, let scroll = attached.first, hasGeometry(scroll, surface: surface),
                matching.contains(where: { $0.enclosingScrollView === scroll && $0.window === surface.window
                    && !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width > 0 && $0.bounds.height > 0 }) {
+                // BEGIN viewport timeline diagnostic
+                timeline?.discovered(surface, scroll: scroll, texts: matching)
+                // END viewport timeline diagnostic
                 return scroll
             }
             guard ProcessInfo.processInfo.systemUptime < deadline else { break }
@@ -221,6 +546,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         }
         let context = failureContext(fixture, terminal: terminal, surface: surface, stage: stage)
         let matching = textViews(surface.root).filter { $0.string.hasPrefix(terminal.tag) }
+        // BEGIN viewport timeline diagnostic
+        timeline?.failedDiscovery(texts: matching)
+        // END viewport timeline diagnostic
         // Keep missing text distinct from text that has no enclosing scroll.
         _ = try XCTUnwrap(matching.first, "No matching NSTextView. \(context)", file: file, line: line)
         _ = try XCTUnwrap(matching.compactMap(\.enclosingScrollView).first,
@@ -235,13 +563,39 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         let scroll = try scrollView(fixture, terminal: terminal, stage: stage, file: file, line: line)
         let document = try XCTUnwrap(scroll.documentView, file: file, line: line)
         let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
+        // BEGIN viewport timeline diagnostic
+        timeline?.request(maximum: maximum, fraction: fraction, basis: "existing maximum local and fraction")
+        // END viewport timeline diagnostic
         XCTAssertGreaterThan(maximum, 1500, "The rendered fixture must be much longer than its viewport.", file: file, line: line)
         // Send the same intent notifications as an AppKit live scroll, then
         // move the real clip view. No product scheduler is changed for tests.
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("before-willStartLiveScroll")
+        // END viewport timeline diagnostic
         NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-willStartLiveScroll")
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        timeline?.insideTestScrollAndReflect = true
+        timeline?.mark("before-scroll")
+        // END viewport timeline diagnostic
         scroll.contentView.scroll(to: NSPoint(x: 0, y: maximum * fraction))
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-scroll")
+        // END viewport timeline diagnostic
         scroll.reflectScrolledClipView(scroll.contentView)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-reflect")
+        timeline?.insideTestScrollAndReflect = false
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("before-didEndLiveScroll")
+        // END viewport timeline diagnostic
         NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-didEndLiveScroll")
+        // END viewport timeline diagnostic
         settle(fixture.host)
     }
 
@@ -258,6 +612,10 @@ final class CoordinatorPeekViewportTests: XCTestCase {
                 !$0.isHiddenOrHasHiddenAncestor && $0.convert($0.bounds, to: clip).intersects(clip.bounds)
         }.sorted { $0.convert($0.bounds, to: clip).minY < $1.convert($1.bounds, to: clip).minY }
         let text = try XCTUnwrap(candidates.first, "No rendered message intersects the actual clip viewport. \(context)", file: file, line: line)
+        // BEGIN viewport timeline diagnostic
+        timeline?.textIdentity("selected-position-text", texts: [text])
+        timeline?.textIdentity("position-candidates", texts: candidates)
+        // END viewport timeline diagnostic
         let layout = try XCTUnwrap(text.layoutManager, "Visible text has no layout manager. \(context)", file: file, line: line)
         let container = try XCTUnwrap(text.textContainer, "Visible text has no text container. \(context)", file: file, line: line)
         let visible = text.convert(clip.bounds, from: clip).intersection(text.bounds)
@@ -281,6 +639,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
 
     private func assertPosition(_ expected: Position, _ actual: Position, stage: String,
                                 file: StaticString = #filePath, line: UInt = #line) {
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(actual, stage: stage, expected: expected)
+        // END viewport timeline diagnostic
         func describe(_ position: Position) -> String {
             let firstLine = String(position.fullMessage.prefix(80).prefix { $0 != "\n" })
             return "firstLine=\(firstLine.debugDescription) utf16Length=\((position.fullMessage as NSString).length) lineRange=\(position.lineRange) offset=\(position.offset)"
@@ -294,12 +655,32 @@ final class CoordinatorPeekViewportTests: XCTestCase {
     }
 
     func testActualHomeSwitchesEmptyDraftPeeksAndRetainsBothViewports() throws {
+        // BEGIN viewport timeline diagnostic
+        let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
+        timeline = recorder
+        addTeardownBlock { [weak self, recorder] in
+            MainActor.assumeIsolated {
+                if let attachment = recorder.attachment() { self?.add(attachment) }
+            }
+        }
+        defer {
+            if let attachment = recorder.attachment() { add(attachment) }
+            timeline = nil
+        }
+        // END viewport timeline diagnostic
         let f = try Fixture(); defer { f.shutdown() }
+        // BEGIN viewport timeline diagnostic
+        defer { timeline?.stop() }
+        timeline?.fixture(f.surface)
+        // END viewport timeline diagnostic
         let a = try f.terminal("VIEWPORT-A")
         let b = try f.terminal("VIEWPORT-B")
         f.show(a); settle(f.host)
         try scroll(f, terminal: a, fraction: 0.31, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(first, stage: "A initial reading position")
+        // END viewport timeline diagnostic
         let originalInspection = try XCTUnwrap(f.controller.peeks.inspections[f.windowID])
         XCTAssertEqual(originalInspection.panelID, a.panelID)
         let oldModel = try XCTUnwrap(originalInspection.conversation)
@@ -307,6 +688,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         f.show(b); settle(f.host)
         try scroll(f, terminal: b, fraction: 0.63, stage: "B choose off-bottom position")
         let second = try position(f, terminal: b, stage: "B initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(second, stage: "B initial reading position")
+        // END viewport timeline diagnostic
         f.show(a); settle(f.host)
         _ = try scrollView(f, terminal: a, stage: "A reopened model identity")
         let reopenedInspection = try XCTUnwrap(f.controller.peeks.inspections[f.windowID])
@@ -325,7 +709,13 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         settle(f.host)
         let scroll = try scrollView(f, terminal: a, stage: "A bottom viewport")
         let document = try XCTUnwrap(scroll.documentView)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("before-tail-assertion")
+        // END viewport timeline diagnostic
         XCTAssertLessThanOrEqual(document.bounds.maxY - scroll.contentView.bounds.maxY, 32)
+        // BEGIN viewport timeline diagnostic
+        timeline?.finishBody()
+        // END viewport timeline diagnostic
     }
 
     private func appendAndCheckOffBottom(_ fixture: Fixture, terminal: Terminal, expected: Position,
@@ -337,16 +727,39 @@ final class CoordinatorPeekViewportTests: XCTestCase {
     }
 
     func testActualHomeRestoresPositionWithinSingleLongMessage() throws {
+        // BEGIN viewport timeline diagnostic
+        let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
+        timeline = recorder
+        addTeardownBlock { [weak self, recorder] in
+            MainActor.assumeIsolated {
+                if let attachment = recorder.attachment() { self?.add(attachment) }
+            }
+        }
+        defer {
+            if let attachment = recorder.attachment() { add(attachment) }
+            timeline = nil
+        }
+        // END viewport timeline diagnostic
         let f = try Fixture(); defer { f.shutdown() }
+        // BEGIN viewport timeline diagnostic
+        defer { timeline?.stop() }
+        timeline?.fixture(f.surface)
+        // END viewport timeline diagnostic
         let a = try f.terminal("LONG-A", singleMessage: true)
         let b = try f.terminal("LONG-B", singleMessage: true)
         f.show(a); settle(f.host)
         try scroll(f, terminal: a, fraction: 0.27, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(first, stage: "A initial reading position")
+        // END viewport timeline diagnostic
         XCTAssertFalse(first.visibleText.contains("line 000"))
         f.show(b); settle(f.host)
         try scroll(f, terminal: b, fraction: 0.69, stage: "B choose off-bottom position")
         let second = try position(f, terminal: b, stage: "B initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(second, stage: "B initial reading position")
+        // END viewport timeline diagnostic
         f.show(a); settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
         f.show(b); settle(f.host)
@@ -355,14 +768,37 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         f.show(a); settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after close and reopen")
         try appendAndCheckOffBottom(f, terminal: a, expected: first)
+        // BEGIN viewport timeline diagnostic
+        timeline?.finishBody()
+        // END viewport timeline diagnostic
     }
     func testSameConversationHasIndependentViewportsInTwoHomeWindows() throws {
+        // BEGIN viewport timeline diagnostic
+        let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
+        timeline = recorder
+        addTeardownBlock { [weak self, recorder] in
+            MainActor.assumeIsolated {
+                if let attachment = recorder.attachment() { self?.add(attachment) }
+            }
+        }
+        defer {
+            if let attachment = recorder.attachment() { add(attachment) }
+            timeline = nil
+        }
+        // END viewport timeline diagnostic
         let f = try Fixture(); defer { f.shutdown() }
+        // BEGIN viewport timeline diagnostic
+        defer { timeline?.stop() }
+        timeline?.fixture(f.surface)
+        // END viewport timeline diagnostic
         let a = try f.terminal("WINDOW-A", singleMessage: true)
         let b = try f.terminal("WINDOW-B", singleMessage: true)
         f.show(a); settle(f.host)
         try scroll(f, terminal: a, fraction: 0.22, stage: "A choose off-bottom position")
         let first = try position(f, terminal: a, stage: "A initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(first, stage: "A initial reading position")
+        // END viewport timeline diagnostic
         let before = Set(f.tasks.store.state.windows.map(\.id))
         XCTAssertTrue(f.tasks.store.send(.createWindow(seed: nil, initialFrame: nil)))
         let otherID = try XCTUnwrap(f.tasks.store.state.windows.first { !before.contains($0.id) }?.id)
@@ -375,43 +811,124 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         otherWindow.orderFront(nil)
         let otherSurface = Surface(windowID: otherID, window: otherWindow, root: otherHost)
         defer { otherWindow.orderOut(nil); otherWindow.contentView = nil }
+        // BEGIN viewport timeline diagnostic
+        defer { timeline?.stop() }
+        timeline?.fixture(otherSurface)
+        // END viewport timeline diagnostic
         f.controller.peeks.openSession(a.sessionID, in: otherID)
         settle(otherHost)
         let scroll = try scrollView(f, terminal: a, surface: otherSurface, stage: "second window initial viewport")
         let document = try XCTUnwrap(scroll.documentView)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("before-willStartLiveScroll")
+        // END viewport timeline diagnostic
         NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-willStartLiveScroll")
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        // Snapshot the unchanged inline expression below; keep both expressions identical.
+        timeline?.request(maximum: document.bounds.height - scroll.contentView.bounds.height,
+            fraction: 0.71, basis: "immediate pre-call snapshot of original inline expression")
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        timeline?.insideTestScrollAndReflect = true
+        timeline?.mark("before-scroll")
+        // END viewport timeline diagnostic
         scroll.contentView.scroll(to: NSPoint(x: 0, y: (document.bounds.height - scroll.contentView.bounds.height) * 0.71))
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-scroll")
+        // END viewport timeline diagnostic
         scroll.reflectScrolledClipView(scroll.contentView)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-reflect")
+        timeline?.insideTestScrollAndReflect = false
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("before-didEndLiveScroll")
+        // END viewport timeline diagnostic
         NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-didEndLiveScroll")
+        // END viewport timeline diagnostic
         settle(otherHost)
         let other = try position(f, terminal: a, surface: otherSurface, stage: "second window initial reading position")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(other, stage: "second window initial reading position")
+        // END viewport timeline diagnostic
         XCTAssertNotEqual(first.visibleText, other.visibleText)
         f.show(b); settle(f.host)
         f.show(a); settle(f.host)
         try assertPosition(first, f, terminal: a, stage: "A after switching back")
         let unchanged = try position(f, terminal: a, surface: otherSurface, stage: "second window after first-window switches")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(unchanged, stage: "second window after first-window switches")
+        // END viewport timeline diagnostic
         assertPosition(other, unchanged, stage: "second window after first-window switches")
         f.controller.peeks.close(in: otherID); settle(otherHost)
         f.controller.peeks.openSession(a.sessionID, in: otherID); settle(otherHost)
         let reopened = try position(f, terminal: a, surface: otherSurface, stage: "second window after close and reopen")
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(reopened, stage: "second window after close and reopen")
+        // END viewport timeline diagnostic
         assertPosition(other, reopened, stage: "second window after close and reopen")
+        // BEGIN viewport timeline diagnostic
+        timeline?.finishBody()
+        // END viewport timeline diagnostic
     }
 
     func testExternalClipScrollWinsOverAppendAndDeferredWorkFromReplacedPeek() throws {
+        // BEGIN viewport timeline diagnostic
+        let recorder = Timeline(method: #function, continueAfterFailure: continueAfterFailure)
+        timeline = recorder
+        addTeardownBlock { [weak self, recorder] in
+            MainActor.assumeIsolated {
+                if let attachment = recorder.attachment() { self?.add(attachment) }
+            }
+        }
+        defer {
+            if let attachment = recorder.attachment() { add(attachment) }
+            timeline = nil
+        }
+        // END viewport timeline diagnostic
         let f = try Fixture(); defer { f.shutdown() }
+        // BEGIN viewport timeline diagnostic
+        defer { timeline?.stop() }
+        timeline?.fixture(f.surface)
+        // END viewport timeline diagnostic
         let a = try f.terminal("DEFERRED-A", singleMessage: true)
         let b = try f.terminal("DEFERRED-B", singleMessage: true)
         f.show(a); settle(f.host)
         let scroll = try scrollView(f, terminal: a, stage: "A bottom viewport")
         let document = try XCTUnwrap(scroll.documentView)
         let maximum = document.bounds.height - scroll.contentView.bounds.height
+        // BEGIN viewport timeline diagnostic
+        timeline?.request(maximum: maximum, fraction: nil, basis: "existing initial tail bound; no test scroll yet")
+        // END viewport timeline diagnostic
         XCTAssertGreaterThan(maximum, 1500)
         XCTAssertLessThanOrEqual(maximum - scroll.contentView.bounds.minY, 32)
         // Selection/autoscroll and accessibility can move the clip without
         // live-scroll notifications. Do not drain queued work before append.
+        // BEGIN viewport timeline diagnostic
+        timeline?.insideTestScrollAndReflect = true
+        timeline?.mark("before-scroll")
+        // END viewport timeline diagnostic
+        // BEGIN viewport timeline diagnostic
+        timeline?.request(maximum: maximum, fraction: 0.37, basis: "existing maximum local times 0.37")
+        // END viewport timeline diagnostic
         scroll.contentView.scroll(to: NSPoint(x: 0, y: maximum * 0.37))
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-scroll")
+        // END viewport timeline diagnostic
         scroll.reflectScrolledClipView(scroll.contentView)
+        // BEGIN viewport timeline diagnostic
+        timeline?.mark("after-reflect")
+        timeline?.insideTestScrollAndReflect = false
+        // END viewport timeline diagnostic
         let expected = try position(f, terminal: a, stage: "A immediate position before append", waitForReadiness: false)
+        // BEGIN viewport timeline diagnostic
+        timeline?.sample(expected, stage: "A immediate position before append")
+        // END viewport timeline diagnostic
         XCTAssertGreaterThan(expected.offset, 100)
         XCTAssertLessThan(expected.offset, maximum - 100)
         try f.append(a, text: "DEFERRED-A appended during navigation")
@@ -422,6 +939,9 @@ final class CoordinatorPeekViewportTests: XCTestCase {
         // The replaced view's queued work must not later push this mount down.
         settle(f.host)
         try assertPosition(expected, f, terminal: a, stage: "A after deferred work drains")
+        // BEGIN viewport timeline diagnostic
+        timeline?.finishBody()
+        // END viewport timeline diagnostic
     }
 
 }
