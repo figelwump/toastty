@@ -28,7 +28,7 @@ struct CoordinatorPeekStoreTests {
         var store: AppStore { tasks.store }
         var runtime: SessionRuntimeStore { tasks.sessionRuntimeStore }
 
-        init() throws {
+        init(sendConfirmationTimeout: Duration = .seconds(10)) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
             self.tasks = tasks
             let terminalRuntime = TerminalRuntimeRegistry(
@@ -65,7 +65,8 @@ struct CoordinatorPeekStoreTests {
                 sessionRuntimeStore: tasks.sessionRuntimeStore, pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
                 refreshInterval: nil, releaseCheckInterval: nil)
             service = ConversationService(store: tasks.store, sessionRuntimeStore: tasks.sessionRuntimeStore,
-                terminalRuntimeRegistry: terminalRuntime, runtimePaths: paths)
+                terminalRuntimeRegistry: terminalRuntime, runtimePaths: paths,
+                sendConfirmationTimeout: sendConfirmationTimeout)
             peeks = CoordinatorPeekStore(service: service, session: session, board: board,
                 store: tasks.store, sessionRuntimeStore: tasks.sessionRuntimeStore)
         }
@@ -269,8 +270,8 @@ struct CoordinatorPeekStoreTests {
         #expect(Set(f.service.localConversations.compactMap(\.placement.panelID)) == [f.coordinator.panelID, second.current.panelID])
     }
 
-    @Test
-    func openExactSessionPeekBecomesUnavailableWhenThatSessionIsReplacedAndKeepsDraft() async throws {
+    @Test(arguments: [false, true])
+    func openExactSessionPeekBecomesUnavailableWhenThatSessionIsReplacedAndKeepsDraft(whileHidden: Bool) async throws {
         let f = try Fixture()
         defer { f.service.setLocalPanelIDs([]) }
         let task = try f.task("Pinned session")
@@ -278,21 +279,34 @@ struct CoordinatorPeekStoreTests {
         f.peeks.openSession(task.current.sessionID, in: viewer)
         let model = try #require(f.peeks.inspections[viewer]?.conversation)
         let conversationID = try f.conversationID(task.current.panelID)
+        let originalBinding = try f.openPrompt(for: model, in: task.current).bindingID
         model.draft = "Feedback for the original session"
+        if whileHidden { f.peeks.close(in: viewer) }
 
         let replacement = f.replaceSession(in: task.current)
-        await f.tasks.waitUntil("the exact session Peek is invalidated", timeout: .seconds(2)) {
-            f.peeks.inspections[viewer]?.unavailableReason != nil
+        await f.tasks.waitUntil("hidden draft observes the replacement session", timeout: .seconds(2)) {
+            f.service.activeSessionIDByConversationID[conversationID] == replacement.sessionID
         }
+        if !whileHidden {
+            await f.tasks.waitUntil("exact session Peek is invalidated", timeout: .seconds(2)) {
+                f.peeks.inspections[viewer]?.panelID == nil
+            }
+            #expect(f.peeks.inspections[viewer]?.conversation === model)
+        }
+        f.peeks.openTask(task.record.id, in: viewer)
+        #expect(f.peeks.inspections[viewer]?.conversation === model)
+        #expect(try f.openPrompt(for: model, in: replacement).bindingID != originalBinding)
+        #expect(model.hasDraftFromPreviousSession)
+        #expect(!model.canSend)
+        f.peeks.openSession(task.current.sessionID, in: viewer)
 
         let inspection = try #require(f.peeks.inspections[viewer])
         #expect(inspection.panelID == nil)
-        #expect(inspection.conversation === model)
         #expect(model.draft == "Feedback for the original session")
         #expect(f.runtime.sessionRegistry.activeSession(for: replacement.panelID)?.sessionID == replacement.sessionID)
         #expect(f.service.localPanelIDs == [f.coordinator.panelID])
-        #expect(f.service.localSnapshot(for: conversationID, at: Date()) == nil)
-        #expect(f.service.conversationID(for: replacement.panelID) == nil)
+        #expect(f.service.localSnapshot(for: conversationID, at: Date()) != nil)
+        #expect(f.service.localConversations.allSatisfy { $0.placement.panelID != replacement.panelID })
     }
 
     @Test
@@ -356,6 +370,7 @@ struct CoordinatorPeekStoreTests {
         #expect(f.peeks.inspections[viewer]?.conversation === model)
         #expect(model.draft == "Keep after terminal closes")
         #expect(f.service.localPanelIDs == [f.coordinator.panelID])
+        #expect(f.service.conversationID(for: task.current.panelID) == nil)
     }
 
     @Test
@@ -499,8 +514,8 @@ struct CoordinatorPeekStoreTests {
         #expect(f.peeks.inspections[viewer]?.unavailableReason == nil)
     }
 
-    @Test
-    func movingTerminalBetweenWorkspacesKeepsPeekOnSamePanel() async throws {
+    @Test(arguments: [false, true])
+    func movingTerminalBetweenWorkspacesKeepsPeekOnSamePanel(whileHidden: Bool) async throws {
         let f = try Fixture()
         defer { f.service.setLocalPanelIDs([]) }
         let task = try f.task("Moved panel")
@@ -508,15 +523,91 @@ struct CoordinatorPeekStoreTests {
         let viewer = try f.viewerWindow()
         f.peeks.openTask(task.record.id, in: viewer)
         let model = try #require(f.peeks.inspections[viewer]?.conversation)
+        let binding = try f.openPrompt(for: model, in: task.current).bindingID
         model.draft = "Same panel"
+        if whileHidden { f.peeks.close(in: viewer) }
         #expect(f.store.send(.movePanelToWorkspace(panelID: task.current.panelID,
             targetWorkspaceID: destination.workspaceID, targetSlotID: nil)))
+        if whileHidden { f.peeks.openTask(task.record.id, in: viewer) }
         await f.tasks.waitUntil("Peek follows panel location", timeout: .seconds(2)) {
             f.peeks.inspections[viewer]?.workspaceID == destination.workspaceID
         }
         #expect(f.peeks.inspections[viewer]?.panelID == task.current.panelID)
         #expect(f.peeks.inspections[viewer]?.conversation === model)
         #expect(f.peeks.inspections[viewer]?.unavailableReason == nil)
+        #expect(try f.openPrompt(for: model, in: task.current).bindingID == binding)
+        #expect(!model.hasDraftFromPreviousSession)
+        #expect(model.canSend)
+    }
+
+    @Test
+    func hidingDuringAcceptedSendClearsDraftAndReleasesObservationAfterConfirmationExpires() async throws {
+        let f = try Fixture(sendConfirmationTimeout: .milliseconds(40))
+        defer {
+            f.terminalRuntime.setAutomationSendTextHandlerForTesting(nil)
+            f.service.setLocalPanelIDs([])
+        }
+        let task = try f.task("Hide during delivery")
+        let viewer = try f.viewerWindow()
+        f.peeks.openTask(task.record.id, in: viewer)
+        let model = try #require(f.peeks.inspections[viewer]?.conversation)
+        let id = try f.conversationID(task.current.panelID)
+        let binding = try f.openPrompt(for: model, in: task.current).bindingID
+        // Sync the service input gate to the fixture's open provider prompt.
+        f.service.syncConversations()
+        model.refresh()
+        model.draft = "Deliver once while leaving Peek"
+        var delivered: [String] = []
+        f.terminalRuntime.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        f.terminalRuntime.setAutomationSendTextHandlerForTesting { text, _, panelID, _ in
+            #expect(panelID == task.current.panelID)
+            #expect(model.sending)
+            delivered.append(text)
+            // Use the real service result, with navigation at the terminal
+            // delivery boundary while the model still owns this send.
+            f.peeks.close(in: viewer)
+            #expect(f.service.localPanelIDs == [f.coordinator.panelID])
+            #expect(model.inputEpoch?.bindingID == binding)
+            return true
+        }
+        await model.send()
+        #expect(delivered == ["Deliver once while leaving Peek"])
+        #expect(model.draft.isEmpty)
+        #expect(!model.sending)
+        #expect(model.notice == nil)
+        #expect(model.draftHold == nil)
+        await f.tasks.waitUntil("send completion releases hidden draft observation", timeout: .seconds(2)) {
+            f.service.localSnapshot(for: id, at: Date()) == nil
+        }
+        #expect(f.service.conversationID(for: f.coordinator.panelID) != nil)
+        f.peeks.openTask(task.record.id, in: viewer)
+        #expect(f.peeks.inspections[viewer]?.conversation !== model)
+    }
+
+    @Test
+    func clearingHiddenDraftAndAttachmentsReleasesObservationAndEvictsModel() async throws {
+        let f = try Fixture()
+        defer { f.service.setLocalPanelIDs([]) }
+        let task = try f.task("Clear hidden draft")
+        let viewer = try f.viewerWindow()
+        f.peeks.openTask(task.record.id, in: viewer)
+        let model = try #require(f.peeks.inspections[viewer]?.conversation)
+        let id = try f.conversationID(task.current.panelID)
+        let binding = try f.openPrompt(for: model, in: task.current).bindingID
+        model.draft = "Unfinished reply"
+        model.attachments = [RemoteMessageAttachment(filename: "note.txt", data: Data("note".utf8))]
+        f.peeks.close(in: viewer)
+        #expect(f.service.localSnapshot(for: id, at: Date()) != nil)
+        model.draft = ""
+        // A remaining attachment must keep the same binding.
+        await Task.yield()
+        #expect(try f.openPrompt(for: model, in: task.current).bindingID == binding)
+        model.attachments = []
+        await f.tasks.waitUntil("empty hidden draft releases observation", timeout: .seconds(2)) {
+            f.service.localSnapshot(for: id, at: Date()) == nil
+        }
+        f.peeks.openTask(task.record.id, in: viewer)
+        #expect(f.peeks.inspections[viewer]?.conversation !== model)
     }
 
     @Test

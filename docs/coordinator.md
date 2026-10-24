@@ -43,8 +43,12 @@ the terminal workspace. The Coordinator chat, draft and selected review stay
 in place while Peek is open.
 
 Each window owns its Peek selection. Toastty tracks the union of those panels
-and the Coordinator panel. Closing Peek releases viewing demand; accepted
-queued input remains owned by the conversation service.
+and the Coordinator panel. Closing Peek releases viewing demand. An unfinished
+draft, attachment or send keeps conversation observation active until it is
+cleared or completes. This preserves the input binding across navigation and
+still detects session changes and input in the backing terminal. A hidden Peek
+cannot start new input. Accepted queued input remains owned by the conversation
+service.
 
 ## Review queue
 

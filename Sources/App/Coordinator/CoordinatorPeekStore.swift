@@ -30,6 +30,7 @@ final class CoordinatorPeekStore: ObservableObject {
     /// A hidden model can still own an unfinished draft or an uncertain send.
     /// Inspection.panelID is cleared on invalidation; it is not the cache key.
     private var modelsByPanelID: [UUID: CoordinatorConversationModel] = [:]
+    private var modelSubscriptions: [UUID: AnyCancellable] = [:]
 
     private struct Target {
         let workspaceID: UUID
@@ -122,6 +123,13 @@ final class CoordinatorPeekStore: ObservableObject {
         }
         let model = modelsByPanelID[target.panelID] ?? CoordinatorConversationModel(service: service, panelID: target.panelID)
         modelsByPanelID[target.panelID] = model
+        if modelSubscriptions[target.panelID] == nil {
+            modelSubscriptions[target.panelID] = Publishers.CombineLatest3(model.$draft, model.$attachments, model.$sending)
+                .map { !$0.isEmpty || !$1.isEmpty || $2 }
+                .removeDuplicates()
+                .dropFirst()
+                .sink { [weak self] _ in self?.scheduleValidation() }
+        }
         inspections[windowID] = .init(title: title, workspaceID: location.workspaceID, panelID: location.panelID,
             conversation: model,
             unavailableReason: nil, taskID: taskID, expectedSessionID: expectedSessionID)
@@ -229,13 +237,21 @@ final class CoordinatorPeekStore: ObservableObject {
     }
 
     private func updateDemand() {
-        service.setLocalPanelIDs(Self.panelDemand(coordinator: session.identity?.panelID,
-            inspections: inspections.values.compactMap(\.panelID)))
         let displayed = Set(inspections.values.compactMap(\.conversation).map(ObjectIdentifier.init))
         modelsByPanelID = modelsByPanelID.filter { _, model in
             displayed.contains(ObjectIdentifier(model)) || !model.draft.isEmpty
                 || !model.attachments.isEmpty || model.sending
         }
+        modelSubscriptions = modelSubscriptions.filter { modelsByPanelID[$0.key] != nil }
+        let visiblePanels = Self.panelDemand(coordinator: session.identity?.panelID,
+            inspections: inspections.values.compactMap(\.panelID))
+        let retainedPanels = Set(modelsByPanelID.compactMap { panelID, model in
+            terminalLocation(panelID) != nil && (!model.draft.isEmpty || !model.attachments.isEmpty || model.sending)
+                ? panelID : nil
+        }).subtracting(visiblePanels)
+        // Change both sets together. Dropping viewing demand first would destroy
+        // the binding before retained observation can take ownership.
+        service.setLocalPanelIDs(visiblePanels, retainingDraftPanels: retainedPanels)
     }
 
     static func panelDemand(coordinator: UUID?, inspections: [UUID]) -> Set<UUID> {
