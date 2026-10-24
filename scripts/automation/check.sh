@@ -477,6 +477,10 @@ if ! node --test "$COMPUTER_USE_PROTOCOL_TEST"; then
   exit 10
 fi
 
+if ! node --test "$ROOT_DIR/Tests/RemoteScripts/RunnerInfrastructureTests.mjs" "$ROOT_DIR/Tests/RemoteScripts/RunnerWrapperTests.mjs"; then
+  exit 10
+fi
+
 if ! node --test "$REMOTE_WEB_CLIENT_TEST"; then
   exit 10
 fi
