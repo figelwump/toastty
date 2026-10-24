@@ -10,6 +10,8 @@ struct CoordinatorHomeSurface: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let controller: CoordinatorHomeController
     @ObservedObject var peeks: CoordinatorPeekStore
+    var viewportStore: NativeConversationViewportStore?
+    @StateObject private var localViewportStore = NativeConversationViewportStore()
     @FocusState private var focusedComposer: CoordinatorComposer?
 
     var body: some View {
@@ -47,7 +49,8 @@ struct CoordinatorHomeSurface: View {
             openTerminal: {
                 guard let workspaceID = inspection.workspaceID else { return }
                 openTerminal(workspaceID: workspaceID, panelID: inspection.panelID)
-            }, focusedComposer: $focusedComposer).id(inspection.panelID))
+            }, focusedComposer: $focusedComposer,
+            viewportStore: viewportStore ?? localViewportStore).id(inspection.panelID))
     }
 
     private func openTerminal(workspaceID: UUID, panelID: UUID?) {
@@ -68,13 +71,15 @@ private struct CoordinatorPeekView: View {
     let close: () -> Void
     let openTerminal: () -> Void
     var focusedComposer: FocusState<CoordinatorComposer?>.Binding
+    let viewportStore: NativeConversationViewportStore
 
     var body: some View {
         Group {
             if let conversation = inspection.conversation, inspection.unavailableReason == nil {
                 NativeConversationView(conversation: conversation, openTerminal: openTerminal,
                     focusedComposer: focusedComposer, pane: .peek,
-                    composerLabel: "Message task agent") {
+                    composerLabel: "Message task agent", viewportStore: viewportStore,
+                    viewportPanelID: inspection.panelID) {
                     header
                 } empty: {
                     Text("Waiting for the task conversation. Use Open task space to inspect its terminal.")

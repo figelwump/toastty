@@ -18,73 +18,70 @@ struct NativeConversationView<Header: View, Empty: View>: View {
     var focusedComposer: FocusState<CoordinatorComposer?>.Binding
     var pane: CoordinatorComposer
     var composerLabel = "Message"
+    var viewportStore: NativeConversationViewportStore?
+    var viewportPanelID: UUID?
     @ViewBuilder var header: () -> Header
     @ViewBuilder var empty: () -> Empty
     @State private var confirmsDraftRelease = false
     @State private var confirmedDraftHold: CoordinatorConversationModel.DraftHold?
     @State private var followsTail = true
+    @State private var isVisible = false
+    @StateObject private var viewportSession = NativeConversationViewportSession()
 
     var body: some View {
         VStack(spacing: 0) {
             header()
             Divider()
-            ScrollViewReader { proxy in
-              GeometryReader { viewport in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        if conversation.historyTruncated {
-                            Text("Earlier messages are outside this view’s retained history.")
-                                .font(.caption).foregroundStyle(.secondary)
+            if let viewportStore, let viewportPanelID {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        transcript.background {
+                            NativeConversationViewportMarker(session: viewportSession, store: viewportStore,
+                                panelID: viewportPanelID, conversationID: conversation.snapshot?.summary.conversationID,
+                                eventIDs: conversation.events.filter(isTranscriptRow).map(\.eventID),
+                                isHistoryLoaded: conversation.snapshot.map {
+                                    (conversation.events.last?.sequence ?? 0) >= $0.summary.latestSequence
+                                } ?? false,
+                                scrollTo: { proxy.scrollTo($0, anchor: .top) })
                         }
-                        if conversation.events.isEmpty { empty() }
-                        ForEach(conversation.events, id: \.eventID) { event in
-                            eventView(event).textSelection(.enabled).id(event.eventID)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !viewportSession.followsTail, conversation.snapshot?.pendingInteractions.isEmpty == false {
+                            Button("Agent needs a response ↓") { viewportSession.revealTail() }.padding(12)
                         }
-                        ForEach(conversation.snapshot?.pendingInteractions ?? [], id: \.id) { interaction in
-                            ConversationInteractionCard(interaction: interaction,
-                                answerState: conversation.answerStates[interaction.id],
-                                copy: .init(providerName: conversation.snapshot?.summary.provider.rawValue.capitalized ?? "Agent",
-                                    answerElsewhere: nil, respondElsewhere: nil,
-                                    reconnectToAnswer: "Waiting for the agent session",
-                                    reconnectToRespond: "Waiting for the agent session",
-                                    readOnlyMessage: "Respond in the terminal",
-                                    expiredMessage: "Answer window closed · respond in the terminal",
-                                    unavailableMessage: "This answer is no longer available · respond in the terminal",
-                                    shortenedPreviewMessage: "Preview shortened. Check the terminal for the full request.",
-                                    sentOrigin: "Sent from Toastty", sentOriginIcon: "macwindow",
-                                    structuredChoiceLabel: "Choose in terminal"),
-                                onEdit: { conversation.editAnswer($0, interaction: interaction) },
-                                onSubmit: { conversation.answer(interaction) })
-                        }
-                        Color.clear.frame(height: 1).id("conversation-bottom")
-                            .background(GeometryReader { bottom in
-                                Color.clear.preference(key: ConversationBottomPreference.self,
-                                    value: bottom.frame(in: .named("conversation-scroll")).maxY)
-                            })
-                    }.padding(20)
-                }
-                .coordinateSpace(name: "conversation-scroll")
-                .defaultScrollAnchor(.bottom)
-                .onPreferenceChange(ConversationBottomPreference.self) { bottom in
-                    followsTail = bottom.map { $0 <= viewport.size.height + 32 } ?? false
-                }
-                .onChange(of: conversation.events.last) { _, _ in followTail(proxy) }
-                .onChange(of: conversation.snapshot?.pendingInteractions) { _, _ in followTail(proxy) }
-                .onChange(of: viewport.size) { _, _ in followTail(proxy) }
-                .overlay(alignment: .bottomTrailing) {
-                    if !followsTail, conversation.snapshot?.pendingInteractions.isEmpty == false {
-                        Button("Agent needs a response ↓") {
-                            followsTail = true
-                            proxy.scrollTo("conversation-bottom", anchor: .bottom)
-                        }.padding(12)
                     }
                 }
-              }
+            } else {
+                ScrollViewReader { proxy in
+                  GeometryReader { viewport in
+                    ScrollView {
+                        transcript
+                    }
+                    .coordinateSpace(name: "conversation-scroll")
+                    .defaultScrollAnchor(.bottom)
+                    .onPreferenceChange(ConversationBottomPreference.self) { bottom in
+                        followsTail = bottom.map { $0 <= viewport.size.height + 32 } ?? false
+                    }
+                    .onChange(of: conversation.events.last) { _, _ in followTail(proxy) }
+                    .onChange(of: conversation.snapshot?.pendingInteractions) { _, _ in followTail(proxy) }
+                    .onChange(of: viewport.size) { _, _ in followTail(proxy) }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !followsTail, conversation.snapshot?.pendingInteractions.isEmpty == false {
+                            Button("Agent needs a response ↓") {
+                                followsTail = true
+                                proxy.scrollTo("conversation-bottom", anchor: .bottom)
+                            }.padding(12)
+                        }
+                    }
+                  }
+                }
             }
             Divider()
             composer
         }
         .background(ToastyTheme.surfaceBackground)
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
         .onChange(of: conversation.draftHold) { _, _ in
             confirmsDraftRelease = false
             confirmedDraftHold = nil
@@ -95,11 +92,62 @@ struct NativeConversationView<Header: View, Empty: View>: View {
         } message: { _ in Text("Inspect the terminal first. This action permits chat input without clearing text in the terminal.") }
     }
 
+    private var transcript: some View {
+        LazyVStack(alignment: .leading, spacing: 18) {
+            if conversation.historyTruncated {
+                Text("Earlier messages are outside this view’s retained history.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if conversation.events.isEmpty { empty() }
+            ForEach(conversation.events, id: \.eventID) { event in
+                eventView(event).textSelection(.enabled).id(event.eventID)
+                    .background {
+                        if viewportStore != nil, isTranscriptRow(event) {
+                            NativeConversationViewportRow(eventID: event.eventID, session: viewportSession)
+                        }
+                    }
+            }
+            ForEach(conversation.snapshot?.pendingInteractions ?? [], id: \.id) { interaction in
+                ConversationInteractionCard(interaction: interaction,
+                    answerState: conversation.answerStates[interaction.id],
+                    copy: .init(providerName: conversation.snapshot?.summary.provider.rawValue.capitalized ?? "Agent",
+                        answerElsewhere: nil, respondElsewhere: nil,
+                        reconnectToAnswer: "Waiting for the agent session",
+                        reconnectToRespond: "Waiting for the agent session",
+                        readOnlyMessage: "Respond in the terminal",
+                        expiredMessage: "Answer window closed · respond in the terminal",
+                        unavailableMessage: "This answer is no longer available · respond in the terminal",
+                        shortenedPreviewMessage: "Preview shortened. Check the terminal for the full request.",
+                        sentOrigin: "Sent from Toastty", sentOriginIcon: "macwindow",
+                        structuredChoiceLabel: "Choose in terminal"),
+                    onEdit: { conversation.editAnswer($0, interaction: interaction) },
+                    onSubmit: { conversation.answer(interaction) })
+            }
+            Color.clear.frame(height: 1).id("conversation-bottom")
+                .background(GeometryReader { bottom in
+                    if viewportStore == nil {
+                        Color.clear.preference(key: ConversationBottomPreference.self,
+                            value: bottom.frame(in: .named("conversation-scroll")).maxY)
+                    }
+                })
+        }.padding(20)
+    }
+
     private func followTail(_ proxy: ScrollViewProxy) {
         guard followsTail else { return }
         Task { @MainActor in
             await Task.yield()
+            guard isVisible, followsTail else { return }
             proxy.scrollTo("conversation-bottom", anchor: .bottom)
+        }
+    }
+
+    private func isTranscriptRow(_ event: ConversationEvent) -> Bool {
+        switch event.payload {
+        case .userMessage, .assistantMessage, .toolStarted, .toolFinished, .subagentSummary, .sendDeliveryUnconfirmed:
+            true
+        default:
+            false
         }
     }
 

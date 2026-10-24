@@ -79,6 +79,8 @@ struct AppWindowView: View {
         )
     }
 
+    @StateObject private var coordinatorViewports = NativeConversationViewportStore()
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -135,7 +137,7 @@ struct AppWindowView: View {
                         if let coordinatorHome {
                             CoordinatorHomeSurface(windowID: windowID, store: store, board: taskBoard,
                                 sessionRuntimeStore: sessionRuntimeStore, controller: coordinatorHome,
-                                peeks: coordinatorHome.peeks)
+                                peeks: coordinatorHome.peeks, viewportStore: coordinatorViewports)
                         } else {
                             TasksView(windowID: windowID, store: store, board: taskBoard,
                                 sessionRuntimeStore: sessionRuntimeStore,

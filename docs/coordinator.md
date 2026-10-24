@@ -42,6 +42,12 @@ input service. **Back to review** restores the queue. **Open task space** opens
 the terminal workspace. The Coordinator chat, draft and selected review stay
 in place while Peek is open.
 
+Each window retains the scroll position for recently viewed conversations,
+including the position inside a long message. Switching tasks or closing and
+reopening Peek preserves that position even when the draft is empty. New
+messages follow the view while it is at the bottom. Reading earlier text keeps
+the view in place.
+
 Each window owns its Peek selection. Toastty tracks the union of those panels
 and the Coordinator panel. Closing Peek releases viewing demand. An unfinished
 draft, attachment or send keeps conversation observation active until it is
