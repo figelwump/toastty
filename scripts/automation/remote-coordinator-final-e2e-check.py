@@ -567,9 +567,11 @@ def main():
         wait_for('the docs-site filter', lambda: chat_state()['selectedRowID'] == rows[c['taskID']]['id'], timeout=10, interval=0.3)
         capture('08-all-tasks-filtered')
         page('click', 'task-filter-all')
-        page('click', f"task-row-{rows[a_id]['id']}")
+        # C comes first, in Needs you or Running; Down moves past it.
+        page('click', f"task-row-{rows[c['taskID']]['id']}")
+        wait_for('C selected', lambda: chat_state()['selectedRowID'] == rows[c['taskID']]['id'], timeout=10, interval=0.3)
         key(KEY_DOWN)
-        wait_for('Down Arrow to move the selection', lambda: chat_state()['selectedRowID'] not in (None, rows[a_id]['id']),
+        wait_for('Down Arrow to move the selection', lambda: chat_state()['selectedRowID'] not in (None, rows[c['taskID']]['id']),
                  timeout=10, interval=0.3)
         capture('08-all-tasks-selection')
         page('click', f"task-row-{rows[a_id]['id']}")
