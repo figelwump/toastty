@@ -42,7 +42,6 @@ public struct AppReducer {
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
             state.selectedWindowID = windowID
             state.windows[index].selectedWorkspaceID = workspaceID
-            state.windows[index].showsTasksView = false
             markWorkspaceScopedNotificationsRead(workspaceID: workspaceID, state: &state)
             markWorkspaceVisited(workspaceID: workspaceID, state: &state)
             return true
@@ -1232,12 +1231,6 @@ public struct AppReducer {
         case .toggleSidebar(let windowID):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
             state.windows[windowIndex].sidebarVisible.toggle()
-            return true
-
-        case .setTasksViewShown(let windowID, let shown):
-            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
-                  state.windows[windowIndex].showsTasksView != shown else { return false }
-            state.windows[windowIndex].showsTasksView = shown
             return true
 
         case .setCoordinatorTerminalShown(let windowID, let shown):

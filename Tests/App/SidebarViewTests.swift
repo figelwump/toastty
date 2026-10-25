@@ -2230,7 +2230,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
         // The finished task space leaves its card; the footer counts it.
         XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
-        XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Finished tasks: 1 done."), "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
 
@@ -2244,224 +2244,20 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Group the sidebar by") }, "\(textValues)")
     }
 
-    func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
+    func testSidebarDoneCountIsALabelNowThatTheTasksViewIsGone() throws {
         let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
-        let board = try XCTUnwrap(harness.taskBoard)
-        board.selectionByWindowID[harness.windowID] = .taskSpace(ids.annotatedIdleID)
-        let tasksView = TasksView(
-            windowID: harness.windowID,
-            store: harness.store,
-            board: board,
-            sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
-        )
-        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 640))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
-        defer { window.orderOut(nil) }
-        window.contentView = hostingView
-        window.makeKeyAndOrderFront(nil)
-        pumpMainRunLoop(duration: 0.6)
-        hostingView.layoutSubtreeIfNeeded()
-
-        let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(textValues.contains("Task detail, qa-private-app-verification, Review"), "\(textValues)")
-        // The unread finished turn the sidebar marks ready waits for the
-        // user here too.
-        let readyUnread = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
-        XCTAssertEqual(readyUnread.stage, .needsYou(.agentFinished))
-        XCTAssertTrue(readyUnread.hasUnreadTurn)
-        try attachSidebarRender(hostingView, name: "tasks-view")
-        try writeSidebarEvidence(hostingView, name: "tasks-view")
-    }
-
-    func testSidebarDoneCountsOpenTheTasksViewWithDoneExpanded() throws {
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
-        defer { harness.window.orderOut(nil) }
-        let board = try XCTUnwrap(harness.taskBoard)
         _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
 
-        // Already open and short enough that Done starts below the fold.
-        let tasks = hostTasksView(harness, board: board, height: 300)
-        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-done-click")
-        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-done-click")
-
-        // The project card's Done count expands Done and scrolls to it.
+        let selectedBefore = harness.store.window(id: harness.windowID)?.selectedWorkspaceID
         harness.window.makeKeyAndOrderFront(nil)
         try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.6)
-        tasks.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
-        XCTAssertNil(board.revealGroupByWindowID[harness.windowID], "The view should clear the request it applied.")
-        let doneFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "Done, 1, expanded")
-        XCTAssertTrue(
-            tasks.hostingView.bounds.contains(CGPoint(x: doneFrame.midX, y: doneFrame.midY)),
-            "Done should be scrolled into view: \(doneFrame) in \(tasks.hostingView.bounds)"
-        )
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.selectedWorkspaceID, selectedBefore)
+        XCTAssertFalse(harness.store.state.coversWorkspaceContent(windowID: harness.windowID))
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-done-count")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-done-count")
-        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-after-done-click")
-        try attachSidebarRender(tasks.hostingView, name: "tasks-view-after-done-click")
-
-        // Closed views stop observing the board, as in the app.
-        tasks.window.orderOut(nil)
-        tasks.window.contentView = nil
-    }
-
-    func testTasksViewArrowKeysMoveTheSelectionThroughTheRowsItShows() throws {
-        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 8, taskRecords: [], withTaskBoard: true)
-        defer { harness.window.orderOut(nil) }
-        let board = try XCTUnwrap(harness.taskBoard)
-        // One task in the collapsed Done group, which the arrows skip.
-        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
-        pumpMainRunLoop(duration: 0.6)
-        let tasks = hostTasksView(harness, board: board, height: 300)
-        defer { tasks.window.orderOut(nil) }
-        let visible = TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false)
-        XCTAssertGreaterThan(visible.count, 6, "The list should run past the fold")
-        XCTAssertFalse(visible.contains { $0.id == .taskSpace(ids.readyUnreadID) })
-        let responder = try XCTUnwrap(tasks.window.firstResponder as? NSView, "The Tasks view should hold keyboard focus")
-
-        func press(_ keyCode: Int, modifiers: NSEvent.ModifierFlags = []) throws {
-            let event = try XCTUnwrap(NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: modifiers.union([.numericPad, .function]),
-                timestamp: 0, windowNumber: tasks.window.windowNumber, context: nil,
-                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(keyCode)
-            ))
-            responder.keyDown(with: event)
-            pumpMainRunLoop(duration: 0.3)
-            tasks.hostingView.layoutSubtreeIfNeeded()
-        }
-
-        // Down walks the list from the first row, which shows by default.
-        for entry in visible.dropFirst() {
-            try press(kVK_DownArrow)
-            XCTAssertEqual(board.selectionByWindowID[harness.windowID], entry.id)
-        }
-        let last = try XCTUnwrap(visible.last)
-        try press(kVK_DownArrow)
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], last.id, "Down should stop at the last row")
-        // The detail pane follows, and the row scrolled into view.
-        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(last.item.title),") })
-        let rowFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "\(last.item.title), ")
-        XCTAssertTrue(
-            tasks.hostingView.bounds.contains(CGPoint(x: rowFrame.midX, y: rowFrame.midY)),
-            "The selected row should scroll into view: \(rowFrame) in \(tasks.hostingView.bounds)"
-        )
-        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-arrow-last-row")
-        try attachSidebarRender(tasks.hostingView, name: "tasks-view-arrow-last-row")
-
-        try press(kVK_UpArrow)
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
-        // Arrows with a modifier are not the list's.
-        try press(kVK_UpArrow, modifiers: .shift)
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
-    }
-
-    func testTasksViewSelectsTheNextTaskWhenTheSelectedOneLeavesTheList() throws {
-        let failed = TaskRecord(
-            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
-            source: .cli, setup: .setupFailed(reason: "The agent did not start")
-        )
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
-        defer { harness.window.orderOut(nil) }
-        let board = try XCTUnwrap(harness.taskBoard)
-        let coordinator = try XCTUnwrap(board.coordinator)
-        let tasks = hostTasksView(harness, board: board, height: 640)
-        defer { tasks.window.orderOut(nil) }
-        func visible() -> [TaskBoardItem.Subject] {
-            TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false).map(\.id)
-        }
-
-        // Marked done into the collapsed Done group: the next row takes the
-        // selection, or the previous one when it was the last.
-        let leaving = TaskBoardItem.Subject.taskSpace(ids.readyUnreadID)
-        var before = visible()
-        let index = try XCTUnwrap(before.firstIndex(of: leaving))
-        let expected = index + 1 < before.count ? before[index + 1] : before[index - 1]
-        board.selectionByWindowID[harness.windowID] = leaving
-        pumpMainRunLoop(duration: 0.3)
-        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
-        pumpMainRunLoop(duration: 0.6)
-        tasks.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertFalse(visible().contains(leaving))
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], expected)
-        let expectedTitle = try XCTUnwrap(board.items().first { $0.id == expected }?.title)
-        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(expectedTitle),") })
-
-        // A deleted Inbox task hands the selection to the row below it.
-        before = visible()
-        XCTAssertEqual(before.first, .task(failed.id))
-        board.selectionByWindowID[harness.windowID] = .task(failed.id)
-        pumpMainRunLoop(duration: 0.3)
-        try coordinator.delete(taskID: failed.id)
-        pumpMainRunLoop(duration: 0.6)
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], before[1])
-        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-selection-after-delete")
-        try attachSidebarRender(tasks.hostingView, name: "tasks-view-selection-after-delete")
-    }
-
-    private func hostTasksView(
-        _ harness: SidebarHarness,
-        board: TaskBoardStore,
-        height: CGFloat
-    ) -> (window: NSWindow, hostingView: NSView) {
-        let tasksView = TasksView(
-            windowID: harness.windowID,
-            store: harness.store,
-            board: board,
-            sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
-        )
-        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: height))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: height), styleMask: [.titled], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = hostingView
-        window.makeKeyAndOrderFront(nil)
-        pumpMainRunLoop(duration: 0.6)
-        hostingView.layoutSubtreeIfNeeded()
-        return (window, hostingView)
-    }
-
-    func testTasksViewDetailShowsAnInboxTaskOnceWithThePicker() throws {
-        var waiting = TaskRecord(
-            createdAt: Date().addingTimeInterval(-120),
-            text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
-            title: "Why artifacts/ files are missing from @ file search",
-            slug: "artifacts-missing-from-file-search",
-            source: .quickEntry,
-            setup: .needsWorkspace(reason: "It's about Toastty's command palette file search. Toastty's workspace is not open.")
-        )
-        waiting.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: NSTemporaryDirectory())
-        let (harness, _) = try makeSubspacesHarness(taskRecords: [waiting], withTaskBoard: true)
-        defer { harness.window.orderOut(nil) }
-        let board = try XCTUnwrap(harness.taskBoard)
-        board.selectionByWindowID[harness.windowID] = .task(waiting.id)
-        let tasksView = TasksView(
-            windowID: harness.windowID,
-            store: harness.store,
-            board: board,
-            sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
-        )
-        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 560))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
-        defer { window.orderOut(nil) }
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = hostingView
-        window.makeKeyAndOrderFront(nil)
-        pumpMainRunLoop(duration: 0.6)
-        hostingView.layoutSubtreeIfNeeded()
-
-        let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Why artifacts/ files are missing from @ file search") }, "\(textValues)")
-        try writeSidebarEvidence(hostingView, name: "tasks-view-inbox-picker")
-        try attachSidebarRender(hostingView, name: "tasks-view-inbox-picker")
     }
 
     func testInboxCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {

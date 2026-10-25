@@ -605,6 +605,8 @@ struct SidebarView: View {
     let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
+    /// Projects whose finished-task footer lists every To ship task.
+    @State private var expandedToShipProjectIDs: Set<UUID> = []
     @StateObject private var packetLookAtCache = SidebarPacketLookAtCache()
     @State private var renameDraftTitle = ""
     @State private var flashingWorkspaceID: UUID?
@@ -1087,27 +1089,26 @@ struct SidebarView: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
+    /// Opens a finished task: its cards in the coordinator chat, else its
+    /// task space while that is open.
+    private func openFinishedTask(_ item: TaskBoardItem) {
         cancelWorkspaceRename()
-        if let subject {
-            taskBoard.selectionByWindowID[windowID] = subject
+        if let taskID = item.taskID, openCoordinatorChat?(taskID) == true { return }
+        if let workspaceID = item.taskSpaceWorkspaceID {
+            TaskActions.openTaskSpace(workspaceID: workspaceID, fallbackWindowID: windowID, store: store, sessionRuntimeStore: sessionRuntimeStore)
         }
-        if let group {
-            taskBoard.revealGroupByWindowID[windowID] = group
-        }
-        _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
     }
 
     /// A merged task waiting for a release, under its project's To ship
     /// line or card. Its task space has usually closed, so it opens the task
-    /// in the Tasks view.
+    /// in the coordinator chat.
     private func toShipTaskRow(_ item: TaskBoardItem) -> some View {
         let hoverID = switch item.id {
         case .task(let id), .taskSpace(let id): id
         }
         return SidebarHoverRegion(id: hoverID, selection: hoverState.toShipTask) { isHovered in
             let label = "\(item.title), \(TaskBoardPresentation.statusLine(item))"
-            let open = { openTasksView(selecting: item.id) }
+            let open = { openFinishedTask(item) }
             HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
                 SubspaceRailStatusIcon(status: .toShip, isDoneTogglePreviewed: false)
                     .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
@@ -1170,30 +1171,30 @@ struct SidebarView: View {
             if recent.shown.isEmpty == false || toShip > 0 || done > 0 {
                 VStack(alignment: .leading, spacing: 4) {
                     if recent.shown.isEmpty == false {
+                        let expanded = expandedToShipProjectIDs.contains(projectWorkspaceID)
                         VStack(alignment: .leading, spacing: 1) {
-                            ForEach(recent.shown) { item in
+                            ForEach(expanded ? recent.shown + recent.hidden : recent.shown) { item in
                                 toShipTaskRow(item)
                             }
                         }
                         .padding(.horizontal, 10)
                     }
                     if recent.hidden.isEmpty == false || toShip > 0 || done > 0 {
-                        // Each count opens the Tasks view at its own group.
                         HStack(spacing: 12) {
-                            if let firstHidden = recent.hidden.first {
+                            if recent.hidden.isEmpty == false, expandedToShipProjectIDs.contains(projectWorkspaceID) == false {
                                 SidebarShowMoreToShipButton(count: recent.hidden.count) {
-                                    openTasksView(selecting: firstHidden.id, revealing: .toShip)
+                                    expandedToShipProjectIDs.insert(projectWorkspaceID)
                                 }
                                 .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
                             }
                             if toShip > 0 {
-                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                finishedTasksCount(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
                                     Label("To ship \(toShip)", systemImage: "arrow.up.square")
                                         .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                                 }
                             }
                             if done > 0 {
-                                finishedTasksButton(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
+                                finishedTasksCount(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
                                     Label("Done \(done)", systemImage: "checkmark.square")
                                         .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
                                 }
@@ -1210,21 +1211,17 @@ struct SidebarView: View {
         }
     }
 
-    private func finishedTasksButton(
+    private func finishedTasksCount(
         _ group: TaskStage.Group,
         count: Int,
         projectWorkspaceID: UUID,
         @ViewBuilder label: () -> some View
     ) -> some View {
         let accessibilityText = Self.finishedTasksFooterLabel(group, count: count)
-        return Button {
-            openTasksView(selecting: nil, revealing: group)
-        } label: {
-            label()
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(group == .done ? "Show done tasks in the Tasks view" : "Show tasks to ship in the Tasks view")
+        // A count only: the tasks themselves are in the coordinator chat and,
+        // for To ship, in the rows above.
+        return label()
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
         .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(group == .done ? "done" : "toShip").\(projectWorkspaceID.uuidString)")
         .background {
@@ -1236,7 +1233,7 @@ struct SidebarView: View {
 
     static func finishedTasksFooterLabel(_ group: TaskStage.Group, count: Int) -> String {
         let counted = group == .done ? "\(count) done" : "\(count) to ship"
-        return "Finished tasks: \(counted). Opens the Tasks view."
+        return "Finished tasks: \(counted)."
     }
 
     private var sidebarTitlebarCover: some View {
@@ -3612,7 +3609,7 @@ struct SidebarView: View {
                 windowWorkspaceIDs: windowWorkspaceIDs
             )
             // A finished task leaves its project's card; the card's footer
-            // counts it and the Tasks view lists it.
+            // counts it.
             if taskBoard.isEnabled, SidebarSubspacePresentation.isHiddenAsFinished(row) {
                 return nil
             }
@@ -3683,10 +3680,10 @@ struct SidebarView: View {
     /// one; other subspaces keep their own menu.
     private func taskMenu(for item: TaskBoardItem?, workspace: WorkspaceState) -> [[TaskBoardPresentation.MenuItem]]? {
         guard let item, item.record != nil else { return nil }
-        // The window shows the selected task space unless the Tasks view
-        // covers it.
-        let showsTasksView = store.window(id: windowID)?.showsTasksView ?? false
-        let currentWorkspaceID = showsTasksView ? nil : selectedWorkspaceID
+        // The window shows the selected task space unless the coordinator
+        // chat covers it.
+        let isCovered = store.state.coversWorkspaceContent(windowID: windowID)
+        let currentWorkspaceID = isCovered ? nil : selectedWorkspaceID
         return TaskBoardPresentation.menuItems(
             item,
             currentWorkspaceID: currentWorkspaceID,

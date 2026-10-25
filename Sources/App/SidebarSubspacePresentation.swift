@@ -221,7 +221,6 @@ enum SidebarSubspacePresentation {
 
     /// Whether a project's Task Spaces group leaves the row out: its task
     /// is finished and nothing in it is running or waiting for the user.
-    /// The Tasks view still lists it.
     static func isHiddenAsFinished(_ row: Row) -> Bool {
         switch row.status {
         case .done, .toShip:

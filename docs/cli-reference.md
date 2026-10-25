@@ -952,8 +952,9 @@ project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#me
 
 These commands are short forms of
 `action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.packet.publish|task.packet.get|task.mark-done|task.archive|task.release`
-and `query run task.get|task.list|task.workspace-choices|task.watches`. The
-Tasks view has actions too: `window.tasks.show` and `window.tasks.hide`.
+and `query run task.get|task.list|task.workspace-choices|task.watches`.
+`window.tasks.show` and `window.tasks.hide`, from before the coordinator chat
+replaced the Tasks view, now open the chat, as `coordinator.chat.show` does.
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

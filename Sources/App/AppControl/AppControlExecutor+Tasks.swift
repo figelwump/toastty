@@ -6,8 +6,7 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow, .windowTasksShow,
-             .windowTasksHide: true
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow: true
         default: false
         }
     }
@@ -753,7 +752,7 @@ extension AppControlExecutor {
         return Dictionary(board.items().compactMap { item in item.taskID.map { ($0, item.stage) } }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// `stage` as `{group, attention?, reason?}`: the group the Tasks view
+    /// `stage` as `{group, attention?, reason?}`: the group the sidebar
     /// lists the task in, and why it needs the user.
     static func stageSnapshot(_ stage: TaskStage) -> [String: AutomationJSONValue] {
         var result: [String: AutomationJSONValue] = ["group": .string("\(stage.group)"), "needsUser": .bool(stage.needsUser)]

@@ -4,24 +4,16 @@ import CoreState
 import ImageIO
 import SwiftUI
 
-/// One Inbox task with the actions that move it on: the popover from its
-/// sidebar row, and the Tasks view's detail pane. When the task has no
+/// One Inbox task with the actions that move it on, in the popover from its
+/// sidebar row. When the task has no
 /// workspace, it holds the workspace field; when triage is on and suggested
 /// a project, that suggestion is chosen first. Drawn to the "Workspace
 /// Picker Design" Scratchpad, in the quick entry panel's colors.
 struct TaskInboxCard: View {
-    enum Layout {
-        /// The sidebar popover: a status label and the title, a fixed width,
-        /// and a footer with the actions.
-        case popover
-        /// Below the Tasks view's own title: the actions in a row.
-        case pane
-    }
 
     let taskID: UUID
     @ObservedObject var records: TaskRecordStore
     let coordinator: TaskCoordinator
-    var layout: Layout = .popover
     let dismiss: () -> Void
 
     @State private var errorMessage: String?
@@ -89,10 +81,7 @@ struct TaskInboxCard: View {
     var body: some View {
         Group {
             if let record = records.record(id: taskID), SidebarInboxRowPresentation.isInInbox(record) {
-                switch layout {
-                case .popover: popover(record)
-                case .pane: pane(record)
-                }
+                popover(record)
             } else {
                 // The task started or was deleted while this was open.
                 Text("This task left the Inbox.")
@@ -101,7 +90,7 @@ struct TaskInboxCard: View {
                     .padding(16)
             }
         }
-        .frame(width: layout == .popover ? Self.popoverWidth : nil, alignment: .leading)
+        .frame(width: Self.popoverWidth, alignment: .leading)
         .onAppear(perform: loadChoices)
         .onChange(of: records.record(id: taskID)?.setup) { _, _ in
             // Retry Triage may bring a new suggestion.
@@ -151,34 +140,13 @@ struct TaskInboxCard: View {
         }
     }
 
-    private func pane(_ record: TaskRecord) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            taskBody(record)
-            if isPickingWorkspace(record) {
-                workspaceField(record)
-                    .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-                    .frame(maxWidth: 520, alignment: .leading)
-                    .background(Color(hex: 0x141414), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ToastyTheme.subtleBorder, lineWidth: 1))
-            }
-            if let errorMessage {
-                errorText(errorMessage)
-            }
-            HStack(spacing: 8) {
-                primaryAction(record)
-                secondaryActions(record)
-                deleteButton(record)
-            }
-        }
-    }
-
     // MARK: - Parts
 
     /// The text as written, the attached files, and why the task is waiting.
     @ViewBuilder
     private func taskBody(_ record: TaskRecord) -> some View {
         let text = record.text.isEmpty ? (record.pinned.prompt ?? "") : record.text
-        if text.isEmpty == false, text != record.title || layout == .popover {
+        if text.isEmpty == false {
             ScrollView {
                 Text(text)
                     .font(.system(size: 12.5))
@@ -187,7 +155,7 @@ struct TaskInboxCard: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: layout == .popover ? 120 : 240)
+            .frame(maxHeight: 120)
             .fixedSize(horizontal: false, vertical: true)
         }
         if record.attachments.isEmpty == false {
@@ -469,7 +437,7 @@ struct TaskInboxCard: View {
         Button("Delete", role: .destructive) {
             perform { try coordinator.delete(taskID: record.id) }
         }
-        .buttonStyle(TaskInboxButtonStyle(kind: layout == .popover ? .destructiveLink : .secondary))
+        .buttonStyle(TaskInboxButtonStyle(kind: .destructiveLink))
         .accessibilityIdentifier("task.inbox.delete")
     }
 

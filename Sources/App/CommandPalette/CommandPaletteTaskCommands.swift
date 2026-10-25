@@ -42,7 +42,7 @@ enum CommandPaletteTaskCatalog {
         let subtitle = "\(item.title) · \(TaskBoardPresentation.stageDescription(item).stage)"
         var descriptors = TaskBoardPresentation.detailActions(item).map { action in
             // Option+Shift+M runs the selected task space's Merge button,
-            // which is this Merge. It does not follow the Tasks view's row.
+            // which is this Merge. It does not follow the chat's open card.
             let shortcut = action == .merge && current.source == .selectedTaskSpace && current.hasMergeButton
                 ? PaletteShortcut(ToasttyKeyboardShortcuts.mergeWorkspacePullRequest)
                 : nil
@@ -64,7 +64,7 @@ enum CommandPaletteTaskCatalog {
                 command: .openPullRequest(subject: item.id)
             ))
         }
-        if current.source == .tasksView, item.taskSpaceWorkspaceID != nil {
+        if current.source == .coordinatorChat, item.taskSpaceWorkspaceID != nil {
             descriptors.append(descriptor(
                 key: "task.open-task-space",
                 title: "Task: Open Task Space",
@@ -121,7 +121,7 @@ enum CommandPaletteTaskCatalog {
 }
 
 /// Finds the current task and the projects that can release, and runs the
-/// palette's task commands through the same code as the Tasks view.
+/// palette's task commands through the same code as the sidebar.
 @MainActor
 final class CommandPaletteTaskActions {
     private weak var store: AppStore?
@@ -155,27 +155,6 @@ final class CommandPaletteTaskActions {
 
     private var coordinator: TaskCoordinator? { sessionRuntimeStore?.taskCoordinator }
     private var board: TaskBoardStore? { coordinator?.board }
-
-    // MARK: - Tasks view
-
-    func canToggleTasksView(originWindowID: UUID) -> Bool {
-        board?.isEnabled == true && store?.commandSelection(preferredWindowID: originWindowID) != nil
-    }
-
-    func tasksViewTitle(originWindowID: UUID) -> String {
-        ToasttyBuiltInCommand.toggleTasksViewTitle(
-            tasksViewShown: store?.commandSelection(preferredWindowID: originWindowID)?.window.showsTasksView == true
-        )
-    }
-
-    /// Shows the Tasks view, or hides it. The view covers the selected
-    /// workspace without changing it, so hiding it returns to that workspace.
-    func toggleTasksView(originWindowID: UUID) -> Bool {
-        guard canToggleTasksView(originWindowID: originWindowID),
-              let store,
-              let selection = store.commandSelection(preferredWindowID: originWindowID) else { return false }
-        return store.send(.setTasksViewShown(windowID: selection.windowID, shown: selection.window.showsTasksView == false))
-    }
 
     // MARK: - Current task and releases
 
@@ -300,8 +279,7 @@ final class CommandPaletteTaskActions {
         case .release(let workspaceID):
             guard store.state.workspacesByID[workspaceID] != nil else { return false }
             afterPaletteCloses { [presentFailure] in
-                // As the Tasks view's Release… button does; release refuses
-                // a second release of the same project.
+                // Release refuses a second release of the same project.
                 do {
                     _ = try coordinator.release(workspaceID: workspaceID, caller: .unmanaged)
                 } catch {

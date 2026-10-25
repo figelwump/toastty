@@ -411,10 +411,10 @@ public struct AppState: Codable, Equatable, Sendable {
     }
 
     /// Whether a native view covers the window's workspace content, so its
-    /// terminals are selected but not seen: the Tasks view, or the
-    /// coordinator chat over the coordinator's terminal.
+    /// terminals are selected but not seen: the coordinator chat over the
+    /// coordinator's terminal.
     public func coversWorkspaceContent(windowID: UUID) -> Bool {
-        window(id: windowID)?.showsTasksView == true || showsCoordinatorChat(windowID: windowID)
+        showsCoordinatorChat(windowID: windowID)
     }
 
     public func windowHasAnyUnreadNotifications(windowID: UUID) -> Bool {

@@ -224,10 +224,10 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
-    /// Shows or hides the Tasks view; it pairs with Option+Shift+T, the
-    /// default quick entry shortcut. Toastty has no Reopen Closed Tab, which
-    /// browsers put here.
-    static let toggleTasksView = ToasttyKeyboardShortcut(
+    /// Shows the coordinator chat; it pairs with Option+Shift+T, the default
+    /// quick entry shortcut. Toastty has no Reopen Closed Tab, which browsers
+    /// put here.
+    static let showCoordinatorChat = ToasttyKeyboardShortcut(
         "t",
         modifiers: [.command, .shift]
     )

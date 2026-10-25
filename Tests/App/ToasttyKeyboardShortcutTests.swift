@@ -47,7 +47,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleRightPanel.symbolLabel, "⇧⌘B")
-        XCTAssertEqual(ToasttyKeyboardShortcuts.toggleTasksView.symbolLabel, "⇧⌘T")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.showCoordinatorChat.symbolLabel, "⇧⌘T")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newScratchpad.symbolLabel, "⌃⌘S")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
@@ -73,7 +73,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.toggleRightPanel,
-            ToasttyKeyboardShortcuts.toggleTasksView,
+            ToasttyKeyboardShortcuts.showCoordinatorChat,
             ToasttyKeyboardShortcuts.newTab,
             ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel,
             ToasttyKeyboardShortcuts.toggleLaterFlag,

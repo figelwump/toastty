@@ -95,8 +95,6 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorPost = "coordinator.post"
     case coordinatorShowTerminal = "coordinator.show-terminal"
     case coordinatorChatShow = "coordinator.chat.show"
-    case windowTasksShow = "window.tasks.show"
-    case windowTasksHide = "window.tasks.hide"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -137,6 +135,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["panel.markdown.search.hide"]
         case .panelFocusModeToggle:
             return ["topbar.toggle.focused-panel"]
+        case .coordinatorChatShow:
+            // The coordinator chat replaced the Tasks view.
+            return ["window.tasks.show", "window.tasks.hide"]
         case .appMarkdownTextIncrease:
             return ["app.markdown_text.increase"]
         case .appMarkdownTextDecrease:
@@ -705,14 +706,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Show the coordinator chat: select the coordinator workspace, with the chat over its terminal and its right panel beside it. With taskID, the chat opens and scrolls to that task's newest packet card, or its last card. Fails while the coordinator workspace does not exist.",
+                summary: "Show the coordinator chat: select the coordinator workspace, with the chat over its terminal and its right panel beside it. With taskID, the chat opens and scrolls to that task's newest packet card, or its last card. Fails while the coordinator workspace does not exist. window.tasks.show and window.tasks.hide, from before the chat replaced the Tasks view, run it too.",
                 selectors: [],
-                parameters: [.taskID(required: false)]
+                parameters: [.taskID(required: false)],
+                aliases: aliases
             )
-        case .windowTasksShow:
-            return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
-        case .windowTasksHide:
-            return .init(id: rawValue, kind: .action, summary: "Hide a window's Tasks view.", selectors: [.windowID])
         }
     }
 

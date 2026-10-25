@@ -304,7 +304,7 @@ enum TaskBoard {
 /// Keeps the inputs of the board current and tells views when they change:
 /// task records, pull request answers, and tasks.toml. It also asks GitHub
 /// about open task pull requests every two minutes, when an agent's turn
-/// ends in a task space, and when the Tasks view opens, and copies what it
+/// ends in a task space, and when the coordinator chat opens, and copies what it
 /// learns onto the records: the pull request link, and the merge.
 @MainActor
 final class TaskBoardStore: ObservableObject {
@@ -313,17 +313,9 @@ final class TaskBoardStore: ObservableObject {
     let coordinator: TaskCoordinator?
     let pullRequests: PullRequestStateCache?
     @Published private(set) var config: TasksConfig?
-    /// Why tasks.toml could not be read; shown in the Tasks view.
-    @Published private(set) var configError: String?
-    /// The task each window's Tasks view shows in its detail pane.
-    @Published var selectionByWindowID: [UUID: TaskBoardItem.Subject] = [:]
-    /// The rows each window's Tasks view showed last, in order; see
-    /// `tasksViewListDidChange`.
-    var tasksViewListByWindowID: [UUID: [TaskBoardItem.Subject]] = [:]
-    /// A group each window's Tasks view should show next, set by the
-    /// sidebar's To ship and Done counts. The view scrolls to it, expands
-    /// Done, and then clears the request.
-    @Published var revealGroupByWindowID: [UUID: TaskStage.Group] = [:]
+    /// Why tasks.toml could not be read; the coordinator chat's header shows
+    /// it.
+    private(set) var configError: String?
     /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
     /// view's New Task. `nil` hides them.
     var newTask: (@MainActor () -> Void)?
@@ -485,7 +477,10 @@ final class TaskBoardStore: ObservableObject {
             if configError != nil { configError = nil }
         } catch {
             let message = error.localizedDescription
-            if configError != message { configError = message }
+            if configError != message {
+                configError = message
+                ToasttyLog.warning("Task board could not read tasks.toml", category: .tasks, metadata: ["error": message])
+            }
         }
     }
 
@@ -500,9 +495,9 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
-    /// When the Tasks view opens: read tasks.toml again, ask GitHub, and
-    /// look for release tags.
-    func tasksViewDidOpen() {
+    /// When the coordinator chat opens: read tasks.toml again, ask GitHub,
+    /// and look for release tags, so its cards show the latest state.
+    func chatDidOpen() {
         reloadConfig()
         refreshOpenPullRequests()
         Task { [weak coordinator] in

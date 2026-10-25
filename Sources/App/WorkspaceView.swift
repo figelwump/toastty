@@ -598,7 +598,7 @@ struct WorkspaceView: View {
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleSeenUnreadPanelClearIfNeeded()
         }
-        .onChange(of: isCoveredByTasksView) { _, isCovered in
+        .onChange(of: isCoveredByChat) { _, isCovered in
             scheduleSeenUnreadPanelClearIfNeeded()
             // The coordinator chat holds focus while it covers its terminal;
             // switching to the raw terminal gives the terminal focus again.
@@ -1709,8 +1709,8 @@ struct WorkspaceView: View {
     private func scheduleSeenUnreadPanelClearIfNeeded() {
         cancelSeenUnreadClearTask()
 
-        // The Tasks view covers the workspace, so its output is not seen.
-        guard isCoveredByTasksView == false,
+        // The coordinator chat covers the workspace, so its output is not seen.
+        guard isCoveredByChat == false,
               let clearCandidate = Self.unreadClearCandidate(
             workspace: selectedWorkspace,
             appIsActive: store.isAppActive
@@ -1721,7 +1721,7 @@ struct WorkspaceView: View {
         // The delay keeps panels the user only passes through on the way elsewhere unread.
         seenUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.seenUnreadClearDelayNanoseconds)
-            guard Task.isCancelled == false, isCoveredByTasksView == false else { return }
+            guard Task.isCancelled == false, isCoveredByChat == false else { return }
             let panelIDs = Self.unreadPanelIDsToClear(
                 currentWorkspace: store.selectedWorkspace(in: windowID),
                 candidate: clearCandidate,
@@ -1738,7 +1738,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private var isCoveredByTasksView: Bool {
+    private var isCoveredByChat: Bool {
         store.state.coversWorkspaceContent(windowID: windowID)
     }
 
@@ -3913,6 +3913,16 @@ struct PanelCardView: View {
         isWorkspaceSelected && isTabSelected && focusedPanelID == panelID
     }
 
+    /// Whether the coordinator chat covers this panel. The terminal under it
+    /// is selected but must not take keyboard focus back from the chat.
+    private var isCoveredByChat: Bool {
+        guard isWorkspaceSelected, chromeContext == .mainSplit else { return false }
+        let state = store.state
+        guard state.workspacesByID[workspaceID]?.isCoordinator == true,
+              let windowID = state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id else { return false }
+        return state.coversWorkspaceContent(windowID: windowID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             panelHeader
@@ -3924,7 +3934,7 @@ struct PanelCardView: View {
                         workspaceID: workspaceID,
                         panelID: panelID,
                         hostState: TerminalPanelHostState(terminalState: terminalState),
-                        focused: isFocused,
+                        focused: isFocused && isCoveredByChat == false,
                         windowFontPoints: windowFontPoints,
                         runtimeContext: terminalRuntimeContext
                     )

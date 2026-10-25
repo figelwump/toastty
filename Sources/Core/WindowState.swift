@@ -14,9 +14,6 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var sidebarWidthPointsOverride: Double?
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
-    /// Whether the Tasks view covers the workspace content. Not saved: a
-    /// relaunch opens the workspace the window had selected.
-    public var showsTasksView: Bool
     /// Whether the coordinator workspace shows its raw terminal instead of
     /// the coordinator chat that normally covers it. Not saved.
     public var showsCoordinatorTerminal: Bool = false
@@ -29,8 +26,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         sidebarVisible: Bool = true,
         sidebarWidthPointsOverride: Double? = nil,
         terminalFontSizePointsOverride: Double? = nil,
-        markdownTextScaleOverride: Double? = nil,
-        showsTasksView: Bool = false
+        markdownTextScaleOverride: Double? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -40,7 +36,6 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.sidebarWidthPointsOverride = Self.normalizedSidebarWidthOverride(sidebarWidthPointsOverride)
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
-        self.showsTasksView = showsTasksView
     }
 
     public static func clampedSidebarWidth(_ width: Double) -> Double {
@@ -102,7 +97,6 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
             )
         )
         // An unknown segment from a newer version falls back to projects.
-        showsTasksView = false
     }
 
     public func encode(to encoder: Encoder) throws {

@@ -72,15 +72,18 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
-    func aTurnThatEndsUnderTheTasksViewStaysUnread() throws {
-        let appState = makeTwoPanelAppState()
+    func aTurnThatEndsUnderTheCoordinatorChatStaysUnread() throws {
+        var appState = makeTwoPanelAppState()
+        // The chat covers the coordinator workspace's terminal.
+        let selectedID = try #require(appState.selectedWorkspaceSelection()?.workspaceID)
+        appState.workspacesByID[selectedID]?.isCoordinator = true
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let focusedPanelID = try #require(selection.workspace.focusedPanelID)
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
-        _ = appStore.send(.setTasksViewShown(windowID: selection.windowID, shown: true))
+        #expect(appStore.state.coversWorkspaceContent(windowID: selection.windowID))
 
         sessionStore.startSession(
             sessionID: "sess-covered",

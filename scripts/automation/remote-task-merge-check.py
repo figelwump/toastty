@@ -3,8 +3,8 @@
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-merge-check.py'. It needs an unlocked
-screen: it presses the Tasks view's buttons in its own app instance and
-captures its window. A real Codex agent runs the merge prompt (subscription
+screen: it presses the sidebar's buttons and menus in its own app instance
+and captures its window. A real Codex agent runs the merge prompt (subscription
 usage is consumed).
 
 The check starts its own instance of the wrapper's build, with a throwaway
@@ -12,17 +12,21 @@ runtime home, a repository whose origin is a local bare repository, and a fake
 `gh` first on the instance's login-shell PATH. The fake `gh` serves one pull
 request per task and merges by pushing the accepted commit to origin's main.
 Through the real UI and CLI it checks that:
-- Merge in the Tasks view sends the project's merge_prompt to the task's
+- Merge, then Merge again to confirm, on the task's Needs you row in the
+  sidebar sends the project's merge_prompt to the task's
   agent, which runs `task merge` mid-turn; Toastty merges at the checked
   commit, and once the agent's turn ends closes the task space, removes the
   worktree and deletes both branches; the task is To ship;
-- Release… on the To ship lane starts a release task in a worktree on no
-  branch at origin's main; a tag pushed to origin ships the task and the
+- `task release` starts a release task in a worktree on no branch at
+  origin's main; a tag pushed to origin ships the task and the
   release, and the release's task space and worktree are cleaned up;
 - `task archive` refuses uncommitted changes, then with --discard-changes
   removes the worktree and keeps a branch with unpushed commits;
-- Merge Without Checks waits for a pending check, and Cancel Merge ends the
-  wait without merging.
+- Merge Without Checks, from the Needs you row's menu, waits for a pending
+  check, and Cancel Merge, from the task space row's menu, ends the wait
+  without merging.
+The coordinator runs a fake agent: opening its chat reads tasks.toml again,
+asks GitHub, and looks for release tags.
 """
 
 import argparse
@@ -166,14 +170,20 @@ def main():
     version, argv = start_work_check.provider_profile(provider, environment, repository)
     if provider == 'codex':
         argv = [argv[0], '-c', 'check_for_update_on_startup=false', *argv[1:]]
+    coordinator_agent = fake_bin / 'coordinator-agent'
+    coordinator_agent.write_text(create_check.FAKE_AGENT)
+    coordinator_agent.chmod(0o755)
     (toastty_dir / 'agents.toml').write_text(
-        f'[{provider}]\ndisplayName = "{provider}"\nargv = {json.dumps(argv)}\ninitialPromptPlacement = "trailing"\n')
+        f'[{provider}]\ndisplayName = "{provider}"\nargv = {json.dumps(argv)}\ninitialPromptPlacement = "trailing"\n\n'
+        f'[coordinator-check]\ndisplayName = "Coordinator check"\nargv = {json.dumps([str(coordinator_agent)])}\n'
+        # The coordinator starts only with an agent that takes a first message.
+        'initialPromptPlacement = "trailing"\n')
     merge_prompt = ('This is an automated Toastty check. Run exactly this one shell command, with no arguments '
                     'added, and no other command:\n"$TOASTTY_CLI_PATH" task merge\n'
                     'Then reply with exactly MERGE-REQUESTED and end your turn.')
     release_prompt = 'This is an automated Toastty check. Run no command and edit no file. Reply with exactly RELEASE-READY.'
     (toastty_dir / 'tasks.toml').write_text(
-        f'[defaults]\nagent = "{provider}"\n\n'
+        f'[defaults]\nagent = "{provider}"\n\n[coordinator]\nagent = "coordinator-check"\n\n'
         f'[workspace.{json.dumps(str(repository))}]\nrelease_tags = "v*"\n'
         f'release_prompt = {json.dumps(release_prompt)}\nmerge_prompt = {json.dumps(merge_prompt)}\n')
 
@@ -183,6 +193,9 @@ def main():
         TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
         TOASTTY_RUNTIME_LABEL='remote-task-merge-check',
         TOASTTY_SOCKET_PATH=socket_path,
+        TOASTTY_COORDINATOR_AUTOSTART='1',
+        TOASTTY_AUTOMATION='1',
+        TOASTTY_ARTIFACTS_DIR=str(artifacts),
         CFFIXED_USER_HOME=str(repository),
         ZDOTDIR=str(zdotdir),
         DISABLE_AUTOUPDATER='1',
@@ -221,14 +234,10 @@ def main():
         Screen Recording."""
         path = artifacts / f'{PREFIX}-{name}.png'
         # The first agent launch announces Toastty's skills over the content;
-        # dismiss it so the capture shows the Tasks view.
+        # dismiss it so the capture shows the sidebar.
         if run_tool(helper, 'exists', pid, 'xmark', check=False).returncode == 0:
             run_tool(helper, 'press', pid, 'xmark', check=False)
         time.sleep(0.8)
-        # What the rows say through Accessibility, next to what was drawn.
-        dump = run_tool(helper, 'dump', pid, check=False).stdout.splitlines()
-        evidence.setdefault('rows', {})[name] = [line.split('title=', 1)[-1].split(' frame=')[0]
-                                                  for line in dump if 'id=tasks.view.row ' in line]
         response = instance.request('automation.capture_screenshot', dict(step=name))
         if response.get('ok'):
             shutil.copyfile(response['result']['path'], path)
@@ -294,42 +303,55 @@ def main():
     def gh_pr(number):
         return json.loads(gh_state.read_text())['prs'][str(number)]
 
-    def open_tasks_view():
-        """Shows the Tasks view, closing it first when it is open, so it
-        opens again: that reloads tasks.toml and looks for release tags."""
-        instance.request('app_control.run_action', dict(id='window.tasks.hide', args=dict(windowID=window_id)))
-        action('window.tasks.show', windowID=window_id)
+    def open_chat():
+        """Shows the coordinator chat, which reloads tasks.toml, asks GitHub
+        and looks for release tags each time."""
+        action('coordinator.chat.show')
 
     def checking_releases(probe):
-        """Opens the Tasks view again on each try, which looks for release tags."""
+        """Opens the chat again on each try, which looks for release tags."""
         def wrapped():
-            open_tasks_view()
+            open_chat()
             return probe()
         return wrapped
+
+    def row(record, part):
+        return f'sidebar.needsYou.task.{record["taskID"]}.{part}'
+
+    def task_space_label(record):
+        title = next(w['title'] for w in instance.query('workspace.list')['workspaces']
+                     if w['workspaceID'] == record['setup']['taskSpaceWorkspaceID'])
+        return f'{title}, task space'
+
+    def menu_press(label, item):
+        """Right-clicks a sidebar row by its label and picks a menu item."""
+        result = run_tool(driver, 'context-menu', pid, '*', label, item)
+        step('menu', row=label, pressed=item, items=json.loads(result.stdout))
 
     try:
         listed = instance.wait_until_ready()
         workspace_id = listed[0]['workspaceID']
-        window_id = listed[0]['windowID']
-        project_title = listed[0]['title']
 
         def terminal_in_repository():
             cwds = next(w for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == workspace_id)['terminalCwds']
             return str(repository) in [os.path.realpath(cwd) for cwd in cwds]
 
         wait_for('the first terminal in the repository', terminal_in_repository, interval=1)
+        wait_for('the coordinator to run', lambda: (lambda c: c if c['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=60, interval=1)
         run_tool(helper, 'activate', pid)
         step('booted', workspaceID=workspace_id, provider=provider, version=version)
 
-        # 1. Merge through the agent, from the Tasks view.
+        # 1. Merge through the agent, from the sidebar's Needs you row.
         a = started_task('Merge check', 'READY-A')
         a_worktree, a_branch = a['worktree']['path'], a['worktree']['branch']
         a_head = open_pull_request(a, 7)
         wait_for('A waits for review', lambda: task(a['taskID'])['stage'].get('attention') == 'review', timeout=120, interval=2)
-        # The detail pane shows the first task that needs the user: A.
-        open_tasks_view()
+        open_chat()
         capture('1-review')
-        press('tasks.view.detail.merge')
+        press(row(a, 'primary'))
+        capture('1-confirm-merge')
+        press(row(a, 'confirmMerge'))
         reply_on(a, 'MERGE-REQUESTED')
         step('agent ran task merge', merge=task(a['taskID'])['merge'])
         wait_for('origin merged A', lambda: gh_pr(7)['state'] == 'MERGED', timeout=120, interval=1)
@@ -344,12 +366,11 @@ def main():
         require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
         require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
         step('A merged and cleaned up', cleanup=merged['cleanup'])
-        # The Tasks view offers Release for the lane (mockup 14e).
-        open_tasks_view()
+        open_chat()
         capture('2-to-ship')
 
-        # 2. Release from the To ship lane; a pushed tag ships both.
-        press(f'tasks.view.toShip.{project_title}.release')
+        # 2. Release the project; a pushed tag ships both.
+        cli_result('task', 'release', '--workspace', workspace_id)
         release = wait_for('the release task', lambda: next((t for t in cli_result('task', 'list')['tasks']
                                                            if t.get('release')), None), timeout=60, interval=1)
         release = wait_for('the release starts', lambda: (lambda r: r if r['setup']['state'] == 'started' else None)(task(release['taskID'])),
@@ -394,25 +415,25 @@ def main():
         c = started_task('Cancel check', 'READY-C')
         open_pull_request(c, 9, pending=True)
         wait_for('C waits for review', lambda: task(c['taskID'])['stage'].get('attention') == 'review', timeout=120, interval=2)
-        open_tasks_view()
-        press('tasks.view.detail.mergeWithoutChecks')
+        open_chat()
+        wait_for('C\'s Needs you row', lambda: run_tool(helper, 'exists', pid, row(c, 'primary'), check=False).returncode == 0,
+                 timeout=30, interval=0.5)
+        menu_press('Cancel check, review', 'Merge Without Checks')
         wait_for('C waits for checks', lambda: task(c['taskID'])['merge'] == 'waitingForChecks', timeout=120, interval=1)
-        # The row moved from Needs you to Running while the view showed; it
-        # must say so, not keep its old drawing.
-        wait_for('C\'s row to say it waits for checks', lambda: any(
-            'Cancel check, Waiting for checks' in line for line in run_tool(helper, 'dump', pid, check=False).stdout.splitlines()
-            if 'id=tasks.view.row ' in line), timeout=20, interval=1)
+        # The task runs while it waits, so its row leaves Needs you.
+        wait_for('C to leave Needs you', lambda: run_tool(helper, 'exists', pid, row(c, 'primary'), check=False).returncode != 0,
+                 timeout=20, interval=1)
         capture('4-waiting-for-checks')
         # A cancel is refused in the seconds the waiting merge's script runs,
         # every 30 seconds; press again after a refusal.
         def cancel():
-            if run_tool(helper, 'exists', pid, 'tasks.view.detail.cancelMerge', check=False).returncode == 0:
-                run_tool(helper, 'press', pid, 'tasks.view.detail.cancelMerge')
-                time.sleep(2)
+            if task(c['taskID'])['merge'] is not None:
+                if run_tool(driver, 'context-menu', pid, '*', task_space_label(c), 'Cancel Merge', check=False).returncode == 0:
+                    time.sleep(2)
             record = task(c['taskID'])
             return record if record['merge'] is None and record['mergeCancelledAt'] else None
         cancelled = wait_for('C cancelled', cancel, timeout=90, interval=1)
-        step('pressed', button='tasks.view.detail.cancelMerge')
+        step('pressed', menuItem='Cancel Merge')
         require(gh_pr(9)['state'] == 'OPEN', 'C merged after the cancel')
         step('cancelled', stage=cancelled['stage'])
         capture('5-cancelled')

@@ -63,7 +63,7 @@ merges it now or after the checks that are still running. Then end your turn
 and run nothing else: Toastty cleans up after this turn ends.
 
 If something blocks, report each blocker with its link and end your turn. Do
-not run `task merge`. The task then waits for the user in the Tasks view, who can
+not run `task merge`. The task then waits for the user in Needs you, who can
 fix the blocker and press Merge again, or choose Merge Without Checks.
 
 If `task merge` refuses because the user cancelled the merge, do not retry it.

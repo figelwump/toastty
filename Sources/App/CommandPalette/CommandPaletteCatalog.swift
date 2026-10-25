@@ -66,7 +66,6 @@ enum CommandPaletteCatalog {
             (.newScratchpad, actions.canCreateScratchpad(originWindowID: originWindowID)),
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
             (.newTask, actions.canCreateTask()),
-            (.toggleTasksView, actions.canToggleTasksView(originWindowID: originWindowID)),
             (.showCoordinatorChat, actions.canShowCoordinatorChat()),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
@@ -224,8 +223,6 @@ enum CommandPaletteCatalog {
         actions: CommandPaletteActionHandling
     ) -> String {
         switch command {
-        case .toggleTasksView:
-            return actions.tasksViewTitle(originWindowID: originWindowID)
         case .toggleSidebar:
             return actions.sidebarTitle(originWindowID: originWindowID)
         case .toggleRightPanel:

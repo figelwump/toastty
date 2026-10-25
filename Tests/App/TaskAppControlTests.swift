@@ -526,16 +526,15 @@ extension TaskAppControlTests {
         }
     }
 
-    @Test func windowActionsShowAndHideTheTasksView() throws {
+    @Test func theTasksViewActionsNowOpenTheCoordinatorChat() throws {
+        #expect(AppControlActionID.resolve("window.tasks.show") == .coordinatorChatShow)
+        #expect(AppControlActionID.resolve("window.tasks.hide") == .coordinatorChatShow)
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
-        let windowID = try #require(fixture.store.state.windows.first?.id)
-        let args: [String: AutomationJSONValue] = ["windowID": .string(windowID.uuidString)]
-
-        _ = try executor.runAction(id: "window.tasks.show", args: args)
-        #expect(fixture.store.window(id: windowID)?.showsTasksView == true)
-        _ = try executor.runAction(id: "window.tasks.hide", args: args)
-        #expect(fixture.store.window(id: windowID)?.showsTasksView == false)
+        // Without a coordinator workspace there is no chat to open.
+        #expect(throws: AutomationSocketError.self) {
+            _ = try executor.runAction(id: "window.tasks.show", args: [:])
+        }
     }
 
     @Test func coordinatorPostAppendsACardThatOnlyTheCoordinatorMayPost() async throws {

@@ -174,8 +174,6 @@ public enum AppAction: Equatable, Sendable {
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?, sessionID: String? = nil)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
-    /// Shows or hides the Tasks view. Selecting a workspace hides it.
-    case setTasksViewShown(windowID: UUID, shown: Bool)
     /// Switches the coordinator workspace between its chat and its raw
     /// terminal in one window.
     case setCoordinatorTerminalShown(windowID: UUID, shown: Bool)
@@ -339,8 +337,6 @@ public extension AppAction {
             return "markPanelNotificationsRead"
         case .toggleSidebar:
             return "toggleSidebar"
-        case .setTasksViewShown:
-            return "setTasksViewShown"
         case .setCoordinatorTerminalShown:
             return "setCoordinatorTerminalShown"
         case .setSidebarWidth:
