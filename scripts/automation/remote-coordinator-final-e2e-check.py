@@ -341,9 +341,7 @@ def main():
             time.sleep(0.3)
             return ax('helper', 'frontmost-pid', check=False)['stdout'].strip() == str(pid())
         wait_for('the app to be frontmost', frontmost, timeout=20, interval=0.5)
-        # System Events presses keys as a keyboard does. With a terminal
-        # focused, a posted key event that only carries modifier flags does
-        # not reach the menu shortcuts.
+        # System Events presses the modifier keys too, as a keyboard does.
         using = ', '.join(MODIFIERS[name] for name in (modifiers or '').split(',') if name)
         ax('osascript', f'tell application "System Events" to key code {code}' + (f' using {{{using}}}' if using else ''))
         time.sleep(0.8)

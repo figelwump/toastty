@@ -503,6 +503,20 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(repeatedEvent))
     }
 
+    func testCoordinatorShortcutsMatchTheirModifiersOnly() throws {
+        let chat = try makeKeyEvent(characters: "T", modifiers: [.command, .shift], keyCode: 0x11)
+        let allTasks = try makeKeyEvent(characters: "t", modifiers: [.command, .option], keyCode: 0x11)
+        let newTab = try makeKeyEvent(characters: "t", modifiers: [.command], keyCode: 0x11)
+        let repeated = try makeKeyEvent(characters: "T", modifiers: [.command, .shift], keyCode: 0x11, isARepeat: true)
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isShowCoordinatorChatShortcut(chat))
+        XCTAssertFalse(DisplayShortcutInterceptor.isShowCoordinatorChatShortcut(allTasks))
+        XCTAssertFalse(DisplayShortcutInterceptor.isShowCoordinatorChatShortcut(newTab))
+        XCTAssertFalse(DisplayShortcutInterceptor.isShowCoordinatorChatShortcut(repeated))
+        XCTAssertTrue(DisplayShortcutInterceptor.isShowAllTasksShortcut(allTasks))
+        XCTAssertFalse(DisplayShortcutInterceptor.isShowAllTasksShortcut(chat))
+    }
+
     func testSplitDirectionMatchesCommandDVariantsOnly() throws {
         let splitRightEvent = try makeKeyEvent(characters: "d", modifiers: [.command], keyCode: 0x02)
         let splitDownEvent = try makeKeyEvent(characters: "D", modifiers: [.command, .shift], keyCode: 0x02)
