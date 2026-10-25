@@ -184,13 +184,13 @@ export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: Ch
   if (packet && item.kind === "packet" && !item.superseded) {
     if (ui.confirmingMerge === item.id) {
       html += `<div class="confirm"><div>Merge ${esc(task.pullRequestLabel ?? "the pull request")} as it is now? ${esc(task.mergePolicy)}</div>`
-        + `<div class="btns"><button class="btn primary" data-act="merge-go" data-task="${esc(task.id)}">Merge</button><button class="btn" data-act="merge-cancel">Cancel</button></div></div>`;
+        + `<div class="btns"><button class="btn primary" id="merge-go-${esc(item.id)}" data-act="merge-go" data-task="${esc(task.id)}">Merge</button><button class="btn" data-act="merge-cancel">Cancel</button></div></div>`;
     } else {
       html += `<div class="btns">`
         + (task.canMerge ? `<button class="btn primary" id="merge-${esc(item.id)}" data-act="merge" data-id="${esc(item.id)}">Merge</button>` : "")
         + `<button class="btn" id="report-${esc(item.id)}" data-act="open-report" data-task="${esc(task.id)}" data-version="${packet.version}">Full report</button>`
         + (task.hasTaskSpace ? `<button class="btn" data-act="open-task" data-task="${esc(task.id)}">Open task space</button>` : "")
-        + (task.pullRequestURL ? `<button class="btn" data-act="open-url" data-url="${esc(task.pullRequestURL)}">Open PR</button>` : "")
+        + (task.pullRequestURL ? `<button class="btn" id="open-pr-${esc(item.id)}" data-act="open-url" data-url="${esc(task.pullRequestURL)}">Open PR</button>` : "")
         + `</div>`;
     }
     html += `<div class="policy">${esc(task.project ?? "this project")}: ${esc(task.mergePolicy)}</div>`;
