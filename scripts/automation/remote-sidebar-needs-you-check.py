@@ -133,6 +133,8 @@ def main():
 
     cli_environment = {key: value for key, value in environment.items()
                        if key not in ('TOASTTY_COORDINATOR_AUTOSTART', 'TOASTTY_AUTOMATION')}
+    # The CLI reads relative paths from PWD.
+    cli_environment['PWD'] = str(work)
 
     def cli_json(*arguments, session=None):
         env = dict(cli_environment)
