@@ -750,8 +750,9 @@ failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 
 `coordinator.chat.state` returns `pages` (open chat pages), `canSend`,
 `items` in time order (each with `type`: `message`, `tool`, `status` or `card`,
-and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded` and
-`isNew`), `expandedCardIDs`, the cards an open page has expanded, and
+and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded`,
+`isNew`, `stage`, `canMerge`, `mergePolicy` and `pullRequestURL`),
+`expandedCardIDs`, the cards an open page has expanded, and
 `notice`, the last line the chat showed after an action (`text`, `isError`).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
@@ -1534,6 +1535,29 @@ Behavior:
   `INVALID_PAYLOAD`.
 - Output path is:
   `<artifactsDirectory>/ui/<sanitized-runID>/<sanitized-fixture>/<sanitized-step>.png`
+
+### `automation.coordinator_chat_action`
+
+Request payload:
+
+- `action: "click" | "type"`
+- `elementID: String`, an element ID in the chat page, such as
+  `composer-input`, `expand-<cardID>`, `reply-<cardID>`, `report-<cardID>`,
+  `merge-<cardID>`, `merge-go-<cardID>` or `open-pr-<cardID>`
+- `text?: String`, for `type`
+
+Result:
+
+- `elementID: String`
+- `performed: Bool`
+
+Behavior:
+
+- Works only in automation mode.
+- `click` clicks the element. `type` sets the field's text and submits it,
+  as Return does.
+- Acts only when exactly one open chat page has the element; otherwise
+  returns `INVALID_PAYLOAD`.
 
 ### `automation.dump_state`
 
