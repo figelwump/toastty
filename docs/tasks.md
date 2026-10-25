@@ -429,11 +429,33 @@ creates a task. Below it, from top to bottom:
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
 
-The coordinator chat took the place of the Tasks view: it shows the cards of
-each task the coordinator posted about, with its packet and its actions.
-`Cmd+Shift+T`, or **View > Show Coordinator Chat**, opens it. There is no list
-of every task, and no view of Done or Archived tasks: `toastty task list` and
-`toastty task get` show them. The chat's header shows a tasks.toml error.
+The coordinator chat and All tasks took the place of the Tasks view. The chat
+shows the cards of each task the coordinator posted about, with its packet and
+its actions. `Cmd+Shift+T`, or **View > Show Coordinator Chat**, opens it. The
+chat's header shows a tasks.toml error.
+
+### All tasks
+
+**All tasks** lists every task, in the coordinator workspace where the chat
+shows. Open it with `Option+Cmd+T`, **View > Show All Tasks**, **Show All
+Tasks** in the command palette, `toastty coordinator tasks`, or the **Chat |
+All tasks** switch in the chat's header.
+
+- Tasks are grouped by stage: Inbox, Needs you, Running, To ship, Done and
+  Archived. Done and Archived start closed; click a group's name to open or
+  close it. The newest change comes first in each group. Done and Archived
+  list their newest 200 tasks; `toastty task list` lists them all.
+- With tasks in more than one project, buttons above the list show one
+  project at a time.
+- A row shows the task's stage, title, status, project and how long ago it
+  last changed.
+- Each row has the action and the ▾ menu that its Needs you row in the
+  sidebar has. Merge asks first, naming the project's merge policy. A To ship
+  task whose project can release also offers **Release <project>…**, and an
+  archived task offers **Delete Task**.
+- Up and Down Arrow move the selection, and Return opens the task: its card
+  in the chat, or else its task space. The command palette's task commands act
+  on the selected task.
 
 A To ship row opens the task's cards in the coordinator chat. A task with no
 card, or any task while the coordinator is off, opens its task space instead,
@@ -441,7 +463,7 @@ when that is still open. **Show N more** lists the project's other To ship
 tasks in place. The To ship and Done counts are counts only. The newest merge
 comes first; a task with no merge time uses its latest change. A To ship task
 whose task space is still open keeps its task space row and does not show a
-second time. Release from the command palette or with `toastty task release`.
+second time. Release from a To ship row in All tasks, the command palette, or `toastty task release`.
 
 Task space rows use square marks: green for a
 finished turn (filled while it is unread), blue for a pull request waiting for
@@ -609,7 +631,8 @@ archived.
 With `release_tags` set, a merged task waits in To ship until a release tag
 contains its merge commit. A project can release from Toastty when
 `tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release
-<project>…** in the command palette makes a release task: Toastty fetches the remote's default
+<project>…** in the command palette, or in a To ship row's menu in
+[All tasks](#all-tasks), makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The
 agent's first message starts with `Use the <release_skill> skill.` when a

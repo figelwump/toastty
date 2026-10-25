@@ -31,11 +31,20 @@ struct CoordinatorChatPayload: Encodable, Equatable {
         var ok: Bool
     }
 
+    /// Asks the page to show the chat or All tasks; a new token asks again.
+    struct ViewRequest: Encodable, Equatable {
+        var view: CoordinatorChatPageView
+        var token: Int
+    }
+
     var coordinator: Coordinator
     var items: [CoordinatorChatItem]
     var focus: Focus?
     var notice: Notice?
     var ack: Ack?
+    var view: ViewRequest?
+    var taskGroups: [CoordinatorAllTasks.Group] = []
+    var tasks: [CoordinatorAllTasks.Row] = []
 
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
@@ -352,11 +361,20 @@ struct CoordinatorChatTranscript {
     }
 }
 
+/// The page's two views: the chat, and the All tasks list.
+enum CoordinatorChatPageView: String, Encodable, Equatable {
+    case chat
+    case tasks
+}
+
 /// What the chat page asks for; see `ChatEvent` in the page's types.
 enum CoordinatorChatPageEvent: Equatable {
     case ready
-    /// The page drew the state; it reports the cards it has open.
-    case rendered(expanded: [String])
+    /// The page drew the state; it reports the cards it has open, the view
+    /// it shows, and the All tasks row selected.
+    case rendered(expanded: [String], view: CoordinatorChatPageView = .chat, selectedRowID: String? = nil)
+    /// An All tasks row's action, by the IDs the row was drawn with.
+    case taskAction(rowID: String, actionID: String)
     case send(String)
     case reply(taskID: UUID, version: Int, text: String)
     case ask(taskID: UUID, version: Int?, text: String)
@@ -386,7 +404,15 @@ enum CoordinatorChatPageEvent: Equatable {
         switch type {
         case "ready": self = .ready
         case "rendered":
-            self = .rendered(expanded: ((body["expanded"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(200).map { $0 })
+            self = .rendered(
+                expanded: ((body["expanded"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(200).map { $0 },
+                view: (body["view"] as? String).flatMap(CoordinatorChatPageView.init(rawValue:)) ?? .chat,
+                selectedRowID: (body["selected"] as? String).flatMap { $0.count <= 64 ? $0 : nil }
+            )
+        case "taskAction":
+            guard let rowID = body["rowID"] as? String, rowID.count <= 64,
+                  let actionID = body["actionID"] as? String, actionID.count <= 64 else { return nil }
+            self = .taskAction(rowID: rowID, actionID: actionID)
         case "send":
             guard let text = text() else { return nil }
             self = .send(text)

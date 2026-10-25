@@ -64,6 +64,40 @@ export type ChatItem =
       packet: ChatPacket | null;
     };
 
+export type PageView = "chat" | "tasks";
+
+export interface TaskGroup {
+  id: string;
+  title: string;
+  /// Every task in the group; Done and Archived send only the newest rows.
+  total: number;
+}
+
+export interface TaskAction {
+  id: string;
+  title: string;
+  isDestructive: boolean;
+}
+
+/// A row of All tasks: what the sidebar's Needs you row shows, for any task.
+export interface TaskRow {
+  id: string;
+  taskID: string | null;
+  title: string;
+  project: string | null;
+  group: string;
+  stageLabel: string;
+  stageTone: Tone;
+  status: string;
+  activityAt: string;
+  /// Whether the chat has a card for the task, which Open shows.
+  hasCard: boolean;
+  primary: TaskAction | null;
+  /// Asked before the primary action runs, as Merge asks.
+  confirm: string | null;
+  menu: TaskAction[][];
+}
+
 export interface ChatState {
   coordinator: {
     title: string;
@@ -80,11 +114,17 @@ export interface ChatState {
   notice: { text: string; isError: boolean; token: number } | null;
   /// Whether the send, reply or ask with `token` was taken.
   ack?: { token: number; ok: boolean } | null;
+  /// Asks the page to show the chat or All tasks; a new token asks again.
+  view?: { view: PageView; token: number } | null;
+  /// The stage groups, in order.
+  taskGroups?: TaskGroup[];
+  tasks?: TaskRow[];
 }
 
 export type ChatEvent =
   | { type: "ready" }
-  | { type: "rendered"; expanded: string[] }
+  | { type: "rendered"; expanded: string[]; view: PageView; selected: string | null }
+  | { type: "taskAction"; rowID: string; actionID: string }
   | { type: "send"; text: string; token: number }
   | { type: "reply"; taskID: string; version: number; text: string; token: number }
   | { type: "ask"; taskID: string; version: number | null; text: string; token: number }
@@ -104,6 +144,19 @@ export interface ChatUIState {
   drafts: Map<string, string>;
   replyTarget: Map<string, "task" | "coordinator">;
   confirmingMerge: string | null;
+}
+
+/// What the user is doing on All tasks.
+export interface TasksUIState {
+  /// The project shown, or null for all.
+  project: string | null;
+  selected: string | null;
+  /// Groups the user opened or closed; Done and Archived start closed.
+  toggledGroups: Set<string>;
+  menuOpen: string | null;
+  /// The question shown before a row's action, tied to that action: a
+  /// refresh that changes the row's action closes it.
+  confirming: { rowID: string; actionID: string } | null;
 }
 
 export interface ReportPacket {

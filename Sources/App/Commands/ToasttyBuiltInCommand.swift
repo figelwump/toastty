@@ -34,6 +34,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case showScratchpadForCurrentSession
     case newTask
     case showCoordinatorChat
+    case showAllTasks
     case toggleSidebar
     case toggleRightPanel
     case toggleFocusedPanelMode
@@ -128,6 +129,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "task.new"
         case .showCoordinatorChat:
             return "coordinator.show-chat"
+        case .showAllTasks:
+            return "coordinator.show-tasks"
         case .showScratchpadForCurrentSession:
             return "scratchpad.show-current-session"
         case .toggleSidebar:
@@ -240,6 +243,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "New Task…"
         case .showCoordinatorChat:
             return "Show Coordinator Chat"
+        case .showAllTasks:
+            return "Show All Tasks"
         case .showScratchpadForCurrentSession:
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
@@ -353,6 +358,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .showCoordinatorChat:
             return ToasttyKeyboardShortcuts.showCoordinatorChat
+        case .showAllTasks:
+            return ToasttyKeyboardShortcuts.showAllTasks
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
         case .toggleRightPanel:
@@ -466,7 +473,9 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .newTask:
             return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
         case .showCoordinatorChat:
-            return ["coordinator", "chat", "packets", "review", "needs", "show", "tasks"]
+            return ["coordinator", "chat", "packets", "review", "needs", "show"]
+        case .showAllTasks:
+            return ["tasks", "all", "list", "done", "archived", "release", "show"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleRightPanel:

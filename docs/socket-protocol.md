@@ -265,6 +265,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.post`
 - `coordinator.show-terminal`
 - `coordinator.chat.show` (aliases `window.tasks.show` and `window.tasks.hide`)
+- `coordinator.tasks.show`
 
 Notable action-specific behavior:
 
@@ -536,6 +537,9 @@ Notable action-specific behavior:
 - `window.tasks.show`, `window.tasks.hide`
   - aliases of `coordinator.chat.show`, kept for scripts from before the
     coordinator chat replaced the Tasks view. Both open the chat.
+- `coordinator.tasks.show`
+  - as `coordinator.chat.show` without `taskID`, but the page shows All tasks
+    instead of the chat; returns the `coordinator.status` object.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -749,8 +753,11 @@ failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded`,
 `isNew`, `stage`, `canMerge`, `mergePolicy` and `pullRequestURL`),
 `expandedCardIDs`, the cards an open page has expanded, `currentTaskID`, the
-task of the card the page expanded last, which the command palette acts on,
-and `notice`, the last line the chat showed after an action (`text`, `isError`).
+task the command palette acts on (on All tasks the selected row's, else the
+task of the card the page expanded last), `view` (`chat` or `tasks`),
+`selectedRowID`, `tasks`, the All tasks rows (each with `id`, `taskID`,
+`title`, `group`, `stage`, `hasCard`, `primary`, the primary action's ID, and
+`menu`, the menu's action IDs), and `notice`, the last line the chat showed after an action (`text`, `isError`).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,

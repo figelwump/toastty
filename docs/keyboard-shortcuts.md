@@ -19,6 +19,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Option+Shift+T` | Open the quick entry panel to create a task, from any app. Set it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`; see [Quick entry](tasks.md#quick-entry) |
 | `Cmd+Shift+T` | Show the coordinator chat. **View > Show Coordinator Chat** does the same |
+| `Option+Cmd+T` | Show All tasks beside the coordinator chat. **View > Show All Tasks** does the same; see [All tasks](tasks.md#all-tasks) |
 | `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list. In the Agent list, `1`–`5` pick a Frequent preset while the search is empty |
 | `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
 

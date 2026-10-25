@@ -54,6 +54,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canReloadValue = true
     var canShowCoordinatorChatValue = false
     var showCoordinatorChatCount = 0
+    var showAllTasksCount = 0
     var currentTaskValue: TaskBoardCurrentTask?
     var taskReleaseOptionsValue: [PaletteTaskReleaseOption] = []
     var executedTaskCommands: [PaletteTaskCommand] = []
@@ -282,6 +283,11 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
 
     func showCoordinatorChat() -> Bool {
         showCoordinatorChatCount += 1
+        return true
+    }
+
+    func showAllTasks() -> Bool {
+        showAllTasksCount += 1
         return true
     }
 
@@ -656,6 +662,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return createTask()
             case .showCoordinatorChat:
                 return showCoordinatorChat()
+            case .showAllTasks:
+                return showAllTasks()
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:

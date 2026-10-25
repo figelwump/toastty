@@ -563,6 +563,15 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.showCoordinatorChat.requiredShortcut.modifiers
             )
             .disabled(CoordinatorChatController.shared?.session.workspaceID == nil)
+
+            Button(ToasttyBuiltInCommand.showAllTasks.title) {
+                _ = CoordinatorChatController.shared?.showTasks()
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.showAllTasks.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.showAllTasks.requiredShortcut.modifiers
+            )
+            .disabled(CoordinatorChatController.shared?.session.workspaceID == nil)
         }
 
         CommandMenu("Workspace") {

@@ -72,6 +72,12 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     /// `items` newest activity first, as the board gives them, so the
     /// latest request is on top. Tasks that have not reached their task
     /// space stay in the Inbox.
+    /// What the row asks before Merge runs.
+    static func mergeQuestion(_ primary: PrimaryAction) -> String? {
+        guard case .merge(_, let number) = primary else { return nil }
+        return "Merge \(number.map { "PR #\($0)" } ?? "the pull request")?"
+    }
+
     static func rows(_ items: [TaskBoardItem], lookAt: (TaskRecord) -> String?) -> [Self] {
         items.filter { $0.stage.group == .needsYou }.map { make($0, lookAt: lookAt) }
     }
@@ -384,7 +390,7 @@ private struct SidebarNeedsYouRowView: View {
 
     private var mergeConfirmation: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(row.primary.flatMap(Self.mergeQuestion) ?? "Merge?")
+            Text(row.primary.flatMap(SidebarNeedsYouRow.mergeQuestion) ?? "Merge?")
                 .font(.system(size: 11.5))
                 .foregroundStyle(ToastyTheme.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -402,10 +408,6 @@ private struct SidebarNeedsYouRowView: View {
         }
     }
 
-    static func mergeQuestion(_ primary: SidebarNeedsYouRow.PrimaryAction) -> String? {
-        guard case .merge(_, let number) = primary else { return nil }
-        return "Merge \(number.map { "PR #\($0)" } ?? "the pull request")?"
-    }
 }
 
 private struct SidebarNeedsYouButtonStyle: ButtonStyle {

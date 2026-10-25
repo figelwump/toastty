@@ -104,9 +104,13 @@ final class CoordinatorChatController {
     private var notice: (text: String, isError: Bool, token: Int)?
     private var ack: (token: Int, ok: Bool)?
     private var tokenCounter = 0
+    private var viewRequest: (view: CoordinatorChatPageView, token: Int)?
     private(set) var lastPayload: CoordinatorChatPayload?
     /// The cards an open page last reported expanded.
     private(set) var expandedCardIDs: [String] = []
+    /// What an open page last reported it shows, and its selected All tasks row.
+    private(set) var pageView: CoordinatorChatPageView = .chat
+    private(set) var selectedTaskRowID: String?
 
     init(
         store: AppStore,
@@ -155,8 +159,19 @@ final class CoordinatorChatController {
     /// `coordinator.chat.show`: the chat covers the coordinator's terminal,
     /// and with a task, its latest packet card opens.
     func show(taskID: UUID?) -> Bool {
+        show(.chat, taskID: taskID)
+    }
+
+    /// `coordinator.tasks.show`: the page shows All tasks instead of the chat.
+    func showTasks() -> Bool {
+        show(.tasks, taskID: nil)
+    }
+
+    private func show(_ view: CoordinatorChatPageView, taskID: UUID?) -> Bool {
         guard session.showChat() else { return false }
         taskCoordinator.board?.chatDidOpen()
+        tokenCounter += 1
+        viewRequest = (view, tokenCounter)
         if let taskID {
             tokenCounter += 1
             focus = (taskID, tokenCounter)
@@ -265,12 +280,26 @@ final class CoordinatorChatController {
             chatItems.append(.card(CoordinatorChatCardView(card: card, task: task, packet: packetView)))
         }
         chatItems.sort { $0.at < $1.at }
+        let board = taskCoordinator.board
+        let isTriageConfigured = taskCoordinator.isTriageConfigured
+        let rows = CoordinatorAllTasks.rows(
+            CoordinatorAllTasks.shownItems(items),
+            hasCard: { taskIDs.contains($0) },
+            canRelease: { board?.canRelease($0) ?? false },
+            isTriageConfigured: isTriageConfigured,
+            mergePolicy: { [taskCoordinator] item in
+                CoordinatorChatTaskView.mergePolicy(record: item.record, config: config, homeDirectoryPath: taskCoordinator.homeDirectoryPath)
+            }
+        )
         return CoordinatorChatPayload(
             coordinator: coordinatorView(),
             items: chatItems,
             focus: focus.map { .init(taskID: $0.taskID.uuidString, token: $0.token) },
             notice: notice.map { .init(text: $0.text, isError: $0.isError, token: $0.token) },
-            ack: ack.map { .init(token: $0.token, ok: $0.ok) }
+            ack: ack.map { .init(token: $0.token, ok: $0.ok) },
+            view: viewRequest.map { .init(view: $0.view, token: $0.token) },
+            taskGroups: CoordinatorAllTasks.groups(items),
+            tasks: rows
         )
     }
 
@@ -348,9 +377,13 @@ final class CoordinatorChatController {
         switch event {
         case .ready:
             if let page { attach(page) }
-        case .rendered(let expanded):
+        case .rendered(let expanded, let view, let selectedRowID):
             expandedCardIDs = expanded
+            pageView = view
+            selectedTaskRowID = selectedRowID
             return
+        case .taskAction(let rowID, let actionID):
+            runTaskAction(rowID: rowID, actionID: actionID)
         case .send(let text):
             acknowledge(token, ok: await sendToCoordinator(text))
         case .reply(let taskID, let version, let text):
@@ -377,9 +410,13 @@ final class CoordinatorChatController {
         setNeedsRefresh()
     }
 
-    /// The task the command palette acts on while the chat shows: the task
-    /// of the card the page opened last. `nil` while no task card is open.
+    /// The task the command palette acts on while the chat shows: on All
+    /// tasks, the selected row's; in the chat, the task of the card the page
+    /// opened last. `nil` while neither is there.
     var currentTaskID: UUID? {
+        if pageView == .tasks {
+            return lastPayload?.tasks.first { $0.id == selectedTaskRowID }?.taskID.flatMap(UUID.init(uuidString:))
+        }
         let cards = (lastPayload?.items ?? []).compactMap { item -> CoordinatorChatCardView? in
             if case .card(let card) = item { return card }
             return nil
@@ -425,6 +462,20 @@ final class CoordinatorChatController {
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
             "currentTaskID": optional(currentTaskID?.uuidString),
+            "view": .string(pageView.rawValue),
+            "selectedRowID": optional(selectedTaskRowID),
+            "tasks": .array((lastPayload?.tasks ?? []).map { row in
+                .object([
+                    "id": .string(row.id),
+                    "taskID": optional(row.taskID),
+                    "title": .string(row.title),
+                    "group": .string(row.group),
+                    "stage": .string(row.stageLabel),
+                    "hasCard": .bool(row.hasCard),
+                    "primary": optional(row.primary?.id),
+                    "menu": .array(row.menu.joined().map { .string($0.id) }),
+                ])
+            }),
             "notice": notice.map { .object(["text": .string($0.text), "isError": .bool($0.isError)]) } ?? .null,
         ]
     }
@@ -497,9 +548,55 @@ final class CoordinatorChatController {
         return true
     }
 
+    /// Runs an All tasks row's action. The row may be older than the task:
+    /// an action the task no longer offers does nothing, and says so.
+    private func runTaskAction(rowID: String, actionID: String) {
+        guard let board = taskCoordinator.board,
+              let resolved = CoordinatorAllTasks.resolve(
+                  rowID: rowID,
+                  actionID: actionID,
+                  items: board.items(),
+                  canRelease: board.canRelease,
+                  isTriageConfigured: taskCoordinator.isTriageConfigured
+              ) else {
+            setNotice("That task changed; its row now shows what it offers.", isError: true)
+            return
+        }
+        switch resolved {
+        case .open(let item):
+            if let taskID = item.taskID, hasCards(taskID: taskID) {
+                _ = show(taskID: taskID)
+            } else if let workspaceID = item.taskSpaceWorkspaceID {
+                openWorkspace(workspaceID)
+            } else {
+                setNotice("This task has no card in the chat and no open task space.", isError: true)
+            }
+        case .release(let projectWorkspaceID):
+            if perform("Release", { try taskCoordinator.release(workspaceID: projectWorkspaceID, caller: .unmanaged) }) != nil {
+                setNotice("Release started.", isError: false)
+            }
+        case .menu(.openPullRequest(_, let url)):
+            openInRightPanel(url.absoluteString)
+        case .menu(let item):
+            let ran = perform(item.title) {
+                try TaskActions.run(item, coordinator: taskCoordinator) { openWorkspace($0) }
+            }
+            if ran != nil, case .action(.merge, _, _) = item {
+                setNotice("Merge requested. It follows the project's merge policy.", isError: false)
+            }
+        }
+    }
+
     private func openTaskSpace(_ taskID: UUID) {
-        guard let workspaceID = taskCoordinator.records.record(id: taskID)?.taskSpaceWorkspaceID,
-              store.state.workspacesByID[workspaceID] != nil,
+        guard let workspaceID = taskCoordinator.records.record(id: taskID)?.taskSpaceWorkspaceID else {
+            setNotice("The task space is closed.", isError: true)
+            return
+        }
+        openWorkspace(workspaceID)
+    }
+
+    private func openWorkspace(_ workspaceID: UUID) {
+        guard store.state.workspacesByID[workspaceID] != nil,
               let windowID = store.state.workspaceSelection(containingWorkspaceID: workspaceID)?.windowID
                 ?? store.state.selectedWindowID else {
             setNotice("The task space is closed.", isError: true)

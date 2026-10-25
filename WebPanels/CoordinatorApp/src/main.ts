@@ -3,7 +3,8 @@
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
 import { collapseNewlySuperseded, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
-import type { ChatEvent, ChatState } from "./types";
+import { moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
+import type { ChatEvent, ChatState, PageView } from "./types";
 
 interface WebKitMessageHandler {
   postMessage: (event: ChatEvent) => void;
@@ -21,8 +22,11 @@ function post(event: ChatEvent) {
 }
 
 const ui = newUIState();
+const tasksUI = newTasksUIState();
+let view: PageView = "chat";
 let state: ChatState | null = null;
 let lastFocusToken: number | null = null;
+let lastViewToken: number | null = null;
 let lastNoticeToken: number | null = null;
 let nextToken = 1;
 /// Sends waiting for the app's answer: what to clear once it is taken.
@@ -31,6 +35,7 @@ const composerDraftKey = "composer";
 
 const header = document.getElementById("header")!;
 const scroll = document.getElementById("scroll")!;
+const tasksView = document.getElementById("tasks")!;
 const composer = document.getElementById("composer") as HTMLFormElement;
 const composerInput = composer.querySelector("textarea") as HTMLTextAreaElement;
 const composerHint = document.getElementById("composer-hint")!;
@@ -38,7 +43,16 @@ const notice = document.getElementById("notice")!;
 
 function render() {
   if (!state) return;
-  header.innerHTML = renderHeader(state);
+  header.innerHTML = renderHeader(state, view);
+  scroll.classList.toggle("hidden", view !== "chat");
+  composer.classList.toggle("hidden", view !== "chat");
+  tasksView.classList.toggle("hidden", view !== "tasks");
+  normalize(state, tasksUI);
+  if (view === "tasks") {
+    tasksView.innerHTML = renderTasks(state, tasksUI, new Date());
+    post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
+    return;
+  }
 
   // Re-rendering replaces the reply boxes; drafts live in `ui.drafts`, so
   // only focus needs carrying over.
@@ -52,7 +66,7 @@ function render() {
   }
   if (nearBottom) scroll.scrollTop = scroll.scrollHeight;
 
-  post({ type: "rendered", expanded: [...ui.expanded] });
+  post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
   composerInput.disabled = !state.coordinator.canSend;
   composerHint.textContent = state.coordinator.sendHint ?? "";
   composerInput.placeholder = state.coordinator.canSend ? "Tell the coordinator…" : state.coordinator.sendHint ?? "The coordinator is not running";
@@ -69,8 +83,17 @@ function receive(next: ChatState) {
       if (sent.draftKey === composerDraftKey) composerInput.value = "";
     }
   }
-  if (next.focus && next.focus.token !== lastFocusToken) {
-    lastFocusToken = next.focus.token;
+  // The newer of a view request and a card focus decides the view: a page
+  // that opens later gets both, with the older still set.
+  const newView = next.view && next.view.token !== lastViewToken ? next.view : null;
+  const newFocus = next.focus && next.focus.token !== lastFocusToken ? next.focus : null;
+  if (newView) {
+    lastViewToken = newView.token;
+    if (!newFocus || newView.token > newFocus.token) setView(newView.view);
+  }
+  if (newFocus) {
+    lastFocusToken = newFocus.token;
+    if (!newView || newFocus.token > newView.token) view = "chat";
     const id = focusCardID(next, next.focus.taskID);
     if (id) {
       // Last in the set, so the app reads it as the card opened last.
@@ -93,11 +116,76 @@ function receive(next: ChatState) {
   render();
 }
 
+function setView(next: PageView) {
+  view = next;
+  if (view === "tasks" && state && tasksUI.selected === null) {
+    tasksUI.selected = navigableRows(state, tasksUI)[0]?.id ?? null;
+  }
+}
+
+function taskRow(id: string | undefined) {
+  return state?.tasks?.find((row) => row.id === id) ?? null;
+}
+
+function runTaskAction(rowID: string, actionID: string) {
+  tasksUI.menuOpen = null;
+  tasksUI.confirming = null;
+  post({ type: "taskAction", rowID, actionID });
+  render();
+}
+
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target || target.tagName === "FORM") return;
   const data = target.dataset;
   switch (data.act) {
+    case "view":
+      setView(data.view === "tasks" ? "tasks" : "chat");
+      render();
+      if (view === "chat") composerInput.focus();
+      break;
+    case "task-select":
+      tasksUI.selected = data.id!;
+      tasksUI.menuOpen = null;
+      render();
+      break;
+    case "task-primary": {
+      const row = taskRow(data.id);
+      if (!row?.primary) break;
+      tasksUI.selected = row.id;
+      if (row.confirm) {
+        tasksUI.menuOpen = null;
+        tasksUI.confirming = { rowID: row.id, actionID: row.primary.id };
+        render();
+      } else {
+        runTaskAction(row.id, row.primary.id);
+      }
+      break;
+    }
+    case "task-menu":
+      tasksUI.selected = data.id!;
+      tasksUI.menuOpen = tasksUI.menuOpen === data.id ? null : data.id!;
+      tasksUI.confirming = null;
+      render();
+      break;
+    case "task-action":
+      runTaskAction(data.id!, data.action!);
+      break;
+    case "task-cancel":
+      tasksUI.confirming = null;
+      render();
+      break;
+    case "task-filter":
+      tasksUI.project = data.project ?? null;
+      render();
+      break;
+    case "task-group": {
+      const group = data.group!;
+      if (tasksUI.toggledGroups.has(group)) tasksUI.toggledGroups.delete(group);
+      else tasksUI.toggledGroups.add(group);
+      render();
+      break;
+    }
     case "expand": {
       const id = data.id!;
       if (ui.expanded.has(id)) ui.expanded.delete(id);
@@ -192,6 +280,28 @@ composerInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     sendComposer();
+  }
+});
+
+// All tasks: the arrow keys move the selection, Return opens the task, and
+// Esc closes an open menu or question.
+document.addEventListener("keydown", (event) => {
+  if (view !== "tasks" || !state || event.isComposing) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if ((event.target as HTMLElement).closest("input, textarea")) return;
+  if (event.key === "Escape" && (tasksUI.menuOpen || tasksUI.confirming)) {
+    tasksUI.menuOpen = null;
+    tasksUI.confirming = null;
+    render();
+  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    tasksUI.selected = moveSelection(state, tasksUI, event.key === "ArrowDown" ? 1 : -1);
+    tasksUI.menuOpen = null;
+    render();
+    if (tasksUI.selected) document.getElementById(`task-row-${tasksUI.selected}`)?.scrollIntoView({ block: "nearest" });
+  } else if (event.key === "Enter" && tasksUI.selected && !(event.target as HTMLElement).closest("button")) {
+    event.preventDefault();
+    runTaskAction(tasksUI.selected, "open");
   }
 });
 

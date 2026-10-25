@@ -190,7 +190,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.newTask.id })
     }
 
-    func testShowCoordinatorChatTakesTheFormerTasksShortcut() throws {
+    func testTheChatAndAllTasksTakeTheTasksViewsPlaceInThePalette() throws {
         let actions = CommandPaletteActionSpy()
         actions.canShowCoordinatorChatValue = true
         let command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.showCoordinatorChat.id })
@@ -199,8 +199,15 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(actions.execute(command.invocation, originWindowID: UUID()))
         XCTAssertEqual(actions.showCoordinatorChatCount, 1)
 
+        let allTasks = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.showAllTasks.id })
+        XCTAssertEqual(allTasks.title, "Show All Tasks")
+        XCTAssertEqual(allTasks.shortcut?.symbolLabel, "⌥⌘T")
+        XCTAssertTrue(actions.execute(allTasks.invocation, originWindowID: UUID()))
+        XCTAssertEqual(actions.showAllTasksCount, 1)
+
         actions.canShowCoordinatorChatValue = false
         XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.showCoordinatorChat.id })
+        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.showAllTasks.id })
     }
 
     func testTaskCommandsListTheDetailPaneActionsForTheCurrentTasksStage() throws {
