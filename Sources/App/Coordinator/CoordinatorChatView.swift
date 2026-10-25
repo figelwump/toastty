@@ -68,6 +68,14 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
         webView.evaluateJavaScript("window.toasttyCoordinatorChat && window.toasttyCoordinatorChat.receive(\(json))")
     }
 
+    func run(_ script: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { result, _ in
+                continuation.resume(returning: (result as? Bool) == true)
+            }
+        }
+    }
+
     fileprivate func handle(_ body: Any) {
         guard let event = CoordinatorChatPageEvent(body: body) else { return }
         if event == .ready {
