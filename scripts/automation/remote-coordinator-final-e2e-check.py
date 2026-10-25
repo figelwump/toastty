@@ -594,8 +594,9 @@ def main():
         instance().kill()
         app['instance'] = LaunchedInstance(bundle, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log')
         instance().wait_until_ready()
-        wait_for('the coordinator after relaunch', waiting(lambda: instance().query('coordinator.status')['state'] == 'running'),
-                 timeout=180, interval=2)
+        # The coordinator's workspace may come back with a new ID.
+        coordinator = wait_for('the coordinator after relaunch', waiting(lambda: (lambda c: c if c['state'] == 'running' else None)(
+            instance().query('coordinator.status'))), timeout=180, interval=2)
         cli_result('coordinator', 'show')
         after = wait_for('the chat after relaunch', lambda: (lambda c: c if c == before else None)(
             sorted((c['taskID'], c['kind'], c['packetVersion']) for c in cards())), timeout=60, interval=1)
