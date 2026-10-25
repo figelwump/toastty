@@ -169,8 +169,8 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
         guard let requestTurnID = request.turnID else {
             return .suppress(reason: .missingRequestTurn)
         }
-        // Queued input can clear root turn context before the running turn ends.
-        // Honor its recorded suppression before deferring for the next context.
+        // Honor a previous turn's recorded suppression before deferring for
+        // unidentified input or a missing root context.
         if requestTurnID != root.rootTurnID,
            autoReviewedTurnIDs.contains(requestTurnID) {
             return .ignore(reason: .autoReviewedStaleTurn)
@@ -180,6 +180,13 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
                 return .suppress(reason: .missingRootTurn)
             }
             return .deferForContext(reason: .missingRootTurn)
+        }
+        if authority == .hooks,
+           requestTurnID != rootTurnID,
+           root.hasUnidentifiedHookInput {
+            // Input may start a new turn before its hook arrives. The retained
+            // running turn's reviewer cannot decide that new turn's request.
+            return .deferForContext(reason: .turnMismatch)
         }
         if requestTurnID != rootTurnID,
            hasApplicableReviewer(root: root) {

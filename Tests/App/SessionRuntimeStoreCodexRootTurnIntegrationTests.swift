@@ -464,7 +464,6 @@ extension SessionRuntimeStoreTests {
             fingerprint: CodexInputFingerprint.fingerprint(for: "Queued follow-up"),
             threadID: "thread-root"
         )
-        #expect(store.codexRootTurnSnapshotForTesting(sessionID: sessionID)?.rootTurnID == nil)
         #expect(store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID) == ["turn-running"])
 
         #expect(store.handleCodexHookEvent(
@@ -475,6 +474,53 @@ extension SessionRuntimeStoreTests {
         // No pending approval means no timeout can later surface a false badge.
         #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID) == false)
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == workingStatus)
+    }
+
+    @Test
+    func codexFollowUpInputPreservesPendingHumanApproval() {
+        let sessionID = "sess-codex-follow-up-human-approval"
+        let startedAt = Date(timeIntervalSince1970: 1_700_002_800)
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 10_000_000_000)
+        startCodexReconciliationSession(store, sessionID: sessionID, source: .hooks, at: startedAt)
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: codexReconciliationPromptEvent(
+                threadID: "thread-root",
+                turnID: "turn-running",
+                fingerprint: CodexInputFingerprint.fingerprint(for: "Original input"),
+                detail: "Original input"
+            ),
+            at: startedAt
+        ))
+        #expect(!store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: codexReconciliationPermissionEvent(threadID: "thread-root", turnID: "turn-running"),
+            at: startedAt.addingTimeInterval(1)
+        ))
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Follow-up input"),
+            threadID: "thread-root"
+        )
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+        store.recordCodexCanonicalTurnContext(
+            sessionID: sessionID,
+            turnID: "turn-running",
+            approvalPolicy: .string("on-request"),
+            approvalsReviewer: .string("user")
+        )
+        #expect(!store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .needsApproval)
+
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Another follow-up"),
+            threadID: "thread-root"
+        )
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .needsApproval)
+        #expect(store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID).isEmpty)
     }
 
     @Test
