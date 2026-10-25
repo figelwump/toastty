@@ -129,6 +129,11 @@ def main():
     require(binary.is_file() and cli.is_file(), f'No Toastty binary or CLI in {bundle}')
 
     request_count = [0]
+    # This check runs in a Terminal window, which must not hold the keys
+    # meant for the app. Terminal scripts its own windows without
+    # Accessibility.
+    subprocess.run(['osascript', '-e', 'tell application "Terminal" to set miniaturized of every window to true'],
+                   capture_output=True, timeout=30)
 
     def ax(tool, *arguments, check=True):
         """Runs a helper in the SSH session, which may press keys."""
@@ -257,8 +262,13 @@ def main():
         evidence['captures'].append(path.name)
 
     def key(code, modifiers=None):
-        ax('helper', 'activate', pid(), check=False)
-        time.sleep(0.3)
+        """Presses a key in the app, once it is frontmost: a key goes to the
+        frontmost app, and the Terminal running this check can be."""
+        def frontmost():
+            ax('helper', 'activate', pid(), check=False)
+            time.sleep(0.3)
+            return ax('helper', 'frontmost-pid', check=False)['stdout'].strip() == str(pid())
+        wait_for('the app to be frontmost', frontmost, timeout=20, interval=0.5)
         ax('driver', 'key', code, *([modifiers] if modifiers else []))
         time.sleep(0.8)
 
