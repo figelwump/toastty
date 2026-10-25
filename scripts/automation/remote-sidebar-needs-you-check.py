@@ -7,18 +7,22 @@ unlocked screen: it presses sidebar buttons in its own app instance through
 Accessibility and captures its window.
 
 The check starts its own instance of the wrapper's build, as
-remote-sidebar-to-ship-check.py does, with a fake agent and a fake `gh` that
-reports each pull request open. It creates a task and links a pull request to
-its task space, so the task waits for review. Through the UI and the CLI it
+remote-coordinator-chat-check.py does, with TOASTTY_COORDINATOR_AUTOSTART=1,
+the fake agent from remote-coordinator-session-check.py for the coordinator
+and the task, and a fake `gh` that reports each pull request open. Automation
+mode lets the app capture its own window. The task publishes a packet and gets
+a pull request link, so it waits for review. Through the UI and the CLI it
 checks that:
 - the Coordinator row counts the task, and the Projects | Status switcher is
   gone;
-- the task's Needs you row shows the review reason and offers Merge;
+- the task's Needs you row shows the review reason and the packet's look_at,
+  and offers Merge;
+- the Coordinator row opens the chat, and the row opens the task's packet
+  card in it;
 - Merge asks in the row first: Cancel leaves the task unmerged;
 - Merge, then the row's Merge, accepts the merge (`mergeRequestedAt`).
 Captures of each step and remote-sidebar-needs-you-check.json go to the
-artifacts directory when the app or the screen allows one; a missing capture
-is recorded, not failed.
+artifacts directory; a capture that cannot be made is recorded, not failed.
 """
 
 import importlib.util
@@ -27,6 +31,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -34,10 +39,20 @@ HERE = Path(__file__).parent
 _spec = importlib.util.spec_from_file_location('remote_task_create_check', HERE / 'remote-task-create-check.py')
 base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(base)
-require, wait_for, Instance, FAKE_AGENT = base.require, base.wait_for, base.Instance, base.FAKE_AGENT
-_spec = importlib.util.spec_from_file_location('remote_sidebar_to_ship_check', HERE / 'remote-sidebar-to-ship-check.py')
-to_ship = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(to_ship)
+require, wait_for, Instance = base.require, base.wait_for, base.Instance
+
+def _load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, HERE / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+to_ship = _load('remote_sidebar_to_ship_check', 'remote-sidebar-to-ship-check.py')
+chat_check = _load('remote_coordinator_chat_check', 'remote-coordinator-chat-check.py')
+session_check = _load('remote_coordinator_session_check', 'remote-coordinator-session-check.py')
+queue_check = _load('remote_queue_steer_check', 'remote-queue-steer-check.py')
+LOOK_AT = 'The pinned totals bar at 390 px.'
 
 PREFIX = 'remote-sidebar-needs-you'
 SLUG = 'toastty-check/project'
@@ -45,6 +60,8 @@ TITLE = 'Unread dot stays on'
 
 
 def main():
+    if '--gui-session' in sys.argv[1:]:
+        queue_check.run_in_gui_session(PREFIX, __file__)
     bundle = Path(os.environ['TOASTTY_APP_BUNDLE'])
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR'])
     binary = bundle / 'Contents/MacOS/Toastty'
@@ -65,11 +82,20 @@ def main():
     require(run_tool(driver, 'locked').stdout.strip() == '0', 'The remote screen is locked; unlock it to press rows')
 
     runtime_home, user_home, fake_bin, zdotdir = root / 'runtime-home', root / 'user-home', root / 'bin', root / 'zdotdir'
-    for directory in (runtime_home, user_home / '.toastty', fake_bin, zdotdir):
+    work = root / 'work'
+    for directory in (runtime_home, user_home / '.toastty', fake_bin, zdotdir, work):
         directory.mkdir(parents=True)
     subprocess.run(['git', 'init', '-q', str(user_home)], check=True)
+    chat_check.png(work / 'after-390.png', 390, 700, [(220, 218, 213), (207, 227, 212), (45, 107, 70)])
+    (work / 'packet.json').write_text(json.dumps({
+        'summary': 'Pins the totals bar on narrow screens.',
+        'look_at': LOOK_AT,
+        'checks': [{'name': 'unit tests', 'ok': True}],
+        'not_verified': [],
+        'screenshots': [{'name': 'after-390', 'width': 390}],
+    }))
     agent = fake_bin / 'claude'
-    agent.write_text(FAKE_AGENT)
+    agent.write_text(session_check.FAKE_AGENT)
     agent.chmod(0o755)
     gh_state = root / 'gh-state.json'
     gh_state.write_text('{}')
@@ -91,6 +117,9 @@ def main():
         TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
         TOASTTY_RUNTIME_LABEL=PREFIX,
         TOASTTY_SOCKET_PATH=socket_path,
+        TOASTTY_COORDINATOR_AUTOSTART='1',
+        TOASTTY_AUTOMATION='1',
+        TOASTTY_ARTIFACTS_DIR=str(artifacts),
         HOME=str(user_home),
         CFFIXED_USER_HOME=str(user_home),
         ZDOTDIR=str(zdotdir),
@@ -102,8 +131,14 @@ def main():
         evidence['steps'].append(dict(step=name, at=time.time(), **facts))
         print(f'[sidebar-needs-you-check] {name} {json.dumps(facts, default=str, ensure_ascii=False)}', flush=True)
 
-    def cli_json(*arguments):
-        result = subprocess.run([str(cli), '--json', *arguments], env=environment,
+    cli_environment = {key: value for key, value in environment.items()
+                       if key not in ('TOASTTY_COORDINATOR_AUTOSTART', 'TOASTTY_AUTOMATION')}
+
+    def cli_json(*arguments, session=None):
+        env = dict(cli_environment)
+        if session:
+            env.update(TOASTTY_SESSION_ID=session['sessionID'], TOASTTY_PANEL_ID=session['panelID'])
+        result = subprocess.run([str(cli), '--json', '--socket-path', socket_path, *arguments], env=env, cwd=work,
                                 capture_output=True, text=True, timeout=120)
         require(result.returncode == 0, f'toastty {" ".join(arguments)} failed: {result.stdout} {result.stderr}')
         return json.loads(result.stdout).get('result') or {}
@@ -114,11 +149,11 @@ def main():
     def capture(name):
         """Evidence only: a capture that cannot be made is recorded, not failed."""
         path = artifacts / f'{name}.png'
-        run_tool(helper, 'press', pid, 'xmark', check=False)
-        time.sleep(0.8)
-        response = instance.request('automation.capture_screenshot', dict(step=name, path=str(path)))
+        run_tool(helper, 'activate', pid, check=False)
+        time.sleep(1.0)
+        response = instance.request('automation.capture_screenshot', dict(step=name))
         if response.get('ok'):
-            if Path(response['result']['path']) != path:
+            if Path(response['result']['path']).resolve() != path.resolve():
                 shutil.copyfile(response['result']['path'], path)
         else:
             result = run_tool(helper, 'capture', pid, path, check=False)
@@ -138,15 +173,27 @@ def main():
     def exists(identifier):
         return run_tool(helper, 'exists', pid, identifier, check=False).returncode == 0
 
+    def chat_state():
+        return instance.query('coordinator.chat.state')
+
     try:
         workspaces = instance.wait_until_ready()
         workspace_id = workspaces[0]['workspaceID']
+        coordinator_status = wait_for('the coordinator to run', lambda: (lambda s: s if s['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=90, interval=1)
         wait_for('the first terminal in the user home', lambda: str(user_home) in [
             os.path.realpath(cwd) for w in instance.query('workspace.list')['workspaces']
             if w['workspaceID'] == workspace_id for cwd in w['terminalCwds']], interval=1)
 
-        task = cli_json('task', 'create', TITLE, '--workspace', workspace_id, '--wait', '--timeout', '90')
+        task = cli_json('task', 'create', TITLE, '--title', TITLE, '--workspace', workspace_id, '--wait', '--timeout', '90')
         task_id = task['taskID']
+        session_file = fake_bin / 'sessions' / f"{task['setup']['sessionID']}.json"
+        task_session = json.loads(wait_for('the task agent to record its session',
+                                           lambda: session_file.is_file() and session_file.read_text()))
+        published = cli_json('task', 'packet', 'publish', '--file', 'packet.json', '--screenshot', 'after-390.png',
+                             session=task_session)
+        require(published['packetVersion'] == 1, f'Packet not published: {published}')
+        cli_json('coordinator', 'post', 'packet', '--task', task_id)
         cli_json('action', 'run', 'workspace.set-annotation', '--workspace', task['setup']['taskSpaceWorkspaceID'],
                  'key=github-pr', 'text=PR #1', f'url=https://github.com/{SLUG}/pull/1')
         wait_for('the task to wait for review', lambda: cli_json('task', 'get', task_id)['stage'].get('attention') == 'review',
@@ -156,13 +203,26 @@ def main():
         # 1. The Coordinator row counts it; the switcher is gone.
         coordinator = wait_for('the Coordinator row', lambda: label_starting('Coordinator, 1 needs you'))
         require(label_starting('Group the sidebar by') is None, f'The Projects | Status switcher is still there: {labels()}')
-        row = wait_for('the Needs you row', lambda: label_starting(f'{TITLE}, review'))
+        # The look_at line comes from the packet, read after the first draw.
+        row = wait_for('the Needs you row with the look_at line',
+                       lambda: (lambda label: label if label and label.endswith(LOOK_AT) else None)(label_starting(f'{TITLE}, review')))
         require(label_starting('Needs you, 1'), f'No Needs you header: {labels()}')
         require(exists(f'sidebar.needsYou.task.{task_id}.primary'), 'The row has no primary action')
         step('needs you row', coordinator=coordinator, row=row)
         capture('needs-you-review')
 
-        # 2. Merge asks in the row; Cancel leaves the task alone.
+        # 2. The Coordinator row opens the chat; the row opens its packet.
+        run_tool(helper, 'press', pid, 'sidebar.coordinator.open')
+        wait_for('the chat', lambda: chat_state()['pages'] >= 1, timeout=20, interval=0.5)
+        listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
+        require(listed[coordinator_status['workspaceID']]['isSelected'], 'The Coordinator row did not select the coordinator')
+        packet_card = next(i for i in chat_state()['items'] if i['type'] == 'card' and i['kind'] == 'packet')
+        run_tool(driver, 'press-label', pid, f'{TITLE}, review')
+        wait_for('the packet card to open', lambda: packet_card['id'] in chat_state()['expandedCardIDs'], timeout=20, interval=0.3)
+        step('row opened its packet', card=packet_card['id'])
+        capture('needs-you-opens-packet')
+
+        # 3. Merge asks in the row; Cancel leaves the task alone.
         run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.primary')
         wait_for('the merge question', lambda: exists(f'sidebar.needsYou.task.{task_id}.confirmMerge'))
         require('Merge PR #1?' in run_tool(driver, 'texts', pid, '*').stdout, 'The row does not ask before it merges')
@@ -173,7 +233,7 @@ def main():
         require(not cli_json('task', 'get', task_id).get('mergeRequestedAt'), 'Cancel accepted the merge')
         step('cancel kept the task')
 
-        # 3. Merge, then Merge in the row, accepts the merge.
+        # 4. Merge, then Merge in the row, accepts the merge.
         run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.primary')
         wait_for('the merge question', lambda: exists(f'sidebar.needsYou.task.{task_id}.confirmMerge'))
         run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.confirmMerge')
