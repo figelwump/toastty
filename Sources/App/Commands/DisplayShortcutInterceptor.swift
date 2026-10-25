@@ -39,6 +39,8 @@ final class DisplayShortcutInterceptor {
         case toggleLaterFlag
         case mergeWorkspacePullRequest
         case toggleRightPanel
+        case showCoordinatorChat
+        case showAllTasks
         case toggleFocusedPanelMode
         case renameSelectedTab
         case closeSelectedTab
@@ -165,6 +167,17 @@ final class DisplayShortcutInterceptor {
         if Self.isToggleRightPanelShortcut(event),
            appOwnedWindowID != nil {
             return .toggleRightPanel
+        }
+
+        // A focused terminal can take these before the View menu does.
+        if Self.isShowCoordinatorChatShortcut(event),
+           appOwnedWindowID != nil {
+            return .showCoordinatorChat
+        }
+
+        if Self.isShowAllTasksShortcut(event),
+           appOwnedWindowID != nil {
+            return .showAllTasks
         }
 
         if let textSizeShortcutAction = textSizeShortcutAction(
@@ -345,6 +358,10 @@ final class DisplayShortcutInterceptor {
             mergeWorkspacePullRequest(preferredWindowID: appOwnedWindowID)
         case .toggleRightPanel:
             toggleRightPanel(preferredWindowID: appOwnedWindowID)
+        case .showCoordinatorChat:
+            CoordinatorChatController.shared?.show(taskID: nil) ?? false
+        case .showAllTasks:
+            CoordinatorChatController.shared?.showTasks() ?? false
         case .toggleFocusedPanelMode:
             toggleFocusedPanelMode()
         case .renameSelectedTab:
@@ -466,6 +483,29 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .shift]
+    }
+
+    static func isShowCoordinatorChatShortcut(_ event: NSEvent) -> Bool {
+        matches(event, ToasttyKeyboardShortcuts.showCoordinatorChat)
+    }
+
+    static func isShowAllTasksShortcut(_ event: NSEvent) -> Bool {
+        matches(event, ToasttyKeyboardShortcuts.showAllTasks)
+    }
+
+    /// Whether the key is the shortcut, with exactly its modifiers.
+    private static func matches(_ event: NSEvent, _ shortcut: ToasttyKeyboardShortcut) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == String(shortcut.key.character).lowercased() else {
+            return false
+        }
+        var flags: NSEvent.ModifierFlags = []
+        if shortcut.modifiers.contains(.command) { flags.insert(.command) }
+        if shortcut.modifiers.contains(.shift) { flags.insert(.shift) }
+        if shortcut.modifiers.contains(.option) { flags.insert(.option) }
+        if shortcut.modifiers.contains(.control) { flags.insert(.control) }
+        return event.modifierFlags.intersection(.deviceIndependentFlagsMask) == flags
     }
 
     static func isSaveShortcut(_ event: NSEvent) -> Bool {

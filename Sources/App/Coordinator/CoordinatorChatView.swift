@@ -68,6 +68,14 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
         webView.evaluateJavaScript("window.toasttyCoordinatorChat && window.toasttyCoordinatorChat.receive(\(json))")
     }
 
+    func takeKeyboardFocus() {
+        // A workspace keeps its other tabs mounted; only the page on screen
+        // takes the keyboard.
+        guard let window, window.firstResponder !== webView,
+              isHiddenOrHasHiddenAncestor == false, visibleRect.isEmpty == false else { return }
+        window.makeFirstResponder(webView)
+    }
+
     func run(_ script: String) async -> Bool {
         await withCheckedContinuation { continuation in
             webView.evaluateJavaScript(script) { result, _ in

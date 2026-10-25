@@ -71,7 +71,7 @@ export function renderHeader(state: ChatState, view: PageView = "chat"): string 
   return `<div class="chead"><span class="cmark">C</span><div class="who"><div class="name">${esc(c.title)}</div>`
     + `<div class="mono dim small">${esc(c.detail)}</div></div>`
     + renderViewSwitch(view)
-    + `<button class="tb-btn" data-act="open-routing" title="Open routing.md in the right panel">routing.md</button>`
+    + `<button class="tb-btn" id="open-routing" data-act="open-routing" title="Open routing.md in the right panel">routing.md</button>`
     + (c.hasTerminal ? `<button class="tb-btn" data-act="open-terminal" title="Show the coordinator's terminal">Open terminal</button>` : "")
     + `</div>`;
 }

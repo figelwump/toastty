@@ -20,6 +20,8 @@ final class CoordinatorChatController {
         func receive(_ payload: Data)
         /// Runs a script in the page; true when it returned true.
         func run(_ script: String) async -> Bool
+        /// Takes the keyboard, as opening the chat by its shortcut asks.
+        func takeKeyboardFocus()
     }
 
     /// What `automation.coordinator_chat_action` does in the page.
@@ -172,6 +174,9 @@ final class CoordinatorChatController {
         taskCoordinator.board?.chatDidOpen()
         tokenCounter += 1
         viewRequest = (view, tokenCounter)
+        // The page may already show, with the keyboard elsewhere: typing,
+        // and the arrow keys on All tasks, should reach it.
+        for page in pages.values.compactMap(\.page) { page.takeKeyboardFocus() }
         if let taskID {
             tokenCounter += 1
             focus = (taskID, tokenCounter)
@@ -366,7 +371,11 @@ final class CoordinatorChatController {
         case .localDraft:
             return (false, "Text is typed in the coordinator's terminal")
         case .unavailable:
-            if snapshot.summary.inputControl?.canQueue == true { return (true, "Sends when its turn ends") }
+            // A message queues behind a running turn. Just after a turn ends
+            // there is none to queue behind, and the prompt is not open yet.
+            if let control = snapshot.summary.inputControl, control.canQueue {
+                return control.turnEpoch == nil ? (false, "The coordinator is finishing its turn") : (true, "Sends when its turn ends")
+            }
             return (false, "The coordinator cannot take a message now")
         }
     }
