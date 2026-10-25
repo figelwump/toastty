@@ -118,6 +118,9 @@ function receive(next: ChatState) {
 
 function setView(next: PageView) {
   view = next;
+  // The composer hides on All tasks; it must not keep the keyboard, or the
+  // arrow keys would go to it.
+  if (view === "tasks" && document.activeElement === composerInput) composerInput.blur();
   if (view === "tasks" && state && tasksUI.selected === null) {
     tasksUI.selected = navigableRows(state, tasksUI)[0]?.id ?? null;
   }
