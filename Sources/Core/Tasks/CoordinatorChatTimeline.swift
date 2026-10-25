@@ -77,21 +77,27 @@ public enum CoordinatorChatTimeline {
             return card
         }
 
-        // A task with any card gets a card for a packet newer than every
-        // packet card it has.
+        // A task with any card gets a card for each packet no card announces:
+        // the latest, and each one published after the task's first card.
+        // So an added v1 card stays, collapsed, when v2 comes, whether or
+        // not the coordinator posts a card for v2.
         let taskIDs = Set(cards.compactMap(\.taskID))
         for taskID in taskIDs {
-            guard let latest = stamps[taskID]?.last else { continue }
-            let shown = cards.filter { $0.taskID == taskID && $0.kind == .packet }.compactMap(\.packetVersion).max() ?? 0
-            guard latest.version > shown else { continue }
-            cards.append(Card(
-                id: "packet-\(taskID.uuidString)-v\(latest.version)",
-                at: latest.createdAt,
-                kind: .packet,
-                taskID: taskID,
-                text: nil,
-                packetVersion: latest.version
-            ))
+            let taskCards = cards.filter { $0.taskID == taskID }
+            let announced = Set(taskCards.filter { $0.kind == .packet }.compactMap(\.packetVersion))
+            let firstCardAt = taskCards.map(\.at).min() ?? .distantPast
+            let latest = stamps[taskID]?.last?.version
+            for stamp in stamps[taskID] ?? []
+            where announced.contains(stamp.version) == false && (stamp.createdAt >= firstCardAt || stamp.version == latest) {
+                cards.append(Card(
+                    id: "packet-\(taskID.uuidString)-v\(stamp.version)",
+                    at: stamp.createdAt,
+                    kind: .packet,
+                    taskID: taskID,
+                    text: nil,
+                    packetVersion: stamp.version
+                ))
+            }
         }
 
         // The first card for the latest version stays open; every other

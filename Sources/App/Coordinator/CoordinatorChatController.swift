@@ -18,6 +18,65 @@ final class CoordinatorChatController {
     @MainActor
     protocol Page: AnyObject {
         func receive(_ payload: Data)
+        /// Runs a script in the page; true when it returned true.
+        func run(_ script: String) async -> Bool
+    }
+
+    /// What `automation.coordinator_chat_action` does in the page.
+    enum PageAction {
+        case click(elementID: String)
+        /// Types the text into a field, then submits it as Return would.
+        case type(elementID: String, text: String)
+
+        var elementID: String {
+            switch self {
+            case .click(let elementID), .type(let elementID, _): elementID
+            }
+        }
+
+        /// True in a page that has the element.
+        var probe: String {
+            "document.getElementById(\(Self.literal(elementID))) !== null"
+        }
+
+        private static func literal(_ value: String) -> String {
+            // A JSON string is a JavaScript string literal.
+            String(data: (try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
+        }
+
+        var script: String {
+            let literal = Self.literal
+            switch self {
+            case .click(let elementID):
+                return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; e.click(); return true; })()"
+            case .type(let elementID, let text):
+                return """
+                (() => {
+                  const e = document.getElementById(\(literal(elementID)));
+                  if (!e) return false;
+                  e.focus();
+                  e.value = \(literal(text));
+                  e.dispatchEvent(new Event("input", { bubbles: true }));
+                  e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+                  const form = e.closest("form");
+                  if (form && form.id !== "composer") form.requestSubmit();
+                  return true;
+                })()
+                """
+            }
+        }
+    }
+
+    /// Runs the action in the one open page that has the element. Returns
+    /// how many pages have it; the action runs only when that is one, so a
+    /// second chat page, in another window or tab, never acts twice.
+    func performPageAction(_ action: PageAction) async -> Int {
+        var matching: [any Page] = []
+        for page in pages.values.compactMap(\.page) where await page.run(action.probe) {
+            matching.append(page)
+        }
+        if matching.count == 1 { _ = await matching[0].run(action.script) }
+        return matching.count
     }
 
     let store: AppStore
@@ -328,6 +387,10 @@ final class CoordinatorChatController {
                     "packetVersion": card.packet.map { .int($0.version) } ?? .null,
                     "superseded": .bool(card.superseded),
                     "isNew": .bool(card.isNew),
+                    "stage": optional(card.task?.stageLabel),
+                    "canMerge": .bool(card.task?.canMerge ?? false),
+                    "mergePolicy": optional(card.task?.mergePolicy),
+                    "pullRequestURL": optional(card.task?.pullRequestURL),
                 ])
             }
         }

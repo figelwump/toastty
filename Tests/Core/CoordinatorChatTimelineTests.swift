@@ -82,6 +82,34 @@ struct CoordinatorChatTimelineTests {
     }
 
     @Test
+    func addedCardsKeepEachVersionWhenTheCoordinatorPostedNone() {
+        let started = event(.taskStarted, at: 0, task: taskID)
+        let first = CoordinatorChatTimeline.cards(events: [started], packets: [taskID: [stamp(1, at: 50)]])
+        let v1 = "packet-\(taskID.uuidString)-v1"
+        #expect(first.map(\.id) == [started.id.uuidString, v1])
+        // v2 adds a new card; the v1 card keeps its ID and collapses.
+        let second = CoordinatorChatTimeline.cards(events: [started], packets: [taskID: [stamp(1, at: 50), stamp(2, at: 80)]])
+        #expect(second.map(\.id) == [started.id.uuidString, v1, "packet-\(taskID.uuidString)-v2"])
+        #expect(second.map(\.superseded) == [false, true, false])
+        #expect(second[2].isNew)
+        // A card the coordinator posts after v2 announces v2; v1 keeps its
+        // added card.
+        let posted = event(.packet, at: 90, task: taskID)
+        let third = CoordinatorChatTimeline.cards(events: [started, posted], packets: [taskID: [stamp(1, at: 50), stamp(2, at: 80)]])
+        #expect(third.map(\.id) == [started.id.uuidString, v1, posted.id.uuidString])
+        #expect(third.map(\.packetVersion) == [nil, 1, 2])
+        #expect(third.map(\.superseded) == [false, true, false])
+        #expect(third[2].isNew)
+    }
+
+    @Test
+    func versionsFromBeforeTheTasksFirstCardGetNoCardButTheLatest() {
+        let started = event(.taskStarted, at: 100, task: taskID)
+        let cards = CoordinatorChatTimeline.cards(events: [started], packets: [taskID: [stamp(1, at: 10), stamp(2, at: 20)]])
+        #expect(cards.map(\.packetVersion) == [2, nil])
+    }
+
+    @Test
     func theChatCoversOnlyTheSelectedCoordinatorWorkspaceUntilItsTerminalShows() throws {
         var state = AppState.bootstrap()
         let windowID = try #require(state.windows.first?.id)
