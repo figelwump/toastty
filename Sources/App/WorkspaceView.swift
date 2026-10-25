@@ -3913,6 +3913,16 @@ struct PanelCardView: View {
         isWorkspaceSelected && isTabSelected && focusedPanelID == panelID
     }
 
+    /// Whether the coordinator chat covers this panel. The terminal under it
+    /// is selected but must not take keyboard focus back from the chat.
+    private var isCoveredByChat: Bool {
+        guard isWorkspaceSelected, chromeContext == .mainSplit else { return false }
+        let state = store.state
+        guard state.workspacesByID[workspaceID]?.isCoordinator == true,
+              let windowID = state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id else { return false }
+        return state.coversWorkspaceContent(windowID: windowID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             panelHeader
@@ -3924,7 +3934,7 @@ struct PanelCardView: View {
                         workspaceID: workspaceID,
                         panelID: panelID,
                         hostState: TerminalPanelHostState(terminalState: terminalState),
-                        focused: isFocused,
+                        focused: isFocused && isCoveredByChat == false,
                         windowFontPoints: windowFontPoints,
                         runtimeContext: terminalRuntimeContext
                     )

@@ -236,9 +236,10 @@ def main():
         def terminal_text():
             return instance.query('terminal.visible-text', panelID=coordinator['panelID']).get('text', '')
 
+        capture('coordinator-chat-typing')
+        evidence['coordinatorTerminalAfterTyping'] = terminal_text()[-1500:]
         require('covered-marker' not in terminal_text(), 'Typing under the chat reached the coordinator terminal')
         require(chat_shown(), 'The chat closed while typing')
-        capture('coordinator-chat-typing')
         step('typing stayed out of the covered terminal')
         cli_json('coordinator', 'show-terminal')
         wait_for('the raw terminal', lambda: chat_shown() is False)

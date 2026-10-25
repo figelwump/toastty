@@ -175,7 +175,9 @@ def main():
     coordinator_agent.chmod(0o755)
     (toastty_dir / 'agents.toml').write_text(
         f'[{provider}]\ndisplayName = "{provider}"\nargv = {json.dumps(argv)}\ninitialPromptPlacement = "trailing"\n\n'
-        f'[coordinator-check]\ndisplayName = "Coordinator check"\nargv = {json.dumps([str(coordinator_agent)])}\n')
+        f'[coordinator-check]\ndisplayName = "Coordinator check"\nargv = {json.dumps([str(coordinator_agent)])}\n'
+        # The coordinator starts only with an agent that takes a first message.
+        'initialPromptPlacement = "trailing"\n')
     merge_prompt = ('This is an automated Toastty check. Run exactly this one shell command, with no arguments '
                     'added, and no other command:\n"$TOASTTY_CLI_PATH" task merge\n'
                     'Then reply with exactly MERGE-REQUESTED and end your turn.')
@@ -335,8 +337,8 @@ def main():
             return str(repository) in [os.path.realpath(cwd) for cwd in cwds]
 
         wait_for('the first terminal in the repository', terminal_in_repository, interval=1)
-        wait_for('the coordinator to run', lambda: instance.query('coordinator.status')['state'] == 'running',
-                 timeout=60, interval=1)
+        wait_for('the coordinator to run', lambda: (lambda c: c if c['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=60, interval=1)
         run_tool(helper, 'activate', pid)
         step('booted', workspaceID=workspace_id, provider=provider, version=version)
 
