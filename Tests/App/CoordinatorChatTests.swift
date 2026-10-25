@@ -205,6 +205,25 @@ struct CoordinatorChatTests {
         #expect(current()?.source == .coordinatorChat)
     }
 
+    @Test func theComposerQueuesOnlyBehindARunningTurn() {
+        func state(_ control: RemoteConversationInputControl?) -> (canSend: Bool, hint: String?) {
+            let summary = RemoteConversationSummary(
+                conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
+                state: .working, inputAvailability: .unavailable(reason: .working), inputControl: control,
+                latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
+            )
+            return CoordinatorChatController.sendState(
+                status: .running(sessionID: "s1"),
+                snapshot: RemoteConversationSnapshot(summary: summary, pendingInteractions: [])
+            )
+        }
+        let turn = RemoteInputEpoch(bindingID: UUID())
+        #expect(state(RemoteConversationInputControl(turnEpoch: turn, canQueue: true)) == (true, "Sends when its turn ends"))
+        // Just after a turn ends, a send would be refused: the composer waits.
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "The coordinator is finishing its turn"))
+        #expect(state(nil).canSend == false)
+    }
+
     @Test func aReplyGoesToTheTaskAsAReviewNoteAndTakesItOutOfNeedsYou() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()

@@ -456,6 +456,7 @@ def main():
             f'before and after pair at width 390: {shots / "before-390.png"} and {shots / "after-390.png"}. '
             'Post the task-started card, and a packet card when its packet arrives.'
         )
+        wait_for('the chat to accept a message', waiting(lambda: chat_state()['canSend']), timeout=300, interval=2)
         page('type', 'composer-input', request)
         a = wait_for('the coordinator to create a task', waiting(lambda: (cli_result('task', 'list')['tasks'] or [None])[0]),
                      timeout=600, interval=5)
