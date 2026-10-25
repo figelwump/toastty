@@ -74,6 +74,28 @@ KEY_RETURN, KEY_ESCAPE, KEY_DOWN, KEY_T = 36, 53, 125, 17
 # The whole run, both agents' turns included.
 GUI_TIMEOUT = 3600
 
+# Prints the View menu's items, whether each is enabled, and its key, for
+# a failure report.
+VIEW_MENU = r'''
+import AppKit
+let pid = pid_t(CommandLine.arguments[1])!
+let app = AXUIElementCreateApplication(pid)
+func v(_ e: AXUIElement, _ n: String) -> AnyObject? { var r: AnyObject?; return AXUIElementCopyAttributeValue(e, n as CFString, &r) == .success ? r : nil }
+guard let bar = v(app, kAXMenuBarAttribute) else { print("no menu bar"); exit(0) }
+for top in (v(bar as! AXUIElement, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+    let title = v(top, kAXTitleAttribute) as? String ?? ""
+    guard title == "View" else { continue }
+    for menu in (v(top, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+        for item in (v(menu, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+            let t = v(item, kAXTitleAttribute) as? String ?? ""
+            let enabled = (v(item, kAXEnabledAttribute) as? Bool) ?? false
+            let key = v(item, "AXMenuItemCmdChar") as? String ?? ""
+            if !t.isEmpty { print("\(t)\t\(enabled)\t\(key)") }
+        }
+    }
+}
+'''
+
 
 def serve_gui_session():
     """Starts the check in the GUI session and runs its Accessibility
@@ -83,9 +105,11 @@ def serve_gui_session():
     artifacts.mkdir(parents=True, exist_ok=True)
     requests = Path(tempfile.mkdtemp(prefix='toastty-final-e2e-ax-', dir='/tmp'))
     tools = {}
-    for name, source in (('driver', 'quick-entry-ui-driver.swift'), ('helper', 'task-stages-ui-helper.swift')):
+    (requests / 'view-menu.swift').write_text(VIEW_MENU)
+    for name, source in (('driver', HERE / 'quick-entry-ui-driver.swift'), ('helper', HERE / 'task-stages-ui-helper.swift'),
+                         ('menu', requests / 'view-menu.swift')):
         tools[name] = requests / name
-        subprocess.run(['swiftc', '-O', str(HERE / source), '-o', str(tools[name])], check=True)
+        subprocess.run(['swiftc', '-O', str(source), '-o', str(tools[name])], check=True)
     locked = subprocess.run([str(tools['driver']), 'locked'], capture_output=True, text=True).stdout.strip()
     require(locked == '0', 'The remote screen is locked; unlock it to press keys')
 
@@ -336,6 +360,29 @@ def main():
         require(json.loads(gh_state.read_text())['prs'][str(number)]['state'] == 'MERGED', f'PR #{number} did not merge')
         return record
 
+    def cmd_shift_t(when):
+        """From the project workspace, Cmd+Shift+T selects the coordinator
+        with its chat. A failure records what held the keys."""
+        cli_result('action', 'run', 'workspace.select', '--workspace', workspace_id)
+        time.sleep(1)
+        key(KEY_T, 'cmd,shift')
+
+        def chat_shows():
+            selected = [w['workspaceID'] for w in instance().query('workspace.list')['workspaces'] if w['isSelected']]
+            return selected == [coordinator['workspaceID']] and chat_state()['view'] == 'chat'
+        try:
+            wait_for(f'Cmd+Shift+T to open the chat {when}', chat_shows, timeout=15, interval=0.5)
+        except AssertionError:
+            evidence['shortcutFailure'] = dict(
+                when=when,
+                frontmost=ax('helper', 'frontmost-pid', check=False)['stdout'].strip(), pid=pid(),
+                viewMenu=ax('menu', pid(), check=False)['stdout'],
+                windows=ax('helper', 'dump', pid(), check=False)['stdout'][-6000:],
+            )
+            raise
+        step(f'cmd+shift+t opens the chat {when}')
+
+    workspace_id = None
     try:
         workspace_id = instance().wait_until_ready()[0]['workspaceID']
         coordinator = wait_for('the coordinator to run', waiting(lambda: (lambda s: s if s['state'] == 'running' else None)(
@@ -349,6 +396,7 @@ def main():
         require(selected == [coordinator['workspaceID']], f'The Coordinator row did not open the chat: {selected}')
         capture('01-sidebar-opens-chat')
         step('1 coordinator row opens the chat')
+        cmd_shift_t('before any task')
 
         # 2. A request in the composer creates and starts task A.
         request = (
@@ -444,11 +492,7 @@ def main():
         step('6 merge from a card')
 
         # 7. Cmd+Shift+T opens the chat from another workspace.
-        cli_result('action', 'run', 'workspace.select', '--workspace', workspace_id)
-        key(KEY_T, 'cmd,shift')
-        wait_for('Cmd+Shift+T to open the chat', lambda: [w['workspaceID'] for w in instance().query('workspace.list')['workspaces']
-                                                          if w['isSelected']] == [coordinator['workspaceID']]
-                 and chat_state()['view'] == 'chat', timeout=15, interval=0.5)
+        cmd_shift_t('after the merges')
         capture('07-cmd-shift-t')
         step('7 cmd+shift+t opens the chat')
 
