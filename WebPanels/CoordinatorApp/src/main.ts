@@ -87,9 +87,14 @@ function receive(next: ChatState) {
   // that opens later gets both, with the older still set.
   const newView = next.view && next.view.token !== lastViewToken ? next.view : null;
   const newFocus = next.focus && next.focus.token !== lastFocusToken ? next.focus : null;
+  let focusComposer = false;
   if (newView) {
     lastViewToken = newView.token;
-    if (!newFocus || newView.token > newFocus.token) setView(newView.view);
+    if (!newFocus || newView.token > newFocus.token) {
+      setView(newView.view);
+      // Asked for the chat, as its shortcut does: typing goes to it.
+      focusComposer = view === "chat";
+    }
   }
   if (newFocus) {
     lastFocusToken = newFocus.token;
@@ -114,6 +119,7 @@ function receive(next: ChatState) {
     setTimeout(() => { if (lastNoticeToken === next.notice?.token) notice.className = "notice hidden"; }, 6000);
   }
   render();
+  if (focusComposer && !composerInput.disabled) composerInput.focus();
 }
 
 function setView(next: PageView) {

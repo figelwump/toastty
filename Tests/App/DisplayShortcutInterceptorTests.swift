@@ -1437,6 +1437,25 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(store.state.workspacesByID[workspaceID]).rightAuxPanel.isVisible)
     }
 
+    func testCoordinatorShortcutsRunInAnAppWindowAndPassThroughWithoutAChat() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let interceptor = makeInterceptor(store: store)
+        let chat = try makeKeyEvent(characters: "T", modifiers: [.command, .shift], keyCode: 0x11)
+        let allTasks = try makeKeyEvent(characters: "t", modifiers: [.command, .option], keyCode: 0x11)
+
+        XCTAssertEqual(interceptor.shortcutAction(for: chat, appOwnedWindowID: windowID), .showCoordinatorChat)
+        XCTAssertEqual(interceptor.shortcutAction(for: allTasks, appOwnedWindowID: windowID), .showAllTasks)
+        // Outside an app window, such as in a panel of another app's text.
+        XCTAssertNil(interceptor.shortcutAction(for: chat, appOwnedWindowID: nil))
+        // Without a coordinator chat the key goes on to the menu, unhandled.
+        let shared = CoordinatorChatController.shared
+        CoordinatorChatController.shared = nil
+        defer { CoordinatorChatController.shared = shared }
+        XCTAssertFalse(interceptor.handle(.showCoordinatorChat, appOwnedWindowID: windowID))
+        XCTAssertFalse(interceptor.handle(.showAllTasks, appOwnedWindowID: windowID))
+    }
+
     func testToggleRightPanelActionFocusesActiveTabWhenShowingPanel() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)

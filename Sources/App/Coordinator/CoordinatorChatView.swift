@@ -69,7 +69,10 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
     }
 
     func takeKeyboardFocus() {
-        guard let window, window.firstResponder !== webView else { return }
+        // A workspace keeps its other tabs mounted; only the page on screen
+        // takes the keyboard.
+        guard let window, window.firstResponder !== webView,
+              isHiddenOrHasHiddenAncestor == false, visibleRect.isEmpty == false else { return }
         window.makeFirstResponder(webView)
     }
 
