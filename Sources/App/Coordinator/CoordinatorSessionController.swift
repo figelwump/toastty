@@ -196,15 +196,29 @@ final class CoordinatorSessionController {
         scheduleLaunch(after: hasLaunchedThisRun ? relaunchDelay : .zero)
     }
 
-    /// Selects the coordinator workspace so its terminal shows. Returns
-    /// false when it does not exist yet.
+    /// Selects the coordinator workspace with its raw terminal showing.
+    /// Returns false when it does not exist yet.
     @discardableResult
     func showTerminal() -> Bool {
+        select(showingTerminal: true)
+    }
+
+    /// Selects the coordinator workspace with the chat covering its
+    /// terminal. Returns false when it does not exist yet.
+    @discardableResult
+    func showChat() -> Bool {
+        select(showingTerminal: false)
+    }
+
+    private func select(showingTerminal: Bool) -> Bool {
         guard let workspaceID = store.state.coordinatorWorkspaceID,
               let windowID = store.state.workspaceSelection(containingWorkspaceID: workspaceID)?.windowID else {
             return false
         }
         _ = store.send(.selectWindow(windowID: windowID))
+        _ = store.send(.setCoordinatorTerminalShown(windowID: windowID, shown: showingTerminal))
+        _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        guard store.state.window(id: windowID)?.selectedWorkspaceID != workspaceID else { return true }
         return store.sendNavigation(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
 

@@ -34,6 +34,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case showScratchpadForCurrentSession
     case newTask
     case toggleTasksView
+    case showCoordinatorChat
     case toggleSidebar
     case toggleRightPanel
     case toggleFocusedPanelMode
@@ -130,6 +131,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "task.new"
         case .toggleTasksView:
             return "window.toggle-tasks-view"
+        case .showCoordinatorChat:
+            return "coordinator.show-chat"
         case .showScratchpadForCurrentSession:
             return "scratchpad.show-current-session"
         case .toggleSidebar:
@@ -242,6 +245,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "New Task…"
         case .toggleTasksView:
             return Self.showTasksTitle
+        case .showCoordinatorChat:
+            return "Show Coordinator Chat"
         case .showScratchpadForCurrentSession:
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
@@ -355,6 +360,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .toggleTasksView:
             return ToasttyKeyboardShortcuts.toggleTasksView
+        case .showCoordinatorChat:
+            return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
         case .toggleRightPanel:
@@ -469,6 +476,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
         case .toggleTasksView:
             return ["tasks", "task", "show", "hide", "view", "board", "toggle"]
+        case .showCoordinatorChat:
+            return ["coordinator", "chat", "packets", "review", "needs", "show"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleRightPanel:

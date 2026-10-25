@@ -6,7 +6,7 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .windowTasksShow, .windowTasksHide,
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow, .windowTasksShow, .windowTasksHide,
              .windowSidebarSetSegment: true
         default: false
         }
@@ -16,7 +16,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isTaskQuery: Bool {
         switch self {
-        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus: true
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus, .coordinatorChatState: true
         default: false
         }
     }
@@ -136,6 +136,21 @@ extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
             }
             return .init(didMutateState: true, result: Self.coordinatorStatusSnapshot(session))
+        case .coordinatorChatShow:
+            guard let session = coordinator.coordinatorSession, let workspaceID = session.workspaceID else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            try enforceWorkspaceAutomationAccess(workspaceID)
+            let taskID = try args.taskString("taskID").map { try visibleTask(args: ["taskID": .string($0)], coordinator: coordinator).id }
+            guard let chat = CoordinatorChatController.shared else {
+                throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
+            }
+            guard chat.show(taskID: taskID) else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            var result = Self.coordinatorStatusSnapshot(session)
+            result["taskID"] = taskID.map { .string($0.uuidString) } ?? .null
+            return .init(didMutateState: true, result: result)
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }
@@ -399,6 +414,12 @@ extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("the coordinator is not available in this Toastty instance")
             }
             return Self.coordinatorStatusSnapshot(session)
+        case .coordinatorChatState:
+            guard let session = coordinator.coordinatorSession, let chat = CoordinatorChatController.shared else {
+                throw AutomationSocketError.invalidPayload("the coordinator chat is not available in this Toastty instance")
+            }
+            if let workspaceID = session.workspaceID { try enforceWorkspaceAutomationAccess(workspaceID) }
+            return chat.stateSnapshot()
         default:
             throw AutomationSocketError.invalidPayload("unsupported task query: \(query.rawValue)")
         }
@@ -435,6 +456,7 @@ extension AppControlExecutor {
                 at: Date()
             )
             try session.files.append(event)
+            CoordinatorChatController.shared?.setNeedsRefresh()
         } catch let error as CoordinatorEventError {
             throw AutomationSocketError.invalidPayload(error.message)
         } catch {

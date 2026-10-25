@@ -183,7 +183,7 @@ jobs:
 
       - name: Test web panels and generated bundles
         run: |
-          for panel in WebPanels/LocalDocumentApp WebPanels/ScratchpadApp; do
+          for panel in WebPanels/LocalDocumentApp WebPanels/ScratchpadApp WebPanels/CoordinatorApp; do
             npm ci --prefix "$panel" --no-audit --no-fund
             npm test --prefix "$panel"
           done
