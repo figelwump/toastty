@@ -6,8 +6,8 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow, .windowTasksShow, .windowTasksHide,
-             .windowSidebarSetSegment: true
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow, .windowTasksShow,
+             .windowTasksHide: true
         default: false
         }
     }

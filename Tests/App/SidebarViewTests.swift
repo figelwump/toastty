@@ -2222,11 +2222,11 @@ final class SidebarViewTests: XCTestCase {
         _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
-        var textValues = renderedTextValues(in: harness.hostingView)
+        let textValues = renderedTextValues(in: harness.hostingView)
 
         // Needs you: the agent asking for approval, the linked pull request
         // with no agent working on it, and the task triage could not place.
-        XCTAssertTrue(textValues.contains("Tasks, 3 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Coordinator, 3 need you"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
         // The finished task space leaves its card; the footer counts it.
         XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
@@ -2234,20 +2234,14 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
 
-        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
-        pumpMainRunLoop(duration: 0.6)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        textValues = renderedTextValues(in: harness.hostingView)
+        // Needs you, above the projects: the agent asking for approval and
+        // the pull request with no agent working on it. The task triage
+        // could not place stays in the Inbox.
         XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
-        // The Inbox stays at the top of both segments.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, question, in emptyos-computer") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, review") }, "\(textValues)")
         XCTAssertTrue(textValues.contains("Inbox, 1 task"), "\(textValues)")
-        // Top-level workspaces show only in Projects.
-        XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-status")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Group the sidebar by") }, "\(textValues)")
     }
 
     func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
@@ -2291,7 +2285,7 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
 
         // Already open and short enough that Done starts below the fold.
-        var tasks = hostTasksView(harness, board: board, height: 300)
+        let tasks = hostTasksView(harness, board: board, height: 300)
         try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-done-click")
         try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-done-click")
 
@@ -2312,36 +2306,9 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-after-done-click")
         try attachSidebarRender(tasks.hostingView, name: "tasks-view-after-done-click")
 
-        // The Tasks row opens the view without touching Done.
-        tasks.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Done, 1, expanded", in: tasks.hostingView)
-        pumpMainRunLoop(duration: 0.3)
-        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
-        harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Tasks, ", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.6)
-        tasks.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
-        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
         // Closed views stop observing the board, as in the app.
         tasks.window.orderOut(nil)
         tasks.window.contentView = nil
-
-        // The Status segment's Done expands Done in a view that opens after
-        // the click, as the app opens it.
-        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
-        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
-        pumpMainRunLoop(duration: 0.6)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Done, 1 task, opens the Tasks view", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.3)
-        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
-        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
-        tasks = hostTasksView(harness, board: board, height: 300)
-        defer { tasks.window.orderOut(nil) }
-        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
-        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, expanded"), "\(renderedTextValues(in: tasks.hostingView))")
     }
 
     func testTasksViewArrowKeysMoveTheSelectionThroughTheRowsItShows() throws {

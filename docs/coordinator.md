@@ -5,8 +5,9 @@ tell it what you want done; it routes each request to a task in the right
 project, follows the tasks, and tells you when one needs you. The work itself
 happens in the tasks, each with its own agent. See [Tasks](tasks.md).
 
-You talk to the coordinator in its chat: run `toastty coordinator show`, or
-choose **Show Coordinator Chat** in the command palette. The chat covers the
+You talk to the coordinator in its chat: click **Coordinator** at the top of
+the sidebar, run `toastty coordinator show`, or choose **Show Coordinator
+Chat** in the command palette. The chat covers the
 coordinator's terminal in the main area, and the right panel stays beside it.
 `toastty coordinator show-terminal` shows the raw terminal instead.
 
@@ -43,6 +44,10 @@ marked **new**, and the task's older packet cards collapse to one line.
 **routing.md** in the chat's header opens the routing notes in the right panel.
 `toastty coordinator show --task <task-id>` opens the chat and scrolls to that
 task's newest packet card.
+
+The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
+one opens its newest packet in the chat; see
+[The sidebar and the Tasks view](tasks.md#the-sidebar-and-the-tasks-view).
 
 ## How it runs
 

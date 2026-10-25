@@ -97,7 +97,6 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorChatShow = "coordinator.chat.show"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
-    case windowSidebarSetSegment = "window.sidebar.set-segment"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -714,20 +713,6 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
         case .windowTasksHide:
             return .init(id: rawValue, kind: .action, summary: "Hide a window's Tasks view.", selectors: [.windowID])
-        case .windowSidebarSetSegment:
-            return .init(
-                id: rawValue,
-                kind: .action,
-                summary: "Group a window's sidebar by project (segment=projects) or by task stage (segment=status).",
-                selectors: [.windowID],
-                parameters: [.init(
-                    name: "segment",
-                    summary: "projects or status.",
-                    valueType: .string,
-                    required: true,
-                    allowedValues: SidebarSegment.allCases.map(\.rawValue)
-                )]
-            )
         }
     }
 

@@ -13,8 +13,8 @@ real right-clicks, key events and the CLI it checks that:
   request, Mark Done without one, Archive… on both, and the workspace items
   below a divider, with no Mark as done; once its task space is selected,
   Open Task Space leaves the menu and Merge shows Option+Shift+M;
-- the Status segment's task space row and its row for a task whose task space
-  closed, and the Tasks view's row, offer the same task actions;
+- the Needs you row for a task whose task space closed, and the Tasks view's
+  row, offer the same task actions;
 - Up and Down Arrow move the Tasks view selection through its rows in order,
   and the detail pane follows;
 - Archive… from a Tasks view row opens the archive alert; Cancel keeps the
@@ -211,13 +211,9 @@ def main():
                 f'The selected task space should show the Merge shortcut and no Open Task Space: {items}')
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
 
-        # 2. Status rows: a task space, and a task whose task space closed.
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        items = menu('status-without-pr', '*', row_label(without_pr_space))
-        require(items[:4] == ['Open Task Space', '—', 'Mark Done', 'Archive…'], f'Unexpected Status menu: {items}')
-        items = menu('status-closed-task-space', '*', 'Close the stale task space,')
+        # 2. The Needs you row of a task whose task space closed.
+        items = menu('needs-you-closed-task-space', '*', 'Close the stale task space, closed')
         require(items == ['Archive…', 'Delete Task'], f'Unexpected menu for a closed task space: {items}')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
 
         # 3. The Tasks view's rows, and the arrow keys.
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)

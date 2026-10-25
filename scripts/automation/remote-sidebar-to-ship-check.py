@@ -13,11 +13,9 @@ reports each task's pull request merged. It merges five tasks one at a time,
 so their merge times differ, and closes every task space but the newest
 task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - the project card shows the three newest merges as rows, newest first, then
-  "Show 2 more", including the task whose quiet task space left the card; the
-  Status segment shows the same tasks under the project's To ship line, the
-  newest as its task space row;
-- "Show 2 more" in either segment opens the Tasks view with the newest task
-  the sidebar did not show selected;
+  "Show 2 more", including the task whose quiet task space left the card;
+- "Show 2 more" opens the Tasks view with the newest task the sidebar did not
+  show selected;
 - a To ship row opens the Tasks view with its task selected;
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count.
@@ -239,25 +237,10 @@ def main():
         open_from_sidebar('Show 2 more', newest[3], 'projects-show-more')
         open_from_sidebar(f'{newest[1]}, ', newest[1], 'projects-row-opens-task')
 
-        # 2. Status: the same rows under the project's To ship line.
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        wait_for('the Status rows', lambda: sidebar_rows()[:3] == newest[:3])
-        rows = sidebar_rows()
-        step('status rows', rows=rows)
-        require('Release' in labels(), 'The To ship line should keep its Release pill')
-        require(rows == [*newest[:3], 'Show 2 more tasks to ship in the Tasks view'], f'Unexpected Status rows: {rows}')
-        capture('status-five-to-ship')
-        open_from_sidebar('Show 2 more', newest[3], 'status-show-more')
-        open_from_sidebar(f'{newest[2]}, ', newest[2], 'status-row-opens-task')
-
-        # 3. Two To ship tasks and three done.
+        # 2. Two To ship tasks and three done.
         for title in TITLES[:3]:
             cli_json('task', 'mark-done', tasks[title])
             wait_for(f'{title} to be done', lambda: stage(tasks[title])['group'] == 'done')
-        wait_for('two Status rows', lambda: sidebar_rows() == newest[:2])
-        step('status rows with two', rows=sidebar_rows())
-        capture('status-two-to-ship')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
         wait_for('two card rows', lambda: sidebar_rows() == newest[:2])
         done_label = 'Finished tasks: 3 done. Opens the Tasks view.'
         require(done_label in labels(), f'The footer should keep the Done count: {labels()}')

@@ -845,18 +845,6 @@ final class AppControlExecutor {
                 )),
                 result: nil
             )
-
-        case .windowSidebarSetSegment:
-            guard taskCoordinator != nil else {
-                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
-            }
-            guard let rawSegment = args.stringValue("segment"), let segment = SidebarSegment(rawValue: rawSegment) else {
-                throw AutomationSocketError.invalidPayload("segment must be projects or status")
-            }
-            return .init(
-                didMutateState: try requiredStore().send(.setSidebarSegment(windowID: try resolveWindowID(args: args), segment: segment)),
-                result: nil
-            )
         }
         }
     }

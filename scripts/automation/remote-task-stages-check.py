@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check task stages, the Status sidebar and the Tasks view in a real app.
+"""Check task stages, the sidebar's Needs you list and the Tasks view in a real app.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-stages-check.py'. It needs an unlocked
@@ -14,15 +14,14 @@ directory is the project root), a fake agent, and a tasks.toml with
   from GitHub makes it `needsYou`/`review`, and the link is copied to the
   record; the task space's done mark makes it `done`;
 - `task adopt` gives a task space made by `workspace.create` a record;
-- `window.sidebar.set-segment` and `window.tasks.show` work without changing
-  the selected workspace;
+- `window.tasks.show` works without changing the selected workspace;
 - a task whose agent reports a finished turn is `needsYou`/`agentFinished`,
   and goes back to `running` once it holds a watch on another task;
-- the sidebar Tasks row's + and the Tasks view's New Task open the quick
+- the sidebar Coordinator row's + and the Tasks view's New Task open the quick
   entry panel;
 - while the Tasks view shows, typing does not reach the terminal under it;
   Esc closes the view, and typing then reaches the terminal again.
-Captures of both sidebar segments and the Tasks view go to the artifacts
+Captures of the sidebar and the Tasks view go to the artifacts
 directory when the app or the screen allows one; a missing capture is
 recorded, not failed.
 """
@@ -186,15 +185,12 @@ def main():
                 f'Adopt did not track the task space: {adopted}')
         step('adopted', taskID=adopted['taskID'], stage=adopted.get('stage'))
 
-        # 3. Both sidebar segments, then the Tasks view; none changes the
-        # selected workspace. The + opens quick entry.
-        capture('sidebar-projects-review')
+        # 3. The sidebar, then the Tasks view; neither changes the selected
+        # workspace. The + opens quick entry.
+        capture('sidebar-needs-you-review')
         open_and_close_quick_entry('sidebar.tasks.new')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        capture('sidebar-status')
         cli_json('action', 'run', 'workspace.set-done', '--workspace', task_space)
         require(stage(task_id)['group'] == 'done', f'The done mark should finish the task: {stage(task_id)}')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
         capture('sidebar-projects-done')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
         capture('tasks-view')

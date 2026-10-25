@@ -91,6 +91,9 @@ struct AppWindowView: View {
                         taskCoordinator: taskCoordinator,
                         taskBoard: taskBoard,
                         newTask: taskBoard.newTask,
+                        openCoordinatorChat: { taskID in
+                            CoordinatorChatController.shared?.show(taskID: taskID) ?? false
+                        },
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
                         requestWorkspaceClose: requestWorkspaceClose,

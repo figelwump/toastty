@@ -74,18 +74,18 @@ def main():
         instance.wait_until_ready()
 
         def tasks_row_frame():
-            result = subprocess.run([str(driver), 'frame', str(pid), 'sidebar.tasks.open'],
+            result = subprocess.run([str(driver), 'frame', str(pid), 'sidebar.coordinator.open'],
                                     capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 return None
             return [float(value) for value in result.stdout.split()]
 
-        x, y, width, height = wait_for('the sidebar Tasks row', tasks_row_frame, timeout=30, interval=0.5)
+        x, y, width, height = wait_for('the sidebar Coordinator row', tasks_row_frame, timeout=30, interval=0.5)
         step('tasks row', x=x, y=y, width=width, height=height)
         # The row spans the sidebar less its side padding. At the old 180 pt
         # width it could be at most 180 pt wide.
-        require(width > OLD_FIRST_LAUNCH_WIDTH, f'The sidebar is still narrow: Tasks row {width} pt')
-        require(width <= DEFAULT_SIDEBAR_WIDTH, f'The Tasks row is wider than the sidebar: {width} pt')
+        require(width > OLD_FIRST_LAUNCH_WIDTH, f'The sidebar is still narrow: Coordinator row {width} pt')
+        require(width <= DEFAULT_SIDEBAR_WIDTH, f'The Coordinator row is wider than the sidebar: {width} pt')
 
         time.sleep(0.6)
         response = instance.request('automation.capture_screenshot', dict(step='fresh-install-sidebar'))

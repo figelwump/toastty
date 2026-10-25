@@ -7,7 +7,7 @@ after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI or from
 an agent, moving a task into its own git worktree, the sidebar Inbox, task
-stages with the Status sidebar and the Tasks view, `~/.toastty/tasks.toml`,
+stages with the sidebar's Needs you list and the Tasks view, `~/.toastty/tasks.toml`,
 and optional triage. The coordinator, an agent session that routes your
 requests to tasks, has its own page: [Coordinator](coordinator.md).
 
@@ -69,7 +69,7 @@ Other ways to open the same panel:
 
 - **File > New Task…** and **New Task…** in the command palette. Both show
   the shortcut.
-- The **＋** on the sidebar's Tasks row, and **New Task** in the Tasks view.
+- The **＋** on the sidebar's Coordinator row, and **New Task** in the Tasks view.
 - **New Task from Selection…** in a terminal's context menu, with text
   selected. The selection is attached as `selection.txt`, and the terminal's
   workspace is picked.
@@ -407,22 +407,31 @@ Tasks view, gives one a record, so its history stays after it closes.
 
 ## The sidebar and the Tasks view
 
-The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
-the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
-the sidebar by **Projects** or by **Status**. The choice is saved for each
-window.
+The **Coordinator** row at the top of the sidebar opens the
+[coordinator](coordinator.md) chat. Its badge counts the tasks that need you, and its ＋
+creates a task. Below it, from top to bottom:
 
-- **Projects** is the workspace list. A task space whose task is To ship or
+- **Needs you** lists the started tasks that wait for you, newest first. Each
+  row shows why (review, question, stuck, finished, closed or clean up), the
+  task, its project, and one line: the packet's `look_at` when the task
+  published one, else its status. The row's button settles the task: **Merge**
+  for a pull request waiting for review, which asks in the row first; **Answer**
+  for a question, which opens its task space; **Mark Done**, **Archive…** or
+  **Clean Up** where those settle it; else **Open**. Its **▾** menu, and a
+  right-click, offer the task's menu, with **Open Packet** for a task that
+  published one. Clicking the row opens the task's newest packet in the
+  coordinator chat, or its task space while the coordinator is off.
+- The **Inbox**, for tasks that have not reached a task space.
+- **Projects**, the workspace list. A task space whose task is To ship or
   Done leaves its card unless an agent in it is working or waiting for you.
   After the card's task spaces, the project's 3 most recently merged To ship
   tasks show as rows. A footer line after them has **Show N more** when the
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
-- **Status** lists task spaces by stage: Needs you, Running, To ship (one line
-  for each project), and a Done count. Each row carries its project's name.
-  Under each project's To ship line, its 3 most recently merged tasks show as
-  rows, then **Show N more** when the project has more.
-  Top-level workspaces show only in Projects.
+
+The sidebar no longer opens the Tasks view or offers Release. Open the Tasks
+view with **View > Show Tasks** (`Cmd+Shift+T`) or a card's Done count, and
+release from its To ship group or the command palette.
 
 A To ship row opens the Tasks view with its task selected. **Show N more**
 opens the Tasks view at To ship with the first task the sidebar did not show
@@ -431,7 +440,7 @@ merge comes first; a task with no merge time uses its latest change. A To ship
 task whose task space is still open keeps its task space row and does not show
 a second time.
 
-Both keep the Inbox at the top. Task space rows use square marks: green for a
+Task space rows use square marks: green for a
 finished turn (filled while it is unread, when the Tasks view also shows the
 title in bold), blue for a pull request waiting for review, violet ↑ for a merge waiting for a release,
 a green check for done, and a dashed box for a task that has not started.
@@ -445,8 +454,7 @@ request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
 and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project can release (see
-[Release](#release)); the sidebar's
-Status To ship lines have one too. A task that has not started shows the
+[Release](#release)). A task that has not started shows the
 Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
 it hides the view and returns to the workspace it covered. Up and Down Arrow
@@ -474,8 +482,7 @@ does, even when nothing waits to ship. It is hidden while a release of that proj
 ### Context menus
 
 Right-click a task's row to act on it: its task space row in the sidebar, its
-row in the sidebar's Status segment, a To ship row, or its row in the Tasks
-view. The menu
+Needs you row, a To ship row, or its row in the Tasks view. The menu
 lists what the detail pane offers now, with the same confirmations: **Open
 Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel
 Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** for

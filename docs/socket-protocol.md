@@ -267,7 +267,6 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.chat.show`
 - `window.tasks.show`
 - `window.tasks.hide`
-- `window.sidebar.set-segment`
 
 Notable action-specific behavior:
 
@@ -536,10 +535,9 @@ Notable action-specific behavior:
     Takes optional `taskID`: the chat then opens and scrolls to that task's
     newest packet card, or its last card. `INVALID_PAYLOAD` while the
     workspace does not exist, or for a task the caller may not see.
-- `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
-  - take the `windowID` selector. `window.sidebar.set-segment` requires
-    `segment` (`projects` or `status`). All three are listed only when the task
-    system is available.
+- `window.tasks.show`, `window.tasks.hide`
+  - take the `windowID` selector. Both are listed only when the task system is
+    available.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
