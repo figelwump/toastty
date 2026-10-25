@@ -136,7 +136,7 @@ extension SessionRuntimeStore {
 
 extension TaskActions {
     /// Marks the task done or archives it through the same coordinator
-    /// paths as the Tasks view, after its task space closed. A task space
+    /// paths as the sidebar, after its task space closed. A task space
     /// that is still open, because a tab opened in it while the question
     /// was up, leaves the task as it is.
     static func applyTaskSpaceCloseChoice(

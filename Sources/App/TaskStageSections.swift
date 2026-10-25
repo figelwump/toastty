@@ -104,7 +104,7 @@ struct SidebarStatusSections: Equatable {
 
 /// A project's most recently merged To ship tasks, which the sidebar lists
 /// under the project so that a merged task does not seem to disappear. The
-/// rest wait behind "Show N more", which opens the Tasks view.
+/// rest wait behind "Show N more", which lists them under the others.
 struct SidebarRecentToShip: Equatable {
     static let limit = 3
 
@@ -144,7 +144,7 @@ struct SidebarRecentToShip: Equatable {
     }
 
     static func showMoreLabel(_ count: Int) -> String {
-        "Show \(count) more \(count == 1 ? "task" : "tasks") to ship in the Tasks view"
+        "Show \(count) more \(count == 1 ? "task" : "tasks") to ship"
     }
 }
 
@@ -180,7 +180,7 @@ struct SidebarShowMoreToShipButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Show the other tasks to ship in the Tasks view")
+        .help("Show the other tasks to ship")
         .accessibilityLabel(SidebarRecentToShip.showMoreLabel(count))
         .background {
             SidebarSemanticTextBridge(text: SidebarRecentToShip.showMoreLabel(count))

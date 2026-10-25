@@ -46,7 +46,7 @@ extension TaskCoordinator {
     }
 
     /// Merge from the UI: the top bar's button and its shortcut, the
-    /// sidebar's menu, and the Tasks view. With the agent route, the
+    /// sidebar's menu, the palette and the chat's cards. With the agent route, the
     /// task's agent gets the merge prompt and decides; `nil` takes the
     /// route from tasks.toml.
     func requestMerge(taskID: UUID, route requestedRoute: TaskMergeRoute? = nil) throws {

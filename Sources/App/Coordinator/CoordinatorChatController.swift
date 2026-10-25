@@ -97,6 +97,7 @@ final class CoordinatorChatController {
     /// and with a task, its latest packet card opens.
     func show(taskID: UUID?) -> Bool {
         guard session.showChat() else { return false }
+        taskCoordinator.board?.chatDidOpen()
         if let taskID {
             tokenCounter += 1
             focus = (taskID, tokenCounter)
@@ -238,7 +239,7 @@ final class CoordinatorChatController {
     private func coordinatorView() -> CoordinatorChatPayload.Coordinator {
         let snapshot = conversationSnapshot()
         let (canSend, hint) = Self.sendState(status: session.status, snapshot: snapshot)
-        let detail: String
+        var detail: String
         switch session.status {
         case .off: detail = "Off. Set [coordinator] agent in tasks.toml, then Reload Configuration."
         case .waitingForWindow: detail = "Waiting for a window"
@@ -246,6 +247,11 @@ final class CoordinatorChatController {
         case .starting: detail = "Starting"
         case .running: detail = snapshot.map { "\($0.summary.provider.displayName) · running" } ?? "Running"
         case .failed(let reason): detail = "Stopped: \(reason)"
+        }
+        // The task board reads tasks.toml again each time the chat opens; an
+        // error there matters more than the coordinator's own state.
+        if let configError = taskCoordinator.board?.configError {
+            detail = "tasks.toml: \(configError)"
         }
         return .init(title: "Coordinator", detail: detail, canSend: canSend, sendHint: hint, hasTerminal: session.workspaceID != nil)
     }
@@ -312,6 +318,25 @@ final class CoordinatorChatController {
         setNeedsRefresh()
     }
 
+    /// The task the command palette acts on while the chat shows: the task
+    /// of the card the page opened last. `nil` while no task card is open.
+    var currentTaskID: UUID? {
+        let cards = (lastPayload?.items ?? []).compactMap { item -> CoordinatorChatCardView? in
+            if case .card(let card) = item { return card }
+            return nil
+        }
+        for cardID in expandedCardIDs.reversed() {
+            if let id = cards.first(where: { $0.id == cardID })?.task?.id { return UUID(uuidString: id) }
+        }
+        return nil
+    }
+
+    /// Whether the chat has a card for the task: one the coordinator posted,
+    /// or a packet card the chat adds for a task that has one.
+    func hasCards(taskID: UUID) -> Bool {
+        session.files.events().contains { $0.taskID == taskID }
+    }
+
     /// `coordinator.chat.state`, for automation and checks.
     func stateSnapshot() -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
@@ -336,6 +361,7 @@ final class CoordinatorChatController {
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
+            "currentTaskID": optional(currentTaskID?.uuidString),
             "notice": notice.map { .object(["text": .string($0.text), "isError": .bool($0.isError)]) } ?? .null,
         ]
     }

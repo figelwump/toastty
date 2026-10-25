@@ -1,7 +1,7 @@
 import CoreState
 import SwiftUI
 
-/// The words the sidebar and the Tasks view use for a task. Kept apart from
+/// The words the sidebar and the command palette use for a task. Kept apart from
 /// the views so they can be tested without hosting them.
 enum TaskBoardPresentation {
     static func groupTitle(_ group: TaskStage.Group) -> String {

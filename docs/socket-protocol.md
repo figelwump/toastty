@@ -264,9 +264,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.adopt`
 - `coordinator.post`
 - `coordinator.show-terminal`
-- `coordinator.chat.show`
-- `window.tasks.show`
-- `window.tasks.hide`
+- `coordinator.chat.show` (aliases `window.tasks.show` and `window.tasks.hide`)
 
 Notable action-specific behavior:
 
@@ -536,8 +534,8 @@ Notable action-specific behavior:
     newest packet card, or its last card. `INVALID_PAYLOAD` while the
     workspace does not exist, or for a task the caller may not see.
 - `window.tasks.show`, `window.tasks.hide`
-  - take the `windowID` selector. Both are listed only when the task system is
-    available.
+  - aliases of `coordinator.chat.show`, kept for scripts from before the
+    coordinator chat replaced the Tasks view. Both open the chat.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -749,8 +747,9 @@ failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 `coordinator.chat.state` returns `pages` (open chat pages), `canSend`,
 `items` in time order (each with `type`: `message`, `tool`, `status` or `card`,
 and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded` and
-`isNew`), `expandedCardIDs`, the cards an open page has expanded, and
-`notice`, the last line the chat showed after an action (`text`, `isError`).
+`isNew`), `expandedCardIDs`, the cards an open page has expanded,
+`currentTaskID`, the task of the card the page expanded last, which the
+command palette acts on, and `notice`, the last line the chat showed after an action (`text`, `isError`).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,

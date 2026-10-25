@@ -647,7 +647,7 @@ meanwhile.
 A task's pull request merged on GitHub is your acceptance too. Toastty cleans up
 its task space the same way when its agent is at rest, and the worktree is
 clean at the merged head. Otherwise the task shows **Merged · clean up?** in
-Needs you, with **Clean Up** and **Keep As Is** in the Tasks view. Subspaces
+Needs you, with **Clean Up** and **Keep As Is** in its menu. Subspaces
 without a task record are never cleaned up on their own.
 
 ## User-created skills

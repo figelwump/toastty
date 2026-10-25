@@ -163,24 +163,8 @@ struct TaskWindowStateTests {
     }
 
     @Test
-    func selectingAWorkspaceLeavesTheTasksView() {
-        var (state, windowID, workspaceIDs) = state()
-        #expect(AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state))
-        #expect(state.windows[0].showsTasksView)
-        #expect(AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state) == false)
-
-        #expect(AppReducer.reduce(action: .selectWorkspace(windowID: windowID, workspaceID: workspaceIDs[1]), state: &state))
-        #expect(state.windows[0].showsTasksView == false)
-    }
-
-    @Test
-    func theTasksViewIsNotSaved() throws {
-        var (state, windowID, _) = state()
-        _ = AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state)
-
-        let decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(state.windows[0]))
-        #expect(decoded.showsTasksView == false)
-
+    func windowsSavedByEarlierVersionsStillOpen() throws {
+        let (state, windowID, _) = state()
         // A window saved with the sidebar segment that the Needs you list
         // replaced still opens.
         var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state.windows[0])) as? [String: Any])

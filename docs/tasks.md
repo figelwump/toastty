@@ -7,7 +7,7 @@ after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI or from
 an agent, moving a task into its own git worktree, the sidebar Inbox, task
-stages with the sidebar's Needs you list and the Tasks view, `~/.toastty/tasks.toml`,
+stages with the sidebar's Needs you list and the coordinator chat, `~/.toastty/tasks.toml`,
 and optional triage. The coordinator, an agent session that routes your
 requests to tasks, has its own page: [Coordinator](coordinator.md).
 
@@ -69,7 +69,7 @@ Other ways to open the same panel:
 
 - **File > New Task…** and **New Task…** in the command palette. Both show
   the shortcut.
-- The **＋** on the sidebar's Coordinator row, and **New Task** in the Tasks view.
+- The **＋** on the sidebar's Coordinator row.
 - **New Task from Selection…** in a terminal's context menu, with text
   selected. The selection is attached as `selection.txt`, and the terminal's
   workspace is picked.
@@ -393,7 +393,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about it every two minutes while the task is open, when an agent's
-turn ends in the task space, and when the Tasks view opens, and copies the
+turn ends in the task space, and when the coordinator chat opens, and copies the
 link and the merge onto the task record. Without `gh`, a linked pull request
 with no agent working counts as waiting for review. A merge made on GitHub
 also cleans up the task space when that is safe; see
@@ -401,11 +401,11 @@ also cleans up the task space when that is safe; see
 
 Task spaces that an agent made with `workspace.create`, before they had a
 record, are only watched: their done mark counts as Done, and the mark clears
-when their work starts again. `toastty task adopt`, or Track as Task in the
-Tasks view, gives one a record, so its history stays after it closes.
+when their work starts again. `toastty task adopt` gives one a record, so its
+history stays after it closes.
 `task start-work` from one of its sessions also gives it a record.
 
-## The sidebar and the Tasks view
+## The sidebar
 
 The **Coordinator** row at the top of the sidebar opens the
 [coordinator](coordinator.md) chat. Its badge counts the tasks that need you, and its ＋
@@ -429,61 +429,48 @@ creates a task. Below it, from top to bottom:
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
 
-The sidebar no longer opens the Tasks view or offers Release. Open the Tasks
-view with **View > Show Tasks** (`Cmd+Shift+T`) or a card's Done count, and
-release from its To ship group or the command palette.
+The coordinator chat took the place of the Tasks view: it shows the cards of
+each task the coordinator posted about, with its packet and its actions.
+`Cmd+Shift+T`, or **View > Show Coordinator Chat**, opens it. There is no list
+of every task, and no view of Done or Archived tasks: `toastty task list` and
+`toastty task get` show them. The chat's header shows a tasks.toml error.
 
-A To ship row opens the Tasks view with its task selected. **Show N more**
-opens the Tasks view at To ship with the first task the sidebar did not show
-selected, and the To ship and Done counts open it at their group. The newest
-merge comes first; a task with no merge time uses its latest change. A To ship
-task whose task space is still open keeps its task space row and does not show
-a second time.
+A To ship row opens the task's cards in the coordinator chat. A task with no
+card, or any task while the coordinator is off, opens its task space instead,
+when that is still open. **Show N more** lists the project's other To ship
+tasks in place. The To ship and Done counts are counts only. The newest merge
+comes first; a task with no merge time uses its latest change. A To ship task
+whose task space is still open keeps its task space row and does not show a
+second time. Release from the command palette or with `toastty task release`.
 
 Task space rows use square marks: green for a
-finished turn (filled while it is unread, when the Tasks view also shows the
-title in bold), blue for a pull request waiting for review, violet ↑ for a merge waiting for a release,
+finished turn (filled while it is unread), blue for a pull request waiting for
+review, violet ↑ for a merge waiting for a release,
 a green check for done, and a dashed box for a task that has not started.
 When an agent splits its work, the new tasks draw under the task that started
 them, and that task shows how many of them have merged.
 
-The Tasks view covers the workspace while it shows; selecting a workspace or
-pressing Esc leaves it. It lists every task in the same groups, with Done and
-Archived collapsed, and a detail pane with the task's text, stage, pull
-request, branch, agent and history, and its actions: open its task space or
-pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
-and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
-**Release…** button when its project can release (see
-[Release](#release)). A task that has not started shows the
-Inbox's controls there. An error in `tasks.toml` shows as a banner at the top.
-`Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
-it hides the view and returns to the workspace it covered. Up and Down Arrow
-move the selection through the rows the list shows, skipping collapsed Done
-and Archived, and the detail pane follows. When the selected task leaves the
-list, for example after **Archive…** or **Mark Done** into collapsed Done, the
-next row is selected, or the previous one when it was the last.
-
 ### The command palette
 
 Type `task`, `done` or `merge` in the command palette to act on the current
-task: the row selected in the Tasks view while it shows, otherwise the task
-whose task space is selected. The palette lists the detail pane's actions that
-apply now, as **Task: Merge**, **Task: Merge Without Checks**, **Task: Cancel
-Merge**, **Task: Mark Done**, **Task: Archive…**, **Task: Clean Up** and
-**Task: Keep As Is**, plus **Task: Open PR** and, from the Tasks view, **Task:
-Open Task Space**. Each row names the task and its stage. The actions run as
-the detail pane's buttons do, with the same confirmations. **Task: Merge**
-shows `Option+Shift+M` when it acts on the selected task space.
+task: while the coordinator chat shows, the task of the card you opened last;
+otherwise the task whose task space is selected. The palette lists the actions
+that apply now, as **Task: Merge**, **Task: Merge Without Checks**, **Task:
+Cancel Merge**, **Task: Mark Done**, **Task: Archive…**, **Task: Clean Up** and
+**Task: Keep As Is**, plus **Task: Open PR** and, from the chat, **Task: Open
+Task Space**. Each row names the task and its stage. The actions run as the
+task's menu items do, with the same confirmations. **Task: Merge** shows
+`Option+Shift+M` when it acts on the selected task space.
 
 **Release <project>…** starts a release for each open project with a
-`release_skill` or a `release_prompt`, as the To ship line's **Release…**
-does, even when nothing waits to ship. It is hidden while a release of that project is under way.
+`release_skill` or a `release_prompt`, even when nothing waits to ship. It is
+hidden while a release of that project is under way.
 
 ### Context menus
 
 Right-click a task's row to act on it: its task space row in the sidebar, its
-Needs you row, a To ship row, or its row in the Tasks view. The menu
-lists what the detail pane offers now, with the same confirmations: **Open
+Needs you row, or a To ship row. The menu lists what applies now, with the
+same confirmations: **Open
 Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel
 Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** for
 a task whose task space closed. An action that does not apply is left out.
@@ -495,7 +482,7 @@ Inbox's Retry and Delete. A task space row keeps its workspace items, such as
 
 ## Merge a task
 
-**Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
+**Merge** on a task, from its packet card in the coordinator chat, the task space's top bar, its sidebar
 menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 
 1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
@@ -621,20 +608,19 @@ archived.
 
 With `release_tags` set, a merged task waits in To ship until a release tag
 contains its merge commit. A project can release from Toastty when
-`tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release…** on
-its To ship line makes a release task: Toastty fetches the remote's default
+`tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release
+<project>…** in the command palette makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The
 agent's first message starts with `Use the <release_skill> skill.` when a
 release skill is set, then `release_prompt` if one is set, then the list of
 tasks waiting to ship. `toastty task release` does the
-same from the CLI, and **Release <project>…** in the command palette does it
-for an open project even when its To ship list is empty.
+same from the CLI.
 
-Toastty looks for release tags every 15 minutes and when the Tasks view opens:
+Toastty looks for release tags every 15 minutes and when the coordinator chat opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
 release made outside Toastty counts too. When a tag contains a task's merge
-commit, the task is Done, and the Tasks view shows the tag. A shipped release
+commit, the task is Done. A shipped release
 task closes its task space and removes its worktree once its agent is at rest,
 unless the worktree's commit is on no remote branch or tag.
 

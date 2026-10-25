@@ -217,7 +217,6 @@ final class CoordinatorSessionController {
         }
         _ = store.send(.selectWindow(windowID: windowID))
         _ = store.send(.setCoordinatorTerminalShown(windowID: windowID, shown: showingTerminal))
-        _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
         guard store.state.window(id: windowID)?.selectedWorkspaceID != workspaceID else { return true }
         return store.sendNavigation(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }

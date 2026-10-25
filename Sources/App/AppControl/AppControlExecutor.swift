@@ -833,18 +833,6 @@ final class AppControlExecutor {
 
         case .taskAdopt:
             return try runTaskAdopt(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
-
-        case .windowTasksShow, .windowTasksHide:
-            guard taskCoordinator != nil else {
-                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
-            }
-            return .init(
-                didMutateState: try requiredStore().send(.setTasksViewShown(
-                    windowID: try resolveWindowID(args: args),
-                    shown: action == .windowTasksShow
-                )),
-                result: nil
-            )
         }
         }
     }

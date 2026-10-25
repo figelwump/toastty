@@ -129,10 +129,10 @@ struct CommandPaletteTaskCommandsTests {
         }
     }
 
-    @Test func taskCommandsFollowTheSelectedTaskSpaceThenTheTasksViewRow() async throws {
+    @Test func taskCommandsFollowTheSelectedTaskSpace() async throws {
         let harness = try Harness()
         let first = try await harness.startedTask("Fix the composer")
-        let second = try await harness.startedTask("Keep the sidebar order")
+        _ = try await harness.startedTask("Keep the sidebar order")
         let firstSpace = try #require(first.taskSpaceWorkspaceID)
 
         // A project workspace has no current task.
@@ -145,36 +145,10 @@ struct CommandPaletteTaskCommandsTests {
             "Task: Archive… — Fix the composer · Running",
         ])
 
-        // Show Tasks covers the task space without selecting anything else.
-        let show = try #require(harness.commands().first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        #expect(show.title == "Show Tasks")
-        #expect(show.shortcut?.symbolLabel == "⇧⌘T")
-        #expect(try harness.run("Show Tasks"))
-        #expect(harness.window.showsTasksView)
-        #expect(harness.window.selectedWorkspaceID == firstSpace)
-
-        // Now the commands act on the Tasks view's selected row.
-        harness.board.selectionByWindowID[harness.windowID] = .task(second.id)
-        #expect(harness.taskRows() == [
-            "Task: Mark Done — Keep the sidebar order · Running",
-            "Task: Archive… — Keep the sidebar order · Running",
-            "Task: Open Task Space — Keep the sidebar order · Running",
-        ])
-
-        // Pressed again, it returns to the task space that was showing.
-        #expect(try harness.run("Hide Tasks"))
-        #expect(harness.window.showsTasksView == false)
-        #expect(harness.window.selectedWorkspaceID == firstSpace)
-
-        // Open Task Space selects the row's task space and leaves the view.
-        #expect(try harness.run("Show Tasks"))
-        #expect(try harness.run("Task: Open Task Space"))
-        #expect(harness.window.showsTasksView == false)
-        #expect(harness.window.selectedWorkspaceID == second.taskSpaceWorkspaceID)
         #expect(harness.failures.isEmpty)
     }
 
-    @Test func markDoneFromThePaletteFinishesTheTaskAsTheDetailPaneDoes() async throws {
+    @Test func markDoneFromThePaletteFinishesTheTask() async throws {
         let harness = try Harness()
         let task = try await harness.startedTask("Fix the composer")
         let taskSpace = try #require(task.taskSpaceWorkspaceID)

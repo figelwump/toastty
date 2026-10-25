@@ -36,10 +36,6 @@ struct AppWindowView: View {
         store.window(id: windowID)?.sidebarVisible ?? true
     }
 
-    private var showsTasksView: Bool {
-        store.window(id: windowID)?.showsTasksView ?? false
-    }
-
     private var taskBoard: TaskBoardStore {
         taskCoordinator?.board ?? .disabled
     }
@@ -92,7 +88,11 @@ struct AppWindowView: View {
                         taskBoard: taskBoard,
                         newTask: taskBoard.newTask,
                         openCoordinatorChat: { taskID in
-                            CoordinatorChatController.shared?.show(taskID: taskID) ?? false
+                            // A task without a card would open to nothing;
+                            // false lets the sidebar open its task space.
+                            guard let chat = CoordinatorChatController.shared,
+                                  taskID.map(chat.hasCards) ?? true else { return false }
+                            return chat.show(taskID: taskID)
                         },
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
@@ -129,20 +129,6 @@ struct AppWindowView: View {
                     requestWorkspaceMerge: requestWorkspaceMerge,
                     requestWorkspaceClose: requestWorkspaceClose
                 )
-                // The Tasks view covers the workspace instead of replacing
-                // it, so terminals stay attached while it shows.
-                .overlay {
-                    if showsTasksView, taskBoard.isEnabled {
-                        TasksView(
-                            windowID: windowID,
-                            store: store,
-                            board: taskBoard,
-                            sessionRuntimeStore: sessionRuntimeStore,
-                            newTask: taskBoard.newTask.map { action in { action() } },
-                            newTaskShortcutLabel: taskBoard.newTaskShortcutLabel()
-                        )
-                    }
-                }
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
             .overlay(alignment: .topLeading) {
@@ -249,13 +235,6 @@ struct AppWindowView: View {
         }
         .onChange(of: slotFocusSignature) { _, _ in
             handleSlotFocusSignatureChange()
-        }
-        .onChange(of: showsTasksView) { _, isShown in
-            // While shown, the Tasks view holds focus in this window and
-            // focus restores skip the covered terminals.
-            if isShown == false {
-                scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
-            }
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             if let pendingWorkspaceClose,

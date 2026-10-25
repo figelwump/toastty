@@ -14,15 +14,13 @@ so their merge times differ, and closes every task space but the newest
 task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - the project card shows the three newest merges as rows, newest first, then
   "Show 2 more", including the task whose quiet task space left the card;
-- "Show 2 more" opens the Tasks view with the newest task the sidebar did not
-  show selected;
-- a To ship row opens the Tasks view with its task selected;
+- "Show 2 more" lists the other two under the three, oldest last;
+- a To ship row opens the coordinator chat to its task;
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count.
-Captures of each step and remote-sidebar-to-ship-check.json go to the
-artifacts directory. `automation.capture_screenshot` needs automation mode,
-which this check does not use, so captures come only from an evidence build
-that allows it with a `path` outside automation mode; elsewhere a missing
+The coordinator runs the fake agent too; opening its chat asks GitHub about
+every open pull request. Captures of each step and
+remote-sidebar-to-ship-check.json go to the artifacts directory; a missing
 capture is recorded, not failed.
 """
 
@@ -108,6 +106,9 @@ def main():
         TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
         TOASTTY_RUNTIME_LABEL='remote-sidebar-to-ship-check',
         TOASTTY_SOCKET_PATH=socket_path,
+        TOASTTY_COORDINATOR_AUTOSTART='1',
+        TOASTTY_AUTOMATION='1',
+        TOASTTY_ARTIFACTS_DIR=str(artifacts),
         HOME=str(user_home),
         CFFIXED_USER_HOME=str(user_home),
         ZDOTDIR=str(zdotdir),
@@ -153,15 +154,8 @@ def main():
         result = run_tool(driver, 'labels', pid, '*', check=False)
         return json.loads(result.stdout) if result.returncode == 0 else []
 
-    def detail_title():
-        """The task the Tasks view's detail pane shows; see
-        remote-task-context-menu-check.py."""
-        result = run_tool(driver, 'texts', pid, '*', check=False)
-        texts = json.loads(result.stdout) if result.returncode == 0 else []
-        return next((text for text in texts if text in TITLES), None)
-
-    def tasks_view_shown():
-        return run_tool(helper, 'exists', pid, 'tasks.view.close', check=False).returncode == 0
+    def chat_state():
+        return instance.query('coordinator.chat.state')
 
     def sidebar_rows():
         """The task rows' and "Show N more" labels, top to bottom. A row's
@@ -174,20 +168,15 @@ def main():
                 title = TITLES[-1]
             if title:
                 rows.append(title)
-            elif label.startswith('Show ') and 'to ship in the Tasks view' in label:
+            elif label.startswith('Show ') and label.endswith(' to ship'):
                 rows.append(label)
         return rows
 
-    def open_from_sidebar(label, expected, name):
+    def press_label(label):
         """Presses a sidebar row or button by its label: SwiftUI gives them
         their container's identifier."""
         run_tool(driver, 'press-label', pid, label)
-        wait_for('the Tasks view', tasks_view_shown)
-        wait_for(f'{expected} to be selected', lambda: detail_title() == expected)
-        step('tasks view opened', pressed=label, selected=detail_title())
-        capture(name)
-        cli_json('action', 'run', 'window.tasks.hide', '--window', window_id)
-        wait_for('the Tasks view to close', lambda: tasks_view_shown() is False)
+        step('pressed', label=label)
 
     kept_title = None
     try:
@@ -196,6 +185,8 @@ def main():
         wait_for('the first terminal in the user home', lambda: str(user_home) in [
             os.path.realpath(cwd) for w in instance.query('workspace.list')['workspaces']
             if w['workspaceID'] == workspace_id for cwd in w['terminalCwds']], interval=1)
+        coordinator = wait_for('the coordinator to run', lambda: (lambda s: s if s['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=60, interval=1)
 
         tasks = {}
         for number, title in enumerate(TITLES, start=1):
@@ -203,24 +194,26 @@ def main():
             tasks[title] = task['taskID']
             cli_json('action', 'run', 'workspace.set-annotation', '--workspace', task['setup']['taskSpaceWorkspaceID'],
                      'key=github-pr', f'text=PR #{number}', f'url=https://github.com/{SLUG}/pull/{number}')
+        # The chat shows a task that the coordinator posted about.
+        for title in TITLES:
+            cli_json('coordinator', 'post', 'task-started', '--task', tasks[title])
         step('tasks created', tasks=tasks)
 
-        # Merge one at a time, oldest first. Opening the Tasks view asks
-        # GitHub about every open pull request.
+        # Merge one at a time, oldest first. Opening the coordinator chat
+        # asks GitHub about every open pull request.
         merged = {}
         for number, title in enumerate(TITLES, start=1):
             merged[str(number)] = 'MERGED'
             gh_state.write_text(json.dumps(merged))
-            cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
+            cli_json('coordinator', 'show')
             wait_for(f'{title} to be To ship', lambda: stage(tasks[title])['group'] == 'toShip')
-            cli_json('action', 'run', 'window.tasks.hide', '--window', window_id)
             time.sleep(1.1)
         evidence['mergedAt'] = {title: cli_json('task', 'get', tasks[title]).get('mergedAt') for title in TITLES}
         # Keep the newest task's task space open, with its agent quiet.
         kept = cli_json('task', 'get', tasks[TITLES[-1]])['setup']['taskSpaceWorkspaceID']
         kept_title = next(w['title'] for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == kept)
         open_spaces = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces']
-                       if w['workspaceID'] not in (workspace_id, kept)]
+                       if w['workspaceID'] not in (workspace_id, kept, coordinator['workspaceID'])]
         for workspace in open_spaces:
             cli_json('action', 'run', 'workspace.close', '--workspace', workspace)
         step('merged', closedTaskSpaces=len(open_spaces), keptTaskSpace=kept)
@@ -231,18 +224,28 @@ def main():
         wait_for('the card rows', lambda: sidebar_rows()[:3] == newest[:3])
         rows = sidebar_rows()
         step('projects rows', rows=rows)
-        require(rows == [*newest[:3], 'Show 2 more tasks to ship in the Tasks view'], f'Unexpected card rows: {rows}')
+        require(rows == [*newest[:3], 'Show 2 more tasks to ship'], f'Unexpected card rows: {rows}')
         capture('projects-five-to-ship')
 
-        open_from_sidebar('Show 2 more', newest[3], 'projects-show-more')
-        open_from_sidebar(f'{newest[1]}, ', newest[1], 'projects-row-opens-task')
+        press_label('Show 2 more')
+        wait_for('all five rows', lambda: sidebar_rows() == newest)
+        capture('projects-show-more')
+
+        press_label(f'{newest[1]}, ')
+        # The page opens the task's card, which the palette then acts on.
+        wait_for(f'the chat to open the card of {newest[1]}', lambda: chat_state()['currentTaskID'] == tasks[newest[1]])
+        selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
+        require(selected == [coordinator['workspaceID']], f'The row did not open the chat: {selected}')
+        step('chat opened', task=newest[1])
+        capture('projects-row-opens-chat')
+        cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
 
         # 2. Two To ship tasks and three done.
         for title in TITLES[:3]:
             cli_json('task', 'mark-done', tasks[title])
             wait_for(f'{title} to be done', lambda: stage(tasks[title])['group'] == 'done')
         wait_for('two card rows', lambda: sidebar_rows() == newest[:2])
-        done_label = 'Finished tasks: 3 done. Opens the Tasks view.'
+        done_label = 'Finished tasks: 3 done.'
         require(done_label in labels(), f'The footer should keep the Done count: {labels()}')
         step('projects rows with two', rows=sidebar_rows(), doneCount=True)
         capture('projects-two-to-ship')

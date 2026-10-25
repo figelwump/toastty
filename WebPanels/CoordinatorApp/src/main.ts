@@ -73,6 +73,8 @@ function receive(next: ChatState) {
     lastFocusToken = next.focus.token;
     const id = focusCardID(next, next.focus.taskID);
     if (id) {
+      // Last in the set, so the app reads it as the card opened last.
+      ui.expanded.delete(id);
       ui.expanded.add(id);
       render();
       const element = document.getElementById(`card-${id}`);

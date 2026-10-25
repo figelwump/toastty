@@ -3,7 +3,7 @@ import CoreState
 import Foundation
 import SwiftUI
 
-/// The task actions the top bar, the sidebar and the Tasks view share:
+/// The task actions the top bar, the sidebar and the palette share:
 /// each asks what it must, runs the coordinator, and shows a refusal.
 @MainActor
 enum TaskActions {
@@ -40,8 +40,8 @@ enum TaskActions {
         }
     }
 
-    /// Runs one of the actions the Tasks view's detail pane offers, which the
-    /// command palette offers too. Archive asks first and shows its own
+    /// Runs one of a task's actions, which the command palette and the
+    /// sidebar's menus offer. Archive asks first and shows its own
     /// failures; the others throw.
     static func run(_ action: TaskBoardPresentation.DetailAction, taskID: UUID, coordinator: TaskCoordinator) throws {
         switch action {
@@ -129,7 +129,7 @@ enum TaskActions {
     }
 
     /// Selects the task space in the window that holds it, or else in
-    /// `fallbackWindowID`, which also hides that window's Tasks view.
+    /// `fallbackWindowID`.
     static func openTaskSpace(
         workspaceID: UUID,
         fallbackWindowID: UUID,
@@ -239,7 +239,7 @@ enum TaskActions {
 }
 
 /// A task's context menu items, with a divider between sections. The rows
-/// that stand for a task in the sidebar and the Tasks view all show these.
+/// that stand for a task in the sidebar all show these.
 struct TaskContextMenuItems: View {
     let sections: [[TaskBoardPresentation.MenuItem]]
     let run: (TaskBoardPresentation.MenuItem) -> Void

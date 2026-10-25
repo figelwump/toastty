@@ -34,9 +34,6 @@ protocol CommandPaletteActionHandling: AnyObject {
     /// The global quick entry shortcut, if one is set.
     func newTaskShortcut() -> PaletteShortcut?
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
-    func canToggleTasksView(originWindowID: UUID) -> Bool
-    func toggleTasksView(originWindowID: UUID) -> Bool
-    func tasksViewTitle(originWindowID: UUID) -> String
     func canShowCoordinatorChat() -> Bool
     func showCoordinatorChat() -> Bool
     /// The task "Task: <action>" commands act on, if any.
@@ -368,24 +365,12 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return showScratchpadForCurrentSessionAction(originWindowID)
     }
 
-    func canToggleTasksView(originWindowID: UUID) -> Bool {
-        taskActions.canToggleTasksView(originWindowID: originWindowID)
-    }
-
-    func toggleTasksView(originWindowID: UUID) -> Bool {
-        taskActions.toggleTasksView(originWindowID: originWindowID)
-    }
-
     func canShowCoordinatorChat() -> Bool {
         CoordinatorChatController.shared?.session.workspaceID != nil
     }
 
     func showCoordinatorChat() -> Bool {
         CoordinatorChatController.shared?.show(taskID: nil) ?? false
-    }
-
-    func tasksViewTitle(originWindowID: UUID) -> String {
-        taskActions.tasksViewTitle(originWindowID: originWindowID)
     }
 
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
@@ -848,8 +833,6 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .newTask:
             return createTask()
-        case .toggleTasksView:
-            return toggleTasksView(originWindowID: originWindowID)
         case .showCoordinatorChat:
             return showCoordinatorChat()
         case .toggleSidebar:

@@ -30,7 +30,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.newScratchpad.id, "scratchpad.create")
         XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
         XCTAssertEqual(ToasttyBuiltInCommand.newTask.id, "task.new")
-        XCTAssertEqual(ToasttyBuiltInCommand.toggleTasksView.id, "window.toggle-tasks-view")
+        XCTAssertEqual(ToasttyBuiltInCommand.showCoordinatorChat.id, "coordinator.show-chat")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
@@ -118,7 +118,6 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.newScratchpad.id,
                 ToasttyBuiltInCommand.showScratchpadForCurrentSession.id,
                 ToasttyBuiltInCommand.newTask.id,
-                ToasttyBuiltInCommand.toggleTasksView.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleRightPanel.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
@@ -191,21 +190,17 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.newTask.id })
     }
 
-    func testShowTasksToggleUsesItsShortcutAndCurrentTitle() throws {
+    func testShowCoordinatorChatTakesTheFormerTasksShortcut() throws {
         let actions = CommandPaletteActionSpy()
-        let originWindowID = UUID()
-        var command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        XCTAssertEqual(command.title, "Show Tasks")
+        actions.canShowCoordinatorChatValue = true
+        let command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.showCoordinatorChat.id })
+        XCTAssertEqual(command.title, "Show Coordinator Chat")
         XCTAssertEqual(command.shortcut?.symbolLabel, "⇧⌘T")
-        XCTAssertTrue(actions.execute(command.invocation, originWindowID: originWindowID))
-        XCTAssertEqual(actions.toggledTasksViewWindowIDs, [originWindowID])
+        XCTAssertTrue(actions.execute(command.invocation, originWindowID: UUID()))
+        XCTAssertEqual(actions.showCoordinatorChatCount, 1)
 
-        actions.tasksViewTitleValue = "Hide Tasks"
-        command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
-        XCTAssertEqual(command.title, "Hide Tasks")
-
-        actions.canToggleTasksViewValue = false
-        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
+        actions.canShowCoordinatorChatValue = false
+        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.showCoordinatorChat.id })
     }
 
     func testTaskCommandsListTheDetailPaneActionsForTheCurrentTasksStage() throws {
@@ -249,9 +244,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         // A pull request known only from the record leaves the top bar
         // without its Merge button, so the shortcut would do nothing.
         XCTAssertEqual(rows(.needsYou(.review), hasMergeButton: false).first, "Task: Merge — Fix the composer · Review")
-        // From the Tasks view the shortcut would act on another task, and
-        // the task space can be opened.
-        XCTAssertEqual(rows(.needsYou(.review), source: .tasksView), [
+        // From the coordinator chat the shortcut would act on another task,
+        // and the task space can be opened.
+        XCTAssertEqual(rows(.needsYou(.review), source: .coordinatorChat), [
             "Task: Merge — Fix the composer · Review",
             "Task: Merge Without Checks — Fix the composer · Review",
             "Task: Archive… — Fix the composer · Review",

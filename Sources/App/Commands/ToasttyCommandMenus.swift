@@ -555,14 +555,14 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(!canToggleCommandRightPanel)
 
-            Button(ToasttyBuiltInCommand.toggleTasksViewTitle(tasksViewShown: commandWindow?.showsTasksView == true)) {
-                toggleTasksViewFromCommandSelection()
+            Button(ToasttyBuiltInCommand.showCoordinatorChat.title) {
+                _ = CoordinatorChatController.shared?.show(taskID: nil)
             }
             .keyboardShortcut(
-                ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.key,
-                modifiers: ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.modifiers
+                ToasttyBuiltInCommand.showCoordinatorChat.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.showCoordinatorChat.requiredShortcut.modifiers
             )
-            .disabled(commandSelection == nil || sessionRuntimeStore.taskCoordinator?.board?.isEnabled != true)
+            .disabled(CoordinatorChatController.shared?.session.workspaceID == nil)
         }
 
         CommandMenu("Workspace") {
@@ -1080,13 +1080,6 @@ struct ToasttyCommandMenus: Commands {
 
     private var sidebarVisibleForCommand: Bool {
         commandSelection?.window.sidebarVisible ?? true
-    }
-
-    /// The Tasks view covers the selected workspace without changing it, so
-    /// hiding it returns to that workspace.
-    private func toggleTasksViewFromCommandSelection() {
-        guard let selection = commandSelection else { return }
-        store.send(.setTasksViewShown(windowID: selection.windowID, shown: selection.window.showsTasksView == false))
     }
 
     private func toggleSidebarFromCommandSelection() {

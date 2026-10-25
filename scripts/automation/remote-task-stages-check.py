@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check task stages, the sidebar's Needs you list and the Tasks view in a real app.
+"""Check task stages, the sidebar's Needs you list and the coordinator chat in a real app.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-stages-check.py'. It needs an unlocked
@@ -14,16 +14,17 @@ directory is the project root), a fake agent, and a tasks.toml with
   from GitHub makes it `needsYou`/`review`, and the link is copied to the
   record; the task space's done mark makes it `done`;
 - `task adopt` gives a task space made by `workspace.create` a record;
-- `window.tasks.show` works without changing the selected workspace;
+- `window.tasks.show`, kept from the Tasks view, opens the coordinator chat;
 - a task whose agent reports a finished turn is `needsYou`/`agentFinished`,
   and goes back to `running` once it holds a watch on another task;
-- the sidebar Coordinator row's + and the Tasks view's New Task open the quick
-  entry panel;
-- while the Tasks view shows, typing does not reach the terminal under it;
-  Esc closes the view, and typing then reaches the terminal again.
-Captures of the sidebar and the Tasks view go to the artifacts
-directory when the app or the screen allows one; a missing capture is
-recorded, not failed.
+- the sidebar Coordinator row's + opens the quick entry panel;
+- while the chat shows, typing does not reach the coordinator's terminal
+  under it (the fake coordinator has no conversation, so the composer is
+  disabled; remote-coordinator-chat-e2e-check.py types into it); `coordinator show-terminal` shows the terminal, and typing
+  then reaches it; `Cmd+Shift+T` opens the chat again.
+The coordinator runs the fake agent too. Captures of the sidebar and the chat
+go to the artifacts directory; the app captures itself in automation mode. A
+missing capture is recorded, not failed.
 """
 
 import importlib.util
@@ -41,7 +42,7 @@ base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(base)
 require, wait_for, Instance, FAKE_AGENT = base.require, base.wait_for, base.Instance, base.FAKE_AGENT
 
-KEY_RETURN, KEY_ESCAPE = 36, 53
+KEY_RETURN, KEY_ESCAPE, KEY_T = 36, 53, 17
 PULL_REQUEST = 'https://github.com/toastty-check/no-such-repo/pull/9'
 
 
@@ -85,6 +86,9 @@ def main():
         TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
         TOASTTY_RUNTIME_LABEL='remote-task-stages-check',
         TOASTTY_SOCKET_PATH=socket_path,
+        TOASTTY_COORDINATOR_AUTOSTART='1',
+        TOASTTY_AUTOMATION='1',
+        TOASTTY_ARTIFACTS_DIR=str(artifacts),
         HOME=str(user_home),
         CFFIXED_USER_HOME=str(user_home),
         DISABLE_AUTOUPDATER='1',
@@ -125,8 +129,8 @@ def main():
         evidence['captures'].append(path.name)
         step('captured', file=path.name)
 
-    def tasks_view_shown():
-        return run_tool(helper, 'exists', pid, 'tasks.view.close', check=False).returncode == 0
+    def chat_shown():
+        return instance.query('coordinator.chat.state')['pages'] >= 1
 
     def quick_entry_open():
         listed = run_tool(driver, 'windows', pid, check=False)
@@ -185,29 +189,27 @@ def main():
                 f'Adopt did not track the task space: {adopted}')
         step('adopted', taskID=adopted['taskID'], stage=adopted.get('stage'))
 
-        # 3. The sidebar, then the Tasks view; neither changes the selected
+        # 3. The sidebar, then the coordinator chat. The sidebar keeps the selected
         # workspace. The + opens quick entry.
         capture('sidebar-needs-you-review')
         open_and_close_quick_entry('sidebar.tasks.new')
         cli_json('action', 'run', 'workspace.set-done', '--workspace', task_space)
         require(stage(task_id)['group'] == 'done', f'The done mark should finish the task: {stage(task_id)}')
         capture('sidebar-projects-done')
+        coordinator = wait_for('the coordinator to run', lambda: (lambda s: s if s['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=60, interval=1)
+        # The Tasks view's action now opens the chat over the coordinator.
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
-        capture('tasks-view')
-        try:
-            wait_for('the Tasks view', tasks_view_shown, timeout=20)
-        except AssertionError:
-            (artifacts / 'tasks-view-ax.txt').write_text(run_tool(helper, 'dump', pid, check=False).stdout)
-            raise
-        open_and_close_quick_entry('tasks.view.new')
-        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
-        capture('tasks-view-without-sidebar')
-        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
+        wait_for('the coordinator chat', chat_shown, timeout=20)
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
-        require(selected == [workspace_id], f'Showing the Tasks view changed the selection: {selected}')
+        require(selected == [coordinator['workspaceID']], f'The chat did not select the coordinator workspace: {selected}')
+        capture('coordinator-chat')
+        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
+        capture('coordinator-chat-without-sidebar')
+        cli_json('action', 'run', 'window.sidebar.toggle', '--window', window_id)
 
         # 3b. A task whose agent finishes a turn needs the user, in the
-        # Tasks view too; one that waits on another task through a watch is
+        # sidebar; one that waits on another task through a watch is
         # still running.
         answered = cli_json('task', 'create', 'Explain the empty file search', '--workspace', workspace_id,
                             '--wait', '--timeout', '90')
@@ -219,33 +221,39 @@ def main():
                             lambda: (s := stage(answered_id)).get('attention') == 'agentFinished' and s)
         require(finished['group'] == 'needsYou' and finished['needsUser'], f'Unexpected stage: {finished}')
         step('finished turn needs you', stage=finished)
-        capture('tasks-view-needs-you')
+        capture('sidebar-needs-you-finished')
         cli_json('task', 'watch', task_id, '--until', 'archived', '--notify', answered_id)
         waiting = wait_for('the watching task to run', lambda: (s := stage(answered_id))['group'] == 'running' and s)
         step('waiting on a watch runs', stage=waiting)
-        capture('tasks-view-waiting-on-watch')
+        capture('sidebar-waiting-on-watch')
 
-        # 4. Typing under the Tasks view does not reach the terminal; Esc
-        # closes it, and typing then does.
+        # 4. Typing while the chat shows does not reach the coordinator's
+        # terminal under it.
         bring_to_front()
-        run_tool(driver, 'type', 'echo covered-marker')
-        run_tool(driver, 'key', KEY_RETURN)
+        run_tool(driver, 'type', 'covered-marker')
         time.sleep(1.5)
 
         def terminal_text():
-            return instance.query('terminal.visible-text', panelID=terminal_panel).get('text', '')
+            return instance.query('terminal.visible-text', panelID=coordinator['panelID']).get('text', '')
 
-        require('covered-marker' not in terminal_text(), 'Typing under the Tasks view reached the terminal')
-        require(tasks_view_shown(), 'The Tasks view closed while typing')
+        require('covered-marker' not in terminal_text(), 'Typing under the chat reached the coordinator terminal')
+        require(chat_shown(), 'The chat closed while typing')
+        capture('coordinator-chat-typing')
         step('typing stayed out of the covered terminal')
-        run_tool(driver, 'key', KEY_ESCAPE)
-        wait_for('Esc to close the Tasks view', lambda: tasks_view_shown() is False)
+        cli_json('coordinator', 'show-terminal')
+        wait_for('the raw terminal', lambda: chat_shown() is False)
         time.sleep(0.5)
-        run_tool(driver, 'type', 'echo visible-marker')
+        run_tool(driver, 'type', 'visible-marker')
         run_tool(driver, 'key', KEY_RETURN)
-        wait_for('typing to reach the terminal again', lambda: 'visible-marker' in terminal_text())
-        step('focus returned to the terminal')
-        capture('after-tasks-view')
+        wait_for('typing to reach the terminal', lambda: 'visible-marker' in terminal_text())
+        step('focus went to the terminal')
+        capture('coordinator-terminal')
+
+        # 5. Cmd+Shift+T, which showed the Tasks view, opens the chat.
+        run_tool(driver, 'key', KEY_T, 'cmd,shift')
+        wait_for('Cmd+Shift+T to open the chat', chat_shown, timeout=15)
+        capture('coordinator-chat-from-shortcut')
+        step('Cmd+Shift+T opened the chat')
 
         evidence['status'] = 'passed'
     finally:

@@ -1113,16 +1113,16 @@ private extension TerminalRuntimeRegistry {
         ) { [weak self] in
             guard let self,
                   let panelID = resolvePanelID(),
-                  self.isCoveredByTasksView(panelID: panelID) == false else {
+                  self.isCoveredByChat(panelID: panelID) == false else {
                 return false
             }
             return self.focusPanelIfPossible(panelID: panelID)
         }
     }
 
-    /// Whether the Tasks view or the coordinator chat covers the panel's
+    /// Whether the coordinator chat covers the panel's
     /// window, so typing must not reach the terminal underneath.
-    private func isCoveredByTasksView(panelID: UUID) -> Bool {
+    private func isCoveredByChat(panelID: UUID) -> Bool {
         guard let state = store?.state,
               let windowID = state.workspaceSelection(containingPanelID: panelID)?.windowID else {
             return false

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check task context menus and Tasks view keyboard selection in a real app.
+"""Check task context menus in the sidebar of a real app.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-context-menu-check.py'. It needs an
@@ -13,14 +13,11 @@ real right-clicks, key events and the CLI it checks that:
   request, Mark Done without one, Archive… on both, and the workspace items
   below a divider, with no Mark as done; once its task space is selected,
   Open Task Space leaves the menu and Merge shows Option+Shift+M;
-- the Needs you row for a task whose task space closed, and the Tasks view's
-  row, offer the same task actions;
-- Up and Down Arrow move the Tasks view selection through its rows in order,
-  and the detail pane follows;
-- Archive… from a Tasks view row opens the archive alert; Cancel keeps the
-  task and the selection; Archive archives it and selects the next row;
-- Mark Done from a row's menu moves the task into the collapsed Done group
-  and selects the next row.
+- the Needs you rows, for a task whose task space closed and for a pull
+  request waiting for review, offer the same task actions;
+- Archive… from a task space row opens the archive alert; Cancel keeps the
+  task; Archive archives it;
+- Mark Done from a task space row's menu finishes the task.
 The menus, the alert's text and each step go to
 remote-task-context-menu-check.json in the artifacts directory.
 """
@@ -39,7 +36,6 @@ base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(base)
 require, wait_for, Instance, FAKE_AGENT = base.require, base.wait_for, base.Instance, base.FAKE_AGENT
 
-KEY_DOWN, KEY_UP = 125, 126
 PULL_REQUEST = 'https://github.com/toastty-check/no-such-repo/pull/9'
 MERGE_SHORTCUT = 'Merge\t⌥⇧M'
 WORKSPACE_ITEMS = ['Move to top level', 'Close workspace']
@@ -147,36 +143,14 @@ def main():
         time.sleep(0.4)
         return items
 
-    def detail_title():
-        """The title of the task the detail pane shows: the only static text
-        that is a task's title, since rows read as one element each."""
-        result = run_driver('texts', pid, '*', check=False)
-        texts = json.loads(result.stdout) if result.returncode == 0 else []
-        return next((text for text in texts if text in titles), None)
-
-    def tasks_view_rows():
-        """The Tasks view's row titles, top to bottom. SwiftUI rows can take
-        their container's identifier, so rows are found by label; only the
-        Tasks view labels a row with a task's title."""
-        rows = []
-        for label in json.loads(run_driver('labels', pid, '*').stdout):
-            title = next((title for title in titles if label.startswith(title + ', ')), None)
-            if title and title not in rows:
-                rows.append(title)
-        return rows
-
     def row_label(workspace):
         """A sidebar task space row's label starts with its workspace title."""
         title = next(w['title'] for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == workspace)
         return f'{title}, task space'
 
-    def key(code):
-        run_driver('key', code)
-        time.sleep(0.5)
-
     try:
         workspaces = instance.wait_until_ready()
-        workspace_id, window_id = workspaces[0]['workspaceID'], workspaces[0]['windowID']
+        workspace_id = workspaces[0]['workspaceID']
         wait_for('the first terminal in the user home', lambda: str(user_home) in [
             os.path.realpath(cwd) for w in instance.query('workspace.list')['workspaces']
             if w['workspaceID'] == workspace_id for cwd in w['terminalCwds']], interval=1)
@@ -194,8 +168,6 @@ def main():
         closed, closed_space = started('Close the stale task space')
         cli_json('action', 'run', 'workspace.close', '--workspace', closed_space)
         wait_for('the closed task space', lambda: stage(closed).get('attention') == 'taskSpaceClosed')
-        titles = ['Fix the unread dot', 'Composer keeps a blank line', 'Explain the empty file search',
-                  'Close the stale task space']
         step('tasks created', withPR=with_pr, withoutPR=without_pr, toArchive=to_archive, closed=closed)
 
         # 1. Task space rows in Projects.
@@ -215,32 +187,14 @@ def main():
         items = menu('needs-you-closed-task-space', '*', 'Close the stale task space, closed')
         require(items == ['Archive…', 'Delete Task'], f'Unexpected menu for a closed task space: {items}')
 
-        # 3. The Tasks view's rows, and the arrow keys.
-        cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
-        wait_for('the Tasks view rows', lambda: len(tasks_view_rows()) == 4)
-        items = menu('tasks-view-with-pr', '*', 'Fix the unread dot,')
+        # 3. The Needs you row of a pull request waiting for review.
+        items = menu('needs-you-review', '*', 'Fix the unread dot, review')
         require(items == ['Open Task Space', 'Open PR #9', '—', 'Merge', 'Merge Without Checks', 'Archive…'],
-                f'Unexpected Tasks view menu: {items}')
-        rows = tasks_view_rows()
-        step('tasks view rows', rows=rows)
-        require(detail_title() == rows[0], f'The first row should show by default: {detail_title()} {rows}')
-        capture('arrow-0')
-        for index, expected in enumerate(rows[1:], start=1):
-            key(KEY_DOWN)
-            require(detail_title() == expected, f'Down should select {expected}: {detail_title()}')
-            capture(f'arrow-{index}')
-        key(KEY_DOWN)
-        require(detail_title() == rows[-1], 'Down should stop at the last row')
-        for expected in reversed(rows[:-1]):
-            key(KEY_UP)
-            require(detail_title() == expected, f'Up should select {expected}: {detail_title()}')
-        step('arrow keys walked the rows', rows=rows)
+                f'Unexpected Needs you menu for a review: {items}')
 
         # 4. Archive… opens the archive alert; Cancel changes nothing.
-        while detail_title() != 'Explain the empty file search':
-            key(KEY_DOWN)
-        rows = tasks_view_rows()
-        menu('tasks-view-archive', '*', 'Explain the empty file search,', press='Archive…')
+        to_archive_space = cli_json('task', 'get', to_archive)['setup']['taskSpaceWorkspaceID']
+        menu('projects-archive', '*', row_label(to_archive_space), press='Archive…')
         dialog = wait_for('the archive alert', lambda: (d := json.loads(run_driver('dialog', pid).stdout)) and d)
         evidence['archiveAlert'] = dialog
         step('archive alert', **dialog)
@@ -249,32 +203,21 @@ def main():
         run_driver('dialog-press', pid, 'Cancel')
         time.sleep(1)
         require(stage(to_archive)['group'] == 'running', 'Cancel should keep the task')
-        require(detail_title() == 'Explain the empty file search', f'Cancel should keep the selection: {detail_title()}')
-        step('archive cancelled', selected=detail_title())
-        capture('tasks-view-after-cancel')
+        step('archive cancelled')
+        capture('after-cancel')
 
-        # Archive selects the next row.
-        index = rows.index('Explain the empty file search')
-        expected = rows[index + 1] if index + 1 < len(rows) else rows[index - 1]
-        menu('tasks-view-archive-again', '*', 'Explain the empty file search,', press='Archive…')
+        menu('projects-archive-again', '*', row_label(to_archive_space), press='Archive…')
         wait_for('the archive alert', lambda: json.loads(run_driver('dialog', pid).stdout))
         run_driver('dialog-press', pid, 'Archive')
         wait_for('the archived task', lambda: stage(to_archive)['group'] == 'archived')
-        wait_for(f'{expected} to be selected', lambda: detail_title() == expected)
-        step('archived and selected the next row', selected=detail_title(), rows=tasks_view_rows())
-        capture('tasks-view-after-archive')
+        step('archived')
+        capture('after-archive')
 
-        # 5. Mark Done moves the task into collapsed Done and selects the next row.
-        while detail_title() != 'Composer keeps a blank line':
-            key(KEY_UP if rows.index(detail_title()) > rows.index('Composer keeps a blank line') else KEY_DOWN)
-        rows = tasks_view_rows()
-        index = rows.index('Composer keeps a blank line')
-        expected = rows[index + 1] if index + 1 < len(rows) else rows[index - 1]
-        menu('tasks-view-mark-done', '*', 'Composer keeps a blank line,', press='Mark Done')
+        # 5. Mark Done from a task space row's menu.
+        menu('projects-mark-done', '*', row_label(without_pr_space), press='Mark Done')
         wait_for('the done task', lambda: stage(without_pr)['group'] == 'done')
-        wait_for(f'{expected} to be selected', lambda: detail_title() == expected)
-        step('marked done and selected the next row', selected=detail_title(), rows=tasks_view_rows())
-        capture('tasks-view-after-mark-done')
+        step('marked done')
+        capture('after-mark-done')
 
         evidence['status'] = 'passed'
     except Exception:

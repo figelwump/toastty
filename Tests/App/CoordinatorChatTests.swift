@@ -177,6 +177,34 @@ struct CoordinatorChatTests {
         }
     }
 
+    @Test func theTasksViewActionOpensTheChatAndThePaletteActsOnItsOpenCard() async throws {
+        let fixture = try await Fixture()
+        CoordinatorChatController.shared = fixture.chat
+        defer { CoordinatorChatController.shared = nil }
+        let task = try await fixture.taskWithPacket()
+        let windowID = try #require(fixture.tasks.store.state.windows.first?.id)
+
+        // The Tasks view's action, from scripts written before the chat.
+        _ = try await fixture.executor().runActionAsync(
+            id: "window.tasks.show",
+            args: [:],
+            context: AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_action")
+        )
+        #expect(fixture.tasks.store.state.showsCoordinatorChat(windowID: windowID))
+
+        await fixture.chat.refresh()
+        let selection = try #require(fixture.tasks.store.commandSelection(preferredWindowID: windowID))
+        func current() -> TaskBoardCurrentTask? {
+            fixture.board.currentTask(in: selection) { _ in [] }
+        }
+        // No card is open yet, so the palette offers no task commands.
+        #expect(current() == nil)
+        let card = try #require(fixture.card(forTask: task.id))
+        await fixture.chat.handle(.rendered(expanded: [card.id]), from: nil)
+        #expect(current()?.item.taskID == task.id)
+        #expect(current()?.source == .coordinatorChat)
+    }
+
     @Test func aReplyGoesToTheTaskAsAReviewNoteAndTakesItOutOfNeedsYou() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()

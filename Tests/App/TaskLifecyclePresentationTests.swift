@@ -3,8 +3,8 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// How the board reads a merge that is under way, and what the Tasks view
-/// offers for it. These have many cases that the end-to-end tests cannot
+/// How the board reads a merge that is under way, and what the sidebar and
+/// the palette offer for it. These have many cases that the end-to-end tests cannot
 /// reach cheaply.
 @MainActor
 struct TaskLifecyclePresentationTests {
@@ -107,8 +107,8 @@ struct TaskLifecyclePresentationTests {
         #expect(TaskBoardPresentation.detailActions(item(.running, pullRequest: false, record: release)) == [.archive])
     }
 
-    /// The sidebar's and the Tasks view's context menus, and the detail
-    /// pane's buttons, all come from this one list.
+    /// The sidebar's context menus and the palette's task commands all come
+    /// from this one list.
     @Test
     func aTasksMenuOffersWhereToGoAndTheDetailPanesActions() {
         typealias Menu = TaskBoardPresentation.MenuItem
@@ -200,35 +200,6 @@ struct TaskLifecyclePresentationTests {
     }
 
     @Test
-    func theTasksViewSelectionMovesThroughTheRowsItShows() {
-        let rows = (0..<4).map { _ in TaskBoardItem.Subject.task(UUID()) }
-        let hidden = TaskBoardItem.Subject.task(UUID())
-        func move(_ selected: TaskBoardItem.Subject?, _ offset: Int) -> TaskBoardItem.Subject? {
-            TasksViewSections.selection(movingFrom: selected, by: offset, in: rows)
-        }
-        #expect(move(rows[1], 1) == rows[2])
-        #expect(move(rows[1], -1) == rows[0])
-        // Nothing past either end.
-        #expect(move(rows[3], 1) == nil)
-        #expect(move(rows[0], -1) == nil)
-        // A selection the list does not show starts from an end.
-        #expect(move(hidden, 1) == rows[0])
-        #expect(move(nil, -1) == rows[3])
-
-        func replace(_ selected: TaskBoardItem.Subject, after: [TaskBoardItem.Subject]) -> TaskBoardItem.Subject? {
-            TasksViewSections.selection(replacing: selected, before: rows, after: after)
-        }
-        // The next row takes over, or the previous one for the last row.
-        #expect(replace(rows[1], after: [rows[0], rows[2], rows[3]]) == rows[2])
-        #expect(replace(rows[3], after: [rows[0], rows[1], rows[2]]) == rows[2])
-        // A next row that left too is skipped.
-        #expect(replace(rows[1], after: [rows[0], rows[3]]) == rows[3])
-        #expect(replace(rows[1], after: []) == nil)
-        // A row the list never showed keeps its selection.
-        #expect(replace(hidden, after: rows) == nil)
-    }
-
-    @Test
     func projectsWithTheSameTitleKeepSeparateReleaseLanes() {
         func shipped(root: String, workspaceID: UUID) -> TaskBoardItem {
             var task = record(mergeRequested: false)
@@ -243,9 +214,6 @@ struct TaskLifecyclePresentationTests {
         let sidebar = SidebarStatusSections.make(items, releasable: { _ in true })
         #expect(sidebar.toShip.count == 2)
         #expect(Set(sidebar.toShip.compactMap(\.releaseWorkspaceID)) == [first, second])
-        let view = TasksViewSections.make(items, releasable: { _ in true })
-        #expect(view.toShip.count == 2)
-        #expect(Set(view.toShip.compactMap(\.releaseWorkspaceID)) == [first, second])
     }
 
     @Test

@@ -47,7 +47,8 @@ task's newest packet card.
 
 The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
 one opens its newest packet in the chat; see
-[The sidebar and the Tasks view](tasks.md#the-sidebar-and-the-tasks-view).
+[The sidebar](tasks.md#the-sidebar). `Cmd+Shift+T` and **View > Show
+Coordinator Chat** open the chat too.
 
 ## How it runs
 
