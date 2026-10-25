@@ -71,6 +71,7 @@ PREFIX = 'remote-coordinator-final-e2e'
 SLUG = 'toastty-check/project'
 ALLOWED_TOOLS = 'Bash,Edit,Write,Read,Glob,Grep,Skill'
 KEY_RETURN, KEY_ESCAPE, KEY_DOWN, KEY_T = 36, 53, 125, 17
+MODIFIERS = {'cmd': 'command down', 'shift': 'shift down', 'opt': 'option down', 'ctrl': 'control down'}
 # The whole run, both agents' turns included.
 GUI_TIMEOUT = 3600
 
@@ -95,6 +96,52 @@ for top in (v(bar as! AXUIElement, kAXChildrenAttribute) as? [AXUIElement]) ?? [
     }
 }
 '''
+
+
+class _Process:
+    """What `Instance` uses of a child process, for an app LaunchServices
+    started."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def poll(self):
+        try:
+            os.kill(self.pid, 0)
+            return None
+        except ProcessLookupError:
+            return 0
+
+    def send_signal(self, number):
+        try:
+            os.kill(self.pid, number)
+        except ProcessLookupError:
+            pass
+
+    def wait(self, timeout=None):
+        wait_for('the app to exit', lambda: self.poll() is not None, timeout=timeout or 30, interval=0.2)
+
+
+class LaunchedInstance(Instance):
+    """The app started through LaunchServices, as Finder starts it, rather
+    than as a child of the GUI session's Terminal."""
+
+    def __init__(self, bundle, environment, socket_path, runtime_home, log_path):
+        self.socket_path, self.runtime_home = socket_path, runtime_home
+        self.log = open(log_path, 'a')
+        binary = str(Path(bundle) / 'Contents/MacOS/Toastty')
+        before = set(_pids(binary))
+        arguments = ['open', '-n', '-g', '-o', str(log_path), '--stderr', str(log_path)]
+        for key, value in environment.items():
+            arguments += ['--env', f'{key}={value}']
+        subprocess.run([*arguments, '-a', str(bundle)], check=True, timeout=60)
+        pid = wait_for('the app to start', lambda: next(iter(set(_pids(binary)) - before), None), timeout=60, interval=0.2)
+        self.process = _Process(pid)
+
+
+def _pids(binary):
+    result = subprocess.run(['pgrep', '-f', '-x', binary], capture_output=True, text=True)
+    return [int(line) for line in result.stdout.split()]
 
 
 def serve_gui_session():
@@ -131,8 +178,8 @@ def serve_gui_session():
         require(time.time() < deadline, 'The GUI-session check did not finish in time')
         for request in sorted(requests.glob('*.json')):
             arguments = json.loads(request.read_text())
-            result = subprocess.run([str(tools[arguments[0]]), *map(str, arguments[1:])],
-                                    capture_output=True, text=True, timeout=60)
+            executable = ['osascript', '-e'] if arguments[0] == 'osascript' else [str(tools[arguments[0]])]
+            result = subprocess.run([*executable, *map(str, arguments[1:])], capture_output=True, text=True, timeout=60)
             answer = request.with_suffix('.out')
             answer.with_suffix('.tmp').write_text(json.dumps(dict(code=result.returncode, stdout=result.stdout, stderr=result.stderr)))
             os.replace(answer.with_suffix('.tmp'), answer)
@@ -258,7 +305,7 @@ def main():
         require(result.returncode == 0, f'toastty {" ".join(arguments[:3])} failed: {result.stdout} {result.stderr}')
         return json.loads(result.stdout).get('result') or {}
 
-    app = dict(instance=Instance(binary, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log'))
+    app = dict(instance=LaunchedInstance(bundle, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log'))
 
     def instance():
         return app['instance']
@@ -287,13 +334,18 @@ def main():
 
     def key(code, modifiers=None):
         """Presses a key in the app, once it is frontmost: a key goes to the
-        frontmost app, and the Terminal running this check can be."""
+        frontmost app, and the Terminal running this check can be. It runs in
+        the SSH session, which may send keys."""
         def frontmost():
             ax('helper', 'activate', pid(), check=False)
             time.sleep(0.3)
             return ax('helper', 'frontmost-pid', check=False)['stdout'].strip() == str(pid())
         wait_for('the app to be frontmost', frontmost, timeout=20, interval=0.5)
-        ax('driver', 'key', code, *([modifiers] if modifiers else []))
+        # System Events presses keys as a keyboard does. With a terminal
+        # focused, a posted key event that only carries modifier flags does
+        # not reach the menu shortcuts.
+        using = ', '.join(MODIFIERS[name] for name in (modifiers or '').split(',') if name)
+        ax('osascript', f'tell application "System Events" to key code {code}' + (f' using {{{using}}}' if using else ''))
         time.sleep(0.8)
 
     def exists(identifier):
@@ -542,7 +594,7 @@ def main():
         # 10. Kill and relaunch: the chat keeps its cards.
         before = sorted((c['taskID'], c['kind'], c['packetVersion']) for c in cards())
         instance().kill()
-        app['instance'] = Instance(binary, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log')
+        app['instance'] = LaunchedInstance(bundle, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log')
         instance().wait_until_ready()
         wait_for('the coordinator after relaunch', waiting(lambda: instance().query('coordinator.status')['state'] == 'running'),
                  timeout=180, interval=2)
