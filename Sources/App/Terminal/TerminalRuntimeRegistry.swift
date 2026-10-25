@@ -1120,14 +1120,14 @@ private extension TerminalRuntimeRegistry {
         }
     }
 
-    /// Whether the Tasks view covers the panel's window, so typing must not
-    /// reach the terminal underneath.
+    /// Whether the Tasks view or the coordinator chat covers the panel's
+    /// window, so typing must not reach the terminal underneath.
     private func isCoveredByTasksView(panelID: UUID) -> Bool {
         guard let state = store?.state,
               let windowID = state.workspaceSelection(containingPanelID: panelID)?.windowID else {
             return false
         }
-        return state.windows.first { $0.id == windowID }?.showsTasksView == true
+        return state.coversWorkspaceContent(windowID: windowID)
     }
 
 

@@ -4,6 +4,7 @@ import CoreState
 import CryptoKit
 import Darwin
 import Foundation
+import WebKit
 
 final class AutomationCommandExecutor: @unchecked Sendable {
     private static let recentAutomationRequestLimit = 250
@@ -561,7 +562,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let fixture = requestedFixture ?? currentFixtureName
             let screenshotURL = try screenshotURL(fixture: fixture, step: step)
-            let screenshotData = try captureScreenshotPNG()
+            let screenshotData = try await captureScreenshotPNG()
             try screenshotData.write(to: screenshotURL, options: [.atomic])
             return [
                 "path": .string(screenshotURL.path),
@@ -2352,7 +2353,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func captureScreenshotPNG() throws -> Data {
+    private func captureScreenshotPNG() async throws -> Data {
         guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }) else {
             throw AutomationSocketError.internalError("no visible app window")
         }
@@ -2370,10 +2371,40 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.internalError("failed to create image representation")
         }
         contentView.cacheDisplay(in: bounds, to: imageRep)
+        await drawWebViewSnapshots(in: contentView, onto: imageRep)
         guard let data = imageRep.representation(using: .png, properties: [:]) else {
             throw AutomationSocketError.internalError("failed to encode png")
         }
         return data
+    }
+
+    /// `cacheDisplay` leaves web views blank, because WebKit draws in
+    /// another process. Each visible web view's own snapshot is drawn over
+    /// its frame instead.
+    @MainActor
+    private func drawWebViewSnapshots(in contentView: NSView, onto imageRep: NSBitmapImageRep) async {
+        func webViews(in view: NSView) -> [WKWebView] {
+            if let webView = view as? WKWebView { return [webView] }
+            return view.subviews.flatMap(webViews)
+        }
+        let contentRect = contentView.convert(contentView.bounds, to: nil)
+        var snapshots: [(NSImage, CGRect)] = []
+        for webView in webViews(in: contentView) where webView.isHiddenOrHasHiddenAncestor == false && webView.bounds.isEmpty == false {
+            let visible = webView.visibleRect
+            guard visible.isEmpty == false else { continue }
+            let configuration = WKSnapshotConfiguration()
+            configuration.rect = visible
+            guard let image = try? await webView.takeSnapshot(configuration: configuration) else { continue }
+            // Window coordinates have their origin at the bottom left, as
+            // the bitmap's drawing context does.
+            let inWindow = webView.convert(visible, to: nil)
+            snapshots.append((image, inWindow.offsetBy(dx: -contentRect.minX, dy: -contentRect.minY)))
+        }
+        guard snapshots.isEmpty == false, let context = NSGraphicsContext(bitmapImageRep: imageRep) else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        for (image, rect) in snapshots { image.draw(in: rect) }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func sanitizedPathComponent(_ value: String) -> String {

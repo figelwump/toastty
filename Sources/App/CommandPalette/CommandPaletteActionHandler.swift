@@ -37,6 +37,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func canToggleTasksView(originWindowID: UUID) -> Bool
     func toggleTasksView(originWindowID: UUID) -> Bool
     func tasksViewTitle(originWindowID: UUID) -> String
+    func canShowCoordinatorChat() -> Bool
+    func showCoordinatorChat() -> Bool
     /// The task "Task: <action>" commands act on, if any.
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask?
     func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption]
@@ -372,6 +374,14 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func toggleTasksView(originWindowID: UUID) -> Bool {
         taskActions.toggleTasksView(originWindowID: originWindowID)
+    }
+
+    func canShowCoordinatorChat() -> Bool {
+        CoordinatorChatController.shared?.session.workspaceID != nil
+    }
+
+    func showCoordinatorChat() -> Bool {
+        CoordinatorChatController.shared?.show(taskID: nil) ?? false
     }
 
     func tasksViewTitle(originWindowID: UUID) -> String {
@@ -840,6 +850,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return createTask()
         case .toggleTasksView:
             return toggleTasksView(originWindowID: originWindowID)
+        case .showCoordinatorChat:
+            return showCoordinatorChat()
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
         case .toggleRightPanel:

@@ -8,8 +8,11 @@
 //   activate <pid>               makes the app frontmost
 //   frontmost-pid                prints the frontmost app's process ID
 //   press <pid> <identifier>     presses the element with that
-//                                Accessibility identifier, or clicks it
+//                                Accessibility identifier, or clicks it;
+//                                title:<prefix> matches a web page's element
+//                                by its title, label or placeholder instead
 //   exists <pid> <identifier>    exits 0 when the element is on screen
+//   focus <pid> <identifier>     gives the element keyboard focus
 //   dump <pid>                   prints each element's depth, role,
 //                                identifier and frame
 
@@ -55,14 +58,22 @@ case "activate":
 case "frontmost-pid":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
 
-case "press", "exists":
+case "press", "exists", "focus":
     guard arguments.count == 3, let pid = Int32(arguments[1]) else { fail("\(arguments[0]) <pid> <identifier>") }
     func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
         var result: AnyObject?
         return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
     }
     func find(_ element: AXUIElement, depth: Int) -> AXUIElement? {
-        if value(element, "AXIdentifier") as? String == arguments[2] { return element }
+        if arguments[2].hasPrefix("title:") {
+            // Web content has no Accessibility identifiers; match what it shows.
+            let prefix = String(arguments[2].dropFirst("title:".count))
+            for name in [kAXTitleAttribute, kAXDescriptionAttribute, "AXPlaceholderValue"] {
+                if let text = value(element, name) as? String, text.hasPrefix(prefix) { return element }
+            }
+        } else if value(element, "AXIdentifier") as? String == arguments[2] {
+            return element
+        }
         // SwiftUI nests the workspace content deeply.
         guard depth < 120 else { return nil }
         for child in (value(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
@@ -76,6 +87,12 @@ case "press", "exists":
         fail("no element \(arguments[2]) in pid \(pid)")
     }
     if arguments[0] == "exists" { break }
+    if arguments[0] == "focus" {
+        guard AXUIElementSetAttributeValue(target, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else {
+            fail("\(arguments[2]) did not take focus")
+        }
+        break
+    }
     if AXUIElementPerformAction(target, kAXPressAction as CFString) == .success { break }
     // Some SwiftUI buttons refuse AXPress; click the middle of the element
     // instead, with the app in front so the click reaches it.

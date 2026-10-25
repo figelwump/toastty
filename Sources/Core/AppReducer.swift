@@ -1246,6 +1246,12 @@ public struct AppReducer {
             state.windows[windowIndex].showsTasksView = shown
             return true
 
+        case .setCoordinatorTerminalShown(let windowID, let shown):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].showsCoordinatorTerminal != shown else { return false }
+            state.windows[windowIndex].showsCoordinatorTerminal = shown
+            return true
+
         case .setSidebarWidth(let windowID, let width, let defaultWidth):
             return setSidebarWidth(windowID: windowID, width: width, defaultWidth: defaultWidth, state: &state)
         }

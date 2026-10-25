@@ -692,6 +692,7 @@ struct ToasttyApp: App {
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
     private let coordinatorSession: CoordinatorSessionController
+    private let coordinatorChat: CoordinatorChatController
     private let coordinatorSessionObserverToken: UUID
     private let coordinatorSessionRegistrySubscription: AnyCancellable
     private let taskBoard: TaskBoardStore
@@ -1395,6 +1396,16 @@ struct ToasttyApp: App {
         }
         taskCoordinator.coordinatorSession = coordinatorSession
         self.coordinatorSession = coordinatorSession
+        let coordinatorChat = CoordinatorChatController(
+            store: store,
+            taskCoordinator: taskCoordinator,
+            session: coordinatorSession,
+            conversations: remoteAccessService.conversationService,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+        self.coordinatorChat = coordinatorChat
+        CoordinatorChatController.shared = coordinatorChat
+        ToasttyPageSchemeHandler.coordinatorDataSource = coordinatorChat
         if Self.startsCoordinatorAutomatically(
             environment: processInfo.environment,
             automationConfig: automationConfig,

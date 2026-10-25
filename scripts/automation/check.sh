@@ -89,7 +89,8 @@ run_web_panel_tests() {
 
   for package_dir in \
     "$ROOT_DIR/WebPanels/LocalDocumentApp" \
-    "$ROOT_DIR/WebPanels/ScratchpadApp"; do
+    "$ROOT_DIR/WebPanels/ScratchpadApp" \
+    "$ROOT_DIR/WebPanels/CoordinatorApp"; do
     log "Installing and testing $(basename "$package_dir")"
     (
       cd "$package_dir"

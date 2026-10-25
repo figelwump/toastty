@@ -25,6 +25,9 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     /// Whether the Tasks view covers the workspace content. Not saved: a
     /// relaunch opens the workspace the window had selected.
     public var showsTasksView: Bool
+    /// Whether the coordinator workspace shows its raw terminal instead of
+    /// the coordinator chat that normally covers it. Not saved.
+    public var showsCoordinatorTerminal: Bool = false
 
     public init(
         id: UUID,

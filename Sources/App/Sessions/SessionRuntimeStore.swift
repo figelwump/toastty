@@ -5487,9 +5487,9 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
-        // A workspace under the Tasks view is selected but not seen.
+        // A workspace under the Tasks view or the chat is selected but not seen.
         guard let selection = state.selectedWorkspaceSelection(),
-              selection.window.showsTasksView == false else {
+              state.coversWorkspaceContent(windowID: selection.windowID) == false else {
             return false
         }
         guard selection.workspace.focusedPanelID == panelID else {

@@ -598,8 +598,13 @@ struct WorkspaceView: View {
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleSeenUnreadPanelClearIfNeeded()
         }
-        .onChange(of: isCoveredByTasksView) { _, _ in
+        .onChange(of: isCoveredByTasksView) { _, isCovered in
             scheduleSeenUnreadPanelClearIfNeeded()
+            // The coordinator chat holds focus while it covers its terminal;
+            // switching to the raw terminal gives the terminal focus again.
+            if isCovered == false, selectedWorkspace?.isCoordinator == true {
+                scheduleWorkspaceSlotFocusRestore()
+            }
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
@@ -1251,6 +1256,17 @@ struct WorkspaceView: View {
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
                         panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
                     )
+                    // The coordinator chat covers the coordinator's terminal
+                    // rather than replacing it, so the terminal stays
+                    // attached; the right panel shows beside it.
+                    .overlay {
+                        if isWorkspaceSelected, workspace.isCoordinator,
+                           store.state.showsCoordinatorChat(windowID: windowID),
+                           let chat = CoordinatorChatController.shared {
+                            CoordinatorChatView(controller: chat)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                        }
+                    }
 
                     rightAuxPanelSurface(
                         workspace: workspace,
@@ -1723,7 +1739,7 @@ struct WorkspaceView: View {
     }
 
     private var isCoveredByTasksView: Bool {
-        store.window(id: windowID)?.showsTasksView == true
+        store.state.coversWorkspaceContent(windowID: windowID)
     }
 
     private func cancelSeenUnreadClearTask() {

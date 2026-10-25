@@ -825,7 +825,7 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive,
-             .taskPacketPublish, .taskPacketGet, .coordinatorPost, .coordinatorShowTerminal:
+             .taskPacketPublish, .taskPacketGet, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow:
             return try runTaskAction(action, args: args)
 
         case .taskRelease:
@@ -1061,7 +1061,7 @@ final class AppControlExecutor {
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
 
-        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus:
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .coordinatorStatus, .coordinatorChatState:
             return try runTaskQuery(query, args: args)
         }
         }

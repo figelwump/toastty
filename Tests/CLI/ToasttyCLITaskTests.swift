@@ -342,6 +342,12 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "coordinator.post", args: ["kind": .string("note"), "text": .string("Fresh session.")]))
         #expect(try command(["status"]) == .appControlRun(kind: .query, id: "coordinator.status", args: [:]))
         #expect(try command(["show-terminal"]) == .appControlRun(kind: .action, id: "coordinator.show-terminal", args: [:]))
+        #expect(try command(["show"]) == .appControlRun(kind: .action, id: "coordinator.chat.show", args: [:]))
+        let shownTask = UUID().uuidString
+        #expect(try command(["show", "--task", shownTask])
+            == .appControlRun(kind: .action, id: "coordinator.chat.show", args: ["taskID": .string(shownTask)]))
+        #expect(throws: ToasttyCLIError.self) { try command(["show", "--task", "nope"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["show", "extra"]) }
 
         for arguments in [["post"], ["post", "note", "a", "b"], ["post", "note", "a", "--text", "b"], ["post", "packet", "--task", "abc"], ["status", "x"], ["open"]] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Coordinator</title>
+    <link rel="stylesheet" href="/coordinator-panel.css">
+  </head>
+  <body>
+    <main class="chat">
+      <div id="header"></div>
+      <div id="scroll" class="scroll" aria-live="polite"></div>
+      <div id="notice" class="notice hidden" role="status"></div>
+      <form id="composer" class="composer">
+        <textarea rows="1" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Message the coordinator" placeholder="Tell the coordinator…"></textarea>
+        <span id="composer-hint" class="composer-hint"></span>
+        <span class="kbd">↩</span>
+      </form>
+    </main>
+    <script src="/coordinator-panel.js"></script>
+  </body>
+</html>

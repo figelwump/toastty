@@ -54,6 +54,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canReloadValue = true
     var canToggleTasksViewValue = true
     var tasksViewTitleValue = ToasttyBuiltInCommand.toggleTasksView.title
+    var canShowCoordinatorChatValue = false
+    var showCoordinatorChatCount = 0
     var toggledTasksViewWindowIDs: [UUID] = []
     var currentTaskValue: TaskBoardCurrentTask?
     var taskReleaseOptionsValue: [PaletteTaskReleaseOption] = []
@@ -292,6 +294,13 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func tasksViewTitle(originWindowID: UUID) -> String {
         _ = originWindowID
         return tasksViewTitleValue
+    }
+
+    func canShowCoordinatorChat() -> Bool { canShowCoordinatorChatValue }
+
+    func showCoordinatorChat() -> Bool {
+        showCoordinatorChatCount += 1
+        return true
     }
 
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
@@ -665,6 +674,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return createTask()
             case .toggleTasksView:
                 return toggleTasksView(originWindowID: originWindowID)
+            case .showCoordinatorChat:
+                return showCoordinatorChat()
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:
