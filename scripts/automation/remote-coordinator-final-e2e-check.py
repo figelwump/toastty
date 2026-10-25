@@ -547,15 +547,12 @@ def main():
         step('7 cmd+shift+t opens the chat')
 
         # 8. Option+Cmd+T: All tasks, the filter, the arrow keys and Return.
-        docs_workspace = cli_result('action', 'run', 'workspace.create', 'title=docs-site', 'activate=false')['workspaceID']
-        docs_panel = wait_for('the docs-site terminal', lambda: next(iter(panel_ids(
-            instance().query('workspace.snapshot', workspaceID=docs_workspace))), None), timeout=30)
-        instance().request('app_control.run_action', dict(id='terminal.send-text', args=dict(
-            panelID=docs_panel, text=f'cd {shlex.quote(str(docs))}', submit=True)))
-        wait_for('the docs-site terminal in its repository', lambda: str(docs) in [os.path.realpath(cwd) for w in instance().query('workspace.list')['workspaces']
-                                                                                if w['workspaceID'] == docs_workspace for cwd in w['terminalCwds']], timeout=30, interval=1)
+        # A task placed in a project directory opens it as a second project.
         c = cli_result('task', 'create', 'This is an automated Toastty check. Reply with exactly READY-C and do nothing else.',
-                       '--title', 'Update the API guide', '--workspace', docs_workspace, '--wait', '--timeout', '300')
+                       '--title', 'Update the API guide')
+        cli_result('task', 'set-workspace', c['taskID'], '--root', str(docs))
+        wait_for('C to start in docs-site', waiting(lambda: (task(c['taskID']).get('setup') or {}).get('state') == 'started'),
+                 timeout=300, interval=2)
         key(KEY_T, 'cmd,opt')
         wait_for('Option+Cmd+T to show All tasks', lambda: chat_state()['view'] == 'tasks', timeout=15, interval=0.5)
         rows = {r['taskID']: r for r in chat_state()['tasks']}
