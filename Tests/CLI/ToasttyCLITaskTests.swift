@@ -342,6 +342,7 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "coordinator.post", args: ["kind": .string("note"), "text": .string("Fresh session.")]))
         #expect(try command(["status"]) == .appControlRun(kind: .query, id: "coordinator.status", args: [:]))
         #expect(try command(["show-terminal"]) == .appControlRun(kind: .action, id: "coordinator.show-terminal", args: [:]))
+        #expect(try command(["tasks"]) == .appControlRun(kind: .action, id: "coordinator.tasks.show", args: [:]))
         #expect(try command(["show"]) == .appControlRun(kind: .action, id: "coordinator.chat.show", args: [:]))
         let shownTask = UUID().uuidString
         #expect(try command(["show", "--task", shownTask])

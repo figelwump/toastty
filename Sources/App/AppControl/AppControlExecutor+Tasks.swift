@@ -6,7 +6,7 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskPacketPublish, .taskPacketGet, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow: true
+             .taskArchive, .taskRelease, .taskAdopt, .coordinatorPost, .coordinatorShowTerminal, .coordinatorChatShow, .coordinatorTasksShow: true
         default: false
         }
     }
@@ -150,6 +150,18 @@ extension AppControlExecutor {
             var result = Self.coordinatorStatusSnapshot(session)
             result["taskID"] = taskID.map { .string($0.uuidString) } ?? .null
             return .init(didMutateState: true, result: result)
+        case .coordinatorTasksShow:
+            guard let session = coordinator.coordinatorSession, let workspaceID = session.workspaceID else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            try enforceWorkspaceAutomationAccess(workspaceID)
+            guard let chat = CoordinatorChatController.shared else {
+                throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
+            }
+            guard chat.showTasks() else {
+                throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
+            }
+            return .init(didMutateState: true, result: Self.coordinatorStatusSnapshot(session))
         default:
             throw AutomationSocketError.invalidPayload("unsupported task action: \(action.rawValue)")
         }

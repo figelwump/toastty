@@ -232,6 +232,13 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    /// Shows All tasks beside the chat. Command+Shift+B stays Toggle Right
+    /// Panel.
+    static let showAllTasks = ToasttyKeyboardShortcut(
+        "t",
+        modifiers: [.command, .option]
+    )
+
     static let toggleLaterFlag = ToasttyKeyboardShortcut(
         "l",
         modifiers: [.command, .shift]

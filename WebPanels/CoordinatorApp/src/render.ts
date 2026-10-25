@@ -1,7 +1,7 @@
 // Pure HTML builders for the chat and the report. Every value from the app
 // is text that an agent or a task wrote, so it is escaped here; the only
 // markup is ours.
-import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, ReportPacket, Tone } from "./types";
+import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, PageView, ReportPacket, Tone } from "./types";
 
 export function esc(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -60,10 +60,17 @@ export function focusCardID(state: ChatState, taskID: string): string | null {
   return (packet ?? cards[cards.length - 1])?.id ?? null;
 }
 
-export function renderHeader(state: ChatState): string {
+export function renderViewSwitch(view: PageView): string {
+  return `<span class="seg view-switch" role="group" aria-label="View">`
+    + `<button type="button" id="view-chat" class="${view === "chat" ? "on" : ""}" data-act="view" data-view="chat" aria-pressed="${view === "chat"}">Chat</button>`
+    + `<button type="button" id="view-tasks" class="${view === "tasks" ? "on" : ""}" data-act="view" data-view="tasks" aria-pressed="${view === "tasks"}">All tasks</button></span>`;
+}
+
+export function renderHeader(state: ChatState, view: PageView = "chat"): string {
   const c = state.coordinator;
   return `<div class="chead"><span class="cmark">C</span><div class="who"><div class="name">${esc(c.title)}</div>`
     + `<div class="mono dim small">${esc(c.detail)}</div></div>`
+    + renderViewSwitch(view)
     + `<button class="tb-btn" data-act="open-routing" title="Open routing.md in the right panel">routing.md</button>`
     + (c.hasTerminal ? `<button class="tb-btn" data-act="open-terminal" title="Show the coordinator's terminal">Open terminal</button>` : "")
     + `</div>`;

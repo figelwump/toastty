@@ -967,6 +967,7 @@ toastty coordinator post packet|task-started|question|note [<text> | --text <tex
 toastty coordinator status
 toastty coordinator show-terminal
 toastty coordinator show [--task <task-id>]
+toastty coordinator tasks
 ```
 
 `coordinator post` adds a card to the coordinator's chat. Every kind except
@@ -976,8 +977,9 @@ coordinator's own session, or a command outside any agent session, may post.
 are. `coordinator show` shows the coordinator chat over its hidden workspace;
 with `--task`, the chat opens and scrolls to that task's newest packet card.
 `coordinator show-terminal` shows the same workspace with its raw terminal.
+`coordinator tasks` shows [All tasks](tasks.md#all-tasks) there instead of the chat.
 These are short forms of
-`action run coordinator.post|coordinator.chat.show|coordinator.show-terminal`
+`action run coordinator.post|coordinator.chat.show|coordinator.show-terminal|coordinator.tasks.show`
 and `query run coordinator.status`. `query run coordinator.chat.state` lists
 what the chat shows, for automation. See [Coordinator](coordinator.md).
 

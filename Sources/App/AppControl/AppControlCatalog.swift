@@ -95,6 +95,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorPost = "coordinator.post"
     case coordinatorShowTerminal = "coordinator.show-terminal"
     case coordinatorChatShow = "coordinator.chat.show"
+    case coordinatorTasksShow = "coordinator.tasks.show"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -710,6 +711,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.taskID(required: false)],
                 aliases: aliases
+            )
+        case .coordinatorTasksShow:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Show All tasks: select the coordinator workspace, with the list of every task, in stage groups, over its terminal. Fails while the coordinator workspace does not exist.",
+                selectors: []
             )
         }
     }

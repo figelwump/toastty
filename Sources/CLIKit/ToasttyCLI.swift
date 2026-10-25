@@ -958,6 +958,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator show-terminal
       toastty [--json] [--socket-path <path>] coordinator show [--task <task-id>]
+      toastty [--json] [--socket-path <path>] coordinator tasks
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1839,7 +1840,7 @@ public enum ToasttyCLI {
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.chat.show", args: args))
 
-        case "status", "show-terminal":
+        case "status", "show-terminal", "tasks":
             guard remaining.isEmpty else {
                 throw ToasttyCLIError.usage("coordinator \(verb) takes no arguments\n\n\(usage)")
             }
@@ -1847,7 +1848,7 @@ public enum ToasttyCLI {
                 options: options,
                 command: verb == "status"
                     ? .appControlRun(kind: .query, id: "coordinator.status", args: [:])
-                    : .appControlRun(kind: .action, id: "coordinator.show-terminal", args: [:])
+                    : .appControlRun(kind: .action, id: verb == "tasks" ? "coordinator.tasks.show" : "coordinator.show-terminal", args: [:])
             )
 
         default:
