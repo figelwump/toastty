@@ -584,10 +584,11 @@ struct SidebarView: View {
     @ObservedObject var taskBoard: TaskBoardStore
     /// Opens the quick entry panel; `nil` hides the Tasks row's ＋.
     let newTask: (@MainActor () -> Void)?
-    /// Opens the coordinator chat, at a task's packet when given one. nil
-    /// while Toastty has no chat view; the Coordinator row then shows the
+    /// Opens the coordinator chat, at a task's packet when given one, and
+    /// says whether it did: it does not while the coordinator is off. nil
+    /// in hosts without the chat; the Coordinator row then shows the
     /// coordinator's terminal.
-    let openCoordinatorChat: (@MainActor (UUID?) -> Void)?
+    let openCoordinatorChat: (@MainActor (UUID?) -> Bool)?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -773,7 +774,7 @@ struct SidebarView: View {
         taskCoordinator: TaskCoordinator? = nil,
         taskBoard: TaskBoardStore = .disabled,
         newTask: (@MainActor () -> Void)? = nil,
-        openCoordinatorChat: (@MainActor (UUID?) -> Void)? = nil,
+        openCoordinatorChat: (@MainActor (UUID?) -> Bool)? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -1042,13 +1043,11 @@ struct SidebarView: View {
         )
     }
 
-    /// The coordinator chat once it exists; until then, the coordinator's
-    /// terminal in its hidden workspace.
+    /// The coordinator chat; without one, the coordinator's terminal in its
+    /// hidden workspace.
     private func openCoordinator() {
         cancelWorkspaceRename()
-        if let openCoordinatorChat {
-            openCoordinatorChat(nil)
-        } else {
+        if openCoordinatorChat?(nil) != true {
             taskCoordinator?.coordinatorSession?.showTerminal()
         }
     }
@@ -1062,7 +1061,7 @@ struct SidebarView: View {
             rows: rows,
             openPacket: openCoordinatorChat.map { action in { taskID in
                 cancelWorkspaceRename()
-                action(taskID)
+                return action(taskID)
             } },
             openTaskSpace: { workspaceID in
                 TaskActions.openTaskSpace(

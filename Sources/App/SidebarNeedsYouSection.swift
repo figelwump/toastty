@@ -169,8 +169,9 @@ final class SidebarPacketLookAtCache: ObservableObject {
 /// Needs you, between the Coordinator row and the projects.
 struct SidebarNeedsYouSection: View {
     let rows: [SidebarNeedsYouRow]
-    /// nil while there is no coordinator chat to open a packet in.
-    let openPacket: ((UUID) -> Void)?
+    /// Opens a task's packet in the coordinator chat and says whether it
+    /// did; nil while there is no chat.
+    let openPacket: ((UUID) -> Bool)?
     let openTaskSpace: (UUID) -> Void
     let merge: (UUID) -> Void
     let run: (TaskBoardPresentation.MenuItem) -> Void
@@ -219,7 +220,7 @@ struct SidebarNeedsYouSection: View {
                             if case .merge(let taskID, _)? = row.primary { merge(taskID) }
                         },
                         cancelMerge: { confirmingMergeID = nil },
-                        openPacket: openPacket.flatMap { action in row.packetVersion == nil ? nil : row.taskID.map { id in { action(id) } } },
+                        openPacket: openPacket.flatMap { action in row.packetVersion == nil ? nil : row.taskID.map { id in { _ = action(id) } } },
                         run: run
                     )
                 }
@@ -234,12 +235,13 @@ struct SidebarNeedsYouSection: View {
         }
     }
 
-    /// The row's body opens the packet in the coordinator chat, or, before
-    /// that chat exists, the task space.
+    /// The row's body opens the task in the coordinator chat, or, when the
+    /// chat cannot open, the task space.
     private func open(_ row: SidebarNeedsYouRow) {
-        if let openPacket, let taskID = row.taskID {
-            openPacket(taskID)
-        } else if let workspaceID = row.taskSpaceWorkspaceID {
+        if let openPacket, let taskID = row.taskID, openPacket(taskID) {
+            return
+        }
+        if let workspaceID = row.taskSpaceWorkspaceID {
             openTaskSpace(workspaceID)
         }
     }
@@ -318,7 +320,7 @@ private struct SidebarNeedsYouRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(openPacket == nil ? "Open the task space" : "Open the packet in the coordinator")
+        .help("Open the task")
         .accessibilityLabel(row.accessibilityLabel)
         .background {
             SidebarSemanticTextBridge(text: row.accessibilityLabel)

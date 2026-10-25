@@ -94,6 +94,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskAdopt = "task.adopt"
     case coordinatorPost = "coordinator.post"
     case coordinatorShowTerminal = "coordinator.show-terminal"
+    case coordinatorChatShow = "coordinator.chat.show"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
 
@@ -697,8 +698,16 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Show the coordinator's terminal: select its hidden workspace in the window that holds it. Fails while the coordinator workspace does not exist.",
+                summary: "Show the coordinator's terminal: select its hidden workspace in the window that holds it, with the raw terminal instead of the chat. Fails while the coordinator workspace does not exist.",
                 selectors: []
+            )
+        case .coordinatorChatShow:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Show the coordinator chat: select the coordinator workspace, with the chat over its terminal and its right panel beside it. With taskID, the chat opens and scrolls to that task's newest packet card, or its last card. Fails while the coordinator workspace does not exist.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
             )
         case .windowTasksShow:
             return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
@@ -736,6 +745,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
     case coordinatorStatus = "coordinator.status"
+    case coordinatorChatState = "coordinator.chat.state"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -857,6 +867,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 id: rawValue,
                 kind: .query,
                 summary: "The coordinator's state: off, waitingForWindow, waitingForRestore, starting, running or failed (with reason), its workspace, panel and session, and the paths of events.jsonl and routing.md.",
+                selectors: []
+            )
+        case .coordinatorChatState:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "What the coordinator chat shows: pages (open chat pages), canSend, and items in time order, each with type, id and for a card kind, taskID, packetVersion, superseded and isNew; expandedCardIDs lists the cards an open page has expanded. Changes nothing.",
                 selectors: []
             )
         }

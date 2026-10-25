@@ -67,6 +67,7 @@ enum CommandPaletteCatalog {
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
             (.newTask, actions.canCreateTask()),
             (.toggleTasksView, actions.canToggleTasksView(originWindowID: originWindowID)),
+            (.showCoordinatorChat, actions.canShowCoordinatorChat()),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),

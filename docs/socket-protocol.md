@@ -264,6 +264,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.adopt`
 - `coordinator.post`
 - `coordinator.show-terminal`
+- `coordinator.chat.show`
 - `window.tasks.show`
 - `window.tasks.hide`
 
@@ -525,9 +526,15 @@ Notable action-specific behavior:
     the coordinator's workspace gets `INVALID_PAYLOAD`. See
     [Coordinator](coordinator.md#cards).
 - `coordinator.show-terminal`
-  - selects the hidden coordinator workspace in its window and returns the
-    `coordinator.status` object; `INVALID_PAYLOAD` while that workspace does
-    not exist.
+  - selects the hidden coordinator workspace in its window with its raw
+    terminal showing, and returns the `coordinator.status` object;
+    `INVALID_PAYLOAD` while that workspace does not exist.
+- `coordinator.chat.show`
+  - selects the hidden coordinator workspace with the coordinator chat over
+    its terminal, and returns the `coordinator.status` object with `taskID`.
+    Takes optional `taskID`: the chat then opens and scrolls to that task's
+    newest packet card, or its last card. `INVALID_PAYLOAD` while the
+    workspace does not exist, or for a task the caller may not see.
 - `window.tasks.show`, `window.tasks.hide`
   - take the `windowID` selector. Both are listed only when the task system is
     available.
@@ -733,10 +740,17 @@ Common query IDs include:
 - `task.workspace-choices`
 - `task.watches`
 - `coordinator.status`
+- `coordinator.chat.state`
 
 `coordinator.status` returns `state` (`off`, `waitingForWindow`,
 `waitingForRestore`, `starting`, `running` or `failed`), `reason` for a
 failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
+
+`coordinator.chat.state` returns `pages` (open chat pages), `canSend`,
+`items` in time order (each with `type`: `message`, `tool`, `status` or `card`,
+and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded` and
+`isNew`), `expandedCardIDs`, the cards an open page has expanded, and
+`notice`, the last line the chat showed after an action (`text`, `isError`).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,

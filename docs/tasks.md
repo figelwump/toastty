@@ -408,8 +408,7 @@ Tasks view, gives one a record, so its history stays after it closes.
 ## The sidebar and the Tasks view
 
 The **Coordinator** row at the top of the sidebar opens the
-[coordinator](coordinator.md); until its chat view exists, it shows the
-coordinator's terminal. Its badge counts the tasks that need you, and its ＋
+[coordinator](coordinator.md) chat. Its badge counts the tasks that need you, and its ＋
 creates a task. Below it, from top to bottom:
 
 - **Needs you** lists the started tasks that wait for you, newest first. Each
@@ -419,7 +418,9 @@ creates a task. Below it, from top to bottom:
   for a pull request waiting for review, which asks in the row first; **Answer**
   for a question, which opens its task space; **Mark Done**, **Archive…** or
   **Clean Up** where those settle it; else **Open**. Its **▾** menu, and a
-  right-click, offer the task's menu. Clicking the row opens its task space.
+  right-click, offer the task's menu, with **Open Packet** for a task that
+  published one. Clicking the row opens the task's newest packet in the
+  coordinator chat, or its task space while the coordinator is off.
 - The **Inbox**, for tasks that have not reached a task space.
 - **Projects**, the workspace list. A task space whose task is To ship or
   Done leaves its card unless an agent in it is working or waiting for you.

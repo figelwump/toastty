@@ -957,6 +957,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>]
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator show-terminal
+      toastty [--json] [--socket-path <path>] coordinator show [--task <task-id>]
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1823,6 +1824,20 @@ public enum ToasttyCLI {
                 args["text"] = .string(text)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.post", args: args))
+
+        case "show":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--task"])
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("coordinator show takes only --task <task-id>\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let taskID = parsed.singleValue("--task") {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("coordinator show --task takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.chat.show", args: args))
 
         case "status", "show-terminal":
             guard remaining.isEmpty else {

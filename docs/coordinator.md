@@ -5,10 +5,48 @@ tell it what you want done; it routes each request to a task in the right
 project, follows the tasks, and tells you when one needs you. The work itself
 happens in the tasks, each with its own agent. See [Tasks](tasks.md).
 
-This first version has no chat view. You talk to the coordinator in its
-terminal: click **Coordinator** at the top of the sidebar, or run
-`toastty coordinator show-terminal`. A later version adds a chat beside the
-sidebar. The sidebar's **Needs you** list shows the tasks waiting for you; see
+You talk to the coordinator in its chat: click **Coordinator** at the top of
+the sidebar, run `toastty coordinator show`, or choose **Show Coordinator
+Chat** in the command palette. The chat covers the
+coordinator's terminal in the main area, and the right panel stays beside it.
+`toastty coordinator show-terminal` shows the raw terminal instead.
+
+## The chat
+
+The chat shows the coordinator's conversation and the cards it posts, in time
+order. The conversation comes from the coordinator's transcript, as the iPhone
+app shows it; tool calls fold to one line each. Type in the box at the bottom
+to send the coordinator a message. While its turn runs, the message waits and
+goes in when the turn ends.
+
+A card is one line until you click it. It shows its task's live state: title,
+project, stage, packet version, and **stale** when commits landed in the
+task's worktree after the packet. An open packet card shows what changed,
+what to look at, the checks with pass or fail and their logs, what was not
+verified, and screenshot thumbnails. Its actions are:
+
+- **Reply**, to the task: Toastty sends `Review note on packet vN: <your
+  text>` to the task's agent with `task send`, and the task leaves Needs you
+  until its next packet. Switch the reply to **to coordinator** to ask the
+  coordinator about the task instead.
+- **Merge**: asks first, naming what Merge does in the task's project from
+  `tasks.toml`, then runs the same merge as the task's Merge button. The
+  coordinator never merges on its own.
+- **Full report** and the thumbnails open the packet's report in the right
+  panel, at `toastty://coordinator/report/<task-id>/<version>`. It shows the
+  screenshots before, after or side by side, at each width they were taken
+  at. The report is an ordinary browser panel, so its annotation mode works.
+- **Open task space**, and the pull request link, which opens in the right
+  panel.
+
+When a task publishes a newer packet, the chat adds a card for it at the end,
+marked **new**, and the task's older packet cards collapse to one line.
+**routing.md** in the chat's header opens the routing notes in the right panel.
+`toastty coordinator show --task <task-id>` opens the chat and scrolls to that
+task's newest packet card.
+
+The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
+one opens its newest packet in the chat; see
 [The sidebar and the Tasks view](tasks.md#the-sidebar-and-the-tasks-view).
 
 ## How it runs
@@ -68,9 +106,9 @@ toastty coordinator post note "Starting a fresh coordinator session."
 Every kind except `note` names its task, and `question` and `note` need text, at
 most 4000 characters. Toastty appends each card to `events.jsonl` as one JSON
 line with its ID, time, kind, task, text and the session that posted it. The
-chat view will show each card from the task's live state, so a card holds only
-what names it. Only the coordinator's own session, or a command outside any
-agent session, may post; a task's agent reports through its task instead.
+chat shows each card from the task's live state, so a card holds only what
+names it. Only the coordinator's own session, or a command outside any agent
+session, may post; a task's agent reports through its task instead.
 
 `toastty coordinator status` reports the coordinator's state (`off`,
 `waitingForWindow`, `waitingForRestore`, `starting`, `running` or `failed` with
@@ -90,4 +128,4 @@ Runtime-isolated runs keep these under their runtime home.
 
 The coordinator's conversation is an ordinary agent conversation, so a paired
 iPhone shows it like any other. Toastty also follows its transcript when remote
-access is off, for the chat view.
+access is off, for the chat. Cards and packets do not show on the iPhone yet.
