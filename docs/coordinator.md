@@ -19,6 +19,10 @@ app shows it; tool calls fold to one line each. Type in the box at the bottom
 to send the coordinator a message. While its turn runs, the message waits and
 goes in when the turn ends.
 
+On first start, the agent can wait for setup, such as Claude Code's folder-trust
+prompt. The message box stays disabled until the agent can take a message.
+Use **Open terminal** beside the disabled box to review and answer the prompt.
+
 A card is one line until you click it. It shows its task's live state: title,
 project, stage, packet version, and **stale** when commits landed in the
 task's worktree after the packet. An open packet card shows what changed,
@@ -90,9 +94,10 @@ reads it, and a running session keeps going until it exits.
 
 Toastty starts the coordinator only in your own Toastty. Test hosts, smoke runs
 and runtime-isolated dev runs do not start it, so they never use your agent
-subscription unasked. Set `TOASTTY_COORDINATOR_AUTOSTART=1` in the environment
-to start it in one of those runs, or `TOASTTY_COORDINATOR_AUTOSTART=0` to keep it
-off anywhere.
+subscription unasked. In a dev run, opening the coordinator from the sidebar or
+with `Cmd+Shift+T` starts it then; automation and test runs never do. Set
+`TOASTTY_COORDINATOR_AUTOSTART=1` in the environment to start it at launch in
+one of those runs, or `TOASTTY_COORDINATOR_AUTOSTART=0` to keep it off anywhere.
 
 ## Cards
 

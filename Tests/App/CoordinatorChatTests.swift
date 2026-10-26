@@ -30,7 +30,7 @@ struct CoordinatorChatTests {
             var entries: [(text: String, panelID: UUID)] = []
         }
 
-        init() async throws {
+        init(startsSession: Bool = true) async throws {
             tasks = try TaskCoordinatorTests.Fixture()
             board = TaskBoardStore(
                 coordinator: tasks.coordinator,
@@ -62,6 +62,7 @@ struct CoordinatorChatTests {
             )
             tasks.coordinator.coordinatorSession = session
             useLiveTaskSessions()
+            guard startsSession else { return }
             session.start()
             await tasks.waitUntil("the coordinator starts") { self.session.workspaceID != nil && self.launcher.calls.count == 1 }
         }
@@ -177,6 +178,24 @@ struct CoordinatorChatTests {
         }
     }
 
+    /// A dev run does not start the coordinator at launch. Opening it
+    /// starts it and shows the chat, unless the run is automation.
+    @Test func openingTheChatStartsACoordinatorThatThisRunDidNotStart() async throws {
+        let fixture = try await Fixture(startsSession: false)
+        let windowID = try #require(fixture.tasks.store.state.windows.first?.id)
+        #expect(fixture.chat.show(taskID: nil) == false)
+        #expect(fixture.session.workspaceID == nil)
+
+        fixture.session.startsOnRequest = true
+        #expect(fixture.chat.show(taskID: nil))
+        await fixture.tasks.waitUntil("the chat shows") {
+            fixture.session.workspaceID != nil
+                && fixture.tasks.store.state.window(id: windowID)?.selectedWorkspaceID == fixture.session.workspaceID
+        }
+        #expect(fixture.tasks.store.state.showsCoordinatorChat(windowID: windowID))
+        await fixture.tasks.waitUntil("the coordinator starts") { fixture.launcher.calls.count == 1 }
+    }
+
     @Test func theTasksViewActionOpensTheChatAndThePaletteActsOnItsOpenCard() async throws {
         let fixture = try await Fixture()
         CoordinatorChatController.shared = fixture.chat
@@ -206,10 +225,10 @@ struct CoordinatorChatTests {
     }
 
     @Test func theComposerQueuesOnlyBehindARunningTurn() {
-        func state(_ control: RemoteConversationInputControl?) -> (canSend: Bool, hint: String?) {
+        func state(_ control: RemoteConversationInputControl?, reason: RemoteInputUnavailableReason = .working) -> (canSend: Bool, hint: String?) {
             let summary = RemoteConversationSummary(
                 conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
-                state: .working, inputAvailability: .unavailable(reason: .working), inputControl: control,
+                state: reason == .starting ? .starting : .working, inputAvailability: .unavailable(reason: reason), inputControl: control,
                 latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
             )
             return CoordinatorChatController.sendState(
@@ -220,7 +239,13 @@ struct CoordinatorChatTests {
         let turn = RemoteInputEpoch(bindingID: UUID())
         #expect(state(RemoteConversationInputControl(turnEpoch: turn, canQueue: true)) == (true, "Sends when its turn ends"))
         // Just after a turn ends, a send would be refused: the composer waits.
-        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "The coordinator is finishing its turn"))
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "Waiting for the coordinator's prompt"))
+        // A live process can still be at a setup prompt before its first turn.
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .starting)
+            == (false, "The coordinator is starting. Check its terminal for setup."))
+        #expect(state(nil, reason: .starting).canSend == false)
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .unknownProviderState)
+            == (false, "Waiting for the coordinator's prompt"))
         #expect(state(nil).canSend == false)
     }
 
