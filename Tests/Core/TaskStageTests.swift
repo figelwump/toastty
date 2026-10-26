@@ -67,18 +67,18 @@ struct TaskStageTests {
     // MARK: - Before the task space
 
     @Test
-    func setupThatIsStillRunningIsInTheInbox() {
+    func setupThatIsStillRunningListsWithRunningTasks() {
         for setup in [TaskSetupState.routing, .settingUp] {
             let facts = TaskStageFacts(setup: setup, hasTaskSpace: false)
             let result = stage(facts, TaskLiveFacts(taskSpaceOpen: false))
-            #expect(result == .inbox)
+            #expect(result == .running)
             #expect(result.needsUser == false)
         }
-        #expect(stage(started(startWork: .running)) == .inbox)
+        #expect(stage(started(startWork: .running)) == .running)
     }
 
     @Test
-    func failuresBeforeTheTaskSpaceNeedTheUserButListWithTheInbox() {
+    func failuresBeforeTheTaskSpaceListWithNeedsYou() {
         let cases: [(TaskStageFacts, TaskStage.Attention)] = [
             (TaskStageFacts(setup: .needsWorkspace(reason: "no fit"), hasTaskSpace: false), .pickWorkspace(reason: "no fit")),
             (TaskStageFacts(setup: .setupFailed(reason: "hook failed"), hasTaskSpace: false), .setupFailed(reason: "hook failed")),
@@ -88,7 +88,7 @@ struct TaskStageTests {
             let result = stage(facts, TaskLiveFacts(taskSpaceOpen: true, agent: .working))
             #expect(result == .needsYou(attention))
             #expect(result.needsUser)
-            #expect(result.group == .inbox)
+            #expect(result.group == .needsYou)
         }
     }
 
@@ -220,7 +220,7 @@ struct TaskStageTests {
         #expect(TaskStage.archived.isFinished)
         #expect(TaskStage.needsYou(.review).isFinished == false)
         #expect(TaskStage.running.isFinished == false)
-        #expect(TaskStage.Group.allCases.sorted() == [.inbox, .needsYou, .running, .toShip, .done, .archived])
+        #expect(TaskStage.Group.allCases.sorted() == [.needsYou, .running, .toShip, .done, .archived])
     }
 
     @Test

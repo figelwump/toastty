@@ -44,10 +44,12 @@ enum CoordinatorAllTasks {
     enum Resolved: Equatable {
         /// The task's card in the chat, else its task space.
         case open(TaskBoardItem)
+        case setup(taskID: UUID)
         case menu(TaskBoardPresentation.MenuItem)
         case release(projectWorkspaceID: UUID)
     }
 
+    static let setupActionID = "setup"
     static let openActionID = "open"
     static let releaseActionID = "release"
 
@@ -74,7 +76,6 @@ enum CoordinatorAllTasks {
 
     static func groupID(_ group: TaskStage.Group) -> String {
         switch group {
-        case .inbox: "inbox"
         case .needsYou: "needsYou"
         case .running: "running"
         case .toShip: "toShip"
@@ -103,7 +104,7 @@ enum CoordinatorAllTasks {
             if item.stage.group == .toShip, item.projectWorkspaceID != nil, canRelease(item) {
                 sections.append([releaseAction(item)])
             }
-            let (label, tone) = CoordinatorChatTaskView.label(item.stage)
+            let (label, tone) = CoordinatorChatTaskView.label(item)
             let (primary, confirm) = primaryAction(item, hasCard: card, mergePolicy: mergePolicy)
             return Row(
                 id: rowID(item),
@@ -130,8 +131,13 @@ enum CoordinatorAllTasks {
         hasCard: Bool,
         mergePolicy: (TaskBoardItem) -> String
     ) -> (Action?, confirm: String?) {
+        if TaskBoardPresentation.showsSetup(item), item.taskID != nil {
+            return (Action(id: setupActionID, title: "Set Up"), nil)
+        }
         if item.stage.group == .needsYou, let primary = SidebarNeedsYouRow.primaryAction(item) {
             switch primary {
+            case .setup:
+                return (Action(id: setupActionID, title: "Set Up"), nil)
             case .merge(let taskID, _):
                 let question = SidebarNeedsYouRow.mergeQuestion(primary) ?? "Merge?"
                 return (action(.action(.merge, taskID: taskID)), "\(question) \(mergePolicy(item))")
@@ -188,7 +194,14 @@ enum CoordinatorAllTasks {
         isTriageConfigured: Bool
     ) -> Resolved? {
         guard let item = items.first(where: { Self.rowID($0) == rowID }) else { return nil }
-        if actionID == openActionID { return .open(item) }
+        if actionID == setupActionID {
+            guard TaskBoardPresentation.showsSetup(item), let taskID = item.taskID else { return nil }
+            return .setup(taskID: taskID)
+        }
+        if actionID == openActionID {
+            if TaskBoardPresentation.showsSetup(item), let taskID = item.taskID { return .setup(taskID: taskID) }
+            return .open(item)
+        }
         if actionID == releaseActionID {
             guard item.stage.group == .toShip, canRelease(item), let project = item.projectWorkspaceID else { return nil }
             return .release(projectWorkspaceID: project)
@@ -200,6 +213,7 @@ enum CoordinatorAllTasks {
         var candidates = Array(offered)
         if item.stage.group == .needsYou, let primary = SidebarNeedsYouRow.primaryAction(item) {
             switch primary {
+            case .setup: break
             case .answer(let workspaceID), .openTaskSpace(let workspaceID):
                 candidates.append(.openTaskSpace(workspaceID: workspaceID))
             case .merge(let taskID, _):

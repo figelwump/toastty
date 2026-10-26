@@ -6,21 +6,21 @@ The task keeps its own record, so it exists before its task space is ready and
 after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI or from
-an agent, moving a task into its own git worktree, the sidebar Inbox, task
+an agent, moving a task into its own git worktree, setup controls, task
 stages with the sidebar's Needs you list and the coordinator chat, `~/.toastty/tasks.toml`,
 and optional triage. The coordinator, an agent session that routes your
 requests to tasks, has its own page: [Coordinator](coordinator.md).
 
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
-out, and a task without a workspace waits in the Inbox until you pick one.
+out, and a task without a workspace waits in Needs you until you pick one.
 The agent's first message is the task text, followed by the attached files.
 
 ## Quick entry
 
 Press `Option+Shift+T` from any app, Toastty included, to open the quick entry
 panel. Write the task, attach what helps, and press `Cmd+Return` or Create
-Task. Toastty saves the task at once and shows "Task created · in the Inbox".
+Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
 
 - **Attach files** by dropping them anywhere on the panel, including a
@@ -97,7 +97,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 |---|---|
 | `<text>` or `--text` | The task, as written. The agent receives it unchanged. |
 | `--file <path>` | A file to attach. Repeat for more files. Toastty keeps its own copy. |
-| `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in the Inbox for you to pick one. |
+| `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. `[defaults]` in `tasks.toml` fills what you leave out. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They default to the first line of the text. |
@@ -140,7 +140,7 @@ These are short forms of `action run task.create`, `query run task.get`,
 ## Pick a workspace
 
 A task waits as `⚠ pick a workspace` when it names no workspace or its
-workspace closed. Open it from the Inbox. The Workspace menu lists the open
+workspace closed. Open its setup controls from Needs you. The Workspace menu lists the open
 workspaces, then recently closed ones. Choose one, and the main button names
 it, as in **Start in toastty** or **Open toastty & Start**. Toastty opens a
 closed workspace, or a project from `tasks.toml` that was never open, with one
@@ -218,7 +218,7 @@ work. Other agents cannot be forked: they start fresh in the worktree with the
 task text, and their old session stays. The task's project directory, and so its
 `tasks.toml` section, does not change.
 
-Each step is saved as it happens. If one fails, the task shows in the Inbox with
+Each step is saved as it happens. If one fails, the task shows in Needs you with
 the reason, and Retry continues from the last step that finished: after a
 failed hook, it runs the hook again in the same worktree.
 
@@ -360,16 +360,21 @@ Any unscoped caller may read, message and watch any task. A workspace-scoped
 session, which you set up on purpose, reaches only the tasks it may see in
 `task list`.
 
-## The Inbox
+## Setup controls
 
-Tasks whose setup has not finished appear in an Inbox group at the top of the
-sidebar. It is hidden when it is empty. A row shows the task's title, its
-workspace and agent, and its state: `⚠ pick a workspace` or `⚠ setup failed`
-with the reason, or `setting up`. Click a row
-to see the whole task; use Retry, Delete or the workspace picker there or in
-the row's context menu. A task that is moving into a worktree also shows here,
-as `moving to worktree` with its current step, or as `⚠ worktree failed` with
-the reason and Retry.
+A task whose setup needs attention appears in **Needs you**. Click its row or
+**Set Up** to choose a workspace, retry setup or retry a failed move into a
+worktree. The card shows the task text, attachments and the reason it stopped.
+When triage suggested a project, the workspace picker selects it first.
+
+Setup and worktree moves that are still running appear under **Running** in
+**All tasks**, with their current step. **Set Up** opens the same controls there,
+including Delete to stop setup. After Start or Retry succeeds, the card closes.
+
+If the coordinator agent is off and its workspace is absent, All tasks cannot
+open. Use `toastty task list` to inspect setup progress and `toastty task delete
+<id>` to cancel it. Setup blockers still appear in Needs you, where Set Up works
+without the coordinator agent.
 
 Deleting a task closes its task space only while nothing has used it. A task
 space that has run an agent stays, without its link to the task.
@@ -387,7 +392,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
 | To ship | it merged, and its project has `release_tags` |
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
-| Inbox | setup, or triage when it is on, is still running, or it is moving into a worktree |
+| Running | setup, or triage when it is on, is still running, or it is moving into a worktree |
 | Needs you | its agent finished a turn and waits for a prompt: "Claude finished · waiting for you". This holds after you read the answer, and for an agent restored after a relaunch, until you send the next prompt |
 | Running | anything else: an agent that works, waits on its sub-agents, or has not finished a turn yet; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
 
@@ -421,7 +426,6 @@ creates a task. Below it, from top to bottom:
   right-click, offer the task's menu, with **Open Packet** for a task that
   published one. Clicking the row opens the task's newest packet in the
   coordinator chat, or its task space while the coordinator is off.
-- The **Inbox**, for tasks that have not reached a task space.
 - **Projects**, the workspace list. A task space whose task is To ship or
   Done leaves its card unless an agent in it is working or waiting for you.
   After the card's task spaces, the project's 3 most recently merged To ship
@@ -441,9 +445,10 @@ shows. Open it with `Option+Cmd+T`, **View > Show All Tasks**, **Show All
 Tasks** in the command palette, `toastty coordinator tasks`, or the **Chat |
 All tasks** switch in the chat's header.
 
-- Tasks are grouped by stage: Inbox, Needs you, Running, To ship, Done and
+- Tasks are grouped by stage: Needs you, Running, To ship, Done and
   Archived. Done and Archived start closed; click a group's name to open or
-  close it. The newest change comes first in each group. Done and Archived
+  close it. Setup tasks offer **Set Up** to open the workspace picker or retry
+  controls. The newest change comes first in each group. Done and Archived
   list their newest 200 tasks; `toastty task list` lists them all.
 - With tasks in more than one project, buttons above the list show one
   project at a time.
@@ -498,7 +503,7 @@ Merge, Mark Done, **Archive…**, Clean Up or Keep As Is, and **Delete Task** fo
 a task whose task space closed. An action that does not apply is left out.
 **Open Task Space** is left out when the window already shows the task space;
 there **Merge** shows `Option+Shift+M`. A task that has not started offers the
-Inbox's Retry and Delete. A task space row keeps its workspace items, such as
+setup controls: Retry and Delete. A task space row keeps its workspace items, such as
 **Move to top level** and **Close workspace**, below a divider. It has no
 **Mark as done** item, since a task is done when it merges or you mark it done.
 
@@ -798,12 +803,12 @@ code block, after other text, or from `claude -p --output-format json`:
 
 `workspace` may also be a root directory that exactly one open workspace has,
 or the root of one of `closed_workspaces`. A project that is not open is only
-a suggestion: the task waits in the Inbox with it chosen first. The workspace
+a suggestion: the task waits in Needs you with it chosen first. The workspace
 must be open and the agent an installed profile; a value that fails a check,
 or a triage that fails or times out, leaves that field to `[defaults]`, and
 `task get` reports what happened in `triageNote`. The agent receives triage's
 first prompt, then your text exactly as written, then the attached files. For
-a task that waits for a workspace, the Inbox also offers **Retry Triage**.
+a task that waits for a workspace, the setup card also offers **Retry Triage**.
 
 ## Where tasks are stored
 

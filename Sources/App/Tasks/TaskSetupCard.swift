@@ -4,12 +4,11 @@ import CoreState
 import ImageIO
 import SwiftUI
 
-/// One Inbox task with the actions that move it on, in the popover from its
-/// sidebar row. When the task has no
+/// A task's setup controls, opened from Needs you or All tasks. When it has no
 /// workspace, it holds the workspace field; when triage is on and suggested
 /// a project, that suggestion is chosen first. Drawn to the "Workspace
 /// Picker Design" Scratchpad, in the quick entry panel's colors.
-struct TaskInboxCard: View {
+struct TaskSetupCard: View {
 
     let taskID: UUID
     @ObservedObject var records: TaskRecordStore
@@ -80,11 +79,11 @@ struct TaskInboxCard: View {
 
     var body: some View {
         Group {
-            if let record = records.record(id: taskID), SidebarInboxRowPresentation.isInInbox(record) {
+            if let record = records.record(id: taskID), TaskSetupPresentation.isSettingUp(record) {
                 popover(record)
             } else {
                 // The task started or was deleted while this was open.
-                Text("This task left the Inbox.")
+                Text("Setup finished or the task was deleted.")
                     .font(.system(size: 12))
                     .foregroundStyle(Self.mutedText)
                     .padding(16)
@@ -190,7 +189,7 @@ struct TaskInboxCard: View {
         if case .needsWorkspace(let reason) = record.setup {
             notes.append(Note(text: reason, isProblem: false))
         }
-        if let failure = SidebarInboxRowPresentation.failureReason(record) {
+        if let failure = TaskSetupPresentation.failureReason(record) {
             notes.append(Note(text: failure, isProblem: true))
         }
         if let triageNote = record.triageNote, notes.contains(where: { $0.text.contains(triageNote) }) == false {
@@ -239,7 +238,7 @@ struct TaskInboxCard: View {
             .font(.system(size: 11.5))
             .foregroundStyle(ToastyTheme.sessionErrorText)
             .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("task.inbox.error")
+            .accessibilityIdentifier("task.setup.error")
     }
 
     // MARK: - Workspace field
@@ -298,7 +297,7 @@ struct TaskInboxCard: View {
             .menuIndicator(.hidden)
             .accessibilityLabel("Workspace")
             .accessibilityValue(chosen.flatMap(choices.title(of:)) ?? "None chosen")
-            .accessibilityIdentifier("task.inbox.workspacePicker")
+            .accessibilityIdentifier("task.setup.workspacePicker")
 
             if let hint = Self.hint(for: chosen, choices: choices) {
                 Text(hint)
@@ -394,23 +393,23 @@ struct TaskInboxCard: View {
     /// what is missing.
     @ViewBuilder
     private func primaryAction(_ record: TaskRecord) -> some View {
-        if SidebarInboxRowPresentation.canRetry(record) {
+        if TaskSetupPresentation.canRetry(record) {
             Button(record.setup.isStarted ? "Retry Move" : "Retry Setup") {
                 perform { try coordinator.retry(taskID: record.id) }
             }
-            .buttonStyle(TaskInboxButtonStyle(kind: .primary))
+            .buttonStyle(TaskSetupButtonStyle(kind: .primary))
             .keyboardShortcut(.defaultAction)
-            .accessibilityIdentifier("task.inbox.retry")
+            .accessibilityIdentifier("task.setup.retry")
         } else if isPickingWorkspace(record) {
             let choices = choices ?? TaskWorkspaceChoices(open: [], recent: [])
             Button(Self.startTitle(for: chosen, choices: choices)) {
                 guard let chosen else { return }
                 perform { try coordinator.setWorkspace(taskID: record.id, choice: chosen) }
             }
-            .buttonStyle(TaskInboxButtonStyle(kind: chosen == nil ? .disabledPrimary : .primary))
+            .buttonStyle(TaskSetupButtonStyle(kind: chosen == nil ? .disabledPrimary : .primary))
             .disabled(chosen == nil)
             .keyboardShortcut(.defaultAction)
-            .accessibilityIdentifier("task.inbox.start")
+            .accessibilityIdentifier("task.setup.start")
         }
     }
 
@@ -428,8 +427,8 @@ struct TaskInboxCard: View {
             Button("Retry Triage") {
                 perform { try coordinator.retry(taskID: record.id) }
             }
-            .buttonStyle(TaskInboxButtonStyle(kind: .secondary))
-            .accessibilityIdentifier("task.inbox.retryTriage")
+            .buttonStyle(TaskSetupButtonStyle(kind: .secondary))
+            .accessibilityIdentifier("task.setup.retryTriage")
         }
     }
 
@@ -437,8 +436,8 @@ struct TaskInboxCard: View {
         Button("Delete", role: .destructive) {
             perform { try coordinator.delete(taskID: record.id) }
         }
-        .buttonStyle(TaskInboxButtonStyle(kind: .destructiveLink))
-        .accessibilityIdentifier("task.inbox.delete")
+        .buttonStyle(TaskSetupButtonStyle(kind: .destructiveLink))
+        .accessibilityIdentifier("task.setup.delete")
     }
 
     private func loadChoices() {
@@ -461,15 +460,16 @@ struct TaskInboxCard: View {
 extension View {
     /// The card's own dark color behind a popover, the arrow included,
     /// instead of the system's grey material.
-    func inboxPopoverChrome() -> some View {
-        presentationBackground(TaskInboxCard.background)
+    func setupPopoverChrome() -> some View {
+        background(TaskSetupCard.background)
+            .presentationBackground(TaskSetupCard.background)
             .environment(\.colorScheme, .dark)
     }
 }
 
-/// The Inbox card's buttons: amber for the action that moves the task on,
+/// The setup card's buttons: amber for the action that moves the task on,
 /// an outline for the others, and a quiet red link for Delete.
-struct TaskInboxButtonStyle: ButtonStyle {
+struct TaskSetupButtonStyle: ButtonStyle {
     enum Kind {
         case primary
         /// The main action while something is missing, such as a workspace.
@@ -502,8 +502,8 @@ struct TaskInboxButtonStyle: ButtonStyle {
         switch kind {
         case .primary: Color(hex: 0x1A1206)
         case .disabledPrimary: Color(hex: 0x6C665F)
-        case .secondary: TaskInboxCard.secondaryText
-        case .destructiveLink: TaskInboxCard.deleteText
+        case .secondary: TaskSetupCard.secondaryText
+        case .destructiveLink: TaskSetupCard.deleteText
         }
     }
 }
@@ -525,12 +525,12 @@ struct TaskAttachmentChips: View {
                     } else {
                         Image(systemName: "doc")
                             .font(.system(size: 11))
-                            .foregroundStyle(TaskInboxCard.mutedText)
+                            .foregroundStyle(TaskSetupCard.mutedText)
                             .frame(width: 20, height: 20)
                     }
                     Text(attachment.displayName)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(TaskInboxCard.secondaryText)
+                        .foregroundStyle(TaskSetupCard.secondaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }

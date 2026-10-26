@@ -578,7 +578,7 @@ struct SidebarView: View {
     // Observed so first-use claims, unlocked replacements, and legacy
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
-    /// Not observed here: only the Inbox section redraws when tasks change.
+    /// Not observed here: task changes arrive through the board snapshot.
     let taskCoordinator: TaskCoordinator?
     /// Every task's stage. Observed: a stage change moves rows and marks.
     @ObservedObject var taskBoard: TaskBoardStore
@@ -824,15 +824,6 @@ struct SidebarView: View {
                         if taskBoard.isEnabled {
                             needsYouSection
                         }
-                        if let taskCoordinator {
-                            // Inbox tasks have no running task space yet, so
-                            // they sit above every card.
-                            SidebarInboxSection(
-                                records: taskCoordinator.records,
-                                coordinator: taskCoordinator,
-                                workspaceTitle: { store.state.workspacesByID[$0]?.title }
-                            )
-                        }
                         if taskBoard.isEnabled {
                             projectsHeading
                         }
@@ -1056,11 +1047,12 @@ struct SidebarView: View {
 
     private var needsYouSection: some View {
         let packets = taskCoordinator?.packets
-        let rows = SidebarNeedsYouRow.rows(taskBoardSnapshot.windowItems) { record in
+        let rows = SidebarNeedsYouRow.rows(taskBoardSnapshot.windowItems, isTriageConfigured: taskCoordinator?.isTriageConfigured ?? false) { record in
             packets.flatMap { packetLookAtCache.lookAt(record, packets: $0) }
         }
         return SidebarNeedsYouSection(
             rows: rows,
+            coordinator: taskCoordinator,
             openPacket: openCoordinatorChat.map { action in { taskID in
                 cancelWorkspaceRename()
                 return action(taskID)

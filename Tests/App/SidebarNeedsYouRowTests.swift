@@ -91,7 +91,7 @@ struct SidebarNeedsYouRowTests {
     }
 
     @Test
-    func onlyStartedTasksThatNeedTheUserAreListed() {
+    func allTasksThatNeedTheUserAreListed() {
         var pickWorkspace = TaskRecord(createdAt: at, text: "x", title: "x", slug: "x", source: .cli, setup: .needsWorkspace(reason: "none fits"))
         pickWorkspace.pullRequestURL = nil
         let items = [
@@ -104,8 +104,9 @@ struct SidebarNeedsYouRowTests {
             item(.needsYou(.agentNeedsInput)),
         ]
         let rows = SidebarNeedsYouRow.rows(items, lookAt: { _ in nil })
-        // Board order is kept; the task triage could not place stays in the Inbox.
-        #expect(rows.map(\.reason) == ["review", "question"])
+        // Board order is kept, including a task that needs a workspace.
+        #expect(rows.map(\.reason) == ["review", "setup", "question"])
+        #expect(rows[1].primary == .setup(taskID: pickWorkspace.id))
     }
 
     @Test

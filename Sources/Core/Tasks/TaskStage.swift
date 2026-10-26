@@ -3,10 +3,9 @@ import Foundation
 /// Where a task stands: worked out from its record and from what Toastty
 /// sees now, never stored, so it cannot go stale. The rules are checked in
 /// order and the first match wins: a stopped cleanup, Archived, Done, To
-/// ship, Needs you, Inbox, Running. Needs you comes before Inbox, so a task
-/// whose setup failed still counts toward the Needs you badge.
+/// ship, Needs you, Running. Setup progress is Running; setup that needs
+/// the user is Needs you.
 public enum TaskStage: Equatable, Sendable {
-    case inbox
     case needsYou(Attention)
     case running
     case toShip
@@ -35,8 +34,7 @@ public enum TaskStage: Equatable, Sendable {
         /// merge, an archive or a release: "Merged · clean up?".
         case cleanupStopped(reason: String)
 
-        /// Whether the task has not reached its task space yet. Lists show
-        /// these with the Inbox, where the task already is.
+        /// Whether setup or the move into a worktree needs attention.
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
@@ -47,7 +45,6 @@ public enum TaskStage: Equatable, Sendable {
 
     /// The groups lists show, in their order.
     public enum Group: Int, CaseIterable, Comparable, Sendable {
-        case inbox
         case needsYou
         case running
         case toShip
@@ -59,12 +56,10 @@ public enum TaskStage: Equatable, Sendable {
         }
     }
 
-    /// The group a list shows the task in. A task that needs the user
-    /// before it reaches its task space stays with the Inbox.
+    /// The group a list shows the task in.
     public var group: Group {
         switch self {
-        case .inbox: .inbox
-        case .needsYou(let attention): attention.isBeforeStart ? .inbox : .needsYou
+        case .needsYou: .needsYou
         case .running: .running
         case .toShip: .toShip
         case .done: .done
@@ -83,7 +78,7 @@ public enum TaskStage: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .toShip, .done, .archived: true
-        case .inbox, .needsYou, .running: false
+        case .needsYou, .running: false
         }
     }
 
@@ -108,7 +103,7 @@ public enum TaskStage: Equatable, Sendable {
         case .setupFailed(let reason):
             return .needsYou(.setupFailed(reason: reason))
         case .routing, .settingUp:
-            return .inbox
+            return .running
         case .started:
             break
         }
@@ -116,7 +111,7 @@ public enum TaskStage: Equatable, Sendable {
         case .failed(let reason)?:
             return .needsYou(.moveFailed(reason: reason))
         case .running?:
-            return .inbox
+            return .running
         case .finished?, nil:
             break
         }

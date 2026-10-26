@@ -20,7 +20,7 @@ const tasks = await import(outfile);
 rmSync(directory, { recursive: true, force: true });
 
 const groups = [
-  { id: "inbox", title: "Inbox", total: 0 }, { id: "needsYou", title: "Needs you", total: 0 }, { id: "running", title: "Running", total: 0 },
+  { id: "needsYou", title: "Needs you", total: 0 }, { id: "running", title: "Running", total: 0 },
   { id: "toShip", title: "To ship", total: 0 }, { id: "done", title: "Done", total: 0 }, { id: "archived", title: "Archived", total: 0 },
 ];
 

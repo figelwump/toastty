@@ -209,7 +209,7 @@ enum SidebarSubspacePresentation {
             return .toShip
         case .done?, .archived?:
             return .done
-        case .inbox?, .running?, .needsYou?:
+        case .running?, .needsYou?:
             // The stage already counts a done mark that means the work is
             // done; one a merge set as the user's acceptance does not make
             // the task done while the merge runs.
