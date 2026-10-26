@@ -17,7 +17,8 @@ directory is the project root), a fake agent, and a tasks.toml with
 - `window.sidebar.set-segment` and `window.tasks.show` work without changing
   the selected workspace;
 - a task whose agent reports a finished turn is `needsYou`/`agentFinished`,
-  and goes back to `running` once it holds a watch on another task;
+  and goes back to `running` once it holds a watch on another task; another
+  task goes back to `running` once its finished turn is read;
 - the sidebar Tasks row's + and the Tasks view's New Task open the quick
   entry panel;
 - while the Tasks view shows, typing does not reach the terminal under it;
@@ -228,6 +229,26 @@ def main():
         waiting = wait_for('the watching task to run', lambda: (s := stage(answered_id))['group'] == 'running' and s)
         step('waiting on a watch runs', stage=waiting)
         capture('tasks-view-waiting-on-watch')
+
+        # 3c. Once the user reads the finished turn, the idle agent no
+        # longer needs them: the task runs again.
+        read = cli_json('task', 'create', 'Explain the unread dot', '--workspace', workspace_id, '--wait', '--timeout', '90')
+        read_id, read_space = read['taskID'], read['setup']['taskSpaceWorkspaceID']
+        for kind, summary in (('working', 'Working'), ('ready', 'Ready')):
+            cli_json('session', 'status', '--session', read['setup']['sessionID'], '--kind', kind, '--summary', summary)
+            time.sleep(0.3)
+        wait_for('the unread turn to need the user', lambda: stage(read_id).get('attention') == 'agentFinished')
+        read_panel = instance.query('workspace.snapshot', workspaceID=read_space)['slotPanelIDs'][0]
+        cli_json('action', 'run', 'workspace.focus-panel', '--workspace', read_space, '--panel', read_panel)
+        idle = wait_for('the read turn to run', lambda: (s := stage(read_id))['group'] == 'running' and s)
+        require(idle['needsUser'] is False, f'A read turn should not need the user: {idle}')
+        step('read turn runs', stage=idle)
+        capture('tasks-view-read-turn')
+        # Focusing the panel selected its task space, which closed the Tasks
+        # view; the typing check below needs both back.
+        cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
+        cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
+        wait_for('the Tasks view again', tasks_view_shown, timeout=20)
 
         # 4. Typing under the Tasks view does not reach the terminal; Esc
         # closes it, and typing then does.

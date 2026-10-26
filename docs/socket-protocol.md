@@ -702,8 +702,8 @@ has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
 `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
-`group` (`inbox`, `needsYou`, `running`, `toShip`, `done`, or `archived`),
-`needsUser`, and for Needs you `attention` and, for failures and a stopped
+`group` (`needsYou`, `running`, `toShip`, `done`, or `archived`; a task that
+is starting reports `running`), `needsUser`, and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
 `cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,

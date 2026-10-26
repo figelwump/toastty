@@ -18,7 +18,9 @@ It checks that:
   Toastty makes the worktree from the fetched remote tip, runs the hook, forks
   the conversation into a new tab in the worktree, confirms the fork's own
   conversation, and closes the old pane; the fork still knows the instructions
-  from before the move;
+  from before the move. While the move runs, the task lists with Running,
+  keeps its one task space, and the sidebar shows no Inbox and one row for
+  it, whose summary names the move's step;
 - `task create --start-work` starts a fresh agent in a new worktree;
 - a move that fails, here on a base that does not exist, keeps the old session;
 - a task's agent that runs `task create --fork --start-work` keeps running and
@@ -220,11 +222,49 @@ def main():
         source_panel = next(iter(panel_ids(snapshot)))
         step('task started', taskID=task_id, taskSpace=task_space, sourceSession=source_session, sourcePanel=source_panel)
 
-        moved = wait_for('the move to finish', answering(lambda: (lambda t: t if t.get('worktree', {}).get('state') in ('finished', 'failed') else None)(task(task_id))),
-                         timeout=600, interval=2)
+        # While the move runs, sample the task's stage, the sidebar's
+        # accessibility labels and the workspace count.
+        driver = root / 'quick-entry-ui-driver'
+        subprocess.run(['swiftc', '-O', str(Path(__file__).with_name('quick-entry-ui-driver.swift')), '-o', str(driver)], check=True)
+        locked = subprocess.run([str(driver), 'locked'], capture_output=True, text=True, timeout=60).stdout.strip()
+        require(locked == '0', 'The remote screen is locked; unlock it to read the sidebar')
+        listed = instance.query('workspace.list')['workspaces']
+        space_title = next(w['title'] for w in listed if w['workspaceID'] == task_space)
+        workspace_count = len(listed)
+        samples = []
+
+        def sample_move():
+            current = task(task_id)
+            result = subprocess.run([str(driver), 'labels', str(instance.process.pid), '*'],
+                                    capture_output=True, text=True, timeout=60)
+            labels = json.loads(result.stdout) if result.returncode == 0 else []
+            samples.append(dict(
+                at=time.time(),
+                move=current.get('worktree', {}).get('state'),
+                stage=current['stage'],
+                workspaces=len(instance.query('workspace.list')['workspaces']),
+                rows=[label for label in labels if label.startswith(f'{space_title}, ')],
+                inbox=[label for label in labels if 'Inbox' in label],
+            ))
+            return current if current.get('worktree', {}).get('state') in ('finished', 'failed') else None
+
+        moved = wait_for('the move to finish', answering(sample_move), timeout=600, interval=1)
         evidence['dialogs'] = answered
+        evidence['moveSamples'] = samples
         worktree = moved['worktree']
         step('move ended', worktree=worktree)
+        during = [sample for sample in samples if sample['move'] == 'running']
+        step('move samples', total=len(samples), whileRunning=len(during),
+             groups=sorted({sample['stage']['group'] for sample in samples}),
+             rowsWhileRunning=sorted({row for sample in during for row in sample['rows']}))
+        require(during, 'No sample caught the move while it ran')
+        require(all(sample['stage']['group'] == 'running' and sample['stage']['needsUser'] is False for sample in during),
+                f'The task left Running while it moved: {[sample["stage"] for sample in during]}')
+        require(all(sample['inbox'] == [] for sample in samples), f'An Inbox showed: {[s["inbox"] for s in samples if s["inbox"]]}')
+        require(all(len(sample['rows']) <= 1 for sample in samples), f'The task showed more than one row: {[s["rows"] for s in samples if len(s["rows"]) > 1]}')
+        require(all(sample['workspaces'] == workspace_count for sample in samples), 'The move made or closed a workspace')
+        require(any('Moving to worktree' in row for sample in during for row in sample['rows']),
+                f'No row named the move: {[sample["rows"] for sample in during]}')
         require(worktree['state'] == 'finished', f'The move did not finish: {worktree}')
         require(worktree['forked'] is True and worktree['conversationConfirmed'] is True, f'Fork not confirmed: {worktree}')
         require(worktree['source'] == 'closed', f'The old session was not closed: {worktree}')

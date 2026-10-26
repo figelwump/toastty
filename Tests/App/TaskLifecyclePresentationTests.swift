@@ -183,20 +183,27 @@ struct TaskLifecyclePresentationTests {
     }
 
     @Test
-    func anInboxTasksMenuRetriesWhatFailedOrDeletesIt() {
+    func aStartingTasksMenuRetriesWhatFailedOrDeletesIt() {
         typealias Menu = TaskBoardPresentation.MenuItem
         let base = record(mergeRequested: false)
-        func inbox(_ setup: TaskSetupState, triage: Bool = false) -> [[Menu]] {
+        func setupMenu(_ setup: TaskSetupState, startWork: TaskStartWorkState? = nil, triage: Bool = false) -> [[Menu]] {
             var task = base
             task.setup = setup
-            let item = TaskBoardItem(id: .task(task.id), record: task, title: "fix", stage: .inbox, agent: .none, activityAt: requestedAt)
+            if let startWork {
+                task.startWork = TaskStartWork(branchPrefix: "feat", requestedAt: requestedAt)
+                task.startWork?.state = startWork
+            }
+            let stage = TaskStage.derive(TaskStageFacts(record: task), live: TaskLiveFacts(taskSpaceOpen: true), releaseTagsConfigured: false)
+            #expect(stage.isBeforeStart)
+            let item = TaskBoardItem(id: .task(task.id), record: task, title: "fix", stage: stage, agent: .none, activityAt: requestedAt)
             return TaskBoardPresentation.menuItems(item, isTriageConfigured: triage)
         }
         let id = base.id
-        #expect(inbox(.setupFailed(reason: "no agent")) == [[.retry(taskID: id, title: "Retry Setup"), .delete(taskID: id)]])
-        #expect(inbox(.needsWorkspace(reason: "pick one"), triage: true) == [[.retryTriage(taskID: id), .delete(taskID: id)]])
-        #expect(inbox(.needsWorkspace(reason: "pick one")) == [[.delete(taskID: id)]])
-        #expect(inbox(.routing) == [[.delete(taskID: id)]])
+        #expect(setupMenu(.setupFailed(reason: "no agent")) == [[.retry(taskID: id, title: "Retry Setup"), .delete(taskID: id)]])
+        #expect(setupMenu(.needsWorkspace(reason: "pick one"), triage: true) == [[.retryTriage(taskID: id), .delete(taskID: id)]])
+        #expect(setupMenu(.needsWorkspace(reason: "pick one")) == [[.delete(taskID: id)]])
+        #expect(setupMenu(.routing) == [[.delete(taskID: id)]])
+        #expect(setupMenu(.started, startWork: .failed(reason: "fork failed")) == [[.retry(taskID: id, title: "Retry Move"), .delete(taskID: id)]])
     }
 
     @Test

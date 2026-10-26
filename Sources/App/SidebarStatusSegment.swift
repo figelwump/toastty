@@ -1,9 +1,9 @@
 import CoreState
 import SwiftUI
 
-/// The Status segment's groups, below the Inbox: Needs you and Running as
-/// rows, To ship as one line per project with its latest tasks under it,
-/// and Done as a count. Kept apart
+/// The Status segment's groups: Needs you and Running as rows, To ship as
+/// one line per project with its latest tasks under it, and Done as a
+/// count. Kept apart
 /// from the view so the grouping can be tested without hosting it.
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {

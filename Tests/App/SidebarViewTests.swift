@@ -2146,7 +2146,7 @@ final class SidebarViewTests: XCTestCase {
         ))
     }
 
-    func testInboxShowsTasksThatHaveNotStartedAboveTheCardsAndHidesWhenEmpty() throws {
+    func testStartingTasksListWithRunningAndSetupFailuresWithNeedsYou() throws {
         let now = Date()
         func record(_ title: String, setup: TaskSetupState, workspaceID: UUID? = nil) -> TaskRecord {
             TaskRecord(
@@ -2160,52 +2160,40 @@ final class SidebarViewTests: XCTestCase {
                 setup: setup
             )
         }
-        let started = record("Already running", setup: .started)
-        var suggested = record("Why artifacts files are missing from file search", setup: .needsWorkspace(reason: "Toastty's workspace is not open."))
-        suggested.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: "/tmp/toastty")
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [
-            suggested,
-            record("Flaky scratchpad unread test", setup: .settingUp),
-            record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [
             record("Billing page shows the old plan", setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")),
+            record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
+            record("Flaky scratchpad unread test", setup: .settingUp),
             record("Composer keeps a blank line", setup: .routing),
-            started,
-        ])
+        ], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
-        let coordinator = try XCTUnwrap(harness.taskCoordinator)
-        let parentTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.parentID]?.title)
-        try coordinator.records.insert(record("Composer drafts", setup: .settingUp, workspaceID: ids.parentID))
-        pumpMainRunLoop(duration: 0.2)
+        pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
-        let textValues = renderedTextValues(in: harness.hostingView)
 
-        // Started tasks leave the Inbox; the others show their state.
-        XCTAssertTrue(textValues.contains("Inbox, 6 tasks"), "Inbox header missing: \(textValues)")
-        XCTAssertTrue(textValues.contains("Why artifacts files are missing from file search, Inbox task, pick a workspace, suggests toastty. Toastty's workspace is not open."), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Billing page shows the old plan, Inbox task, pick a workspace, None of the open workspaces has a billing page."), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Inbox task, setting up, choosing a workspace"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Inbox task, setting up, → closed workspace · codex"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Composer drafts, Inbox task, setting up, → \(parentTitle) · codex"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Fix the unread dot, Inbox task, setup failed, The agent did not start: profile missing"), "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("Already running") }, "\(textValues)")
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-inbox")
-        let bitmap = try renderedBitmap(for: harness.hostingView)
-        let attachment = XCTAttachment(
-            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
-            uniformTypeIdentifier: "public.png"
-        )
-        attachment.name = "sidebar-inbox"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        // Projects lists task spaces only; there is no Inbox above the cards.
+        var textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test") }, "\(textValues)")
 
-        for task in coordinator.records.records {
-            try coordinator.records.remove(id: task.id)
-        }
-        try coordinator.records.insert(started)
-        pumpMainRunLoop(duration: 0.2)
+        // Status lists a task that is starting with Running, and one whose
+        // setup failed with Needs you.
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
+        pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
-        let emptied = renderedTextValues(in: harness.hostingView)
-        XCTAssertFalse(emptied.contains { $0.hasPrefix("Inbox") }, "An empty Inbox should not render: \(emptied)")
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, ⚠ setup failed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Setting up"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Setting up · choosing a workspace"), "\(textValues)")
+        let board = try XCTUnwrap(harness.taskBoard)
+        let sections = SidebarStatusSections.make(board.items(windowID: harness.windowID))
+        let needsYou = Set(sections.needsYou.map(\.item.title))
+        let running = Set(sections.running.map(\.item.title))
+        XCTAssertTrue(needsYou.isSuperset(of: ["Billing page shows the old plan", "Fix the unread dot"]), "\(needsYou)")
+        XCTAssertTrue(running.isSuperset(of: ["Flaky scratchpad unread test", "Composer keeps a blank line"]), "\(running)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-starting")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-status-starting")
     }
 
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
@@ -2238,12 +2226,12 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        // The task triage could not place needs the user too.
+        XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
-        // The Inbox stays at the top of both segments.
-        XCTAssertTrue(textValues.contains("Inbox, 1 task"), "\(textValues)")
         // Top-level workspaces show only in Projects.
         XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
@@ -2425,14 +2413,15 @@ final class SidebarViewTests: XCTestCase {
         let expectedTitle = try XCTUnwrap(board.items().first { $0.id == expected }?.title)
         XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(expectedTitle),") })
 
-        // A deleted Inbox task hands the selection to the row below it.
+        // A deleted task whose setup failed hands the selection to the row
+        // below it.
         before = visible()
-        XCTAssertEqual(before.first, .task(failed.id))
+        let failedIndex = try XCTUnwrap(before.firstIndex(of: .task(failed.id)))
         board.selectionByWindowID[harness.windowID] = .task(failed.id)
         pumpMainRunLoop(duration: 0.3)
         try coordinator.delete(taskID: failed.id)
         pumpMainRunLoop(duration: 0.6)
-        XCTAssertEqual(board.selectionByWindowID[harness.windowID], before[1])
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], before[failedIndex + 1])
         try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-selection-after-delete")
         try attachSidebarRender(tasks.hostingView, name: "tasks-view-selection-after-delete")
     }
@@ -2460,7 +2449,7 @@ final class SidebarViewTests: XCTestCase {
         return (window, hostingView)
     }
 
-    func testTasksViewDetailShowsAnInboxTaskOnceWithThePicker() throws {
+    func testTasksViewDetailShowsAStartingTaskOnceWithThePicker() throws {
         var waiting = TaskRecord(
             createdAt: Date().addingTimeInterval(-120),
             text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
@@ -2493,11 +2482,11 @@ final class SidebarViewTests: XCTestCase {
 
         let textValues = renderedTextValues(in: hostingView)
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Why artifacts/ files are missing from @ file search") }, "\(textValues)")
-        try writeSidebarEvidence(hostingView, name: "tasks-view-inbox-picker")
-        try attachSidebarRender(hostingView, name: "tasks-view-inbox-picker")
+        try writeSidebarEvidence(hostingView, name: "tasks-view-setup-picker")
+        try attachSidebarRender(hostingView, name: "tasks-view-setup-picker")
     }
 
-    func testInboxCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {
+    func testSetupCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-picker-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2567,24 +2556,19 @@ final class SidebarViewTests: XCTestCase {
         // The picker chooses the suggestion: a project that is not open.
         let choices = coordinator.workspaceChoices(taskID: suggested.id)
         XCTAssertEqual(choices.suggested?.choice, .directory(toastty.path))
-        XCTAssertEqual(TaskInboxCard.startTitle(for: choices.suggested?.choice, choices: choices), "Open toastty & Start")
+        XCTAssertEqual(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices), "Open toastty & Start")
         XCTAssertNil(coordinator.workspaceChoices(taskID: unplaced.id).suggested)
         XCTAssertEqual(coordinator.workspaceChoices().recent.map(\.title), ["control-plane"])
 
-        // The sidebar row puts the tag first and names the suggestion.
-        let row = SidebarInboxRowPresentation.make(suggested) { _ in nil }
-        XCTAssertEqual(row.tag, "⚠ pick a workspace")
-        XCTAssertEqual(row.hint, "suggests toastty")
-        XCTAssertNil(SidebarInboxRowPresentation.make(unplaced) { _ in nil }.hint)
-        XCTAssertNil(SidebarInboxRowPresentation.make(failed) { _ in nil }.hint)
-
         func render(_ record: TaskRecord, name: String) throws {
-            let card = TaskInboxCard(taskID: record.id, records: recordStore, coordinator: coordinator, dismiss: {})
+            let card = TaskSetupCard(taskID: record.id, records: recordStore, coordinator: coordinator)
+                .frame(width: 520, alignment: .leading)
+                .padding(16)
             let hostingView = NSHostingView(
                 rootView: ZStack(alignment: .topLeading) {
                     ToastyTheme.surfaceBackground
                     card
-                        .background(TaskInboxCard.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(TaskSetupCard.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(hex: 0x343434), lineWidth: 1))
                         .padding(24)
                 }
@@ -2602,43 +2586,9 @@ final class SidebarViewTests: XCTestCase {
             try writeSidebarEvidence(hostingView, name: name)
             try attachSidebarRender(hostingView, name: name)
         }
-        try render(suggested, name: "inbox-card-suggested")
-        try render(unplaced, name: "inbox-card-no-suggestion")
-        try render(failed, name: "inbox-card-setup-failed")
-
-        // The real popover, with its arrow, from an anchor in a window.
-        let anchorView = NSHostingView(
-            rootView: Color(hex: 0x111111)
-                .frame(width: 260, height: 520)
-                .overlay(alignment: .topLeading) {
-                    Color.clear
-                        .frame(width: 240, height: 34)
-                        .popover(isPresented: .constant(true), arrowEdge: .trailing) {
-                            TaskInboxCard(taskID: suggested.id, records: recordStore, coordinator: coordinator, dismiss: {})
-                                .inboxPopoverChrome()
-                        }
-                        .padding(.top, 60)
-                }
-        )
-        let anchorWindow = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 260, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
-        anchorWindow.contentView = anchorView
-        anchorWindow.appearance = NSAppearance(named: .darkAqua)
-        anchorWindow.orderFrontRegardless()
-        defer { anchorWindow.orderOut(nil) }
-        pumpMainRunLoop(duration: 1.0)
-        let popoverWindow = NSApp.windows.first { NSStringFromClass(type(of: $0)).contains("Popover") && $0.isVisible }
-        // Window capture needs Screen Recording access, which a test host
-        // may lack; the card renders above are the evidence then.
-        if let popoverWindow,
-           let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(popoverWindow.windowNumber), [.boundsIgnoreFraming, .bestResolution]) {
-            let attachment = XCTAttachment(
-                data: try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])),
-                uniformTypeIdentifier: "public.png"
-            )
-            attachment.name = "inbox-popover-live"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
+        try render(suggested, name: "setup-card-suggested")
+        try render(unplaced, name: "setup-card-no-suggestion")
+        try render(failed, name: "setup-card-setup-failed")
     }
 
     func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {

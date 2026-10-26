@@ -38,7 +38,7 @@ struct TaskSpaceCloseQuestion: Equatable {
         switch item.stage {
         case .running, .needsYou:
             if case .needsYou(.cleanupStopped) = item.stage { return nil }
-        case .inbox, .toShip, .done, .archived:
+        case .starting, .toShip, .done, .archived:
             return nil
         }
         return Self(taskID: record.id, taskTitle: record.title, taskSpaceWorkspaceID: taskSpaceWorkspaceID)

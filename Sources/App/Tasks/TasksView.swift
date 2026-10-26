@@ -2,8 +2,8 @@ import AppKit
 import CoreState
 import SwiftUI
 
-/// The groups the Tasks view lists, in sidebar order. Inbox shows only when
-/// it has tasks; To ship lists its tasks under one header per project.
+/// The groups the Tasks view lists, in sidebar order. To ship lists its
+/// tasks under one header per project.
 struct TasksViewSections: Equatable {
     struct Lane: Equatable, Identifiable {
         /// The project's root directory, or its title for tasks without one:
@@ -16,7 +16,6 @@ struct TasksViewSections: Equatable {
         var releaseWorkspaceID: UUID? = nil
     }
 
-    var inbox: [SidebarStatusSections.Entry] = []
     var needsYou: [SidebarStatusSections.Entry] = []
     var running: [SidebarStatusSections.Entry] = []
     var toShip: [Lane] = []
@@ -28,7 +27,6 @@ struct TasksViewSections: Equatable {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
         var sections = Self()
-        sections.inbox = entries(.inbox)
         sections.needsYou = entries(.needsYou)
         sections.running = entries(.running)
         sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
@@ -48,13 +46,13 @@ struct TasksViewSections: Equatable {
 
     /// Every entry in display order, for picking a selection.
     var all: [SidebarStatusSections.Entry] {
-        inbox + needsYou + running + toShip.flatMap(\.entries) + done + archived
+        needsYou + running + toShip.flatMap(\.entries) + done + archived
     }
 
     /// The entries the list shows, in order: Done and Archived only while
     /// they are expanded.
     func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
-        inbox + needsYou + running + toShip.flatMap(\.entries)
+        needsYou + running + toShip.flatMap(\.entries)
             + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
     }
 
@@ -256,10 +254,6 @@ struct TasksView: View {
     @ViewBuilder
     private func list(_ sections: TasksViewSections, selectedID: TaskBoardItem.Subject?) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            if sections.inbox.isEmpty == false {
-                groupHeader(.inbox, count: sections.inbox.count)
-                rows(sections.inbox, selectedID: selectedID)
-            }
             groupHeader(.needsYou, count: sections.needsYou.count, isHot: sections.needsYou.isEmpty == false)
             rows(sections.needsYou, selectedID: selectedID)
             groupHeader(.running, count: sections.running.count)
@@ -616,10 +610,11 @@ private struct TasksViewDetail: View {
                     .foregroundStyle(ToastyTheme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if let record = item.record, let coordinator = board.coordinator, item.stage.group == .inbox {
-                    // Setup has not finished: the Inbox card's controls, with
-                    // the workspace picker when triage could not place it.
-                    TaskInboxCard(taskID: record.id, records: coordinator.records, coordinator: coordinator, layout: .pane) {}
+                if let record = item.record, let coordinator = board.coordinator, item.stage.isBeforeStart {
+                    // Setup or the move has not finished: the setup card's
+                    // controls, with the workspace picker when triage could
+                    // not place it.
+                    TaskSetupCard(taskID: record.id, records: coordinator.records, coordinator: coordinator)
                 } else {
                     if let text = item.record?.text, text.isEmpty == false, text != item.title {
                         Text(text)
@@ -717,7 +712,7 @@ private struct TasksViewDetail: View {
         case .delete:
             (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.delete")
         case .retry, .retryTriage:
-            // The Inbox card shows these in the pane.
+            // The setup card shows these in the pane.
             (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.retry")
         }
         return Button(menuItem.title, role: menuItem.isDestructive ? .destructive : nil) {

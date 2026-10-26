@@ -299,6 +299,19 @@ final class WorkspaceMergeCoordinator {
         update(workspaceID, WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .awaitingMerge))
     }
 
+    /// Ends a request whose pull request merged, without the cleanup: the
+    /// workspace's task waits for a release with its task space open. Called
+    /// from the `.merged` cleanup event, before the cleanup starts. The done
+    /// mark the merge set goes too, since the workspace's work is not over;
+    /// the cleanup after the release sets it again.
+    func finishWithoutCleanup(workspaceID: UUID) {
+        guard let request = requests[workspaceID], request.phase == .awaitingMerge else { return }
+        let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "The task"
+        update(workspaceID, nil)
+        store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+        notify("Merged PR #\(request.pullRequest.number)", "\(workspaceTitle) stays open until its release ships.")
+    }
+
     func request(workspaceID: UUID) -> WorkspaceMergeRequest? {
         requests[workspaceID]
     }

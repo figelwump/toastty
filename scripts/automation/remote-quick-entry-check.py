@@ -22,8 +22,8 @@ compete with the wrapper's own instance, which holds the default, and has no
   task, with source quickEntry, and the agent starts with the text as
   written and the preset's model and effort;
 - the panel closes and Finder is still in front;
-- `toastty task create` without --workspace saves a task that waits in the
-  Inbox for a workspace, with a reason that does not mention triage;
+- `toastty task create` without --workspace saves a task that waits in Needs
+  you for a workspace, with a reason that does not mention triage;
 - Esc in a picker closes only the picker; Esc then closes a second panel
   without creating a task, and Command+T in the panel opens no tab in
   Toastty;
@@ -251,7 +251,7 @@ def main():
         step('task created', taskID=task['taskID'], files=task['files'], frontmost=front, message=message,
              model=task.get('model'), effort=task.get('effort'), argv=argv)
 
-        # 1b. The CLI without --workspace: the task waits in the Inbox.
+        # 1b. The CLI without --workspace: the task waits for a workspace.
         created = run_cli('task', 'create', CLI_TEXT)
         waiting = wait_for('the CLI task to wait for a workspace', lambda: (lambda t: t if t['setup']['state'] not in (
             'routing', 'settingUp') else None)(run_cli('task', 'get', created['taskID'])), timeout=30)
