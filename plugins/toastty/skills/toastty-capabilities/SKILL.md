@@ -185,7 +185,7 @@ change selection or focus.
 
 ```bash
 B() { "$TOASTTY_CLI_PATH" browser "$@"; }
-B open http://localhost:3000 --placement splitRight   # waits for the load; creates a browser if none
+B open http://localhost:3000     # right panel; waits for the load; creates a browser if none
 B snapshot                       # outline with refs: - button "Save" [ref=e7]
 B fill e4 "Buy milk"; B press Enter --target e4
 B click 'role=button[name="Save"]'; B check 'label=Remember me'; B select '#size' Large
@@ -210,8 +210,8 @@ B screenshot --out /tmp/page.png # then read the PNG to look at the page
   alert/confirm/prompt dialogs are answered (default: accept); answered dialogs
   appear in `console`.
 - `--json` returns the raw result. Run `toastty browser --help` for every
-  command. The right panel is narrow; `--placement splitRight` gives the page
-  more room. A browser in a workspace or tab the user has never shown still
+  command. `open` creates the browser in the right panel; pass `--placement`
+  only when the user asks for a split or tab. A browser in a workspace or tab the user has never shown still
   loads and takes input, but `screenshot` needs it on screen once.
 
 ## Closing Panels
