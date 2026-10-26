@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Mon, 26 Oct 2026 10:43:31 -0700
+Subject: [PATCH 8/8] renderer: send OpenGL frame notifications after releasing
+ the draw mutex
+
+The OpenGL frame completes synchronously inside drawFrameLocked, so its
+`.redraw` and `renderer_health` surface messages were pushed with
+`.forever` while the render thread held draw_mutex. The app mailbox is
+drained on the main thread, which also takes draw_mutex in
+displayRealized and displayUnrealized. When the mailbox filled up (an
+embedder creating and realizing many surfaces at once, before its next
+app tick), a render thread blocked on the full mailbox with the mutex
+held and the main thread blocked on the mutex: a permanent deadlock.
+
+Record those messages under the mutex and send them from drawFrame once
+it is released. Metal frames complete on a GPU callback outside the
+mutex and keep pushing directly.
+
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 5a021b087..ac92a515c 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -235,6 +235,16 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         /// Health of the most recently completed frame.
+         health: std.atomic.Value(Health) = .{ .raw = .healthy },
+ 
++        /// Surface messages from a frame that completed inside
++        /// `drawFrameLocked` (OpenGL completes frames synchronously).
++        /// `drawFrame` sends them once `draw_mutex` is released: a
++        /// `.forever` push while holding it deadlocks when the app
++        /// mailbox is full and the main thread, which drains that
++        /// mailbox, is itself waiting for the mutex (`displayRealized`).
++        ///
++        /// Only accessed with `draw_mutex` held.
++        deferred_surface_messages: DeferredSurfaceMessages = .{},
++
+         /// Health of how well the apprt can present our frames.
+         ///
+         /// This is separate from `health` because a renderer
+@@ -1712,15 +1722,34 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             // mutex. The display link is synced after the mutex is
+             // released. It doesn't need the lock, and this keeps the
+             // critical section to just drawing.
++            var deferred: DeferredSurfaceMessages = .{};
++            defer deferred.send(self.surface_mailbox);
+             const sync_display_link = locked: {
+                 self.draw_mutex.lockUncancelable(global.io());
+                 defer self.draw_mutex.unlock(global.io());
++                defer {
++                    deferred = self.deferred_surface_messages;
++                    self.deferred_surface_messages = .{};
++                }
+                 break :locked try self.drawFrameLocked(sync);
+             };
+ 
+             if (sync_display_link) self.syncDisplayLink(null, null);
+         }
+ 
++        /// See `deferred_surface_messages`.
++        const DeferredSurfaceMessages = struct {
++            redraw: bool = false,
++            health: ?Health = null,
++
++            fn send(self: DeferredSurfaceMessages, mailbox: apprt.surface.Mailbox) void {
++                if (self.redraw) _ = mailbox.push(.redraw, .{ .forever = {} });
++                if (self.health) |health| _ = mailbox.push(.{
++                    .renderer_health = health,
++                }, .{ .forever = {} });
++            }
++        };
++
+         /// The body of `drawFrame`. Must be called with `draw_mutex` held.
+         ///
+         /// Returns true if the display link should be resynced once the
+@@ -2036,11 +2065,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             self: *Self,
+             health: Health,
+         ) void {
+-            // If our health value hasn't changed, then we do nothing. We don't
+-            // do a cmpxchg here because strict atomicity isn't important.
+-            if (self.health.load(.seq_cst) != health) {
+-                self.health.store(health, .seq_cst);
+-
++            if (self.updateHealth(health)) {
+                 // Our health value changed, so we notify the surface so that it
+                 // can do something about it.
+                 _ = self.surface_mailbox.push(.{
+@@ -2055,6 +2080,29 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             self.swap_chain.?.releaseFrame();
+         }
+ 
++        /// `frameCompleted` for a frame that completed inside
++        /// `drawFrameLocked`, with `draw_mutex` held. A new frame
++        /// was exported if `presented`. The surface is notified once
++        /// the mutex is released (see `deferred_surface_messages`).
++        pub fn frameCompletedLocked(
++            self: *Self,
++            health: Health,
++            presented: bool,
++        ) void {
++            if (presented) self.deferred_surface_messages.redraw = true;
++            if (self.updateHealth(health)) self.deferred_surface_messages.health = health;
++            self.swap_chain.?.releaseFrame();
++        }
++
++        /// Record the health of a completed frame. Returns true if it
++        /// changed. We don't do a cmpxchg here because strict atomicity
++        /// isn't important.
++        fn updateHealth(self: *Self, health: Health) bool {
++            if (self.health.load(.seq_cst) == health) return false;
++            self.health.store(health, .seq_cst);
++            return true;
++        }
++
+         /// Call this any time the background image path changes.
+         ///
+         /// Caller must hold the draw mutex.
+diff --git a/src/renderer/opengl/Frame.zig b/src/renderer/opengl/Frame.zig
+index 4ec2320d8..30fff0ab7 100644
+--- a/src/renderer/opengl/Frame.zig
++++ b/src/renderer/opengl/Frame.zig
+@@ -78,13 +78,9 @@ pub fn complete(self: *const Self, sync: bool) void {
+     gl.finish();
+ 
+     // At this point the ExportedFrame is finished and can be shared
+-    if (presented_frame) |frame| {
+-        self.renderer.pushFrame(frame);
++    if (presented_frame) |frame| self.renderer.pushFrame(frame);
+ 
+-        // Notify the surface that it should redraw
+-        _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
+-    }
+-
+-    // Report the health to the renderer.
+-    self.renderer.frameCompleted(health);
++    // Report the health to the renderer. We run inside drawFrameLocked,
++    // so the surface is told to redraw once the draw mutex is released.
++    self.renderer.frameCompletedLocked(health, presented_frame != null);
+ }

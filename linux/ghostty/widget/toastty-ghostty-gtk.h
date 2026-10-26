@@ -68,6 +68,14 @@ ghostty_app_t toastty_ghostty_app_new (ghostty_config_t config,
  * its surfaces first. */
 void toastty_ghostty_app_free (ghostty_app_t app);
 
+/* Frees every ghostty surface now, which stops their renderer and IO
+ * threads: those of disposed widgets (instead of on their pending idle) and
+ * those of live widgets, which are detached from them and stay inert. Call
+ * it once the main loop has quit, before the process exits: a renderer
+ * thread still drawing while exit() tears down the GL driver crashes it.
+ * Main thread only. */
+void toastty_ghostty_free_all_surfaces (void);
+
 /* The action_user_data passed to toastty_ghostty_app_new. */
 gpointer toastty_ghostty_app_get_user_data (ghostty_app_t app);
 

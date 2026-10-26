@@ -514,10 +514,40 @@ surface_handle_free_idle (gpointer data)
   SurfaceHandle *h = data;
   GList *link = g_list_find (pending_frees, h);
   if (link == NULL)
-    return G_SOURCE_REMOVE; /* already freed by toastty_ghostty_app_free */
+    return G_SOURCE_REMOVE; /* already freed (toastty_ghostty_app_free or
+                             * toastty_ghostty_free_all_surfaces) */
   pending_frees = g_list_delete_link (pending_frees, link);
   surface_handle_free_now (h);
   return G_SOURCE_REMOVE;
+}
+
+void
+toastty_ghostty_free_all_surfaces (void)
+{
+  if (surface_handles != NULL)
+    {
+      GHashTableIter iter;
+      gpointer value;
+      g_hash_table_iter_init (&iter, surface_handles);
+      while (g_hash_table_iter_next (&iter, NULL, &value))
+        {
+          SurfaceHandle *h = value;
+          if (h->widget != NULL)
+            {
+              h->widget->handle = NULL;
+              h->widget->surface = NULL;
+              h->widget = NULL;
+            }
+          g_hash_table_iter_remove (&iter);
+          pending_frees = g_list_prepend (pending_frees, h);
+        }
+    }
+  while (pending_frees != NULL)
+    {
+      SurfaceHandle *h = pending_frees->data;
+      pending_frees = g_list_delete_link (pending_frees, pending_frees);
+      surface_handle_free_now (h);
+    }
 }
 
 ToasttyGhosttySurface *

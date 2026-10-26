@@ -72,9 +72,11 @@ public final class LinuxAppController {
     public func run(arguments: [String]) -> Int32 {
         var cArguments = arguments.map { strdup($0) }
         defer { cArguments.forEach { free($0) } }
-        return cArguments.withUnsafeMutableBufferPointer { buffer in
+        let status = cArguments.withUnsafeMutableBufferPointer { buffer in
             g_application_run(cast(application), Int32(buffer.count), buffer.baseAddress)
         }
+        GhosttyRuntime.shutdown()
+        return status
     }
 
     private func startup() {

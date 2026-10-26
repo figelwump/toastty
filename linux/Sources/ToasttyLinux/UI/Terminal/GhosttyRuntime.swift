@@ -54,6 +54,15 @@ final class GhosttyRuntime {
         return runtime
     }
 
+    /// Stops every terminal's renderer and IO threads once the main loop
+    /// has quit. Terminal hosts keep their widgets (and surfaces) alive
+    /// after the windows are destroyed, and a renderer thread still drawing
+    /// when `exit()` tears down the GL driver crashes.
+    static func shutdown() {
+        guard sharedInstance != nil else { return }
+        toastty_ghostty_free_all_surfaces()
+    }
+
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
     private(set) var configSource: ConfigSource = .defaultFiles

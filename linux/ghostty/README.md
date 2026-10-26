@@ -93,6 +93,7 @@ Each patch is a self-contained commit meant to be upstreamed to the fork.
 | `0005-embedded-serve-the-primary-selection-on-Linux` | The embedded apprt hard-coded the primary clipboard as unsupported. On Linux the selection clipboard is the X11/Wayland primary selection, which the GTK apprt also uses for OSC 52 `p`. |
 | `0006-embedded-export-ghostty_surface_set_display_id-on-ev` | `ghostty.h` declares `ghostty_surface_set_display_id` for every platform, but it was only exported on Darwin. Toastty's shared Swift terminal code calls it, so it would not link on Linux. It is a no-op off Darwin. Every other `ghostty_*` function Toastty's Swift sources use is exported. |
 | `0007-termio-Surface-do-not-redraw-for-a-keystroke-before-` | Every typed key woke the renderer before the child echoed it: the termio thread redrew after any mailbox message, including the pty write carrying the key, and `Surface.keyCallback` queued a render. The renderer redraws on every wakeup, so each keystroke first produced a frame identical to the previous one a few milliseconds before the echo frame; the host painted it and showed the echo one paint later. Pty writes no longer trigger a redraw, and the key wakes the renderer only when it cleared a selection or scrolled the viewport; the echo brings its own render. |
+| `0008-renderer-send-OpenGL-frame-notifications-after-relea` | The OpenGL frame completes inside `drawFrameLocked`, so its `.redraw` and `renderer_health` surface messages were pushed with `.forever` while the render thread held `draw_mutex`. The app mailbox (64 slots) is drained on the main thread, which also takes `draw_mutex` in `displayRealized`/`displayUnrealized`. Restoring many terminals at once filled the mailbox before the next app tick, so a render thread blocked on it holding the mutex while the main thread, realizing the next terminal, blocked on the mutex: Toastty froze at launch (and, as the unique GApplication, made every later launch fail with "Failed to register: Timeout was reached"). The messages are now recorded under the mutex and sent once `drawFrame` releases it. |
 
 ### Why there is no GtkGLArea
 
@@ -172,6 +173,7 @@ typedef struct {
 
 ghostty_app_t toastty_ghostty_app_new (ghostty_config_t, const ToasttyGhosttyRuntimeOptions *);
 void          toastty_ghostty_app_free (ghostty_app_t);          /* destroy its widgets first */
+void          toastty_ghostty_free_all_surfaces (void);          /* at exit, after the main loop quits */
 gpointer      toastty_ghostty_app_get_user_data (ghostty_app_t);  /* action_user_data */
 void          toastty_ghostty_app_schedule_tick (ghostty_app_t);  /* thread-safe */
 gboolean      toastty_ghostty_handle_action (ghostty_app_t, ghostty_target_s, ghostty_action_s);
@@ -274,7 +276,11 @@ and `key.zig`):
 Lifetime: disposing the widget never frees the Ghostty surface
 synchronously. Dispose can run inside a Ghostty callback, for example when a
 signal handler destroys the widget. The free happens from an idle, and
-`toastty_ghostty_app_free` flushes pending frees.
+`toastty_ghostty_app_free` flushes pending frees. At exit, once the main loop
+has quit, `toastty_ghostty_free_all_surfaces` frees every surface, including
+those of widgets the host still references (they are detached and stay
+inert), so no renderer thread is still drawing when `exit()` tears down the
+GL driver (NVIDIA's EGL crashes the renderer thread otherwise).
 
 ## Swift (`GhosttyKit`)
 
