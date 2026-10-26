@@ -30,7 +30,7 @@ struct CoordinatorChatTests {
             var entries: [(text: String, panelID: UUID)] = []
         }
 
-        init() async throws {
+        init(startsSession: Bool = true) async throws {
             tasks = try TaskCoordinatorTests.Fixture()
             board = TaskBoardStore(
                 coordinator: tasks.coordinator,
@@ -62,6 +62,7 @@ struct CoordinatorChatTests {
             )
             tasks.coordinator.coordinatorSession = session
             useLiveTaskSessions()
+            guard startsSession else { return }
             session.start()
             await tasks.waitUntil("the coordinator starts") { self.session.workspaceID != nil && self.launcher.calls.count == 1 }
         }
@@ -175,6 +176,24 @@ struct CoordinatorChatTests {
         await #expect(throws: AutomationSocketError.self) {
             _ = try await executor.runActionAsync(id: "coordinator.chat.show", args: ["taskID": .string(missing.uuidString)], context: AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_action"))
         }
+    }
+
+    /// A dev run does not start the coordinator at launch. Opening it
+    /// starts it and shows the chat, unless the run is automation.
+    @Test func openingTheChatStartsACoordinatorThatThisRunDidNotStart() async throws {
+        let fixture = try await Fixture(startsSession: false)
+        let windowID = try #require(fixture.tasks.store.state.windows.first?.id)
+        #expect(fixture.chat.show(taskID: nil) == false)
+        #expect(fixture.session.workspaceID == nil)
+
+        fixture.session.startsOnRequest = true
+        #expect(fixture.chat.show(taskID: nil))
+        await fixture.tasks.waitUntil("the chat shows") {
+            fixture.session.workspaceID != nil
+                && fixture.tasks.store.state.window(id: windowID)?.selectedWorkspaceID == fixture.session.workspaceID
+        }
+        #expect(fixture.tasks.store.state.showsCoordinatorChat(windowID: windowID))
+        await fixture.tasks.waitUntil("the coordinator starts") { fixture.launcher.calls.count == 1 }
     }
 
     @Test func theTasksViewActionOpensTheChatAndThePaletteActsOnItsOpenCard() async throws {

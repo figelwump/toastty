@@ -64,6 +64,13 @@ final class CoordinatorSessionController {
     private var scheduledReconcile: Task<Void, Never>?
     private var restoreDeadline: Date?
     private var hasLaunchedThisRun = false
+    /// Whether a run that did not start the coordinator at launch starts it
+    /// when the user opens it. Off for automation, so a scripted click
+    /// never starts an agent.
+    var startsOnRequest = false
+    /// Run once the coordinator workspace exists, for a request that came
+    /// before it did.
+    private var whenWorkspaceReady: [() -> Void] = []
 
     init(
         store: AppStore,
@@ -107,6 +114,22 @@ final class CoordinatorSessionController {
         if config.agent == nil {
             closeSavedWorkspace()
         }
+    }
+
+    /// For the user opening the coordinator before its workspace exists:
+    /// starts it if this run did not, and calls `ready` once the workspace
+    /// exists. Returns false when nothing will start, because the
+    /// coordinator is off or this run does not start it on request.
+    func startForRequest(whenReady ready: @escaping () -> Void) -> Bool {
+        if isStarted == false {
+            guard startsOnRequest else { return false }
+            ToasttyLog.info("Starting the coordinator because the user opened it", category: .tasks)
+            start()
+        }
+        guard config.agent != nil else { return false }
+        if case .failed = status { return false }
+        whenWorkspaceReady.append(ready)
+        return true
     }
 
     /// For a run that does not start the coordinator: closes a workspace
@@ -309,6 +332,9 @@ final class CoordinatorSessionController {
         panelID = target.panelID
         status = .starting
         hasLaunchedThisRun = true
+        let ready = whenWorkspaceReady
+        whenWorkspaceReady = []
+        ready.forEach { $0() }
         let model = profile.supportsModel ? config.model : nil
         let effort = profile.supportsReasoningEffort ? config.effort : nil
         let cwd = homeDirectoryPath

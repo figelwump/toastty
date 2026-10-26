@@ -1414,6 +1414,10 @@ struct ToasttyApp: App {
             coordinatorSession.start()
         } else {
             coordinatorSession.closeSavedWorkspace()
+            coordinatorSession.startsOnRequest = Self.startsCoordinatorOnRequest(
+                environment: processInfo.environment,
+                automationConfig: automationConfig
+            )
         }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
@@ -1918,6 +1922,19 @@ struct ToasttyApp: App {
                 && isRunningUnderXCTest(environment) == false
                 && runtimePaths.isRuntimeHomeEnabled == false
         }
+    }
+
+    /// A run that did not start the coordinator still starts it when the
+    /// user opens it, except under automation or tests, or with
+    /// `TOASTTY_COORDINATOR_AUTOSTART=0`.
+    @MainActor
+    static func startsCoordinatorOnRequest(
+        environment: [String: String],
+        automationConfig: AutomationConfig?
+    ) -> Bool {
+        environment["TOASTTY_COORDINATOR_AUTOSTART"] != "0"
+            && automationConfig == nil
+            && isRunningUnderXCTest(environment) == false
     }
 
     @MainActor

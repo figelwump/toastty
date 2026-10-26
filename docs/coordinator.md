@@ -90,9 +90,10 @@ reads it, and a running session keeps going until it exits.
 
 Toastty starts the coordinator only in your own Toastty. Test hosts, smoke runs
 and runtime-isolated dev runs do not start it, so they never use your agent
-subscription unasked. Set `TOASTTY_COORDINATOR_AUTOSTART=1` in the environment
-to start it in one of those runs, or `TOASTTY_COORDINATOR_AUTOSTART=0` to keep it
-off anywhere.
+subscription unasked. In a dev run, opening the coordinator from the sidebar or
+with `Cmd+Shift+T` starts it then; automation and test runs never do. Set
+`TOASTTY_COORDINATOR_AUTOSTART=1` in the environment to start it at launch in
+one of those runs, or `TOASTTY_COORDINATOR_AUTOSTART=0` to keep it off anywhere.
 
 ## Cards
 

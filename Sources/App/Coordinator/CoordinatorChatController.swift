@@ -170,7 +170,13 @@ final class CoordinatorChatController {
     }
 
     private func show(_ view: CoordinatorChatPageView, taskID: UUID?) -> Bool {
-        guard session.showChat() else { return false }
+        guard session.showChat() else {
+            // No coordinator workspace yet, as in a dev run that does not
+            // start the coordinator at launch: start it, then show.
+            return session.startForRequest { [weak self] in
+                _ = self?.show(view, taskID: taskID)
+            }
+        }
         taskCoordinator.board?.chatDidOpen()
         tokenCounter += 1
         viewRequest = (view, tokenCounter)
