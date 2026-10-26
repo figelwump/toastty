@@ -38,7 +38,8 @@ const scroll = document.getElementById("scroll")!;
 const tasksView = document.getElementById("tasks")!;
 const composer = document.getElementById("composer") as HTMLFormElement;
 const composerInput = composer.querySelector("textarea") as HTMLTextAreaElement;
-const composerHint = document.getElementById("composer-hint")!;
+const composerHint = document.getElementById("composer-hint-text")!;
+const composerTerminal = document.getElementById("composer-open-terminal")!;
 const notice = document.getElementById("notice")!;
 
 function render() {
@@ -69,6 +70,7 @@ function render() {
   post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
   composerInput.disabled = !state.coordinator.canSend;
   composerHint.textContent = state.coordinator.sendHint ?? "";
+  composerTerminal.classList.toggle("hidden", state.coordinator.canSend || !state.coordinator.hasTerminal);
   composerInput.placeholder = state.coordinator.canSend ? "Tell the coordinator…" : state.coordinator.sendHint ?? "The coordinator is not running";
 }
 

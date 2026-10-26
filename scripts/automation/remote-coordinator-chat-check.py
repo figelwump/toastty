@@ -18,7 +18,7 @@ real agent runs. Through the real CLI and the page itself it checks that:
 - a reply typed into the open card reaches the task's agent as
   `Review note on packet v1: …`, and the task leaves Needs you;
 - Full report opens toastty://coordinator/report/<task>/1 in the right panel;
-- `coordinator show-terminal` shows the raw terminal again.
+- the blocked composer's Open terminal button shows the raw terminal again.
 Captures of the chat with the card collapsed and open, and of the report, go
 to the artifacts directory; a capture that cannot be made is recorded, not
 failed.
@@ -263,11 +263,23 @@ def main():
         capture('coordinator-report')
         step('report opened', url=report_url)
 
-        # 5. show-terminal still shows the raw terminal.
-        cli_result('coordinator', 'show-terminal')
+        # 5. This fake agent emits no ready/turn events, as at first-load
+        # setup. The blocked composer must offer a way to its terminal.
+        require(chat_state()['canSend'] is False, 'The fake agent unexpectedly accepts chat input')
+        opened = instance.request('automation.coordinator_chat_action',
+                                  dict(action='click', elementID='composer-open-terminal'))
+        require(opened.get('ok'), f'The blocked composer did not offer Open terminal: {opened}')
+        wait_for('the chat to uncover the terminal', lambda: chat_state()['pages'] == 0, timeout=15, interval=0.3)
         listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
-        require(listed[coordinator['workspaceID']]['isSelected'], 'show-terminal did not keep the coordinator workspace')
-        step('raw terminal shown')
+        require(listed[coordinator['workspaceID']]['isSelected'], 'Open terminal did not keep the coordinator workspace')
+        step('blocked composer opened the raw terminal without sending a message')
+
+        # Keep the CLI route covered as well.
+        cli_result('coordinator', 'show')
+        wait_for('the chat to reopen', lambda: chat_state()['pages'] >= 1, timeout=15, interval=0.3)
+        cli_result('coordinator', 'show-terminal')
+        wait_for('the CLI to uncover the terminal', lambda: chat_state()['pages'] == 0, timeout=15, interval=0.3)
+        step('CLI showed the raw terminal')
 
         evidence['status'] = 'passed'
     finally:

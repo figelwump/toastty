@@ -15,7 +15,10 @@
       <div id="notice" class="notice hidden" role="status"></div>
       <form id="composer" class="composer">
         <textarea id="composer-input" rows="1" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Message the coordinator" placeholder="Tell the coordinator…"></textarea>
-        <span id="composer-hint" class="composer-hint"></span>
+        <span id="composer-hint" class="composer-hint">
+          <span id="composer-hint-text"></span>
+          <button type="button" id="composer-open-terminal" class="lnk hidden" data-act="open-terminal">Open terminal</button>
+        </span>
         <span class="kbd">↩</span>
       </form>
     </main>

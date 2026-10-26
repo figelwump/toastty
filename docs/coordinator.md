@@ -19,6 +19,10 @@ app shows it; tool calls fold to one line each. Type in the box at the bottom
 to send the coordinator a message. While its turn runs, the message waits and
 goes in when the turn ends.
 
+On first start, the agent can wait for setup, such as Claude Code's folder-trust
+prompt. The message box stays disabled until the agent can take a message.
+Use **Open terminal** beside the disabled box to review and answer the prompt.
+
 A card is one line until you click it. It shows its task's live state: title,
 project, stage, packet version, and **stale** when commits landed in the
 task's worktree after the packet. An open packet card shows what changed,

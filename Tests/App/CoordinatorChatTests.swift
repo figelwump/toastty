@@ -225,10 +225,10 @@ struct CoordinatorChatTests {
     }
 
     @Test func theComposerQueuesOnlyBehindARunningTurn() {
-        func state(_ control: RemoteConversationInputControl?) -> (canSend: Bool, hint: String?) {
+        func state(_ control: RemoteConversationInputControl?, reason: RemoteInputUnavailableReason = .working) -> (canSend: Bool, hint: String?) {
             let summary = RemoteConversationSummary(
                 conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
-                state: .working, inputAvailability: .unavailable(reason: .working), inputControl: control,
+                state: reason == .starting ? .starting : .working, inputAvailability: .unavailable(reason: reason), inputControl: control,
                 latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
             )
             return CoordinatorChatController.sendState(
@@ -239,7 +239,13 @@ struct CoordinatorChatTests {
         let turn = RemoteInputEpoch(bindingID: UUID())
         #expect(state(RemoteConversationInputControl(turnEpoch: turn, canQueue: true)) == (true, "Sends when its turn ends"))
         // Just after a turn ends, a send would be refused: the composer waits.
-        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "The coordinator is finishing its turn"))
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "Waiting for the coordinator's prompt"))
+        // A live process can still be at a setup prompt before its first turn.
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .starting)
+            == (false, "The coordinator is starting. Check its terminal for setup."))
+        #expect(state(nil, reason: .starting).canSend == false)
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .unknownProviderState)
+            == (false, "Waiting for the coordinator's prompt"))
         #expect(state(nil).canSend == false)
     }
 

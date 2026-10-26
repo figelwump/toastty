@@ -376,11 +376,13 @@ final class CoordinatorChatController {
             return (false, "The coordinator waits for an answer in its terminal")
         case .localDraft:
             return (false, "Text is typed in the coordinator's terminal")
+        case .unavailable(reason: .starting):
+            return (false, "The coordinator is starting. Check its terminal for setup.")
         case .unavailable:
             // A message queues behind a running turn. Just after a turn ends
             // there is none to queue behind, and the prompt is not open yet.
             if let control = snapshot.summary.inputControl, control.canQueue {
-                return control.turnEpoch == nil ? (false, "The coordinator is finishing its turn") : (true, "Sends when its turn ends")
+                return control.turnEpoch == nil ? (false, "Waiting for the coordinator's prompt") : (true, "Sends when its turn ends")
             }
             return (false, "The coordinator cannot take a message now")
         }
