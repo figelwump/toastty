@@ -49,7 +49,16 @@ export interface ChatTask {
 export type CardKind = "packet" | "task-started" | "question" | "note";
 
 export type ChatItem =
-  | { type: "message"; id: string; at: string; role: "user" | "assistant"; text: string }
+  | {
+      type: "message";
+      id: string;
+      at: string;
+      role: "user" | "assistant";
+      text: string;
+      /// Set on a question the user asked from a card: the task it is about.
+      aboutTaskID?: string | null;
+      aboutTitle?: string | null;
+    }
   | { type: "tool"; id: string; at: string; name: string; detail: string | null; outcome: "running" | "succeeded" | "failed" | "unknown" }
   | { type: "status"; id: string; at: string; text: string }
   | {

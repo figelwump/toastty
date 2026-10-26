@@ -20,7 +20,7 @@ struct CoordinatorChatView: NSViewRepresentable {
 }
 
 @MainActor
-final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPopoverDelegate {
+final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPopoverDelegate, WKNavigationDelegate {
     static let messageHandlerName = "toasttyCoordinatorChat"
     static let pageURL = URL(string: "toastty://coordinator/")!
 
@@ -39,6 +39,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
         super.init(frame: .zero)
+        webView.navigationDelegate = self
         userContent.add(MessageProxy(view: self), name: Self.messageHandlerName)
         webView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(webView)
@@ -112,6 +113,22 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         }
     }
 
+    /// The chat is one page. Its links open in the right panel through the
+    /// bridge, so anything else that would load here, such as a dropped file
+    /// or a link's context menu, must not replace the chat.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        decisionHandler(Self.isChatPage(navigationAction.request.url) ? .allow : .cancel)
+    }
+
+    static func isChatPage(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme == pageURL.scheme && url.host == pageURL.host && url.path == pageURL.path && url.query == nil
+    }
+
     fileprivate func handle(_ body: Any) {
         guard let event = CoordinatorChatPageEvent(body: body) else { return }
         if event == .ready {
@@ -154,8 +171,15 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         }
 
         func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+            // Only the chat page itself acts through the bridge.
+            let frame = message.frameInfo
             let body = message.body
-            MainActor.assumeIsolated { view?.handle(body) }
+            MainActor.assumeIsolated {
+                let page = CoordinatorChatWebView.pageURL
+                guard frame.isMainFrame, frame.securityOrigin.protocol == page.scheme,
+                      frame.securityOrigin.host == page.host else { return }
+                view?.handle(body)
+            }
         }
     }
 }

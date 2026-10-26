@@ -8,5 +8,9 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.11"
+  },
+  "dependencies": {
+    "micromark": "^4.0.3",
+    "micromark-extension-gfm": "^3.0.0"
   }
 }
