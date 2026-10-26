@@ -355,6 +355,28 @@ struct CoordinatorChatTests {
         #expect(CoordinatorReportMark.message([.init(shot: "after-390", note: "\u{1b}[201~", x: 0, y: 0)], screenshotNames: ["after-390"]) == nil)
     }
 
+    @Test(arguments: [false, true])
+    func closedTasksRemainAvailableForCoordinatorQuestions(archived: Bool) async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        try fixture.tasks.coordinator.records.save(id: task.id) {
+            if archived { $0.archivedAt = Date() }
+            else { $0.doneAt = Date() }
+        }
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.addresses.contains(where: { $0.kind == "task" && $0.id == task.id.uuidString }) == true)
+        await fixture.chat.handle(.ask(taskID: task.id, version: 1, text: "What changed?"), token: 91, from: nil)
+        // The fixture has no conversation transport. The task still passes
+        // target validation, so only the coordinator's availability blocks it.
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.notice?.text == "The coordinator is not running.")
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 91, ok: false))
+        await fixture.chat.handle(.ask(taskID: UUID(), version: nil, text: "What changed?"), token: 92, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.notice?.text == "That task is no longer available. Pick it again before sending.")
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 92, ok: false))
+    }
+
     @Test func reportBridgeOnlyAcceptsItsOwnMainFrameRoute() {
         let id = UUID()
         let url = URL(string: "toastty://coordinator/report/\(id.uuidString)/1")!

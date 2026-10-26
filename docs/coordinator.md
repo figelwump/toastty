@@ -76,7 +76,8 @@ names. Use the arrow keys and Return to pick, or click an option.
 
 A leading `@<task-slug>` sends the remaining text to the coordinator through
 the same task envelope as a card's **to coordinator** reply. The chat shows
-an **About <task>** link. A leading project pick gives the coordinator an
+an **About <task>** link. Known done and archived tasks remain available for
+these questions. A leading project pick gives the coordinator an
 explicit routing hint; it uses that project without asking again and records
 your pick in `routing.md`. Only the first token is an address. Later `@`
 tokens stay in the message. A complete, unique known token also works when

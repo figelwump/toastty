@@ -336,7 +336,7 @@ final class CoordinatorChatController {
     }
 
     private func composerAddresses() -> [CoordinatorComposerAddress] {
-        let tasks = taskCoordinator.records.records.filter { $0.archivedAt == nil && $0.doneAt == nil }.map {
+        let tasks = taskCoordinator.records.records.map {
             CoordinatorComposerAddress(kind: "task", id: $0.id.uuidString, token: $0.slug, title: $0.title, version: $0.packetVersion)
         }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
@@ -458,7 +458,7 @@ final class CoordinatorChatController {
         case .reply(let taskID, let version, let text):
             acknowledge(token, ok: reply(taskID: taskID, version: version, text: text))
         case .ask(let taskID, let version, let text):
-            guard let record = taskCoordinator.records.record(id: taskID), record.archivedAt == nil, record.doneAt == nil else {
+            guard let record = taskCoordinator.records.record(id: taskID) else {
                 setNotice("That task is no longer available. Pick it again before sending.", isError: true)
                 acknowledge(token, ok: false)
                 break
