@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import CoreState
 import Foundation
@@ -24,6 +25,7 @@ final class CoordinatorChatController {
         func takeKeyboardFocus()
         /// Opens setup controls on the page that received the action.
         func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool
+        func showTaskMenu(sections: [[TaskBoardPresentation.MenuItem]], rect: CGRect, run: @escaping (TaskBoardPresentation.MenuItem) -> Void) -> Bool
     }
 
     /// What `automation.coordinator_chat_action` does in the page.
@@ -100,6 +102,10 @@ final class CoordinatorChatController {
     private var changeTasks: [Task<Void, Never>] = []
     private var boardObservation: AnyCancellable?
     private var transcript = CoordinatorChatTranscript()
+    private var taskCursors: [UUID: ConversationEventCursor] = [:]
+    private var taskConversations: [UUID: RemoteConversationID] = [:]
+    private var inFlightQuestions: Set<UUID> = []
+    private var unsavedThreadReplies: [CoordinatorEvent] = []
     private var packetCache: [String: TaskPacket] = [:]
     private var staleByTaskID: [UUID: Bool] = [:]
     /// When staleness was last read with git, and for which packet version:
@@ -220,7 +226,8 @@ final class CoordinatorChatController {
             refreshAgain = false
             refreshTask = nil
             if readTranscript() == false { refreshAgain = true }
-            let events = session.files.events()
+            var events = session.files.events()
+            captureThreadMessages(events: &events)
             let payload = await buildPayload(events: events)
             lastPayload = payload
             updateCardIndex()
@@ -257,6 +264,106 @@ final class CoordinatorChatController {
         return false
     }
 
+    /// Copies explicitly attributed messages into the durable thread log.
+    /// Provider event IDs survive projection rebuilds; sequences do not.
+    private func captureThreadMessages(events: inout [CoordinatorEvent]) {
+        let taskIDs = Set(events.compactMap(\.taskID))
+        var sources = Set(events.compactMap(\.sourceID))
+        func save(_ event: CoordinatorEvent) -> Bool {
+            if let source = event.sourceID, sources.contains(source) { return true }
+            do {
+                try session.files.append(event)
+                events.append(event)
+                if let source = event.sourceID { sources.insert(source) }
+                return true
+            } catch {
+                setNotice("Task thread history could not be saved: \(error.localizedDescription)", isError: true)
+                return false
+            }
+        }
+        let retrying = unsavedThreadReplies
+        unsavedThreadReplies = []
+        for entry in retrying where !save(entry) {
+            unsavedThreadReplies.append(entry)
+            // Keep the delivered answer visible and block duplicate sends
+            // while disk writes are failing. The notice explains the gap.
+            events.append(entry)
+        }
+        for line in transcript.items {
+            guard line.role == "user", let taskID = line.aboutTaskID.flatMap(UUID.init(uuidString:)), taskIDs.contains(taskID),
+                  let text = line.text, let providerID = line.sourceID else { continue }
+            let source = line.replyID.map { "reply:\($0.uuidString)" } ?? "coordinator:\(providerID)"
+            _ = save(CoordinatorEvent(id: line.replyID ?? UUID(), at: line.at, kind: .reply, taskID: taskID,
+                                      text: text, sessionID: nil, threadRole: .userCoordinator,
+                                      questionID: line.questionID, sourceID: source))
+        }
+        guard let conversations else { return }
+        var bindings: [(taskID: UUID, panelID: UUID, sessionID: String?)] = []
+        for taskID in taskIDs {
+            guard let record = taskCoordinator.records.record(id: taskID),
+                  let workspaceID = record.taskSpaceWorkspaceID,
+                  let workspace = store.state.workspacesByID[workspaceID], workspace.taskID == taskID else { continue }
+            let live = taskCoordinator.liveAgentSession(of: record).flatMap { $0.workspaceID == workspaceID ? $0 : nil }
+            // The terminal's saved native transcript remains readable after
+            // its agent exits. Do not drop its final reply at that boundary.
+            guard let panelID = live?.panelID ?? record.operation.worktreeSession?.panelID ?? record.operation.taskSpace?.panelID,
+                  case .terminal? = workspace.allPanelsByID[panelID] else { continue }
+            bindings.append((taskID, panelID, live?.sessionID))
+        }
+        // Separate read demand preserves the coordinator's local input scope.
+        conversations.setTaskPanelIDs(Set(bindings.map(\.panelID)))
+        for (taskID, panelID, sessionID) in bindings {
+            guard let conversationID = conversations.conversationID(for: panelID) else { continue }
+            if taskConversations[taskID] != conversationID {
+                taskConversations[taskID] = conversationID
+                taskCursors[taskID] = nil
+            }
+            for pageNumber in 0..<20 {
+                switch conversations.events(for: conversationID, after: taskCursors[taskID], limit: 500) {
+                case .page(let page):
+                    var saved = true
+                    for event in page.events {
+                        let entry: CoordinatorEvent?
+                        switch event.payload {
+                        case .assistantMessage(let message):
+                            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            entry = text.isEmpty ? nil : CoordinatorEvent(at: event.timestamp, kind: .reply, taskID: taskID,
+                                text: text, sessionID: sessionID, threadRole: .agent,
+                                sourceID: "task:\(taskID.uuidString):\(event.eventID)")
+                        case .userMessage(let message):
+                            let raw = message.text.replacing(#/^Review note on packet v[0-9]+: /#, with: "")
+                                .replacing(#/^Answer from the task card: /#, with: "")
+                            if let ask = CoordinatorTaskAsk(message: raw), ask.taskID == taskID, let id = ask.replyID {
+                                entry = CoordinatorEvent(id: id, at: event.timestamp, kind: .reply, taskID: taskID,
+                                    text: ask.text, sessionID: sessionID, threadRole: .userTask,
+                                    questionID: ask.questionID, sourceID: "reply:\(id.uuidString)")
+                            } else { entry = nil }
+                        default: entry = nil
+                        }
+                        if let entry, !save(entry) { saved = false; break }
+                    }
+                    guard saved else { return }
+                    guard let last = page.events.last else { break }
+                    taskCursors[taskID] = ConversationEventCursor(projectionRunID: page.projectionRunID,
+                        projectionGeneration: page.projectionGeneration, afterSequence: last.sequence)
+                    if last.sequence < page.latestSequence {
+                        if pageNumber == 19 { refreshAgain = true }
+                        continue
+                    }
+                case .resnapshotRequired:
+                    taskCursors[taskID] = nil
+                    if pageNumber == 19 { refreshAgain = true }
+                    continue
+                case .invalidRequest:
+                    taskCursors[taskID] = nil
+                    if pageNumber == 0 { continue }
+                case .conversationNotFound: break
+                }
+                break
+            }
+        }
+    }
+
     // MARK: - Payload
 
     private func buildPayload(events: [CoordinatorEvent]) async -> CoordinatorChatPayload {
@@ -275,10 +382,15 @@ final class CoordinatorChatController {
         await refreshStaleness(taskIDs: taskIDs)
         let config = taskCoordinator.board?.config
         let cards = CoordinatorChatTimeline.cards(events: events, packets: stamps)
-        var chatItems = transcript.items.map { CoordinatorChatItem.transcript($0) }
+        // Explicit task replies are shown once in their task thread. Unscoped
+        // messages stay in the coordinator transcript.
+        var chatItems = transcript.items.filter { line in
+            guard let id = line.aboutTaskID.flatMap(UUID.init(uuidString:)) else { return true }
+            return !taskIDs.contains(id)
+        }.map { CoordinatorChatItem.transcript($0) }
         for card in cards {
             let record = card.taskID.flatMap { taskCoordinator.records.record(id: $0) }
-            let task = card.taskID.map { taskID in
+            var task = card.taskID.map { taskID in
                 CoordinatorChatTaskView.make(
                     taskID: taskID,
                     record: record,
@@ -287,6 +399,9 @@ final class CoordinatorChatController {
                     config: config,
                     homeDirectoryPath: taskCoordinator.homeDirectoryPath
                 )
+            }
+            if card.taskID != nil, let record {
+                task?.defaultReplyTarget = taskCoordinator.agentStatus(of: record).activity == .waiting ? .task : .coordinator
             }
             let packetView = card.taskID.flatMap { taskID in
                 card.packetVersion.flatMap { version in
@@ -328,7 +443,7 @@ final class CoordinatorChatController {
             if case .card(let card) = item { return card.task?.id == taskID.uuidString }
             return false
         }
-        guard case .card(let card)? = newest, card.kind == CoordinatorEvent.Kind.question.rawValue else { return nil }
+        guard case .card(let card)? = newest, card.kind == CoordinatorEvent.Kind.question.rawValue, card.answer == nil else { return nil }
         return card.id
     }
 
@@ -421,19 +536,26 @@ final class CoordinatorChatController {
         case .taskAction(let rowID, let actionID):
             runTaskAction(rowID: rowID, actionID: actionID, page: page)
         case .send(let text):
-            acknowledge(token, ok: await sendToCoordinator(text))
-        case .reply(let taskID, let version, let text):
-            acknowledge(token, ok: reply(taskID: taskID, version: version, text: text))
-        case .ask(let taskID, let version, let text):
-            let ask = CoordinatorTaskAsk(
-                taskID: taskID,
-                title: taskCoordinator.records.record(id: taskID)?.title ?? taskID.uuidString,
-                packetVersion: version,
-                text: text
-            )
-            acknowledge(token, ok: await sendToCoordinator(ask.message))
+            acknowledge(token, ok: await sendToCoordinator(text) != .failed)
+        case .reply(let taskID, let version, let text, let cardID, let questionID):
+            acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: true))
+        case .ask(let taskID, let version, let text, let cardID, let questionID):
+            acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: false))
+        case .taskMenu(let taskID, let rect):
+            guard let item = taskCoordinator.board?.items().first(where: { $0.taskID == taskID }) else {
+                setNotice("That task no longer has a menu.", isError: true)
+                break
+            }
+            let sections = TaskBoardPresentation.menuItems(item, isTriageConfigured: taskCoordinator.isTriageConfigured)
+            if page?.showTaskMenu(sections: sections, rect: rect, run: { [weak self] item in
+                guard let self else { return }
+                TaskActions.runFromMenu(item, coordinator: self.taskCoordinator) { self.openWorkspace($0) }
+                self.setNeedsRefresh()
+            }) != true {
+                setNotice("The task menu could not open.", isError: true)
+            }
         case .merge(let taskID):
-            if perform("Merge", { try taskCoordinator.requestMerge(taskID: taskID) }) != nil {
+            if perform("Merge", { try TaskActions.run(.merge, taskID: taskID, coordinator: taskCoordinator) }) != nil {
                 setNotice("Merge requested. It follows the project's merge policy.", isError: false)
             }
         case .openTaskSpace(let taskID):
@@ -507,6 +629,14 @@ final class CoordinatorChatController {
                     "packetVersion": card.packet.map { .int($0.version) } ?? .null,
                     "superseded": .bool(card.superseded),
                     "isNew": .bool(card.isNew),
+                    "isCurrent": .bool(card.isCurrent),
+                    "options": .array(card.options.map(AutomationJSONValue.string)),
+                    "answer": optional(card.answer),
+                    "defaultReplyTarget": optional(card.task?.defaultReplyTarget.rawValue),
+                    "thread": .array(card.thread.map { entry in .object([
+                        "id": .string(entry.id), "at": .string(entry.at.ISO8601Format()),
+                        "role": .string(entry.role.rawValue), "text": .string(entry.text),
+                    ]) }),
                     "stage": optional(card.task?.stageLabel),
                     "canMerge": .bool(card.task?.canMerge ?? false),
                     "mergePolicy": optional(card.task?.mergePolicy),
@@ -549,13 +679,15 @@ final class CoordinatorChatController {
         ack = (token, ok)
     }
 
+    private enum SendOutcome { case accepted, uncertain, failed }
+
     @discardableResult
-    private func sendToCoordinator(_ text: String) async -> Bool {
+    private func sendToCoordinator(_ text: String) async -> SendOutcome {
         guard let conversations, let panelID = session.panelID,
               let conversationID = conversations.conversationID(for: panelID),
               let snapshot = conversations.localSnapshot(for: conversationID, at: now()) else {
             setNotice("The coordinator is not running.", isError: true)
-            return false
+            return .failed
         }
         let epoch: RemoteInputEpoch
         let mode: RemoteMessageDeliveryMode
@@ -566,7 +698,7 @@ final class CoordinatorChatController {
         default:
             guard snapshot.summary.inputControl?.canQueue == true, let turn = snapshot.summary.inputControl?.turnEpoch else {
                 setNotice(Self.sendState(status: session.status, snapshot: snapshot).hint ?? "The coordinator cannot take a message now.", isError: true)
-                return false
+                return .failed
             }
             epoch = turn
             mode = .queue
@@ -580,29 +712,84 @@ final class CoordinatorChatController {
         )
         switch await conversations.sendLocal(request) {
         case .accepted, .duplicate:
-            return true
+            return .accepted
         case .queued:
             setNotice("Queued: the coordinator gets it when its turn ends.", isError: false)
-            return true
+            return .accepted
         case .rejected(let reason):
             setNotice("The coordinator did not take the message (\(reason.rawValue)).", isError: true)
-            return false
+            return .failed
         case .uncertain:
             // The text may be in the terminal; keeping the draft would invite
             // a second copy.
             setNotice("The message may not have reached the coordinator. Check its terminal.", isError: true)
-            return true
+            return .uncertain
         }
     }
 
-    /// Sends a review note to the task's agent. The task leaves Needs you:
-    /// its agent works on the note, and its next packet asks again.
-    private func reply(taskID: UUID, version: Int, text: String) -> Bool {
-        let sent = perform("Reply") { try taskCoordinator.send(taskID: taskID, text: "Review note on packet v\(version): \(text)") }
-        guard sent != nil else { return false }
-        try? taskCoordinator.saveMergeState(taskID: taskID) { $0.readyForReviewAt = nil }
-        let slug = taskCoordinator.records.record(id: taskID)?.slug ?? "the task"
-        setNotice("Sent to \(slug).", isError: false)
+    /// Validates the exact card and question again before delivery. A task's
+    /// live attention is independent of the answer stored in the chat.
+    private func sendCardReply(taskID: UUID, version: Int?, text: String, cardID: String?, questionID: UUID?, toTask: Bool) async -> Bool {
+        guard let record = taskCoordinator.records.record(id: taskID),
+              taskCoordinator.board?.items().first(where: { $0.taskID == taskID })?.stage.isFinished != true else {
+            setNotice("That task is no longer open.", isError: true)
+            return false
+        }
+        let events = session.files.events() + unsavedThreadReplies
+        let normalizedCardID = cardID.map { UUID(uuidString: $0)?.uuidString ?? $0 }
+        if let cardID = normalizedCardID {
+            let isStoredCard = events.contains { $0.id.uuidString == cardID && $0.taskID == taskID && $0.kind != .reply }
+            let isPacketCard = lastPayload?.items.contains { item in
+                guard case .card(let card) = item else { return false }
+                return card.id == cardID && card.task?.id == taskID.uuidString
+            } ?? false
+            guard isStoredCard || isPacketCard else {
+                setNotice("That card no longer belongs to this task.", isError: true)
+                return false
+            }
+        }
+        if let questionID {
+            guard normalizedCardID == questionID.uuidString,
+                  events.contains(where: { $0.id == questionID && $0.kind == .question && $0.taskID == taskID }),
+                  !events.contains(where: { $0.kind == .reply && $0.questionID == questionID && $0.taskID == taskID && ($0.threadRole == .userTask || $0.threadRole == .userCoordinator) }),
+                  !inFlightQuestions.contains(questionID) else {
+                setNotice("That question was already answered or changed.", isError: true)
+                return false
+            }
+            inFlightQuestions.insert(questionID)
+        }
+        defer { if let questionID { inFlightQuestions.remove(questionID) } }
+        let replyID = UUID()
+        let ask = CoordinatorTaskAsk(taskID: taskID, title: record.title, packetVersion: version, text: text, replyID: replyID, questionID: questionID)
+        let accepted: Bool
+        if toTask {
+            // Keep the established packet prefix. New card sends also carry
+            // explicit references so transcript replay can recover the event.
+            let body = cardID == nil ? text : ask.message
+            let message = version.map { "Review note on packet v\($0): \(body)" } ?? "Answer from the task card: \(body)"
+            accepted = perform("Reply", { try taskCoordinator.send(taskID: taskID, text: message) }) != nil
+            if accepted {
+                try? taskCoordinator.saveMergeState(taskID: taskID) { $0.readyForReviewAt = nil }
+                setNotice("Sent to \(record.slug).", isError: false)
+            }
+        } else {
+            let outcome = await sendToCoordinator(ask.message)
+            accepted = outcome != .failed
+            // Keep the question open until the provider confirms receipt.
+            // Its envelope echo carries both references and saves the reply.
+            if outcome == .uncertain { return true }
+        }
+        guard accepted else { return false }
+        let event = CoordinatorEvent(id: replyID, at: now(), kind: .reply, taskID: taskID, text: text, sessionID: nil,
+                                     threadRole: toTask ? .userTask : .userCoordinator, questionID: questionID,
+                                     sourceID: "reply:\(replyID.uuidString)")
+        do { try session.files.append(event) }
+        catch {
+            unsavedThreadReplies.append(event)
+            setNotice("The message was sent, but its history could not be saved: \(error.localizedDescription)", isError: true)
+        }
+        // A delivered message must not remain as a sendable draft, even if
+        // disk persistence failed. Its explicit transcript echo can recover it.
         return true
     }
 

@@ -101,6 +101,44 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         return popover.isShown
     }
 
+    /// Uses the same native task menu and action guard as the sidebar.
+    func showTaskMenu(sections: [[TaskBoardPresentation.MenuItem]], rect: CGRect, run: @escaping (TaskBoardPresentation.MenuItem) -> Void) -> Bool {
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return false }
+        let menu = NSMenu()
+        var actions: [TaskMenuAction] = []
+        for (index, section) in sections.filter({ !$0.isEmpty }).enumerated() {
+            if index > 0 { menu.addItem(.separator()) }
+            for item in section {
+                let action = TaskMenuAction { run(item) }
+                actions.append(action)
+                let native = NSMenuItem(title: item.title, action: #selector(TaskMenuAction.invoke), keyEquivalent: "")
+                native.target = action
+                menu.addItem(native)
+            }
+        }
+        guard !actions.isEmpty else { return false }
+        let scale = CGFloat(webView.pageZoom) * webView.magnification
+        let scaled = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+        let pageRect = webView.isFlipped ? scaled : CGRect(x: scaled.minX, y: webView.bounds.height - scaled.maxY, width: scaled.width, height: scaled.height)
+        let anchor = pageRect.intersection(webView.bounds)
+        guard !anchor.isNull, !anchor.isEmpty else { return false }
+        let point = NSPoint(x: anchor.minX, y: webView.isFlipped ? anchor.maxY : anchor.minY)
+        // Finish the WebKit bridge callback before AppKit enters its menu
+        // tracking loop. A menu action can remove this page from its window.
+        DispatchQueue.main.async { [weak webView] in
+            guard let webView, webView.window != nil else { return }
+            _ = withExtendedLifetime(actions) { menu.popUp(positioning: nil, at: point, in: webView) }
+        }
+        return true
+    }
+
+    @MainActor
+    private final class TaskMenuAction: NSObject {
+        let run: () -> Void
+        init(run: @escaping () -> Void) { self.run = run }
+        @objc func invoke() { run() }
+    }
+
     func popoverDidClose(_ notification: Notification) {
         if notification.object as? NSPopover === setupPopover { setupPopover = nil }
     }

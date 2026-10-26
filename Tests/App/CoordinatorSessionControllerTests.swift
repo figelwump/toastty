@@ -1,4 +1,5 @@
 import CoreState
+import Dispatch
 import Foundation
 import Testing
 @testable import ToasttyApp
@@ -260,5 +261,52 @@ struct CoordinatorSessionControllerTests {
         let event = CoordinatorEvent(at: fixture.clock, kind: .note, taskID: nil, text: "After a crash.", sessionID: nil)
         try files.append(event)
         #expect(files.events() == [event])
+    }
+
+    @Test
+    func repliesWithTheSameSourceAreSavedOncePerTask() throws {
+        let fixture = Fixture()
+        let files = fixture.controller.files
+        let taskID = UUID()
+        let reply = CoordinatorEvent(
+            at: fixture.clock, kind: .reply, taskID: taskID, text: "Use the feature branch.", sessionID: nil,
+            threadRole: .userCoordinator, sourceID: "provider-event-1"
+        )
+        let duplicate = CoordinatorEvent(
+            at: fixture.clock, kind: .reply, taskID: taskID, text: "Use the feature branch.", sessionID: nil,
+            threadRole: .userCoordinator, sourceID: "provider-event-1"
+        )
+        let otherTask = CoordinatorEvent(
+            at: fixture.clock, kind: .reply, taskID: UUID(), text: "Another task's reply.", sessionID: nil,
+            threadRole: .userTask, sourceID: "provider-event-1"
+        )
+        let card = CoordinatorEvent(at: fixture.clock, kind: .note, taskID: nil, text: "A new card.", sessionID: nil)
+        for event in [reply, duplicate, reply, otherTask, card, card] { try files.append(event) }
+        #expect(files.events() == [reply, otherTask, card, card])
+    }
+
+    @Test
+    func concurrentAppendsKeepOneSourceAndEveryUncorrelatedCard() throws {
+        let fixture = Fixture()
+        let files = fixture.controller.files
+        let directoryURL = files.directoryURL
+        let at = fixture.clock
+        let taskID = UUID()
+        DispatchQueue.concurrentPerform(iterations: 16) { index in
+            do {
+                let writer = CoordinatorFiles(directoryURL: directoryURL)
+                try writer.append(CoordinatorEvent(
+                    at: at, kind: .reply, taskID: taskID, text: "The answer.", sessionID: nil,
+                    threadRole: .userCoordinator, sourceID: "shared-provider-event"
+                ))
+                try writer.append(CoordinatorEvent(at: at, kind: .note, taskID: nil, text: "Card \(index)", sessionID: nil))
+            } catch {
+                Issue.record("Could not append a coordinator event: \(error)")
+            }
+        }
+        let events = files.events()
+        #expect(events.count == 17)
+        #expect(events.filter { $0.sourceID == "shared-provider-event" }.count == 1)
+        #expect(Set(events.filter { $0.sourceID == nil }.compactMap(\.text)) == Set((0..<16).map { "Card \($0)" }))
     }
 }

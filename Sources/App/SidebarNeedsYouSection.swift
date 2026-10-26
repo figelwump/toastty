@@ -109,7 +109,8 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         openTaskID: UUID? = nil,
         lookAt: (TaskRecord) -> String?
     ) -> Self {
-        let (reason, tone) = reasonAndTone(item.stage)
+        let (reason, tone): (String, Tone) = cards?.hasUnansweredQuestion == true
+            ? ("question", .question) : reasonAndTone(item.stage)
         let packetLookAt = item.record.flatMap { $0.packetVersion == nil ? nil : lookAt($0) }
         return Self(
             id: item.id,
@@ -167,7 +168,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             return .action(.archive, taskID: taskID)
         }
         let isQuestion = item.stage == .needsYou(.agentNeedsInput)
-        if let cards, isQuestion == false || cards.latestKind == .question {
+        if let cards, isQuestion == false || cards.hasUnansweredQuestion {
             return .openInChat(taskID: taskID, isAnswer: isQuestion)
         }
         guard let workspaceID = item.taskSpaceWorkspaceID else { return nil }

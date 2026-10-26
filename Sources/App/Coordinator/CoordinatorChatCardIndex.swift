@@ -12,6 +12,9 @@ final class CoordinatorChatCardIndex: ObservableObject {
         /// Whether the task's current packet card is marked new: a packet
         /// version after the first one the chat showed.
         var isNew: Bool
+        var questionAnswered = false
+
+        var hasUnansweredQuestion: Bool { latestKind == .question && !questionAnswered }
     }
 
     /// An index that stays empty, for hosts without the chat.
@@ -38,6 +41,7 @@ final class CoordinatorChatCardIndex: ObservableObject {
                   let kind = CoordinatorEvent.Kind(rawValue: card.kind) else { continue }
             var cards = result[taskID] ?? TaskCards(latestKind: kind, isNew: false)
             cards.latestKind = kind
+            cards.questionAnswered = card.answer != nil
             if kind == .packet, card.superseded == false { cards.isNew = card.isNew }
             result[taskID] = cards
         }

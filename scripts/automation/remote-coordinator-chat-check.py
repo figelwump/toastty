@@ -19,11 +19,21 @@ real agent runs. Through the real CLI and the page itself it checks that:
   `Review note on packet v1: …`, and the task leaves Needs you;
 - Full report opens toastty://coordinator/report/<task>/1 in the right panel;
 - the blocked composer's Open terminal button shows the raw terminal again.
+- a question with two options changes a finished task's sidebar badge to
+  question; a page button answers it and restores the finished badge;
+- a typed question reply reaches a waiting task that has no packet;
+- answers and task-scoped threads survive an app relaunch in the same runtime.
+- a question's native task menu opens its task space;
+- a question with a fake mergeable pull request offers Merge, and Cancel
+  leaves the task unmerged.
+The fake agent records received lines. This proves delivery through Toastty's
+page and terminal routes, not a real provider conversation.
 Captures of the chat with the card collapsed and open, and of the report, go
 to the artifacts directory; a capture that cannot be made is recorded, not
 failed.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
@@ -49,11 +59,15 @@ def _load(name, filename):
 create_check = _load('remote_task_create_check', 'remote-task-create-check.py')
 queue_check = _load('remote_queue_steer_check', 'remote-queue-steer-check.py')
 session_check = _load('remote_coordinator_session_check', 'remote-coordinator-session-check.py')
+to_ship_check = _load('remote_sidebar_to_ship_check', 'remote-sidebar-to-ship-check.py')
 require, wait_for, Instance = create_check.require, create_check.wait_for, create_check.Instance
 
 PREFIX = 'remote-coordinator-chat'
-KEY_RETURN = 36
+KEY_RETURN, KEY_DOWN = 36, 125
 REPLY = "Use banker's rounding"
+OPTIONS = ['Staging only', 'Prepare prod, ask before applying']
+QUESTION = 'Where should the totals bar change go?'
+TYPED_REPLY = 'Keep the coupon row visible.'
 
 
 def png(path, width, height, bands):
@@ -80,12 +94,28 @@ def main():
 
     root = Path(tempfile.mkdtemp(prefix='toastty-coordinator-chat-check-', dir='/tmp')).resolve()
     runtime_home, user_home, fake_bin, work = root / 'runtime-home', root / 'user-home', root / 'bin', root / 'work'
-    for directory in (runtime_home, user_home / '.toastty', fake_bin, work):
+    zdotdir = root / 'zdotdir'
+    for directory in (runtime_home, user_home / '.toastty', fake_bin, work, zdotdir):
         directory.mkdir(parents=True)
     subprocess.run(['git', 'init', '-q', str(user_home)], check=True)
     agent = fake_bin / 'claude'
-    agent.write_text(session_check.FAKE_AGENT)
+    agent.write_text(session_check.FAKE_AGENT.replace(
+        '  [ "$line" = quit ] && exit 0\n',
+        '  printf \'%s\\n\' "$line" >> "$dir/$TOASTTY_SESSION_ID.input"\n'
+        '  [ "$line" = quit ] && exit 0\n'))
     agent.chmod(0o755)
+    # The Merge check only opens and cancels its confirmation. Every GitHub
+    # read is answered by this fake executable in the disposable app's shell.
+    (root / 'gh-state.json').write_text('{}')
+    (fake_bin / 'state-path').write_text(str(root / 'gh-state.json'))
+    (fake_bin / 'gh').write_text(to_ship_check.FAKE_GH.replace(
+        'args = sys.argv[1:]',
+        'args = sys.argv[1:]\nwith open(os.path.join(os.path.dirname(__file__), "gh-calls.jsonl"), "a") as log:\n'
+        '    log.write(json.dumps(args) + "\\n")'))
+    (fake_bin / 'gh').chmod(0o755)
+    for name in ('.zshenv', '.zprofile'):
+        (zdotdir / name).write_text(f'[ -f "$HOME/{name}" ] && source "$HOME/{name}"\n')
+    (zdotdir / '.zshrc').write_text(f'[ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"\nexport PATH="{fake_bin}:$PATH"\n')
     (user_home / '.toastty/agents.toml').write_text(
         f'[claude]\ndisplayName = "Claude Code"\nargv = {json.dumps([str(agent)])}\n')
     (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "claude"\n')
@@ -123,6 +153,8 @@ def main():
         TOASTTY_ARTIFACTS_DIR=str(artifacts),
         HOME=str(user_home),
         CFFIXED_USER_HOME=str(user_home),
+        ZDOTDIR=str(zdotdir),
+        PATH=f'{fake_bin}:{environment.get("PATH", "")}',
         DISABLE_AUTOUPDATER='1',
     )
     cli_environment = {key: value for key, value in environment.items()
@@ -153,6 +185,36 @@ def main():
 
     def chat_state():
         return instance.query('coordinator.chat.state')
+
+    def card(card_id):
+        return next((item for item in chat_state()['items']
+                     if item['type'] == 'card' and item['id'] == card_id), None)
+
+    def page_action(action, element_id, text=None):
+        payload = dict(action=action, elementID=element_id)
+        if text is not None:
+            payload['text'] = text
+        response = instance.request('automation.coordinator_chat_action', payload)
+        require(response.get('ok'), f'The page could not {action} {element_id}: {response}')
+        return response
+
+    def sidebar_row(title, reason):
+        result = run_tool(driver, 'labels', pid, '*', check=False)
+        if result.returncode != 0:
+            return None
+        return next((label for label in json.loads(result.stdout) if label.startswith(f'{title}, {reason}')), None)
+
+    def received(session_id, text):
+        path = fake_bin / 'sessions' / f'{session_id}.input'
+        contents = path.read_text() if path.is_file() else ''
+        return contents if text in contents else None
+
+    def answered(card_id, answer):
+        current = card(card_id)
+        if current and current.get('answer') == answer and any(
+                entry['text'] == answer and entry['role'] == 'user-task' for entry in current.get('thread', [])):
+            return current
+        return None
 
     def capture(name):
         path = artifacts / f'{name}.png'
@@ -280,6 +342,174 @@ def main():
         cli_result('coordinator', 'show-terminal')
         wait_for('the CLI to uncover the terminal', lambda: chat_state()['pages'] == 0, timeout=15, interval=0.3)
         step('CLI showed the raw terminal')
+
+        # 6. A posted question takes precedence over the task's finished
+        # badge. Choosing an option uses the same page reply route as typing.
+        for kind in ('working', 'ready'):
+            cli_result('session', 'status', '--session', task_session['sessionID'], '--kind', kind, '--summary', kind)
+        wait_for('the packet task to finish its turn',
+                 lambda: cli_result('task', 'get', task_id)['stage'].get('attention') == 'agentFinished')
+        finished_row = wait_for('the finished sidebar row', lambda: sidebar_row(task['title'], 'finished'))
+        cli_result('coordinator', 'post', 'question', '--task', task_id,
+                   '--option', OPTIONS[0], '--option', OPTIONS[1], QUESTION)
+        cli_result('coordinator', 'show', '--task', task_id)
+        option_card = wait_for('the question with both options', lambda: next((item for item in chat_state()['items']
+            if item['type'] == 'card' and item['kind'] == 'question' and item['taskID'] == task_id
+            and item.get('options') == OPTIONS and item.get('isCurrent') is True), None))
+        option_id = option_card['id']
+        wait_for('the question card to open', lambda: option_id in chat_state()['expandedCardIDs'])
+        require(option_card.get('answer') is None, f'The new question is already answered: {option_card}')
+        require(option_card.get('defaultReplyTarget') == 'coordinator',
+                f'A finished task should default to the coordinator: {option_card}')
+        question_row = wait_for('the question sidebar row', lambda: sidebar_row(task['title'], 'question'))
+        capture('coordinator-question-options')
+        step('question replaced the finished sidebar badge', taskID=task_id,
+             before=finished_row, question=question_row, options=option_card['options'],
+             capture='coordinator-question-options.png', colorCheck='Compare the question badge with the amber prototype badge.')
+        page_action('click', f'reply-to-task-{option_id}')
+        capture('coordinator-question-options-enabled')
+        page_action('click', f'option-{option_id}-0')
+        option_answer = wait_for('the selected answer in the card thread', lambda: answered(option_id, OPTIONS[0]))
+        input_text = wait_for('the option in the fake task input', lambda: received(task_session['sessionID'], OPTIONS[0]))
+        restored_row = wait_for('the underlying finished sidebar badge', lambda: sidebar_row(task['title'], 'finished'))
+        require(sidebar_row(task['title'], 'question') is None, 'The answered question still owns the sidebar badge')
+        require(cli_result('task', 'get', task_id)['stage'].get('attention') == 'agentFinished',
+                'Answering the question changed the underlying finished stage')
+        coordinator_note = 'The totals bar change will stay on staging.'
+        cli_result('coordinator', 'post', 'note', '--task', task_id, coordinator_note)
+        option_answer = wait_for('the task-scoped coordinator note in the thread', lambda: (lambda item: item if item and any(
+            entry['text'] == coordinator_note and entry['role'] == 'coordinator' for entry in item.get('thread', [])) else None)(card(option_id)))
+        require(not any(item['type'] == 'message' and item.get('text') == coordinator_note for item in chat_state()['items']),
+                'The task-scoped coordinator note was duplicated in the main transcript')
+        require(not any(item['type'] == 'card' and item['kind'] == 'note' and item['taskID'] == task_id
+                        for item in chat_state()['items']), 'The task-scoped coordinator note became a separate card')
+        capture('coordinator-question-answered')
+        step('option answered and restored the finished stage', cardID=option_id, answer=option_answer['answer'],
+             thread=option_answer['thread'], sidebar=restored_row, fakeAgentReceived=input_text[-300:])
+
+        # A native menu can hold the page action's callback until it closes.
+        # One bounded future opens it while the main thread picks a safe item.
+        bring_to_front()
+        with ThreadPoolExecutor(max_workers=1) as menu_actions:
+            opening = menu_actions.submit(page_action, 'click', f'menu-{option_id}')
+            try:
+                def menu_frames():
+                    if opening.done():
+                        opening.result()
+                    result = run_tool(driver, 'menu-frames', pid, check=False)
+                    return json.loads(result.stdout) if result.returncode == 0 else None
+
+                menu = wait_for('the question card native menu', menu_frames, timeout=8, interval=0.3)
+                evidence['questionMenu'] = menu
+                (artifacts / f'{PREFIX}-question-menu.json').write_text(json.dumps(menu, indent=2))
+                target = next((item for item in menu['items'] if item['enabled'] and item['title']), None)
+                require(target and target['title'] == 'Open Task Space',
+                        f'Open Task Space is not the first enabled native menu item: {menu}')
+                # Use a native window capture here: the app socket may still
+                # be completing the page action that opened NSMenu.
+                menu_capture = artifacts / 'coordinator-question-native-menu.png'
+                try:
+                    captured_menu = subprocess.run([str(helper), 'capture', str(pid), str(menu_capture)],
+                                                   capture_output=True, text=True, timeout=3)
+                    if captured_menu.returncode == 0:
+                        evidence['captures'].append(menu_capture.name)
+                    else:
+                        step('native menu capture unavailable', error=captured_menu.stderr.strip())
+                except subprocess.TimeoutExpired:
+                    step('native menu capture unavailable', error='Native capture exceeded three seconds.')
+                x, y, width, height = target['frame']
+                require(width > 0 and height > 0, f'The native menu item has no visible frame: {target}')
+                # popUp(positioning: nil) starts with no selected item.
+                # Arrow Down selects the proven safe first enabled item.
+                run_tool(driver, 'key', KEY_DOWN)
+                run_tool(driver, 'key', KEY_RETURN)
+            finally:
+                run_tool(driver, 'close-menu', pid, check=False)
+            opening.result(timeout=20)
+        task_workspace = task['setup']['taskSpaceWorkspaceID']
+        wait_for('Open Task Space to select the task workspace', lambda: any(
+            item['workspaceID'] == task_workspace and item['isSelected']
+            for item in instance.query('workspace.list')['workspaces']))
+        step('question native menu opened the task space', taskID=task_id, workspaceID=task_workspace,
+             menu=menu, menuFile=f'{PREFIX}-question-menu.json')
+        cli_result('coordinator', 'show', '--task', task_id)
+        wait_for('the coordinator chat after the native menu', lambda: chat_state()['pages'] >= 1 and any(
+            item['workspaceID'] == coordinator['workspaceID'] and item['isSelected']
+            for item in instance.query('workspace.list')['workspaces']))
+
+        # 7. A waiting task needs no review packet to take a typed answer.
+        typed_task = cli_result('task', 'create', 'Keep the coupon visible', '--title', 'Coupon question without a packet',
+                                '--workspace', workspace_id, '--wait', '--timeout', '90')
+        typed_task_id = typed_task['taskID']
+        typed_session_id = typed_task['setup']['sessionID']
+        typed_session_path = fake_bin / 'sessions' / f'{typed_session_id}.json'
+        wait_for('the second fake task to start', lambda: typed_session_path.is_file())
+        cli_result('session', 'status', '--session', typed_session_id, '--kind', 'needs_approval', '--summary', 'Needs an answer')
+        wait_for('the second task to wait for input',
+                 lambda: cli_result('task', 'get', typed_task_id)['stage'].get('attention') == 'agentNeedsInput')
+        cli_result('coordinator', 'post', 'question', '--task', typed_task_id, 'Should the coupon row stay visible?')
+        cli_result('coordinator', 'show', '--task', typed_task_id)
+        typed_card = wait_for('the question without a packet', lambda: next((item for item in chat_state()['items']
+            if item['type'] == 'card' and item['kind'] == 'question' and item['taskID'] == typed_task_id
+            and item.get('isCurrent') is True), None))
+        typed_id = typed_card['id']
+        require(typed_card['packetVersion'] is None, f'The second task unexpectedly has a packet: {typed_card}')
+        require(typed_card.get('defaultReplyTarget') == 'task', f'A waiting task should default to the task: {typed_card}')
+        wait_for('the second question to open', lambda: typed_id in chat_state()['expandedCardIDs'])
+        page_action('type', f'reply-{typed_id}', TYPED_REPLY)
+        typed_answer = wait_for('the typed answer in its card thread', lambda: answered(typed_id, TYPED_REPLY))
+        typed_input = wait_for('the typed answer in the fake task input', lambda: received(typed_session_id, TYPED_REPLY))
+        require('Review note on packet' not in typed_input, f'The no-packet reply used a review note: {typed_input}')
+        capture('coordinator-question-typed-answer')
+        step('typed answer reached a task without a packet', taskID=typed_task_id, cardID=typed_id,
+             answer=typed_answer['answer'], thread=typed_answer['thread'], fakeAgentReceived=typed_input[-300:])
+
+        # 8. A current question offers the same Merge confirmation as a
+        # packet. Cancel it; the fake gh only permits read-only pr view calls.
+        pull_request = f'https://github.com/{to_ship_check.SLUG}/pull/1'
+        cli_result('action', 'run', 'workspace.set-annotation', '--workspace', task['setup']['taskSpaceWorkspaceID'],
+                   'key=github-pr', 'text=PR #1', f'url={pull_request}')
+        merge_card = wait_for('Merge on the current question', lambda: (lambda item: item if item and
+            item.get('isCurrent') and item.get('canMerge') else None)(card(option_id)), timeout=45, interval=0.5)
+        require(merge_card['kind'] == 'question', f'Merge was offered on another card: {merge_card}')
+        cli_result('coordinator', 'show', '--task', task_id)
+        if option_id not in chat_state()['expandedCardIDs']:
+            page_action('click', f'expand-{option_id}')
+        wait_for('the current question to open for Merge', lambda: option_id in chat_state()['expandedCardIDs'])
+        page_action('click', f'merge-{option_id}')
+        wait_for('the question Merge confirmation', lambda: 'Merge PR #1 as it is now?' in
+                 run_tool(driver, 'texts', pid, '*').stdout, timeout=10, interval=0.3)
+        capture('coordinator-question-merge-confirmation')
+        run_tool(helper, 'press', pid, 'title:Cancel')
+        wait_for('Cancel to close the question Merge confirmation', lambda: 'Merge PR #1 as it is now?' not in
+                 run_tool(driver, 'texts', pid, '*').stdout, timeout=10, interval=0.3)
+        unchanged = cli_result('task', 'get', task_id)
+        require(not unchanged.get('mergeRequestedAt'), 'Cancel accepted the task merge')
+        gh_calls = fake_bin / 'gh-calls.jsonl'
+        fake_reads = wait_for('the disposable GitHub read', lambda: [json.loads(line) for line in gh_calls.read_text().splitlines()]
+                             if gh_calls.is_file() else None, timeout=30, interval=0.5)
+        require(fake_reads and all(args[:2] == ['pr', 'view'] for args in fake_reads),
+                f'The disposable GitHub fixture did not record only read-only calls: {fake_reads}')
+        step('question Merge confirmation canceled', taskID=task_id, cardID=option_id,
+             mergeRequestedAt=unchanged.get('mergeRequestedAt'), fakeGitHubCalls=fake_reads)
+
+        # 9. The event store, rather than page memory, owns answers and
+        # threads. Restart this isolated app with exactly the same homes.
+        persisted = {item['id']: dict(answer=item['answer'], thread=item['thread'])
+                     for item in (option_answer, typed_answer)}
+        instance.kill()
+        instance = Instance(binary, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log')
+        pid = instance.process.pid
+        instance.wait_until_ready()
+        wait_for('the coordinator after relaunch', lambda: instance.query('coordinator.status')['state'] == 'running',
+                 timeout=90, interval=1)
+        cli_result('coordinator', 'show', '--task', task_id)
+        for card_id, expected_state in persisted.items():
+            restored = wait_for('the saved answer and thread after relaunch', lambda: answered(card_id, expected_state['answer']))
+            require(restored['thread'] == expected_state['thread'],
+                    f'The thread changed after relaunch: before={expected_state}, after={restored}')
+        capture('coordinator-question-after-relaunch')
+        step('answers and threads survived relaunch', cards=persisted, runtimeHome=str(runtime_home), userHome=str(user_home))
 
         evidence['status'] = 'passed'
     finally:

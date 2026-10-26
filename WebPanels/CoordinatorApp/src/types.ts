@@ -44,9 +44,19 @@ export interface ChatTask {
   mergePolicy: string;
   canMerge: boolean;
   canReply: boolean;
+  /// A question's default: the task when its agent waits for input,
+  /// and the coordinator otherwise.
+  defaultReplyTarget: "task" | "coordinator";
 }
 
 export type CardKind = "packet" | "task-started" | "question" | "note";
+
+export interface ChatThreadMessage {
+  id: string;
+  at: string;
+  role: "user-task" | "user-coordinator" | "coordinator" | "agent";
+  text: string;
+}
 
 export type ChatItem =
   | {
@@ -71,6 +81,12 @@ export type ChatItem =
       isNew: boolean;
       task: ChatTask | null;
       packet: ChatPacket | null;
+      options: string[];
+      /// Saved by the app after it accepts a question's answer.
+      answer: string | null;
+      thread: ChatThreadMessage[];
+      /// The app marks one current card per task, regardless of card kind.
+      isCurrent: boolean;
     };
 
 export type PageView = "chat" | "tasks";
@@ -146,9 +162,10 @@ export type ChatEvent =
   | { type: "rendered"; expanded: string[]; view: PageView; selected: string | null }
   | { type: "taskAction"; rowID: string; actionID: string }
   | { type: "send"; text: string; token: number }
-  | { type: "reply"; taskID: string; version: number; text: string; token: number }
-  | { type: "ask"; taskID: string; version: number | null; text: string; token: number }
+  | { type: "reply"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
+  | { type: "ask"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "merge"; taskID: string }
+  | { type: "taskMenu"; taskID: string; x: number; y: number; width: number; height: number }
   | { type: "openTaskSpace"; taskID: string }
   | { type: "openURL"; url: string }
   | { type: "openReport"; taskID: string; version: number; screenshot: string | null }
@@ -163,6 +180,8 @@ export interface ChatUIState {
   /// What is typed in each card's reply box, kept while the card is closed.
   drafts: Map<string, string>;
   replyTarget: Map<string, "task" | "coordinator">;
+  /// Sends waiting for an acknowledgement, to prevent duplicate answers.
+  pendingCards: Set<string>;
   confirmingMerge: string | null;
 }
 

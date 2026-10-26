@@ -352,6 +352,13 @@ struct ToasttyCLITaskTests {
                 "taskID": .string(taskID),
                 "text": .string("Which base?"),
             ]))
+        #expect(try command(["post", "question", "Which base?", "--option", "Remote main", "--task", taskID, "--option", "Feature branch"])
+            == .appControlRun(kind: .action, id: "coordinator.post", args: [
+                "kind": .string("question"),
+                "taskID": .string(taskID),
+                "text": .string("Which base?"),
+                "options": .array([.string("Remote main"), .string("Feature branch")]),
+            ]))
         #expect(try command(["post", "note", "--text", "Fresh session."])
             == .appControlRun(kind: .action, id: "coordinator.post", args: ["kind": .string("note"), "text": .string("Fresh session.")]))
         #expect(try command(["status"]) == .appControlRun(kind: .query, id: "coordinator.status", args: [:]))
@@ -364,7 +371,7 @@ struct ToasttyCLITaskTests {
         #expect(throws: ToasttyCLIError.self) { try command(["show", "--task", "nope"]) }
         #expect(throws: ToasttyCLIError.self) { try command(["show", "extra"]) }
 
-        for arguments in [["post"], ["post", "note", "a", "b"], ["post", "note", "a", "--text", "b"], ["post", "packet", "--task", "abc"], ["status", "x"], ["open"]] {
+        for arguments in [["post"], ["post", "note", "a", "b"], ["post", "note", "a", "--text", "b"], ["post", "packet", "--task", "abc"], ["post", "question", "--option"], ["status", "x"], ["open"]] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }
         }
     }

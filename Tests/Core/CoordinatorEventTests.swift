@@ -47,4 +47,63 @@ struct CoordinatorEventTests {
         let text = try #require(String(data: try second.jsonLine(), encoding: .utf8))
         #expect(text.contains(#""kind":"question""#))
     }
+
+    @Test
+    func questionOptionsAreTrimmedAndBoundedBeforeTheyAreSaved() throws {
+        let taskID = UUID()
+        let fullLength = String(repeating: "🧭", count: CoordinatorEvent.maximumOptionLength)
+        let question = try CoordinatorEvent.validated(
+            kind: "question", taskID: taskID, text: "Which base?", sessionID: nil, at: at,
+            options: ["  Remote main\n", fullLength]
+        )
+        #expect(question.options == ["Remote main", fullLength])
+        for options in [
+            ["  \n"],
+            [String(repeating: "a", count: CoordinatorEvent.maximumOptionLength + 1)],
+            (0...CoordinatorEvent.maximumOptionCount).map { "Choice \($0)" },
+            ["Remote main", " Remote main "],
+        ] {
+            #expect(throws: CoordinatorEventError.self) {
+                try CoordinatorEvent.validated(kind: "question", taskID: taskID, text: "Which base?", sessionID: nil, at: at, options: options)
+            }
+        }
+        for kind in CoordinatorEvent.Kind.postingKinds where kind != .question {
+            #expect(throws: CoordinatorEventError.self) {
+                try CoordinatorEvent.validated(kind: kind.rawValue, taskID: taskID, text: "A note.", sessionID: nil, at: at, options: ["Remote main"])
+            }
+        }
+        #expect(throws: CoordinatorEventError.self) {
+            try CoordinatorEvent.validated(kind: "reply", taskID: taskID, text: "Remote main", sessionID: nil, at: at)
+        }
+    }
+
+    @Test
+    func legacyEventsStillDecodeAndThreadEventsSurviveARelaunch() throws {
+        let legacy = Data(#"{"id":"E16787EF-5592-4FC8-A26A-D46548253CBF","at":"2026-10-23T00:00:00Z","kind":"note","text":"Checking in."}"#.utf8)
+        let decoded = try #require(CoordinatorEvent.decodeLog(legacy).first)
+        #expect(decoded.options.isEmpty)
+        #expect(decoded.threadRole == nil && decoded.questionID == nil && decoded.sourceID == nil)
+
+        let reply = CoordinatorEvent(
+            at: at, kind: .reply, taskID: UUID(), text: "Remote main", sessionID: nil,
+            threadRole: .userCoordinator, questionID: UUID(), sourceID: "turn-12"
+        )
+        #expect(CoordinatorEvent.decodeLog(try reply.jsonLine()) == [reply])
+        let unknown = Data(#"{"id":"E16787EF-5592-4FC8-A26A-D46548253CBF","at":"2026-10-23T00:00:00Z","kind":"future"}"#.utf8)
+        #expect(CoordinatorEvent.decodeLog(unknown).isEmpty)
+    }
+
+    @Test
+    func malformedStoredOptionsDoNotHideTheQuestion() throws {
+        let question = CoordinatorEvent(at: at, kind: .question, taskID: UUID(), text: "Which base?", sessionID: nil)
+        var object = try #require(JSONSerialization.jsonObject(with: question.jsonLine()) as? [String: Any])
+        object["options"] = "an older invalid value"
+        let malformed = try #require(CoordinatorEvent.decodeLog(JSONSerialization.data(withJSONObject: object)).first)
+        #expect(malformed.text == "Which base?" && malformed.options.isEmpty)
+
+        object["options"] = ["  ", String(repeating: "a", count: CoordinatorEvent.maximumOptionLength + 1), " Main ", "Main"]
+            + (1...7).map { "Choice \($0)" }
+        let sanitized = try #require(CoordinatorEvent.decodeLog(JSONSerialization.data(withJSONObject: object)).first)
+        #expect(sanitized.options == ["Main", "Choice 1", "Choice 2", "Choice 3", "Choice 4", "Choice 5"])
+    }
 }

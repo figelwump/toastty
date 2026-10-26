@@ -21,6 +21,15 @@ final class ConversationService {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private(set) var localPanelIDs: Set<UUID> = []
+    /// Task transcripts are read for card threads without granting local input.
+    private var taskPanelIDs: Set<UUID> = []
+    private struct TaskTranscriptSource {
+        var taskID: UUID
+        var resumeRecord: ManagedAgentResumeRecord
+    }
+    /// Stopping an agent clears the terminal's resume record. Keep the
+    /// explicitly bound source while its task thread still reads the panel.
+    private var taskTranscriptSources: [UUID: TaskTranscriptSource] = [:]
     private var remoteTrackingEnabled = false
     private var isTracking = false
     private var demandReconciliationTask: Task<Void, Never>?
@@ -136,6 +145,13 @@ final class ConversationService {
         updateTracking()
     }
 
+    func setTaskPanelIDs(_ panelIDs: Set<UUID>) {
+        guard taskPanelIDs != panelIDs else { return }
+        taskPanelIDs = panelIDs
+        taskTranscriptSources = taskTranscriptSources.filter { panelIDs.contains($0.key) }
+        updateTracking()
+    }
+
     func setRemoteTrackingEnabled(_ enabled: Bool) {
         guard remoteTrackingEnabled != enabled else { return }
         remoteTrackingEnabled = enabled
@@ -150,7 +166,7 @@ final class ConversationService {
             return
         }
         discardRemoteQueuedEntriesIfDisabled()
-        let needsTracking = remoteTrackingEnabled || !localPanelIDs.isEmpty || !retainedPanelIDs.isEmpty
+        let needsTracking = remoteTrackingEnabled || !localPanelIDs.isEmpty || !taskPanelIDs.isEmpty || !retainedPanelIDs.isEmpty
         if needsTracking {
             if !isTracking {
                 isTracking = true
@@ -776,7 +792,7 @@ final class ConversationService {
     func scanConversationCandidates(mintingIDs: Bool) -> [ConversationCandidate] {
         let registry = sessionRuntimeStore.sessionRegistry
         var candidates: [ConversationCandidate] = []
-        let requestedPanels = localPanelIDs.union(retainedPanelIDs)
+        let requestedPanels = localPanelIDs.union(taskPanelIDs).union(retainedPanelIDs)
         var seenPanelIDs: Set<UUID> = []
 
         for workspace in store.state.workspacesByID.values {
@@ -784,6 +800,12 @@ final class ConversationService {
                 guard case .terminal(let terminalState) = panelState else { continue }
                 guard remoteTrackingEnabled || requestedPanels.contains(panelID) else { continue }
 
+                if taskPanelIDs.contains(panelID), let taskID = workspace.taskID, let record = terminalState.resumeRecord {
+                    taskTranscriptSources[panelID] = TaskTranscriptSource(taskID: taskID, resumeRecord: record)
+                }
+                let retainedSource = taskPanelIDs.contains(panelID) ? taskTranscriptSources[panelID] : nil
+                let savedTaskRecord = retainedSource.flatMap { $0.taskID == workspace.taskID ? $0.resumeRecord : nil }
+                let resumeRecord = terminalState.resumeRecord ?? savedTaskRecord
                 let activeSessionID = registry.activeSessionIDByPanelID[panelID]
                 let activeRecord = activeSessionID.flatMap { registry.sessionsByID[$0] }
                 // Use the same projected panel status as Toastty's desktop UI.
@@ -798,8 +820,8 @@ final class ConversationService {
                 }
                 let isUnread = workspaceTab.unreadPanelIDs.contains(panelID)
                 let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
-                let restorableProvider = terminalState.resumeRecord?.agent
-                let restorableFeed = terminalState.resumeRecord.flatMap { resumeRecord in
+                let restorableProvider = resumeRecord?.agent
+                let restorableFeed = resumeRecord.flatMap { resumeRecord in
                     sessionRuntimeStore.providerConversationFeed(
                         provider: resumeRecord.agent,
                         nativeSessionID: resumeRecord.nativeSessionID
@@ -840,8 +862,8 @@ final class ConversationService {
                 // Both Codex rollout files and Claude transcript files are
                 // recorded as the resume record's sessionFilePath.
                 let transcriptPath = ProviderTranscriptSupport.hasFileTranscript(provider)
-                    && terminalState.resumeRecord?.agent == provider
-                    ? terminalState.resumeRecord?.sessionFilePath
+                    && resumeRecord?.agent == provider
+                    ? resumeRecord?.sessionFilePath
                     : nil
                 let providerFeed = activeSessionID.flatMap {
                     sessionRuntimeStore.providerConversationFeed(managedSessionID: $0)
@@ -860,7 +882,7 @@ final class ConversationService {
                             return providerFeed?.nativeSessionID == confirmation.nativeSessionID
                                 ? confirmation : nil
                         }
-                        guard let resumeRecord = terminalState.resumeRecord,
+                        guard let resumeRecord,
                               confirmation.nativeSessionID == resumeRecord.nativeSessionID,
                               confirmation.sessionFilePath == resumeRecord.sessionFilePath else {
                             return nil
@@ -881,7 +903,7 @@ final class ConversationService {
                     workspaceTabID: workspaceTab.id,
                     workspaceTabTitle: workspaceTab.displayTitle,
                     panelID: panelID,
-                    cwd: activeRecord?.cwd ?? terminalState.resumeRecord?.cwd,
+                    cwd: activeRecord?.cwd ?? resumeRecord?.cwd,
                     activeSessionID: hasLiveAgent ? activeSessionID : nil,
                     runtimeBindingStartedAt: hasLiveAgent ? activeRecord?.startedAt : nil,
                     registryState: activeRecord.flatMap { record in
@@ -903,7 +925,7 @@ final class ConversationService {
                         ? panelStatus?.waitingSummary
                         : nil,
                     updatedAt: max(
-                        activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
+                        activeRecord?.updatedAt ?? resumeRecord?.capturedAt ?? .distantPast,
                         providerFeed?.updatedAt ?? .distantPast
                     ),
                     transcriptPath: transcriptPath,
