@@ -423,18 +423,25 @@ creates a task. Below it, from top to bottom:
   row shows why (review, question, stuck, finished, closed or clean up), the
   task, its project, and one line: the packet's `look_at` when the task
   published one, else its status. The row's button settles the task: **Merge**
-  for a pull request waiting for review, which asks in the row first; **Answer**
-  for a question, which opens its task space; **Mark Done**, **Archive…** or
-  **Clean Up** where those settle it; else **Open**. Its **▾** menu, and a
-  right-click, offer the task's menu, with **Open Packet** for a task that
-  published one. Clicking the row opens the task's newest packet in the
-  coordinator chat, or its task space while the coordinator is off.
+  for a pull request waiting for review, which asks in the row first; **Mark
+  Done**, **Archive…** or **Clean Up** where those settle it; **Answer** for an
+  agent waiting for input; else **Open**. Open shows the task's card in the
+  coordinator chat when the chat has one, else its task space. Answer shows
+  the card only when the coordinator's newest card for the task is a question;
+  otherwise it opens the task space, where the agent asks. Its **▾** menu, and
+  a right-click, offer the task's menu, with **Open in Chat** for a task that
+  has a card. Clicking the row opens the task's card in the coordinator chat:
+  its newest card when that is a question, else its newest packet, else its
+  last card. With no card in the chat, it opens the task space.
+  While the chat shows a task's card open, the task's row is outlined, and a
+  packet version newer than the first one the chat showed is marked **new**.
 - **Projects**, the workspace list. A task space whose task is To ship or
   Done leaves its card unless an agent in it is working or waiting for you.
   After the card's task spaces, the project's 3 most recently merged To ship
   tasks show as rows. A footer line after them has **Show N more** when the
-  project has more To ship tasks, and the Done count. Without To ship rows,
-  the footer counts To ship tasks instead.
+  project has more To ship tasks, the Done count, and **Release** when the
+  project can release. Without To ship rows, the footer counts To ship tasks
+  instead. Each count opens All tasks at that project, with its group open.
 
 The coordinator chat and All tasks took the place of the Tasks view. The chat
 shows the cards of each task the coordinator posted about, with its packet and
@@ -468,10 +475,11 @@ All tasks** switch in the chat's header.
 A To ship row opens the task's cards in the coordinator chat. A task with no
 card, or any task while the coordinator is off, opens its task space instead,
 when that is still open. **Show N more** lists the project's other To ship
-tasks in place. The To ship and Done counts are counts only. The newest merge
-comes first; a task with no merge time uses its latest change. A To ship task
-whose task space is still open keeps its task space row and does not show a
-second time. Release from a To ship row in All tasks, the command palette, or `toastty task release`.
+tasks in place. The To ship and Done counts open All tasks at the project.
+The newest merge comes first; a task with no merge time uses its latest
+change. A To ship task whose task space is still open keeps its task space row
+and does not show a second time. Release from the project's footer, a To ship
+row in All tasks, the command palette, or `toastty task release`.
 
 Task space rows use square marks: green for a
 finished turn (filled while it is unread), blue for a pull request waiting for

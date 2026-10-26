@@ -21,6 +21,9 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         /// The agent asked something; it waits in its task space.
         case answer(workspaceID: UUID)
         case openTaskSpace(workspaceID: UUID)
+        /// Answer or Open, for a task whose card in the coordinator chat is
+        /// where the user settles it.
+        case openInChat(taskID: UUID, isAnswer: Bool)
         case setup(taskID: UUID)
 
         var title: String {
@@ -29,6 +32,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             case .action(let action, _): action.title
             case .answer: "Answer"
             case .openTaskSpace: "Open"
+            case .openInChat(_, let isAnswer): isAnswer ? "Answer" : "Open"
             case .setup: "Set Up"
             }
         }
@@ -52,6 +56,13 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     let primary: PrimaryAction?
     let menu: [[TaskBoardPresentation.MenuItem]]
     let taskSpaceWorkspaceID: UUID?
+    /// Whether the coordinator chat has a card for the task.
+    let hasCard: Bool
+    /// Whether the chat shows the task's card open, as the prototype
+    /// outlines the row whose packet is open.
+    let isOpenInChat: Bool
+    /// Whether the task's packet card is marked new.
+    let isNew: Bool
 
     var taskID: UUID? {
         if case .task(let id) = id { return id }
@@ -68,7 +79,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     }
 
     var accessibilityLabel: String {
-        [title, reason, projectTitle.map { "in \($0)" }, detail].compactMap { $0 }.joined(separator: ", ")
+        [title, reason, isNew ? "new" : nil, projectTitle.map { "in \($0)" }, detail].compactMap { $0 }.joined(separator: ", ")
     }
 
     /// What the row asks before Merge runs.
@@ -78,11 +89,26 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
     }
 
     /// Keeps the board's newest activity first, including setup blockers.
-    static func rows(_ items: [TaskBoardItem], isTriageConfigured: Bool = false, lookAt: (TaskRecord) -> String?) -> [Self] {
-        items.filter { $0.stage.group == .needsYou }.map { make($0, isTriageConfigured: isTriageConfigured, lookAt: lookAt) }
+    /// `cards` and `openTaskID` come from the coordinator chat's card index.
+    static func rows(
+        _ items: [TaskBoardItem],
+        isTriageConfigured: Bool = false,
+        cards: (UUID) -> CoordinatorChatCardIndex.TaskCards? = { _ in nil },
+        openTaskID: UUID? = nil,
+        lookAt: (TaskRecord) -> String?
+    ) -> [Self] {
+        items.filter { $0.stage.group == .needsYou }.map {
+            make($0, isTriageConfigured: isTriageConfigured, cards: $0.taskID.flatMap(cards), openTaskID: openTaskID, lookAt: lookAt)
+        }
     }
 
-    static func make(_ item: TaskBoardItem, isTriageConfigured: Bool = false, lookAt: (TaskRecord) -> String?) -> Self {
+    static func make(
+        _ item: TaskBoardItem,
+        isTriageConfigured: Bool = false,
+        cards: CoordinatorChatCardIndex.TaskCards? = nil,
+        openTaskID: UUID? = nil,
+        lookAt: (TaskRecord) -> String?
+    ) -> Self {
         let (reason, tone) = reasonAndTone(item.stage)
         let packetLookAt = item.record.flatMap { $0.packetVersion == nil ? nil : lookAt($0) }
         return Self(
@@ -93,9 +119,12 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             projectTitle: item.projectTitle,
             detail: TaskBoardPresentation.showsSetup(item) ? TaskBoardPresentation.stageDescription(item).why : packetLookAt ?? TaskBoardPresentation.statusLine(item),
             packetVersion: item.record?.packetVersion,
-            primary: primaryAction(item),
+            primary: primaryAction(item, cards: cards),
             menu: TaskBoardPresentation.menuItems(item, isTriageConfigured: isTriageConfigured),
-            taskSpaceWorkspaceID: item.taskSpaceWorkspaceID
+            taskSpaceWorkspaceID: item.taskSpaceWorkspaceID,
+            hasCard: cards != nil,
+            isOpenInChat: openTaskID != nil && item.taskID == openTaskID,
+            isNew: cards?.isNew ?? false
         )
     }
 
@@ -114,9 +143,12 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
 
     /// Merge for a pull request waiting for review; else the detail action
     /// that settles the task (Clean Up, Mark Done for reviewed work without a
-    /// pull request, Archive for a closed task space); else the task space,
-    /// where the agent waits: Answer for a question, Open otherwise.
-    static func primaryAction(_ item: TaskBoardItem) -> PrimaryAction? {
+    /// pull request, Archive for a closed task space); else Answer for a
+    /// question and Open otherwise. Open shows the task's card in the
+    /// coordinator chat when it has one. Answer does only when the task's
+    /// newest card is a question: an agent waiting for input otherwise asks
+    /// in its terminal, in the task space.
+    static func primaryAction(_ item: TaskBoardItem, cards: CoordinatorChatCardIndex.TaskCards? = nil) -> PrimaryAction? {
         guard let taskID = item.taskID else {
             return item.taskSpaceWorkspaceID.map { .openTaskSpace(workspaceID: $0) }
         }
@@ -134,8 +166,12 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         if item.stage == .needsYou(.taskSpaceClosed), actions.contains(.archive) {
             return .action(.archive, taskID: taskID)
         }
+        let isQuestion = item.stage == .needsYou(.agentNeedsInput)
+        if let cards, isQuestion == false || cards.latestKind == .question {
+            return .openInChat(taskID: taskID, isAnswer: isQuestion)
+        }
         guard let workspaceID = item.taskSpaceWorkspaceID else { return nil }
-        return item.stage == .needsYou(.agentNeedsInput) ? .answer(workspaceID: workspaceID) : .openTaskSpace(workspaceID: workspaceID)
+        return isQuestion ? .answer(workspaceID: workspaceID) : .openTaskSpace(workspaceID: workspaceID)
     }
 }
 
@@ -177,9 +213,9 @@ final class SidebarPacketLookAtCache: ObservableObject {
 struct SidebarNeedsYouSection: View {
     let rows: [SidebarNeedsYouRow]
     let coordinator: TaskCoordinator?
-    /// Opens a task's packet in the coordinator chat and says whether it
+    /// Opens a task's card in the coordinator chat and says whether it
     /// did; nil while there is no chat.
-    let openPacket: ((UUID) -> Bool)?
+    let openInChat: ((UUID) -> Bool)?
     let openTaskSpace: (UUID) -> Void
     let merge: (UUID) -> Void
     let run: (TaskBoardPresentation.MenuItem) -> Void
@@ -229,7 +265,7 @@ struct SidebarNeedsYouSection: View {
                             if case .merge(let taskID, _)? = row.primary { merge(taskID) }
                         },
                         cancelMerge: { confirmingMergeID = nil },
-                        openPacket: openPacket.flatMap { action in row.packetVersion == nil ? nil : row.taskID.map { id in { _ = action(id) } } },
+                        openInChat: openInChat.flatMap { action in row.hasCard ? row.taskID.map { id in { _ = action(id) } } : nil },
                         run: run
                     )
                 }
@@ -247,7 +283,7 @@ struct SidebarNeedsYouSection: View {
     /// The row's body opens the task in the coordinator chat, or, when the
     /// chat cannot open, the task space.
     private func open(_ row: SidebarNeedsYouRow) {
-        if let openPacket, let taskID = row.taskID, openPacket(taskID) {
+        if let openInChat, let taskID = row.taskID, openInChat(taskID) {
             return
         }
         if let workspaceID = row.taskSpaceWorkspaceID {
@@ -263,6 +299,10 @@ struct SidebarNeedsYouSection: View {
             run(.action(action, taskID: taskID))
         case .answer(let workspaceID)?, .openTaskSpace(let workspaceID)?:
             openTaskSpace(workspaceID)
+        case .openInChat?:
+            // The chat may have lost the card since the row drew; then the
+            // task space.
+            open(row)
         case .setup?:
             break // The row presents the setup card at its own anchor.
         case nil:
@@ -279,7 +319,7 @@ private struct SidebarNeedsYouRowView: View {
     let primary: () -> Void
     let confirmMerge: () -> Void
     let cancelMerge: () -> Void
-    let openPacket: (() -> Void)?
+    let openInChat: (() -> Void)?
     let run: (TaskBoardPresentation.MenuItem) -> Void
 
     @State private var isHovered = false
@@ -300,7 +340,7 @@ private struct SidebarNeedsYouRowView: View {
         .background(ToastyTheme.sidebarAttentionApprovalTint, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isHovered ? ToastyTheme.sessionNeedsApprovalText.opacity(0.45) : Color.clear, lineWidth: 1)
+                .stroke(outline, lineWidth: 1)
         }
         .onHover { isHovered = $0 }
         .contextMenu { menuItems }
@@ -312,6 +352,11 @@ private struct SidebarNeedsYouRowView: View {
                 .setupPopoverChrome()
             }
         }
+    }
+
+    private var outline: Color {
+        if row.isOpenInChat { return ToastyTheme.sessionNeedsApprovalText }
+        return isHovered ? ToastyTheme.sessionNeedsApprovalText.opacity(0.45) : Color.clear
     }
 
     private func openRow() {
@@ -398,14 +443,31 @@ private struct SidebarNeedsYouRowView: View {
             .fixedSize()
             .accessibilityLabel("More actions for \(row.title)")
             .accessibilityIdentifier("\(row.identifier).menu")
+            if row.isNew {
+                newBadge
+            }
             Spacer(minLength: 0)
         }
     }
 
+    /// The prototype's green "new": the packet is a version the chat had not
+    /// shown before.
+    private var newBadge: some View {
+        let (text, fill) = Self.colors(.finished)
+        return Text("new")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(text)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(fill, in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+            .accessibilityIdentifier("\(row.identifier).new")
+    }
+
     @ViewBuilder
     private var menuItems: some View {
-        if let openPacket {
-            Button("Open Packet", action: openPacket)
+        if let openInChat {
+            Button("Open in Chat", action: openInChat)
             Divider()
         }
         TaskContextMenuItems(sections: row.menu, run: run)

@@ -80,6 +80,85 @@ struct CoordinatorAllTasksTests {
         #expect(fixture.tasks.record(task.id) == nil)
     }
 
+    @Test func theCardIndexFollowsTheChatAndCountsOpenAllTasksAtAProjectsGroup() async throws {
+        let fixture = try await Fixture()
+        CoordinatorChatController.shared = fixture.chat
+        defer { CoordinatorChatController.shared = nil }
+        let reviewed = try await fixture.taskWithPacket()
+        await fixture.chat.refresh()
+        #expect(fixture.chat.cardIndex.tasks[reviewed.id]?.latestKind == .packet)
+        #expect(fixture.chat.cardIndex.openTaskID == nil)
+
+        // The sidebar outlines the task whose card the page has open, only
+        // while the page shows the chat.
+        let cardID = try #require(fixture.chat.lastPayload?.items.compactMap { item -> String? in
+            guard case .card(let card) = item, card.task?.id == reviewed.id.uuidString else { return nil }
+            return card.id
+        }.last)
+        await fixture.chat.handle(.rendered(expanded: [cardID], view: .chat), from: nil)
+        #expect(fixture.chat.cardIndex.openTaskID == reviewed.id)
+        await fixture.chat.handle(.rendered(expanded: [cardID], view: .tasks), from: nil)
+        #expect(fixture.chat.cardIndex.openTaskID == nil)
+
+        // The To ship and Done counts ask for one project's group.
+        let context = AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_action")
+        _ = try await fixture.executor().runActionAsync(
+            id: "coordinator.tasks.show",
+            args: ["group": .string("done"), "project": .string("toastty")],
+            context: context
+        )
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.view?.view == .tasks)
+        #expect(fixture.chat.lastPayload?.view?.filter == .init(project: "toastty", group: "done"))
+        // A plain request shows All tasks as the user left it.
+        _ = try await fixture.executor().runActionAsync(id: "coordinator.tasks.show", args: [:], context: context)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.view?.filter == nil)
+        await #expect(throws: (any Error).self) {
+            _ = try await fixture.executor().runActionAsync(id: "coordinator.tasks.show", args: ["group": .string("later")], context: context)
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await fixture.executor().runActionAsync(id: "coordinator.tasks.show", args: ["project": .string("toastty")], context: context)
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await fixture.executor().runActionAsync(id: "coordinator.tasks.show", args: ["group": .int(42)], context: context)
+        }
+
+        // A question posted after the packet is what the task asks now:
+        // opening the task opens the question, not the packet.
+        #expect(fixture.chat.lastPayload?.focus?.cardID == nil)
+        try fixture.session.files.append(CoordinatorEvent(at: Date().addingTimeInterval(1), kind: .question, taskID: reviewed.id, text: "Move it?", sessionID: nil))
+        #expect(fixture.chat.show(taskID: reviewed.id))
+        await fixture.chat.refresh()
+        let question = try #require(fixture.chat.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+            guard case .card(let card) = item, card.kind == "question" else { return nil }
+            return card
+        }.first)
+        #expect(fixture.chat.lastPayload?.focus?.cardID == question.id)
+        #expect(fixture.chat.cardIndex.tasks[reviewed.id]?.latestKind == .question)
+    }
+
+    @Test func aNeedsYouTaskWithACardOpensItFromAllTasks() {
+        let record = TaskRecord(createdAt: Date(), text: "trust", title: "trust", slug: "trust", source: .cli, setup: .started)
+        let finished = TaskBoardItem(
+            id: .task(record.id),
+            record: record,
+            title: "Coordinator trust prompt",
+            taskSpaceWorkspaceID: UUID(),
+            projectTitle: "toastty",
+            stage: .needsYou(.agentFinished),
+            agent: .idle,
+            activityAt: Date()
+        )
+        func primary(_ cards: CoordinatorChatCardIndex.TaskCards?) -> String? {
+            CoordinatorAllTasks.rows([finished], cards: { _ in cards }, canRelease: { _ in false }, isTriageConfigured: false, mergePolicy: { _ in "" })
+                .first?.primary?.id
+        }
+        // "open" shows the card in the chat; without one, the task space.
+        #expect(primary(.init(latestKind: .question, isNew: false)) == CoordinatorAllTasks.openActionID)
+        #expect(primary(nil) == "openTaskSpace")
+    }
+
     @Test func toShipRowsOfAProjectThatCanReleaseOfferRelease() {
         let project = UUID()
         let item = TaskBoardItem(
@@ -92,7 +171,7 @@ struct CoordinatorAllTasksTests {
             activityAt: Date()
         )
         let running = TaskBoardItem(id: .task(UUID()), title: "Cart rounding", projectWorkspaceID: project, projectTitle: "lumen", stage: .running, agent: .none, activityAt: Date())
-        let rows = CoordinatorAllTasks.rows([item, running], hasCard: { _ in false }, canRelease: { _ in true }, isTriageConfigured: false, mergePolicy: { _ in "" })
+        let rows = CoordinatorAllTasks.rows([item, running], cards: { _ in nil }, canRelease: { _ in true }, isTriageConfigured: false, mergePolicy: { _ in "" })
         #expect(rows[0].menu.last?.map(\.title) == ["Release lumen…"])
         #expect(rows[1].menu.joined().contains { $0.id == "release" } == false)
 

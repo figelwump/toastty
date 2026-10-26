@@ -589,6 +589,12 @@ struct SidebarView: View {
     /// in hosts without the chat; the Coordinator row then shows the
     /// coordinator's terminal.
     let openCoordinatorChat: (@MainActor (UUID?) -> Bool)?
+    /// Opens All tasks at one project's stage group, and says whether it
+    /// did; nil in hosts without the chat, where the counts are labels.
+    let openCoordinatorTasks: (@MainActor (CoordinatorChatPayload.TasksFilter) -> Bool)?
+    /// Each task's cards in the coordinator chat. Observed: the Needs you
+    /// rows show which card is open and which packet is new.
+    @ObservedObject var chatCards: CoordinatorChatCardIndex
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -777,6 +783,8 @@ struct SidebarView: View {
         taskBoard: TaskBoardStore = .disabled,
         newTask: (@MainActor () -> Void)? = nil,
         openCoordinatorChat: (@MainActor (UUID?) -> Bool)? = nil,
+        openCoordinatorTasks: (@MainActor (CoordinatorChatPayload.TasksFilter) -> Bool)? = nil,
+        chatCards: CoordinatorChatCardIndex = .disabled,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -794,6 +802,8 @@ struct SidebarView: View {
         self.taskBoard = taskBoard
         self.newTask = newTask
         self.openCoordinatorChat = openCoordinatorChat
+        self.openCoordinatorTasks = openCoordinatorTasks
+        self.chatCards = chatCards
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
@@ -1047,13 +1057,21 @@ struct SidebarView: View {
 
     private var needsYouSection: some View {
         let packets = taskCoordinator?.packets
-        let rows = SidebarNeedsYouRow.rows(taskBoardSnapshot.windowItems, isTriageConfigured: taskCoordinator?.isTriageConfigured ?? false) { record in
+        let cards = chatCards.tasks
+        // A card counts as open only while this window shows the chat.
+        let openTaskID = store.state.showsCoordinatorChat(windowID: windowID) ? chatCards.openTaskID : nil
+        let rows = SidebarNeedsYouRow.rows(
+            taskBoardSnapshot.windowItems,
+            isTriageConfigured: taskCoordinator?.isTriageConfigured ?? false,
+            cards: { cards[$0] },
+            openTaskID: openTaskID
+        ) { record in
             packets.flatMap { packetLookAtCache.lookAt(record, packets: $0) }
         }
         return SidebarNeedsYouSection(
             rows: rows,
             coordinator: taskCoordinator,
-            openPacket: openCoordinatorChat.map { action in { taskID in
+            openInChat: openCoordinatorChat.map { action in { taskID in
                 cancelWorkspaceRename()
                 return action(taskID)
             } },
@@ -1151,8 +1169,9 @@ struct SidebarView: View {
 
     /// Under a project card: the tasks that left it because they finished.
     /// The latest To ship tasks show as rows, then one line with "Show N
-    /// more" and the Done count. Without To ship rows, the line counts To
-    /// ship instead, as for a To ship task whose task space row shows.
+    /// more", the Done count, and Release when the project can release.
+    /// Without To ship rows, the line counts To ship instead, as for a To
+    /// ship task whose task space row shows. The counts open All tasks.
     @ViewBuilder
     private func finishedTasksFooter(projectWorkspaceID: UUID, shownTaskSpaceIDs: Set<UUID>) -> some View {
         if taskBoard.isEnabled {
@@ -1160,6 +1179,8 @@ struct SidebarView: View {
             let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
             let toShip = recent.shown.isEmpty ? items.filter { $0.stage == .toShip }.count : 0
             let done = items.filter { $0.stage == .done }.count
+            let projectTitle = items.lazy.compactMap(CoordinatorAllTasks.projectTitle).first
+            let canRelease = taskCoordinator != nil && items.contains { $0.stage == .toShip && taskBoard.canRelease($0) }
             if recent.shown.isEmpty == false || toShip > 0 || done > 0 {
                 VStack(alignment: .leading, spacing: 4) {
                     if recent.shown.isEmpty == false {
@@ -1171,7 +1192,7 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 10)
                     }
-                    if recent.hidden.isEmpty == false || toShip > 0 || done > 0 {
+                    if recent.hidden.isEmpty == false || toShip > 0 || done > 0 || canRelease {
                         HStack(spacing: 12) {
                             if recent.hidden.isEmpty == false, expandedToShipProjectIDs.contains(projectWorkspaceID) == false {
                                 SidebarShowMoreToShipButton(count: recent.hidden.count) {
@@ -1180,18 +1201,24 @@ struct SidebarView: View {
                                 .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
                             }
                             if toShip > 0 {
-                                finishedTasksCount(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                finishedTasksCount(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID, projectTitle: projectTitle) {
                                     Label("To ship \(toShip)", systemImage: "arrow.up.square")
                                         .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                                 }
                             }
                             if done > 0 {
-                                finishedTasksCount(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
+                                finishedTasksCount(.done, count: done, projectWorkspaceID: projectWorkspaceID, projectTitle: projectTitle) {
                                     Label("Done \(done)", systemImage: "checkmark.square")
                                         .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
                                 }
                             }
                             Spacer(minLength: 0)
+                            if canRelease, let taskCoordinator {
+                                TaskReleaseButton(title: "Release") {
+                                    TaskActions.release(workspaceID: projectWorkspaceID, coordinator: taskCoordinator)
+                                }
+                                .accessibilityIdentifier("sidebar.workspace.finishedTasks.release.\(projectWorkspaceID.uuidString)")
+                            }
                         }
                         .font(ToastyTheme.fontWorkspaceSessionChip)
                         .labelStyle(.titleAndIcon)
@@ -1203,29 +1230,52 @@ struct SidebarView: View {
         }
     }
 
+    /// A finished-task count that opens All tasks at the project's group;
+    /// a label in hosts without the chat.
+    @ViewBuilder
     private func finishedTasksCount(
         _ group: TaskStage.Group,
         count: Int,
         projectWorkspaceID: UUID,
+        projectTitle: String?,
         @ViewBuilder label: () -> some View
     ) -> some View {
-        let accessibilityText = Self.finishedTasksFooterLabel(group, count: count)
-        // A count only: the tasks themselves are in the coordinator chat and,
-        // for To ship, in the rows above.
-        return label()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
-        .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(group == .done ? "done" : "toShip").\(projectWorkspaceID.uuidString)")
-        .background {
-            SidebarSemanticTextBridge(text: accessibilityText)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+        let opens = openCoordinatorTasks != nil
+        let accessibilityText = Self.finishedTasksFooterLabel(group, count: count, opensAllTasks: opens)
+        let identifier = "sidebar.workspace.finishedTasks.\(group == .done ? "done" : "toShip").\(projectWorkspaceID.uuidString)"
+        if let openCoordinatorTasks {
+            Button {
+                cancelWorkspaceRename()
+                _ = openCoordinatorTasks(.init(project: projectTitle, group: CoordinatorAllTasks.groupID(group)))
+            } label: {
+                label()
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(group == .done ? "Show this project's done tasks in All tasks" : "Show this project's tasks to ship in All tasks")
+            .accessibilityLabel(accessibilityText)
+            .accessibilityIdentifier(identifier)
+            .background {
+                SidebarSemanticTextBridge(text: accessibilityText)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            label()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityText)
+                .accessibilityIdentifier(identifier)
+                .background {
+                    SidebarSemanticTextBridge(text: accessibilityText)
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
         }
     }
 
-    static func finishedTasksFooterLabel(_ group: TaskStage.Group, count: Int) -> String {
+    static func finishedTasksFooterLabel(_ group: TaskStage.Group, count: Int, opensAllTasks: Bool = false) -> String {
         let counted = group == .done ? "\(count) done" : "\(count) to ship"
-        return "Finished tasks: \(counted)."
+        return "Finished tasks: \(counted).\(opensAllTasks ? " Opens All tasks." : "")"
     }
 
     private var sidebarTitlebarCover: some View {

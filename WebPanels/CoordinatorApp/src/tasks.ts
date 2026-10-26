@@ -2,7 +2,7 @@
 // The app sends the rows with their actions; the page keeps only the project
 // filter, the selected row, open groups and an open menu or question.
 import { esc } from "./render";
-import type { ChatState, TaskAction, TaskRow, TasksUIState, Tone } from "./types";
+import type { ChatState, TaskAction, TaskRow, TasksFilter, TasksUIState, Tone } from "./types";
 
 /// Groups that start closed, since they only grow.
 const closedByDefault = new Set(["done", "archived"]);
@@ -55,6 +55,23 @@ export function normalize(state: ChatState, ui: TasksUIState) {
     const row = rows.find((r) => r.id === confirming.rowID);
     if (!row || !row.confirm || row.primary?.id !== confirming.actionID) ui.confirming = null;
   }
+}
+
+/// Shows what a filter asks for: the project, the group open, and the
+/// group's first row selected. A project with no rows now shows every
+/// project, as the filter buttons do.
+export function applyFilter(state: ChatState, ui: TasksUIState, filter: TasksFilter) {
+  ui.project = filter.project;
+  if (!isGroupOpen(filter.group, ui)) {
+    if (ui.toggledGroups.has(filter.group)) ui.toggledGroups.delete(filter.group);
+    else ui.toggledGroups.add(filter.group);
+  }
+  ui.menuOpen = null;
+  ui.confirming = null;
+  // A project with no rows here shows every project, but the selection
+  // stays in the project asked for.
+  ui.selected = shownRows(state, ui).find((row) => row.group === filter.group
+    && (filter.project === null || row.project === filter.project))?.id ?? null;
 }
 
 /// The row after (`delta` 1) or before (-1) the selected one; the first row

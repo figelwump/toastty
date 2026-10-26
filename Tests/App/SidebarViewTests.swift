@@ -2020,7 +2020,8 @@ final class SidebarViewTests: XCTestCase {
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
         additionalSubspaceCount: Int = 0,
         taskRecords: [TaskRecord]? = nil,
-        withTaskBoard: Bool = false
+        withTaskBoard: Bool = false,
+        openCoordinatorTasks: (@MainActor (CoordinatorChatPayload.TasksFilter) -> Bool)? = nil
     ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
@@ -2097,7 +2098,8 @@ final class SidebarViewTests: XCTestCase {
             windowID: windowID,
             sidebarWidth: sidebarWidth,
             taskRecords: taskRecords,
-            withTaskBoard: withTaskBoard
+            withTaskBoard: withTaskBoard,
+            openCoordinatorTasks: openCoordinatorTasks
         )
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
@@ -2241,20 +2243,31 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Group the sidebar by") }, "\(textValues)")
     }
 
-    func testSidebarDoneCountIsALabelNowThatTheTasksViewIsGone() throws {
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+    func testSidebarDoneCountOpensAllTasksAtTheProjectsDoneGroup() throws {
+        var requested: [CoordinatorChatPayload.TasksFilter] = []
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true) { filter in
+            requested.append(filter)
+            return true
+        }
         defer { harness.window.orderOut(nil) }
         _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
 
-        let selectedBefore = harness.store.window(id: harness.windowID)?.selectedWorkspaceID
         harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
+        try clickSemanticText(prefix: "Finished tasks: 1 done. Opens All tasks.", in: harness.hostingView)
         pumpMainRunLoop(duration: 0.3)
-        XCTAssertEqual(harness.store.window(id: harness.windowID)?.selectedWorkspaceID, selectedBefore)
-        XCTAssertFalse(harness.store.state.coversWorkspaceContent(windowID: harness.windowID))
+        XCTAssertEqual(requested, [.init(project: "emptyos-computer", group: "done")])
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-done-count")
+    }
+
+    func testSidebarDoneCountIsALabelWithoutTheChat() throws {
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(renderedTextValues(in: harness.hostingView).contains("Finished tasks: 1 done."))
     }
 
     func testSetupCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {
@@ -3430,7 +3443,8 @@ final class SidebarViewTests: XCTestCase {
         windowID: UUID,
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
         taskRecords: [TaskRecord]? = nil,
-        withTaskBoard: Bool = false
+        withTaskBoard: Bool = false,
+        openCoordinatorTasks: (@MainActor (CoordinatorChatPayload.TasksFilter) -> Bool)? = nil
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -3469,6 +3483,7 @@ final class SidebarViewTests: XCTestCase {
             taskCoordinator: taskCoordinator,
             taskBoard: taskBoard ?? .disabled,
             newTask: withTaskBoard ? {} : nil,
+            openCoordinatorTasks: openCoordinatorTasks,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))

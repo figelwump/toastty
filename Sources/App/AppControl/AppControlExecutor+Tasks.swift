@@ -155,10 +155,24 @@ extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
             }
             try enforceWorkspaceAutomationAccess(workspaceID)
+            for key in ["group", "project"] {
+                switch args[key] {
+                case nil, .null?, .string?: continue
+                default: throw AutomationSocketError.invalidPayload("\(key) must be a string")
+                }
+            }
+            let group = args.taskString("group")
+            let project = args.taskString("project")
+            if let group, TaskStage.Group.allCases.map(CoordinatorAllTasks.groupID).contains(group) == false {
+                throw AutomationSocketError.invalidPayload("unknown group \"\(group)\"")
+            }
+            if project != nil, group == nil {
+                throw AutomationSocketError.invalidPayload("project needs group")
+            }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
             }
-            guard chat.showTasks() else {
+            guard chat.showTasks(filter: group.map { .init(project: project, group: $0) }) else {
                 throw AutomationSocketError.invalidPayload("the coordinator workspace is not open")
             }
             return .init(didMutateState: true, result: Self.coordinatorStatusSnapshot(session))

@@ -18,7 +18,8 @@ checks that:
 - the task's Needs you row shows the review reason and the packet's look_at,
   and offers Merge;
 - the Coordinator row opens the chat, and the row opens the task's packet
-  card in it;
+  card in it, which outlines the row (see the capture);
+- the first packet is not marked new; a second version marks the row new;
 - Merge asks in the row first: Cancel leaves the task unmerged;
 - Merge, then the row's Merge, accepts the merge (`mergeRequestedAt`).
 Captures of each step and remote-sidebar-needs-you-check.json go to the
@@ -221,8 +222,19 @@ def main():
         packet_card = next(i for i in chat_state()['items'] if i['type'] == 'card' and i['kind'] == 'packet')
         run_tool(driver, 'press-label', pid, f'{TITLE}, review')
         wait_for('the packet card to open', lambda: packet_card['id'] in chat_state()['expandedCardIDs'], timeout=20, interval=0.3)
+        require(chat_state()['currentTaskID'] == task_id, f'The chat does not show the task open: {chat_state()["currentTaskID"]}')
         step('row opened its packet', card=packet_card['id'])
         capture('needs-you-opens-packet')
+
+        # 2b. The first packet is not new; a second version is.
+        new_badge = f'sidebar.needsYou.task.{task_id}.new'
+        require(exists(new_badge) is False, 'The first packet is marked new')
+        published = cli_json('task', 'packet', 'publish', '--file', 'packet.json', '--screenshot', 'after-390.png',
+                             session=task_session)
+        require(published['packetVersion'] == 2, f'Packet v2 not published: {published}')
+        wait_for('the row to mark the packet new', lambda: exists(new_badge), timeout=20, interval=0.5)
+        step('second packet marked new')
+        capture('needs-you-new-packet')
 
         # 3. Merge asks in the row; Cancel leaves the task alone.
         run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{task_id}.primary')

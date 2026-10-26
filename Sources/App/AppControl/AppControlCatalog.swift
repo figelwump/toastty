@@ -707,7 +707,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Show the coordinator chat: select the coordinator workspace, with the chat over its terminal and its right panel beside it. With taskID, the chat opens and scrolls to that task's newest packet card, or its last card. Fails while the coordinator workspace does not exist. window.tasks.show and window.tasks.hide, from before the chat replaced the Tasks view, run it too.",
+                summary: "Show the coordinator chat: select the coordinator workspace, with the chat over its terminal and its right panel beside it. With taskID, the chat opens and scrolls to that task's newest card when that is a question, else its newest packet card, else its last card. Fails while the coordinator workspace does not exist. window.tasks.show and window.tasks.hide, from before the chat replaced the Tasks view, run it too.",
                 selectors: [],
                 parameters: [.taskID(required: false)],
                 aliases: aliases
@@ -716,8 +716,18 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Show All tasks: select the coordinator workspace, with the list of every task, in stage groups, over its terminal. Fails while the coordinator workspace does not exist.",
-                selectors: []
+                summary: "Show All tasks: select the coordinator workspace, with the list of every task, in stage groups, over its terminal. With group, that group opens with its first row selected, and project filters the list to one project as its rows name it. Fails while the coordinator workspace does not exist.",
+                selectors: [],
+                parameters: [
+                    .init(
+                        name: "group",
+                        summary: "Stage group to open and select in.",
+                        valueType: .string,
+                        required: false,
+                        allowedValues: TaskStage.Group.allCases.map(CoordinatorAllTasks.groupID)
+                    ),
+                    .init(name: "project", summary: "Project to show, as All tasks rows name it. Needs group.", valueType: .string, required: false),
+                ]
             )
         }
     }

@@ -3,7 +3,7 @@
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
 import { collapseNewlySuperseded, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
-import { moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
+import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
 import type { ChatEvent, ChatState, PageView } from "./types";
 
 interface WebKitMessageHandler {
@@ -90,9 +90,14 @@ function receive(next: ChatState) {
   const newView = next.view && next.view.token !== lastViewToken ? next.view : null;
   const newFocus = next.focus && next.focus.token !== lastFocusToken ? next.focus : null;
   let focusComposer = false;
+  let revealSelected = false;
   if (newView) {
     lastViewToken = newView.token;
     if (!newFocus || newView.token > newFocus.token) {
+      if (newView.view === "tasks" && newView.filter) {
+        applyFilter(next, tasksUI, newView.filter);
+        revealSelected = true;
+      }
       setView(newView.view);
       // Asked for the chat, as its shortcut does: typing goes to it.
       focusComposer = view === "chat";
@@ -100,8 +105,12 @@ function receive(next: ChatState) {
   }
   if (newFocus) {
     lastFocusToken = newFocus.token;
-    if (!newView || newFocus.token > newView.token) view = "chat";
-    const id = focusCardID(next, next.focus.taskID);
+  }
+  // A focus older than a view request is spent: the view request wins.
+  if (newFocus && (!newView || newFocus.token > newView.token)) {
+    view = "chat";
+    const asked = newFocus.cardID;
+    const id = asked && next.items.some((item) => item.id === asked) ? asked : focusCardID(next, newFocus.taskID);
     if (id) {
       // Last in the set, so the app reads it as the card opened last.
       ui.expanded.delete(id);
@@ -122,6 +131,7 @@ function receive(next: ChatState) {
   }
   render();
   if (focusComposer && !composerInput.disabled) composerInput.focus();
+  if (revealSelected && tasksUI.selected) document.getElementById(`task-row-${tasksUI.selected}`)?.scrollIntoView({ block: "nearest" });
 }
 
 function setView(next: PageView) {

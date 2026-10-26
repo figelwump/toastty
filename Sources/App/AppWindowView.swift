@@ -94,6 +94,10 @@ struct AppWindowView: View {
                                   taskID.map(chat.hasCards) ?? true else { return false }
                             return chat.show(taskID: taskID)
                         },
+                        openCoordinatorTasks: { filter in
+                            CoordinatorChatController.shared?.showTasks(filter: filter) ?? false
+                        },
+                        chatCards: CoordinatorChatController.shared?.cardIndex ?? .disabled,
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
                         requestWorkspaceClose: requestWorkspaceClose,

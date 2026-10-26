@@ -140,4 +140,60 @@ struct SidebarNeedsYouRowTests {
         task.packetVersion = nil
         #expect(cache.lookAt(task, packets: packets) == nil)
     }
+
+    @Test
+    func answerAndOpenShowTheTasksCardInTheChatWhenItHasOne() throws {
+        let packet = CoordinatorChatCardIndex.TaskCards(latestKind: .packet, isNew: false)
+        let question = CoordinatorChatCardIndex.TaskCards(latestKind: .question, isNew: false)
+
+        // A finished task with a card: Open shows the card, where the
+        // coordinator relays what the agent asked.
+        let finished = SidebarNeedsYouRow.make(item(.needsYou(.agentFinished), pullRequest: false), cards: question, lookAt: { _ in nil })
+        #expect(finished.primary == .openInChat(taskID: try #require(finished.taskID), isAnswer: false))
+        #expect(finished.primary?.title == "Open")
+        #expect(finished.hasCard)
+
+        let stuck = SidebarNeedsYouRow.make(item(.needsYou(.agentError), pullRequest: false), cards: packet, lookAt: { _ in nil })
+        #expect(stuck.primary == .openInChat(taskID: try #require(stuck.taskID), isAnswer: false))
+
+        // An agent waiting for input asks in its terminal; Answer opens the
+        // chat only when the coordinator's newest card is the question.
+        let asked = SidebarNeedsYouRow.make(item(.needsYou(.agentNeedsInput)), cards: question, lookAt: { _ in nil })
+        #expect(asked.primary == .openInChat(taskID: try #require(asked.taskID), isAnswer: true))
+        #expect(asked.primary?.title == "Answer")
+        let waiting = SidebarNeedsYouRow.make(item(.needsYou(.agentNeedsInput)), cards: packet, lookAt: { _ in nil })
+        #expect(waiting.primary == .answer(workspaceID: taskSpace))
+
+        // A card still settles a task whose task space is gone.
+        let gone = record(pullRequest: false)
+        let noSpace = TaskBoardItem(
+            id: .task(gone.id), record: gone, title: "fix-dot", projectTitle: "toastty",
+            stage: .needsYou(.agentFinished), agent: .none, activityAt: at
+        )
+        #expect(SidebarNeedsYouRow.make(noSpace, cards: packet, lookAt: { _ in nil }).primary == .openInChat(taskID: gone.id, isAnswer: false))
+        #expect(SidebarNeedsYouRow.make(noSpace, lookAt: { _ in nil }).primary == nil)
+
+        // Merge and the settling actions do not change with a card.
+        let review = SidebarNeedsYouRow.make(item(.needsYou(.review)), cards: packet, lookAt: { _ in nil })
+        #expect(review.primary?.isMerge == true)
+    }
+
+    @Test
+    func theRowWhoseCardIsOpenIsMarkedAndANewPacketSaysSo() throws {
+        let open = item(.needsYou(.review))
+        let other = item(.needsYou(.agentFinished), pullRequest: false)
+        let openID = try #require(open.taskID)
+        let cards: [UUID: CoordinatorChatCardIndex.TaskCards] = [
+            openID: .init(latestKind: .packet, isNew: true),
+            try #require(other.taskID): .init(latestKind: .taskStarted, isNew: false),
+        ]
+        let rows = SidebarNeedsYouRow.rows([open, other], cards: { cards[$0] }, openTaskID: openID, lookAt: { _ in nil })
+        #expect(rows.map(\.isOpenInChat) == [true, false])
+        #expect(rows.map(\.isNew) == [true, false])
+        #expect(rows[0].accessibilityLabel == "fix-dot, review, new, in toastty, Ready for your review")
+
+        // With no chat, no row has a card and none is open.
+        let plain = SidebarNeedsYouRow.rows([open, other], lookAt: { _ in nil })
+        #expect(plain.allSatisfy { $0.hasCard == false && $0.isOpenInChat == false && $0.isNew == false })
+    }
 }
