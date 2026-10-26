@@ -33,6 +33,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
@@ -314,17 +315,18 @@ def main():
         wait_for('the started task in Running', lambda: rows().get(waiting_id, {}).get('group') == 'running')
         step('setup recovered from Needs you and All tasks', taskID=waiting_id, group=rows()[waiting_id]['group'])
 
-        # 8. An installed agent that exits before readiness leaves a setup
-        # failure in Needs you; Retry uses the repaired agent in the same task.
-        original_agent = agent.read_text()
-        try:
-            agent.write_text('#!/bin/sh\nexit 1\n')
-            broken = cli_json('task', 'create', 'Recover a failed agent start', '--title', 'Recover a failed agent start', '--workspace', workspace_id)
-            broken_id = broken['taskID']
-            wait_for('setup to report the failed start', lambda: cli_json('task', 'get', broken_id)['setup']['state'] == 'setupFailed', timeout=90)
-        finally:
-            agent.write_text(original_agent)
-            agent.chmod(0o755)
+        # 8. A failed worktree hook leaves setup in Needs you. Retry
+        # resumes the same task after its prerequisite becomes available.
+        allow_hook = root / 'allow-create-hook'
+        with (user_home / '.toastty/tasks.toml').open('a') as config_file:
+            config_file.write('create_hook = ' + json.dumps('test -f ' + shlex.quote(str(allow_hook))) + '\n')
+        broken = cli_json('task', 'create', 'Recover a failed worktree hook', '--title', 'Recover a failed worktree hook',
+                          '--workspace', workspace_id, '--start-work')
+        broken_id = broken['taskID']
+        wait_for('setup to report the failed hook', lambda: cli_json('task', 'get', broken_id)['setup']['state'] == 'setupFailed', timeout=60)
+        failed = cli_json('task', 'get', broken_id)
+        require('create_hook' in failed['setup'].get('reason', ''), f'An unexpected setup failure occurred: {failed}')
+        allow_hook.write_text('ready\n')
         wait_for('the failed setup in Needs you', lambda: rows().get(broken_id, {}).get('group') == 'needsYou')
         page('click', f"task-primary-{rows()[broken_id]['id']}")
         wait_for('Retry on the failed setup card', lambda: run_tool(helper, 'exists', pid, 'task.setup.retry', check=False).returncode == 0)
@@ -332,7 +334,7 @@ def main():
         run_tool(helper, 'press', pid, 'task.setup.retry')
         wait_for('Retry to start the same task', lambda: cli_json('task', 'get', broken_id)['setup']['state'] == 'started', timeout=60)
         wait_for('the recovered task in Running', lambda: rows().get(broken_id, {}).get('group') == 'running')
-        step('failed setup retried from All tasks', taskID=broken_id, group=rows()[broken_id]['group'])
+        step('failed worktree setup retried from All tasks', taskID=broken_id, group=rows()[broken_id]['group'])
 
         evidence['status'] = 'passed'
     except Exception:
