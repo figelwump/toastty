@@ -2187,7 +2187,7 @@ public enum ToasttyCLI {
                 if state == "needsWorkspace" {
                     var reason = "it has no workspace"
                     if case .string(let detail)? = setup["reason"] { reason = detail }
-                    fputs("task \(taskID) needs a workspace: \(reason)\nPick one in the Inbox, or run: toastty task set-workspace \(taskID) --workspace <id>\n", stderr)
+                    fputs("task \(taskID) needs a workspace: \(reason)\nPick one in the Tasks view, or run: toastty task set-workspace \(taskID) --workspace <id>\n", stderr)
                     return 1
                 }
                 return 0

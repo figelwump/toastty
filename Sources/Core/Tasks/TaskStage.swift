@@ -3,10 +3,12 @@ import Foundation
 /// Where a task stands: worked out from its record and from what Toastty
 /// sees now, never stored, so it cannot go stale. The rules are checked in
 /// order and the first match wins: a stopped cleanup, Archived, Done, To
-/// ship, Needs you, Inbox, Running. Needs you comes before Inbox, so a task
-/// whose setup failed still counts toward the Needs you badge.
+/// ship, Needs you, Starting, Running. Needs you comes before Starting, so
+/// a task whose setup failed counts toward the Needs you badge.
 public enum TaskStage: Equatable, Sendable {
-    case inbox
+    /// Setup, triage, or a move into a worktree is under way. Lists show it
+    /// with Running.
+    case starting
     case needsYou(Attention)
     case running
     case toShip
@@ -29,14 +31,15 @@ public enum TaskStage: Equatable, Sendable {
         case review
         /// The agent marked work without a pull request ready.
         case readyForReview
-        /// The agent finished a turn and waits for the user's next prompt.
+        /// The agent finished a turn the user has not read yet and waits
+        /// for the next prompt.
         case agentFinished
         /// Closing the task space or removing the worktree stopped, after a
         /// merge, an archive or a release: "Merged · clean up?".
         case cleanupStopped(reason: String)
 
-        /// Whether the task has not reached its task space yet. Lists show
-        /// these with the Inbox, where the task already is.
+        /// Whether the task has not reached its task space yet: setup or
+        /// the move into a worktree failed.
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
@@ -47,7 +50,6 @@ public enum TaskStage: Equatable, Sendable {
 
     /// The groups lists show, in their order.
     public enum Group: Int, CaseIterable, Comparable, Sendable {
-        case inbox
         case needsYou
         case running
         case toShip
@@ -59,13 +61,12 @@ public enum TaskStage: Equatable, Sendable {
         }
     }
 
-    /// The group a list shows the task in. A task that needs the user
-    /// before it reaches its task space stays with the Inbox.
+    /// The group a list shows the task in. A task that is starting lists
+    /// with Running, and one whose start failed with Needs you.
     public var group: Group {
         switch self {
-        case .inbox: .inbox
-        case .needsYou(let attention): attention.isBeforeStart ? .inbox : .needsYou
-        case .running: .running
+        case .needsYou: .needsYou
+        case .starting, .running: .running
         case .toShip: .toShip
         case .done: .done
         case .archived: .archived
@@ -78,12 +79,24 @@ public enum TaskStage: Equatable, Sendable {
         return false
     }
 
-    /// Whether the task's work is over: it shipped, merged, finished, or
-    /// was archived. These task spaces leave the sidebar.
+    /// Whether the task's work is over: it shipped, finished, or was
+    /// archived. A merged task waiting for a release is not finished: its
+    /// task space stays open until the release ships.
     public var isFinished: Bool {
         switch self {
-        case .toShip, .done, .archived: true
-        case .inbox, .needsYou, .running: false
+        case .done, .archived: true
+        case .starting, .needsYou, .running, .toShip: false
+        }
+    }
+
+    /// Whether the task has not reached its task space yet, or is still
+    /// moving into its worktree: setup, triage or the move is under way, or
+    /// one of them failed.
+    public var isBeforeStart: Bool {
+        switch self {
+        case .starting: true
+        case .needsYou(let attention): attention.isBeforeStart
+        case .running, .toShip, .done, .archived: false
         }
     }
 
@@ -108,7 +121,7 @@ public enum TaskStage: Equatable, Sendable {
         case .setupFailed(let reason):
             return .needsYou(.setupFailed(reason: reason))
         case .routing, .settingUp:
-            return .inbox
+            return .starting
         case .started:
             break
         }
@@ -116,7 +129,7 @@ public enum TaskStage: Equatable, Sendable {
         case .failed(let reason)?:
             return .needsYou(.moveFailed(reason: reason))
         case .running?:
-            return .inbox
+            return .starting
         case .finished?, nil:
             break
         }
@@ -151,8 +164,9 @@ public enum TaskStage: Equatable, Sendable {
         if facts.readyForReviewAt != nil {
             return .needsYou(.readyForReview)
         }
-        // The agent's turn is over, so the next step is the user's, unless
-        // the agent ended its turn to wait for another task.
+        // The agent's turn is over and unread, so the next step is the
+        // user's, unless the agent ended its turn to wait for another task.
+        // Once the user reads the turn, an idle agent counts as running.
         if live.agent == .finished, live.waitsOnTask == false {
             return .needsYou(.agentFinished)
         }
@@ -222,10 +236,10 @@ public struct TaskStageFacts: Equatable, Sendable {
 public enum TaskAgentActivity: Equatable, Sendable {
     /// No agent session in the task space.
     case none
-    /// At the prompt without a finished turn: just started, or its only
-    /// turn was interrupted before it began.
+    /// At the prompt with no unread turn: just started or restored, or the
+    /// user has read the turn it finished.
     case idle
-    /// Finished a turn and waits for a prompt.
+    /// Finished a turn the user has not read yet, and waits for a prompt.
     case finished
     case working
     case needsInput

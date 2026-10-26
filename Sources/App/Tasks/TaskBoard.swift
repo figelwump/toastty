@@ -105,27 +105,17 @@ enum TaskBoard {
     }
 
     /// The most urgent thing a task space's agents are doing. A session that
-    /// waits on its sub-agents or is resuming is working. An idle session has
-    /// finished and waits for a prompt once it has ended a turn. Without an
-    /// ended turn it waits too, since turn timing does not survive a relaunch
-    /// and a restored session starts idle, except for `launchedSessionID`: the
-    /// session the task started with its first prompt, which is only about to
-    /// begin its first turn. Without `launchedSessionID`, as for a task space
-    /// with no record, an idle session counts only after an ended turn.
-    static func agentActivity(_ statuses: [WorkspaceSessionStatus], launchedSessionID: String? = nil) -> TaskAgentActivity {
+    /// waits on its sub-agents or is resuming is working. Only a finished
+    /// turn the user has not read counts as finished, as the sidebar's ready
+    /// mark shows it: once the user reads it, or after a relaunch, which
+    /// restores every session idle, the agent is idle.
+    static func agentActivity(_ statuses: [WorkspaceSessionStatus], in workspace: WorkspaceState?) -> TaskAgentActivity {
         guard statuses.isEmpty == false else { return .none }
         let kinds = Set(statuses.map(\.status.kind))
         if kinds.contains(.needsApproval) { return .needsInput }
         if kinds.contains(.error) { return .error }
         if kinds.contains(.working) || statuses.contains(where: { $0.projection != .none }) { return .working }
-        let finished = statuses.contains { status in
-            switch status.status.kind {
-            case .ready: true
-            case .idle: status.lastTurnDuration != nil || (launchedSessionID != nil && status.sessionID != launchedSessionID)
-            case .working, .needsApproval, .error: false
-            }
-        }
-        return finished ? .finished : .idle
+        return hasUnreadTurn(statuses, in: workspace) ? .finished : .idle
     }
 
     /// Whether a session in the task space ended a turn whose panel is still
@@ -157,7 +147,7 @@ enum TaskBoard {
         let annotationLink = taskSpace.flatMap(pullRequestLink)
         let link = annotationLink ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
         let pullRequestState = link.flatMap(inputs.pullRequestState)
-        let agent = agentActivity(statuses, launchedSessionID: record.operation.agentLaunch?.sessionID)
+        let agent = agentActivity(statuses, in: taskSpace)
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
@@ -259,7 +249,7 @@ enum TaskBoard {
         let statuses = inputs.statuses(workspace.id)
         let link = pullRequestLink(workspace)
         let pullRequestState = link.flatMap(inputs.pullRequestState)
-        let agent = agentActivity(statuses)
+        let agent = agentActivity(statuses, in: workspace)
         let project = inputs.state.workspacesByID[parentID]
         let stage = TaskStage.derive(
             .observed(doneAt: workspace.doneAt),
@@ -518,7 +508,7 @@ final class TaskBoardStore: ObservableObject {
             guard let workspace = store.state.workspacesByID[workspaceID],
                   let link = TaskBoard.pullRequestLink(workspace) else { continue }
             links[workspaceID] = link
-            if TaskBoard.agentActivity(sessionRuntimeStore.workspaceStatuses(for: workspaceID)) == .working {
+            if TaskBoard.agentActivity(sessionRuntimeStore.workspaceStatuses(for: workspaceID), in: workspace) == .working {
                 working.insert(workspaceID)
             }
         }

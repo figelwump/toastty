@@ -65,7 +65,7 @@ enum ToastyTheme {
     static let sidebarTaskToShipMark = Color(hex: 0xB98CE0)
     static let sidebarTaskToShipMarkBackground = Color(hex: 0xB98CE0, alpha: 0.22)
     /// The dashed box of a task that has not started.
-    static let sidebarTaskInboxMark = Color(hex: 0x8F877D)
+    static let sidebarTaskStartingMark = Color(hex: 0x8F877D)
     /// A done subspace's title recedes next to open work.
     static let sidebarSubspaceDoneTitleText = Color(hex: 0x9A9189)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)

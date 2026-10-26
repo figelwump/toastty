@@ -6,7 +6,6 @@ import SwiftUI
 enum TaskBoardPresentation {
     static func groupTitle(_ group: TaskStage.Group) -> String {
         switch group {
-        case .inbox: "Inbox"
         case .needsYou: "Needs you"
         case .running: "Running"
         case .toShip: "To ship"
@@ -26,11 +25,12 @@ enum TaskBoardPresentation {
     /// One line on what the task is doing or waiting for.
     static func statusLine(_ item: TaskBoardItem) -> String {
         switch item.stage {
-        case .inbox:
+        case .starting:
             switch item.record?.setup {
-            case .routing?: return "setting up"
-            case .settingUp?: return "setting up"
-            default: return "moving to worktree"
+            case .started?:
+                return item.record.map { "Moving to worktree · \(TaskSetupPresentation.startWorkStep($0))" } ?? "Moving to worktree"
+            case .routing?: return "Setting up · choosing a workspace"
+            default: return "Setting up"
             }
         case .needsYou(let attention):
             switch attention {
@@ -74,7 +74,7 @@ enum TaskBoardPresentation {
     /// The stage's name and why, for the detail pane.
     static func stageDescription(_ item: TaskBoardItem) -> (stage: String, why: String) {
         switch item.stage {
-        case .inbox: return ("Inbox", statusLine(item))
+        case .starting: return ("Starting", statusLine(item))
         case .needsYou(let attention):
             switch attention {
             case .pickWorkspace(let reason), .setupFailed(let reason), .moveFailed(let reason):
@@ -123,7 +123,7 @@ enum TaskBoardPresentation {
 
         var help: String {
             switch self {
-            case .merge: "The task's agent checks the pull request, then merges it; Toastty then closes the task space and removes its worktree"
+            case .merge: "The task's agent checks the pull request, then merges it; Toastty then closes the task space and removes its worktree, or keeps them until the release ships when the project has release tags"
             case .mergeWithoutChecks: "Merge the pull request now, without the agent's checks"
             case .cancelMerge: "Stop the merge: the agent's check, or Toastty's wait for GitHub's checks"
             case .markDone: "Finish the task without a merge"
@@ -247,9 +247,9 @@ enum TaskBoardPresentation {
         showsMergeShortcut: Bool = false,
         isTriageConfigured: @autoclosure () -> Bool = false
     ) -> [[MenuItem]] {
-        if item.stage.group == .inbox {
+        if item.stage.isBeforeStart {
             guard let record = item.record else { return [] }
-            return [inboxMenuItems(record, isTriageConfigured: isTriageConfigured())]
+            return [setupMenuItems(record, isTriageConfigured: isTriageConfigured())]
         }
         var navigation: [MenuItem] = []
         let isCurrent = item.taskSpaceWorkspaceID != nil && item.taskSpaceWorkspaceID == currentWorkspaceID
@@ -275,9 +275,9 @@ enum TaskBoardPresentation {
     }
 
     /// A task that has not started yet: retry what failed, or delete it.
-    static func inboxMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {
+    static func setupMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {
         var items: [MenuItem] = []
-        if SidebarInboxRowPresentation.canRetry(record) {
+        if TaskSetupPresentation.canRetry(record) {
             items.append(.retry(taskID: record.id, title: record.setup.isStarted ? "Retry Move" : "Retry Setup"))
         } else if case .needsWorkspace = record.setup, isTriageConfigured() {
             items.append(.retryTriage(taskID: record.id))
@@ -345,6 +345,52 @@ enum TaskBoardPresentation {
     }
 }
 
+/// Where a task's setup or its move into a worktree stands, for the
+/// Starting rows and the setup card.
+enum TaskSetupPresentation {
+    /// Whether setup has not finished, or the move into a worktree is
+    /// running or failed: the setup card's controls apply.
+    static func isSettingUp(_ record: TaskRecord) -> Bool {
+        guard record.setup.isStarted else { return true }
+        switch record.startWork?.state {
+        case .running?, .failed?: return true
+        case .finished?, nil: return false
+        }
+    }
+
+    /// What a move into a worktree is doing now, from the steps it saved.
+    static func startWorkStep(_ record: TaskRecord) -> String {
+        let operation = record.operation
+        if record.worktree == nil {
+            return "making the worktree"
+        }
+        if operation.hookFinishedAt == nil {
+            return "running create_hook"
+        }
+        guard let session = operation.worktreeSession, session.sessionID != nil else {
+            return "waiting for the agent's turn to end"
+        }
+        if session.forked, session.nativeConversationID == nil {
+            return "waiting for the forked agent"
+        }
+        return "closing the old session"
+    }
+
+    /// Whether Retry applies: setup or a move into a worktree failed.
+    static func canRetry(_ record: TaskRecord) -> Bool {
+        if case .setupFailed = record.setup { return true }
+        if record.setup.isStarted, case .failed? = record.startWork?.state { return true }
+        return false
+    }
+
+    /// Why setup or the move failed.
+    static func failureReason(_ record: TaskRecord) -> String? {
+        if case .setupFailed(let reason) = record.setup { return reason }
+        if record.setup.isStarted, case .failed(let reason)? = record.startWork?.state { return reason }
+        return nil
+    }
+}
+
 /// A task's square mark: the same family as the sidebar's task space marks.
 struct TaskStageMark: View {
     let item: TaskBoardItem
@@ -352,9 +398,9 @@ struct TaskStageMark: View {
     var body: some View {
         Group {
             switch item.stage {
-            case .inbox:
+            case .starting:
                 RoundedRectangle(cornerRadius: 1.5)
-                    .strokeBorder(ToastyTheme.sidebarTaskInboxMark, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
+                    .strokeBorder(ToastyTheme.sidebarTaskStartingMark, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
                     .frame(width: 9, height: 9)
             case .needsYou(let attention):
                 switch attention {
@@ -369,15 +415,8 @@ struct TaskStageMark: View {
                 case .agentError:
                     RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
                 case .agentFinished:
-                    // The sidebar's ready square: filled while the turn is
-                    // unread, an outline once the user has looked.
-                    if item.hasUnreadTurn {
-                        RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
-                    } else {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .strokeBorder(ToastyTheme.sessionReadyText, lineWidth: 1.2)
-                            .frame(width: 7, height: 7)
-                    }
+                    // The sidebar's ready square for an unread turn.
+                    RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
                 case .agentNeedsInput, .taskSpaceClosed, .cleanupStopped:
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(ToastyTheme.sessionNeedsApprovalText)

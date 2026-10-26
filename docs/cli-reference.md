@@ -897,8 +897,8 @@ after its current turn ends, and the calling session keeps running; `--wait`
 cannot be used with it. See
 [Fork the conversation into new tasks](tasks.md#fork-the-conversation-into-new-tasks).
 
-Without `--workspace`, and outside an agent session, the task waits in the
-Inbox for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
+Without `--workspace`, and outside an agent session, the task waits in Needs
+you for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
 effort you leave out; optional [triage](tasks.md#optional-triage) fills them
 first when `[triage]` is set up.
 `task set-workspace` places a task that waits for a workspace, in an open one,
@@ -913,9 +913,10 @@ returns once the move is saved, and the agent should then end its turn: the
 move forks the conversation after the turn ends. `task get` reports the move
 under `worktree`, and `task retry` continues a move that failed.
 
-`task get` and `task list` report each task's `stage`: its `group` (`inbox`,
-`needsYou`, `running`, `toShip`, `done` or `archived`), `needsUser`, and for
-Needs you the `attention` and `reason`. See [Stages](tasks.md#stages).
+`task get` and `task list` report each task's `stage`: its `group`
+(`needsYou`, `running`, `toShip`, `done` or `archived`), `needsUser`, and for
+Needs you the `attention` and `reason`. A task that is starting reports
+`running`; its `setup` and `worktree` say how far it got. See [Stages](tasks.md#stages).
 `task adopt` gives a task space without a record one; it defaults to the
 calling agent's task space.
 

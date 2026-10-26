@@ -18,7 +18,9 @@ task's, whose agent is quiet. Through the UI and the CLI it checks that:
   newest as its task space row;
 - "Show 2 more" in either segment opens the Tasks view with the newest task
   the sidebar did not show selected;
-- a To ship row opens the Tasks view with its task selected;
+- a To ship row whose task space has closed opens the Tasks view with its
+  task selected; the newest task's row opens its task space, which stays
+  open while the task waits for a release;
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count.
 Captures of each step and remote-sidebar-to-ship-check.json go to the
@@ -165,6 +167,9 @@ def main():
     def tasks_view_shown():
         return run_tool(helper, 'exists', pid, 'tasks.view.close', check=False).returncode == 0
 
+    def selected_workspaces():
+        return [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w.get('isSelected')]
+
     def sidebar_rows():
         """The task rows' and "Show N more" labels, top to bottom. A row's
         label starts with its task's title, which only rows carry, or with
@@ -238,6 +243,13 @@ def main():
 
         open_from_sidebar('Show 2 more', newest[3], 'projects-show-more')
         open_from_sidebar(f'{newest[1]}, ', newest[1], 'projects-row-opens-task')
+        # The newest task's task space is open, so its row selects it.
+        run_tool(driver, 'press-label', pid, f'{newest[0]}, ')
+        wait_for('the kept task space to be selected', lambda: selected_workspaces() == [kept])
+        require(tasks_view_shown() is False, 'The open task space\'s To ship row opened the Tasks view')
+        step('to ship row opened its task space', workspaceID=kept)
+        capture('projects-row-opens-task-space')
+        cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
 
         # 2. Status: the same rows under the project's To ship line.
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')

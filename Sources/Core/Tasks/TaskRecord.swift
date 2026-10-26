@@ -451,7 +451,7 @@ public enum TaskSource: Codable, Equatable, Sendable {
     }
 }
 
-/// How far setup got. A task is in the Inbox until it has started.
+/// How far setup got. A task is Starting until it has started.
 public enum TaskSetupState: Codable, Equatable, Sendable {
     /// Triage is choosing what the caller left out.
     case routing

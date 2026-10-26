@@ -578,7 +578,7 @@ struct SidebarView: View {
     // Observed so first-use claims, unlocked replacements, and legacy
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
-    /// Not observed here: only the Inbox section redraws when tasks change.
+    /// Not observed here: `taskBoard` publishes task changes.
     let taskCoordinator: TaskCoordinator?
     /// Every task's stage. Observed: a stage change moves rows and marks.
     @ObservedObject var taskBoard: TaskBoardStore
@@ -811,15 +811,6 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if let taskCoordinator {
-                            // Inbox tasks have no running task space yet, so
-                            // they sit above every card.
-                            SidebarInboxSection(
-                                records: taskCoordinator.records,
-                                coordinator: taskCoordinator,
-                                workspaceTitle: { store.state.workspacesByID[$0]?.title }
-                            )
-                        }
                         if taskBoard.isEnabled, sidebarSegment == .status {
                             statusSegmentContent
                         } else if store.window(id: windowID) != nil {
@@ -1049,8 +1040,7 @@ struct SidebarView: View {
         _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
     }
 
-    /// The Status segment: Needs you, Running, To ship and Done, below the
-    /// Inbox the sidebar always shows.
+    /// The Status segment: Needs you, Running, To ship and Done.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
         let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)
@@ -1089,16 +1079,22 @@ struct SidebarView: View {
         .padding(.top, 2)
     }
 
-    /// A merged task waiting for a release, under its project's To ship
-    /// line or card. Its task space has usually closed, so it opens the task
-    /// in the Tasks view.
+    /// A merged task waiting for a release, under its project's card. Its
+    /// task space stays open until the release ships, so the row opens it;
+    /// a task whose task space has closed opens in the Tasks view.
     private func toShipTaskRow(_ item: TaskBoardItem) -> some View {
         let hoverID = switch item.id {
         case .task(let id), .taskSpace(let id): id
         }
         return SidebarHoverRegion(id: hoverID, selection: hoverState.toShipTask) { isHovered in
             let label = "\(item.title), \(TaskBoardPresentation.statusLine(item))"
-            let open = { openTasksView(selecting: item.id) }
+            let open = {
+                if let workspaceID = item.taskSpaceWorkspaceID {
+                    runTaskMenuItem(.openTaskSpace(workspaceID: workspaceID))
+                } else {
+                    openTasksView(selecting: item.id)
+                }
+            }
             HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
                 SubspaceRailStatusIcon(status: .toShip, isDoneTogglePreviewed: false)
                     .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
@@ -3664,7 +3660,10 @@ struct SidebarView: View {
             doneAt: workspace.doneAt,
             annotations: workspace.annotations,
             primaryAnnotationKey: workspace.primaryAnnotationKey,
-            summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
+            // While setup or the move into a worktree runs or has failed,
+            // the row says so instead of what its sessions show.
+            summary: boardItem.flatMap { $0.stage.isBeforeStart ? TaskBoardPresentation.statusLine($0) : nil }
+                ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
             spawningSessionID: workspace.spawningSessionID,
             spawnerName: spawner?.displayTitle,
             spawnerPanelID: spawner?.panelID,
