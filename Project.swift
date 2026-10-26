@@ -486,7 +486,14 @@ let project = Project(
             productName: "Toastty",
             bundleId: "com.GiantThings.toastty",
             deploymentTargets: .macOS("14.0"),
-            infoPlist: .extendingDefault(with: [
+            // SwiftUI owns startup; Tuist's macOS defaults require Main.storyboard.
+            infoPlist: .dictionary([
+                "CFBundleDevelopmentRegion": .string("$(DEVELOPMENT_LANGUAGE)"),
+                "CFBundleExecutable": .string("$(EXECUTABLE_NAME)"),
+                "CFBundleIdentifier": .string("$(PRODUCT_BUNDLE_IDENTIFIER)"),
+                "CFBundleInfoDictionaryVersion": .string("6.0"),
+                "CFBundleName": .string("$(PRODUCT_NAME)"),
+                "CFBundlePackageType": .string("APPL"),
                 "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
                 "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
                 "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
@@ -494,6 +501,7 @@ let project = Project(
                 "NSCameraUsageDescription": .string("A program running within Toastty would like to use the camera."),
                 "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
                 "NSMicrophoneUsageDescription": .string("A program running within Toastty would like to use your microphone."),
+                "NSPrincipalClass": .string("NSApplication"),
                 "ToasttyPushRelayURL": .string(pushRelayURL),
                 "ToasttyPushRelayID": .string(pushRelayID),
                 "ToasttyPushAPNsEnvironment": .string(pushAPNsEnvironment),

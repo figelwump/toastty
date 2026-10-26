@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -41,15 +44,67 @@ function reject(overrides, diagnostic) {
   assert.match(result.stdout + result.stderr, diagnostic);
 }
 
-function embeddedSettings(overrides) {
+function appManifest(overrides) {
   const result = evaluate(overrides);
   assert.equal(result.status, 0, result.stderr);
   const manifest = JSON.parse(result.stdout);
-  const app = manifest.targets.find(target => target.name === 'ToasttyApp');
-  const info = app.infoPlist.extendingDefault.with;
+  return manifest.targets.find(target => target.name === 'ToasttyApp');
+}
+
+function embeddedSettings(overrides) {
+  const info = appManifest(overrides).infoPlist.dictionary._0;
   return ['ToasttyPushRelayURL', 'ToasttyPushRelayID', 'ToasttyPushAPNsEnvironment']
     .map(key => info[key].string._0);
 }
+
+test('generated app plist does not request a storyboard and preserves bundle metadata', () => {
+  const app = appManifest(production);
+  const encodedPlist = Buffer.from(JSON.stringify(app.infoPlist)).toString('base64');
+  const fixture = mkdtempSync(join(tmpdir(), 'toastty-app-plist-'));
+  try {
+    mkdirSync(join(fixture, 'Tuist'));
+    writeFileSync(join(fixture, 'Project.swift'), `
+import Foundation
+import ProjectDescription
+let appInfoPlist = try JSONDecoder().decode(InfoPlist.self, from: Data(base64Encoded: "${encodedPlist}")!)
+let project = Project(name: "LaunchFixture", targets: [
+    .target(name: "LaunchFixture", destinations: .macOS, product: .app,
+            bundleId: "dev.toastty.launch-fixture", deploymentTargets: .macOS("14.0"),
+            infoPlist: appInfoPlist, sources: ["App.swift"])
+])
+`);
+    writeFileSync(join(fixture, 'App.swift'), 'import SwiftUI\n@main struct LaunchFixture: App { var body: some Scene { WindowGroup { Text("Fixture") } } }\n');
+    const generated = spawnSync('tuist', ['generate', '--path', fixture, '--no-open'], {
+      cwd: root, encoding: 'utf8', timeout: 120_000,
+    });
+    assert.ifError(generated.error);
+    assert.equal(generated.status, 0, generated.stdout + generated.stderr);
+    const parsed = spawnSync('plutil', ['-convert', 'json', '-o', '-',
+      join(fixture, 'Derived/InfoPlists/LaunchFixture-Info.plist')], { encoding: 'utf8' });
+    assert.ifError(parsed.error);
+    assert.equal(parsed.status, 0, parsed.stderr);
+    const info = JSON.parse(parsed.stdout);
+    assert.equal(info.NSMainStoryboardFile, undefined);
+    assert.equal(info.NSMainNibFile, undefined);
+    for (const [key, value] of Object.entries({
+      CFBundleIdentifier: '$(PRODUCT_BUNDLE_IDENTIFIER)',
+      CFBundleExecutable: '$(EXECUTABLE_NAME)',
+      CFBundleName: '$(PRODUCT_NAME)',
+      CFBundlePackageType: 'APPL',
+      CFBundleShortVersionString: '$(MARKETING_VERSION)',
+      CFBundleVersion: '$(CURRENT_PROJECT_VERSION)',
+      NSPrincipalClass: 'NSApplication',
+      LSMinimumSystemVersion: '14.0',
+      LSApplicationCategoryType: 'public.app-category.developer-tools',
+      NSCameraUsageDescription: 'A program running within Toastty would like to use the camera.',
+      NSMicrophoneUsageDescription: 'A program running within Toastty would like to use your microphone.',
+    })) {
+      assert.equal(info[key], value, key);
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
 
 test('missing push configuration fails instead of silently disabling alerts', () => {
   reject({}, /Configure the Mac push relay with TUIST_TOASTTY_PUSH_RELAY_URL/);
