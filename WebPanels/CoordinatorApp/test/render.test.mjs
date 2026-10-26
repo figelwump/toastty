@@ -52,8 +52,9 @@ test("agent text is escaped everywhere, and links open in the right panel", () =
   const html = render.renderItem({ type: "message", id: "m1", at: "", role: "assistant", text: "<img src=x onerror=alert(1)> see https://example.com/a." }, ui);
   assert.ok(!html.includes("<img"));
   assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
-  // The page routes clicks on markdown links to the right panel.
-  assert.ok(html.includes('class="bubble md"') && html.includes('<a href="https://example.com/a">'));
+  // Markdown links are the same right-panel buttons; the page has no <a>.
+  assert.ok(html.includes('class="bubble md"') && html.includes('data-act="open-url" data-url="https://example.com/a"'));
+  assert.ok(!html.includes("<a "));
   const user = render.renderItem({ type: "message", id: "u1", at: "", role: "user", text: "see https://example.com/b" }, ui);
   assert.ok(user.includes('data-act="open-url" data-url="https://example.com/b"'));
   const hostile = card({ task: task({ title: '"><script>x</script>' }), packet: packet({ lookAt: "<b>bold</b>" }) });
@@ -133,8 +134,11 @@ test("the coordinator's markdown renders, and stays safe", () => {
   assert.ok(!/<script|<b |<img/.test(hostile));
   assert.ok(hostile.includes("&lt;script&gt;") && hostile.includes("&lt;b onclick=x&gt;"));
   // An unsafe link loses its target; an image becomes a link to it.
-  assert.ok(hostile.includes('<a href="">x</a>') && !hostile.includes("javascript:"));
-  assert.ok(hostile.includes('!<a href="https://e.com/a.png">i</a>'));
+  assert.ok(hostile.includes('<button class="lnk inline" disabled>x</button>') && !hostile.includes("javascript:"));
+  assert.ok(hostile.includes('!<button class="lnk inline" data-act="open-url" data-url="https://e.com/a.png">i</button>'));
+  assert.ok(!hostile.includes("<a "));
+  // The app takes only a lowercase http(s) scheme.
+  assert.ok(render.markdown('[Docs](HTTPS://example.com/A?b=1&c=2 "t")').includes('data-url="https://example.com/A?b=1&amp;c=2">Docs</button>'));
 });
 
 test("a question asked from a card shows only what the user typed, with its task", () => {

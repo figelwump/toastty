@@ -349,11 +349,18 @@ struct CoordinatorChatTests {
         let taskID = UUID()
         // What the coordinator receives names the task, and reads back intact
         // even when the title has quotes and the text spans lines.
-        let ask = CoordinatorTaskAsk(taskID: taskID, title: #"the "coordinator" session"#, packetVersion: 2, text: "yes\nmove it")
-        #expect(ask.message == #"About task "the "coordinator" session" (task ID \#(taskID.uuidString), packet v2): yes"# + "\nmove it")
+        let ask = CoordinatorTaskAsk(taskID: taskID, title: #"the "coordinator" session \ log"#, packetVersion: 2, text: "yes\nmove it")
+        #expect(ask.message == #"About task "the \"coordinator\" session \\ log" (task ID \#(taskID.uuidString), packet v2): yes"# + "\nmove it")
         #expect(CoordinatorTaskAsk(message: ask.message) == ask)
         let noPacket = CoordinatorTaskAsk(taskID: taskID, title: "Fix totals", packetVersion: nil, text: "ok")
         #expect(CoordinatorTaskAsk(message: noPacket.message) == noPacket)
+        // A title that looks like the end of the task line stays in the title.
+        let lookalike = CoordinatorTaskAsk(
+            taskID: taskID, title: #"A" (task ID BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB): B"#, packetVersion: nil, text: "ok"
+        )
+        #expect(CoordinatorTaskAsk(message: lookalike.message) == lookalike)
+        // An older message with an unescaped quote in its title shows as sent.
+        #expect(CoordinatorTaskAsk(message: "About task \"say \"hi\"\" (task ID \(taskID.uuidString)): ok") == nil)
         #expect(CoordinatorTaskAsk(message: "About task \"Fix\" (task ID not-a-uuid): ok") == nil)
         #expect(CoordinatorTaskAsk(message: "What needs me?") == nil)
 
@@ -369,7 +376,7 @@ struct CoordinatorChatTests {
         }
         #expect(transcript.items.map(\.text) == ["yes\nmove it", "What needs me?"])
         #expect(transcript.items.map(\.aboutTaskID) == [taskID.uuidString, nil])
-        #expect(transcript.items.first?.aboutTitle == #"the "coordinator" session"#)
+        #expect(transcript.items.first?.aboutTitle == #"the "coordinator" session \ log"#)
     }
 
     @Test func cardsDescribeTheStageAndTheProjectsMergePolicy() {

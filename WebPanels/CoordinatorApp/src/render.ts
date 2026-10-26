@@ -34,13 +34,23 @@ export function linkify(text: string): string {
 
 /// Markdown that an agent wrote, as HTML. micromark escapes raw HTML and
 /// drops links with unsafe schemes, so the agent's text never becomes markup
-/// of its own. Images are left as text: the page loads nothing remote.
-/// Links open in the right panel; the page's click handler routes them.
+/// of its own. Images become links: the page loads nothing remote.
 export function markdown(text: string): string {
-  return micromark(text, {
+  const html = micromark(text, {
     extensions: [gfm(), { disable: { null: ["labelStartImage"] } }],
     htmlExtensions: [gfmHtml()],
   });
+  // Links become the buttons `linkify` makes, which open in the right panel,
+  // so the page has no link that could navigate it. Text is escaped, so
+  // every `<a` here is micromark's own tag.
+  return html
+    .replace(/<a href="([^"]*)"(?: title="[^"]*")?>/g, (_, href: string) => {
+      const url = href.replace(/^https?(?=:\/\/)/i, (scheme) => scheme.toLowerCase());
+      return /^https?:\/\//.test(url)
+        ? `<button class="lnk inline" data-act="open-url" data-url="${url}">`
+        : `<button class="lnk inline" disabled>`;
+    })
+    .replace(/<\/a>/g, "</button>");
 }
 
 function badge(text: string, tone: Tone): string {

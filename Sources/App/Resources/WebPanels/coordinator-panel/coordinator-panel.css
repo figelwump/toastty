@@ -77,8 +77,7 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 8px; font-size: 12px; }
 .md th, .md td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
-.md a { color: var(--blue); text-decoration: none; cursor: pointer; overflow-wrap: anywhere; }
-.md a:hover { text-decoration: underline; }
+.md .lnk.inline:disabled { color: inherit; cursor: default; text-decoration: none; }
 
 .badge { font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid; white-space: nowrap; font-weight: 500; }
 .b-green { color: var(--green); border-color: var(--green-line); background: var(--green-bg); }

@@ -152,15 +152,6 @@ function runTaskAction(rowID: string, actionID: string) {
 }
 
 document.addEventListener("click", (event) => {
-  // A link in an agent's markdown opens in the right panel; the page itself
-  // never navigates.
-  const link = (event.target as HTMLElement).closest<HTMLAnchorElement>(".md a[href]");
-  if (link) {
-    event.preventDefault();
-    const href = link.getAttribute("href") ?? "";
-    if (/^https?:\/\//i.test(href)) post({ type: "openURL", url: href });
-    return;
-  }
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target || target.tagName === "FORM") return;
   const data = target.dataset;
