@@ -6,7 +6,6 @@ import SwiftUI
 enum TaskBoardPresentation {
     static func groupTitle(_ group: TaskStage.Group) -> String {
         switch group {
-        case .inbox: "Inbox"
         case .needsYou: "Needs you"
         case .running: "Running"
         case .toShip: "To ship"
@@ -26,12 +25,6 @@ enum TaskBoardPresentation {
     /// One line on what the task is doing or waiting for.
     static func statusLine(_ item: TaskBoardItem) -> String {
         switch item.stage {
-        case .inbox:
-            switch item.record?.setup {
-            case .routing?: return "setting up"
-            case .settingUp?: return "setting up"
-            default: return "moving to worktree"
-            }
         case .needsYou(let attention):
             switch attention {
             case .pickWorkspace: return "⚠ pick a workspace"
@@ -50,6 +43,9 @@ enum TaskBoardPresentation {
                 }
             }
         case .running:
+            if let record = item.record, showsSetup(item) {
+                return record.setup.isStarted ? "Moving to worktree · \(TaskSetupPresentation.startWorkStep(record))" : "Setting up"
+            }
             switch item.merge {
             case .checking?, .merging?: return "Merging…"
             case .waitingForChecks?: return "Waiting for checks"
@@ -74,7 +70,6 @@ enum TaskBoardPresentation {
     /// The stage's name and why, for the detail pane.
     static func stageDescription(_ item: TaskBoardItem) -> (stage: String, why: String) {
         switch item.stage {
-        case .inbox: return ("Inbox", statusLine(item))
         case .needsYou(let attention):
             switch attention {
             case .pickWorkspace(let reason), .setupFailed(let reason), .moveFailed(let reason):
@@ -159,7 +154,7 @@ enum TaskBoardPresentation {
     }
 
     static func detailActions(_ item: TaskBoardItem) -> [DetailAction] {
-        guard let record = item.record else { return [] }
+        guard let record = item.record, showsSetup(item) == false else { return [] }
         if case .needsYou(.cleanupStopped) = item.stage {
             return [.cleanUp, .keepAsIs]
         }
@@ -234,6 +229,17 @@ enum TaskBoardPresentation {
         }
     }
 
+    /// Setup controls apply only while setup is active or needs attention.
+    /// A finished task or a stopped cleanup must keep its own actions.
+    static func showsSetup(_ item: TaskBoardItem) -> Bool {
+        guard let record = item.record, TaskSetupPresentation.isSettingUp(record) else { return false }
+        switch item.stage {
+        case .running: return true
+        case .needsYou(let attention): return attention.isBeforeStart
+        case .toShip, .done, .archived: return false
+        }
+    }
+
     /// The task's menu, in sections: where to go, then what to do. The
     /// detail pane's actions come in its order; one that does not apply now
     /// is left out, as in the command palette. Open Task Space is left out
@@ -247,9 +253,9 @@ enum TaskBoardPresentation {
         showsMergeShortcut: Bool = false,
         isTriageConfigured: @autoclosure () -> Bool = false
     ) -> [[MenuItem]] {
-        if item.stage.group == .inbox {
+        if showsSetup(item) {
             guard let record = item.record else { return [] }
-            return [inboxMenuItems(record, isTriageConfigured: isTriageConfigured())]
+            return [setupMenuItems(record, isTriageConfigured: isTriageConfigured())]
         }
         var navigation: [MenuItem] = []
         let isCurrent = item.taskSpaceWorkspaceID != nil && item.taskSpaceWorkspaceID == currentWorkspaceID
@@ -275,9 +281,9 @@ enum TaskBoardPresentation {
     }
 
     /// A task that has not started yet: retry what failed, or delete it.
-    static func inboxMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {
+    static func setupMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {
         var items: [MenuItem] = []
-        if SidebarInboxRowPresentation.canRetry(record) {
+        if TaskSetupPresentation.canRetry(record) {
             items.append(.retry(taskID: record.id, title: record.setup.isStarted ? "Retry Move" : "Retry Setup"))
         } else if case .needsWorkspace = record.setup, isTriageConfigured() {
             items.append(.retryTriage(taskID: record.id))
@@ -352,10 +358,6 @@ struct TaskStageMark: View {
     var body: some View {
         Group {
             switch item.stage {
-            case .inbox:
-                RoundedRectangle(cornerRadius: 1.5)
-                    .strokeBorder(ToastyTheme.sidebarTaskInboxMark, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
-                    .frame(width: 9, height: 9)
             case .needsYou(let attention):
                 switch attention {
                 case .review, .readyForReview:

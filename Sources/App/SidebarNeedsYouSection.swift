@@ -21,6 +21,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         /// The agent asked something; it waits in its task space.
         case answer(workspaceID: UUID)
         case openTaskSpace(workspaceID: UUID)
+        case setup(taskID: UUID)
 
         var title: String {
             switch self {
@@ -28,6 +29,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             case .action(let action, _): action.title
             case .answer: "Answer"
             case .openTaskSpace: "Open"
+            case .setup: "Set Up"
             }
         }
 
@@ -69,20 +71,18 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         [title, reason, projectTitle.map { "in \($0)" }, detail].compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// `items` newest activity first, as the board gives them, so the
-    /// latest request is on top. Tasks that have not reached their task
-    /// space stay in the Inbox.
     /// What the row asks before Merge runs.
     static func mergeQuestion(_ primary: PrimaryAction) -> String? {
         guard case .merge(_, let number) = primary else { return nil }
         return "Merge \(number.map { "PR #\($0)" } ?? "the pull request")?"
     }
 
-    static func rows(_ items: [TaskBoardItem], lookAt: (TaskRecord) -> String?) -> [Self] {
-        items.filter { $0.stage.group == .needsYou }.map { make($0, lookAt: lookAt) }
+    /// Keeps the board's newest activity first, including setup blockers.
+    static func rows(_ items: [TaskBoardItem], isTriageConfigured: Bool = false, lookAt: (TaskRecord) -> String?) -> [Self] {
+        items.filter { $0.stage.group == .needsYou }.map { make($0, isTriageConfigured: isTriageConfigured, lookAt: lookAt) }
     }
 
-    static func make(_ item: TaskBoardItem, lookAt: (TaskRecord) -> String?) -> Self {
+    static func make(_ item: TaskBoardItem, isTriageConfigured: Bool = false, lookAt: (TaskRecord) -> String?) -> Self {
         let (reason, tone) = reasonAndTone(item.stage)
         let packetLookAt = item.record.flatMap { $0.packetVersion == nil ? nil : lookAt($0) }
         return Self(
@@ -91,10 +91,10 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
             reason: reason,
             tone: tone,
             projectTitle: item.projectTitle,
-            detail: packetLookAt ?? TaskBoardPresentation.statusLine(item),
+            detail: TaskBoardPresentation.showsSetup(item) ? TaskBoardPresentation.stageDescription(item).why : packetLookAt ?? TaskBoardPresentation.statusLine(item),
             packetVersion: item.record?.packetVersion,
             primary: primaryAction(item),
-            menu: TaskBoardPresentation.menuItems(item),
+            menu: TaskBoardPresentation.menuItems(item, isTriageConfigured: isTriageConfigured),
             taskSpaceWorkspaceID: item.taskSpaceWorkspaceID
         )
     }
@@ -120,6 +120,7 @@ struct SidebarNeedsYouRow: Equatable, Identifiable {
         guard let taskID = item.taskID else {
             return item.taskSpaceWorkspaceID.map { .openTaskSpace(workspaceID: $0) }
         }
+        if TaskBoardPresentation.showsSetup(item) { return .setup(taskID: taskID) }
         let actions = TaskBoardPresentation.detailActions(item)
         if item.stage == .needsYou(.review), actions.contains(.merge) {
             return .merge(taskID: taskID, pullRequestNumber: item.pullRequest?.number)
@@ -175,6 +176,7 @@ final class SidebarPacketLookAtCache: ObservableObject {
 /// Needs you, between the Coordinator row and the projects.
 struct SidebarNeedsYouSection: View {
     let rows: [SidebarNeedsYouRow]
+    let coordinator: TaskCoordinator?
     /// Opens a task's packet in the coordinator chat and says whether it
     /// did; nil while there is no chat.
     let openPacket: ((UUID) -> Bool)?
@@ -216,6 +218,7 @@ struct SidebarNeedsYouSection: View {
                 ForEach(rows) { row in
                     SidebarNeedsYouRowView(
                         row: row,
+                        coordinator: coordinator,
                         isConfirmingMerge: confirmingMergeID == row.id && row.primary?.isMerge == true,
                         open: { open(row) },
                         primary: { runPrimary(row) },
@@ -260,6 +263,8 @@ struct SidebarNeedsYouSection: View {
             run(.action(action, taskID: taskID))
         case .answer(let workspaceID)?, .openTaskSpace(let workspaceID)?:
             openTaskSpace(workspaceID)
+        case .setup?:
+            break // The row presents the setup card at its own anchor.
         case nil:
             break
         }
@@ -268,6 +273,7 @@ struct SidebarNeedsYouSection: View {
 
 private struct SidebarNeedsYouRowView: View {
     let row: SidebarNeedsYouRow
+    let coordinator: TaskCoordinator?
     let isConfirmingMerge: Bool
     let open: () -> Void
     let primary: () -> Void
@@ -277,6 +283,7 @@ private struct SidebarNeedsYouRowView: View {
     let run: (TaskBoardPresentation.MenuItem) -> Void
 
     @State private var isHovered = false
+    @State private var showsSetup = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -297,10 +304,23 @@ private struct SidebarNeedsYouRowView: View {
         }
         .onHover { isHovered = $0 }
         .contextMenu { menuItems }
+        .popover(isPresented: $showsSetup, arrowEdge: .trailing) {
+            if let coordinator, case .setup(let taskID)? = row.primary {
+                TaskSetupCard(taskID: taskID, records: coordinator.records, coordinator: coordinator) {
+                    showsSetup = false
+                }
+                .setupPopoverChrome()
+            }
+        }
+    }
+
+    private func openRow() {
+        if case .setup? = row.primary, coordinator != nil { showsSetup = true }
+        else { open() }
     }
 
     private var summary: some View {
-        Button(action: open) {
+        Button(action: openRow) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     reasonBadge
@@ -359,7 +379,10 @@ private struct SidebarNeedsYouRowView: View {
     private var actions: some View {
         HStack(spacing: 4) {
             if let primaryAction = row.primary {
-                Button(primaryAction.title, action: primary)
+                Button(primaryAction.title) {
+                    if case .setup = primaryAction { openRow() }
+                    else { primary() }
+                }
                     .buttonStyle(SidebarNeedsYouButtonStyle(isProminent: primaryAction.isProminent))
                     .accessibilityIdentifier("\(row.identifier).primary")
             }

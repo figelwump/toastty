@@ -347,7 +347,7 @@ final class QuickEntryController: ObservableObject {
     private func showToast(near frame: NSRect?) {
         toastTask?.cancel()
         toastPanel?.orderOut(nil)
-        let toast = QuickEntryToastPanel(message: "Task created · in the Inbox")
+        let toast = QuickEntryToastPanel(message: "Task created")
         let anchor = frame ?? QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.focusedScreen())
         toast.setFrameOrigin(NSPoint(
             x: (anchor.midX - QuickEntryToastPanel.size.width / 2).rounded(),

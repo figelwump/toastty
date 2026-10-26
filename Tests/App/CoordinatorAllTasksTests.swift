@@ -32,7 +32,7 @@ struct CoordinatorAllTasksTests {
         await fixture.chat.refresh()
         let payload = try #require(fixture.chat.lastPayload)
         #expect(payload.view?.view == .tasks)
-        #expect(payload.taskGroups.map(\.id) == ["inbox", "needsYou", "running", "toShip", "done", "archived"])
+        #expect(payload.taskGroups.map(\.id) == ["needsYou", "running", "toShip", "done", "archived"])
 
         let reviewRow = try #require(row(fixture, reviewed.id))
         #expect(reviewRow.group == "needsYou")
@@ -116,6 +116,40 @@ struct CoordinatorAllTasksTests {
         #expect(shown.count == 1 + CoordinatorAllTasks.finishedRowLimit + 1)
         #expect(shown.filter { $0.stage == .done }.map(\.id) == done.prefix(CoordinatorAllTasks.finishedRowLimit).map(\.id))
         let totals = Dictionary(uniqueKeysWithValues: CoordinatorAllTasks.groups(items).map { ($0.id, $0.total) })
-        #expect(totals == ["inbox": 0, "needsYou": 0, "running": 1, "toShip": 0, "done": 205, "archived": 1])
+        #expect(totals == ["needsYou": 0, "running": 1, "toShip": 0, "done": 205, "archived": 1])
+    }
+
+    @Test func setupTasksOfferRecoveryWithoutACardOrTaskSpace() async throws {
+        let fixture = try await Fixture()
+        let page = SetupPage()
+        let cases: [TaskSetupState] = [.routing, .settingUp, .needsWorkspace(reason: "Pick a project"), .setupFailed(reason: "Missing profile")]
+        for setup in cases {
+            let task = TaskRecord(createdAt: Date(), text: "fix", title: "fix", slug: "fix", source: .cli, setup: setup)
+            try fixture.tasks.coordinator.records.insert(task)
+            await fixture.chat.refresh()
+            let current = try #require(row(fixture, task.id))
+            #expect(current.group == (setup == .routing || setup == .settingUp ? "running" : "needsYou"))
+            #expect(current.primary?.id == "setup")
+            #expect(current.menu.joined().contains { $0.id == "action:markDone" } == false)
+            await fixture.chat.handle(.taskAction(rowID: current.id, actionID: "setup"), from: page)
+            #expect(page.opened.last == task.id)
+
+            // A stale action cannot open recovery after setup completes.
+            fixture.tasks.coordinator.records.update(id: task.id) { $0.setup = .started }
+            let count = page.opened.count
+            await fixture.chat.handle(.taskAction(rowID: current.id, actionID: "setup"), from: page)
+            #expect(page.opened.count == count)
+        }
+    }
+
+    private final class SetupPage: CoordinatorChatController.Page {
+        var opened: [UUID] = []
+        func receive(_: Data) {}
+        func run(_: String) async -> Bool { false }
+        func takeKeyboardFocus() {}
+        func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool {
+            opened.append(taskID)
+            return true
+        }
     }
 }

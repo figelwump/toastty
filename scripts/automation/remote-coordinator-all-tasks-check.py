@@ -21,7 +21,9 @@ UI, the page's own handlers and the CLI it checks that:
   in the chat;
 - Option+Cmd+T shows All tasks again;
 - the To ship row's menu offers Release, which starts a release task;
-- the Archived group opens, and its row's Delete Task deletes the task.
+- the Archived group opens, and its row's Delete Task deletes the task;
+- setup controls open from All tasks and Needs you, and choosing a workspace
+  starts the task in Running without an Inbox group.
 Captures of each step and remote-coordinator-all-tasks-check.json go to the
 artifacts directory.
 """
@@ -31,6 +33,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
@@ -286,6 +289,52 @@ def main():
             return result.returncode != 0
         wait_for('the task to be deleted', deleted, timeout=20, interval=0.5)
         step('archived task deleted')
+
+        # 7. Setup recovery is reachable without an Inbox or a chat card.
+        waiting = cli_json('task', 'create', 'Choose a project for setup', '--title', 'Choose a project for setup')
+        waiting_id = waiting['taskID']
+        wait_for('the task to need a workspace', lambda: cli_json('task', 'get', waiting_id)['setup']['state'] == 'needsWorkspace')
+        wait_for('workspace selection in Needs you', lambda: rows().get(waiting_id, {}).get('group') == 'needsYou')
+        setup_row = rows()[waiting_id]
+        require(setup_row['primary'] == 'setup' and not setup_row['hasCard'], f'Setup controls are unreachable: {setup_row}')
+        require(all(row['group'] != 'inbox' for row in rows().values()), 'An Inbox group remains')
+        page('click', f"task-primary-{setup_row['id']}")
+        wait_for('the setup card from All tasks', lambda: run_tool(helper, 'exists', pid, 'task.setup.workspacePicker', check=False).returncode == 0)
+        capture('all-tasks-setup-workspace')
+        key(KEY_ESCAPE)
+
+        # The sidebar opens the same card while the task has no task space.
+        run_tool(helper, 'press', pid, f'sidebar.needsYou.task.{waiting_id}.primary')
+        wait_for('the setup card from Needs you', lambda: run_tool(helper, 'exists', pid, 'task.setup.workspacePicker', check=False).returncode == 0)
+        workspace_title = next(w['title'] for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == workspace_id)
+        run_tool(driver, 'press-menu', pid, 'task.setup.workspacePicker', workspace_title)
+        capture('needs-you-setup-workspace')
+        run_tool(helper, 'press', pid, 'task.setup.start')
+        wait_for('workspace selection to start the task', lambda: cli_json('task', 'get', waiting_id)['setup']['state'] == 'started', timeout=60)
+        wait_for('setup controls to close', lambda: run_tool(helper, 'exists', pid, 'task.setup.start', check=False).returncode != 0)
+        wait_for('the started task in Running', lambda: rows().get(waiting_id, {}).get('group') == 'running')
+        step('setup recovered from Needs you and All tasks', taskID=waiting_id, group=rows()[waiting_id]['group'])
+
+        # 8. A failed worktree hook leaves setup in Needs you. Retry
+        # resumes the same task after its prerequisite becomes available.
+        allow_hook = root / 'allow-create-hook'
+        with (user_home / '.toastty/tasks.toml').open('a') as config_file:
+            config_file.write('create_hook = ' + json.dumps('test -f ' + shlex.quote(str(allow_hook))) + '\n')
+        broken = cli_json('task', 'create', 'Recover a failed worktree hook', '--title', 'Recover a failed worktree hook',
+                          '--workspace', workspace_id, '--start-work')
+        broken_id = broken['taskID']
+        wait_for('setup to report the failed hook', lambda: cli_json('task', 'get', broken_id)['setup']['state'] == 'setupFailed', timeout=60)
+        failed = cli_json('task', 'get', broken_id)
+        require('create_hook' in failed['setup'].get('reason', ''), f'An unexpected setup failure occurred: {failed}')
+        allow_hook.write_text('ready\n')
+        wait_for('the failed setup in Needs you', lambda: rows().get(broken_id, {}).get('group') == 'needsYou')
+        page('click', f"task-primary-{rows()[broken_id]['id']}")
+        wait_for('Retry on the failed setup card', lambda: run_tool(helper, 'exists', pid, 'task.setup.retry', check=False).returncode == 0)
+        capture('all-tasks-setup-retry')
+        run_tool(helper, 'press', pid, 'task.setup.retry')
+        wait_for('Retry to start the same task', lambda: cli_json('task', 'get', broken_id)['setup']['state'] == 'started', timeout=60)
+        wait_for('the recovered task in Running', lambda: rows().get(broken_id, {}).get('group') == 'running')
+        step('failed worktree setup retried from All tasks', taskID=broken_id, group=rows()[broken_id]['group'])
 
         evidence['status'] = 'passed'
     except Exception:

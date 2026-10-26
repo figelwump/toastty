@@ -121,7 +121,7 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
         homeDirectoryPath: String
     ) -> CoordinatorChatTaskView {
         let stage = item?.stage
-        let (label, tone) = stage.map(Self.label) ?? ("deleted", "plain")
+        let (label, tone) = item.map(Self.label) ?? ("deleted", "plain")
         let pullRequestURL = item?.pullRequest?.url ?? record?.pullRequestURL
         let project = item?.projectTitle ?? record?.projectRoot.map { URL(filePath: $0).lastPathComponent }
         let finished = stage.map { $0.isFinished } ?? true
@@ -144,10 +144,16 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
         )
     }
 
+    static func label(_ item: TaskBoardItem) -> (String, String) {
+        if item.stage == .running, TaskBoardPresentation.showsSetup(item) {
+            return (item.record?.setup.isStarted == true ? "moving to worktree" : "setting up", "plain")
+        }
+        return label(item.stage)
+    }
+
     /// What the stage looks like on a card: the prototype's badges.
     static func label(_ stage: TaskStage) -> (String, String) {
         switch stage {
-        case .inbox: ("inbox", "plain")
         case .running: ("working", "amber")
         case .toShip: ("merged · to ship", "violet")
         case .done: ("done", "green")

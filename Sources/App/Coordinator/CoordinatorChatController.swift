@@ -22,6 +22,8 @@ final class CoordinatorChatController {
         func run(_ script: String) async -> Bool
         /// Takes the keyboard, as opening the chat by its shortcut asks.
         func takeKeyboardFocus()
+        /// Opens setup controls on the page that received the action.
+        func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool
     }
 
     /// What `automation.coordinator_chat_action` does in the page.
@@ -400,7 +402,7 @@ final class CoordinatorChatController {
             selectedTaskRowID = selectedRowID
             return
         case .taskAction(let rowID, let actionID):
-            runTaskAction(rowID: rowID, actionID: actionID)
+            runTaskAction(rowID: rowID, actionID: actionID, page: page)
         case .send(let text):
             acknowledge(token, ok: await sendToCoordinator(text))
         case .reply(let taskID, let version, let text):
@@ -567,7 +569,7 @@ final class CoordinatorChatController {
 
     /// Runs an All tasks row's action. The row may be older than the task:
     /// an action the task no longer offers does nothing, and says so.
-    private func runTaskAction(rowID: String, actionID: String) {
+    private func runTaskAction(rowID: String, actionID: String, page: (any Page)?) {
         guard let board = taskCoordinator.board,
               let resolved = CoordinatorAllTasks.resolve(
                   rowID: rowID,
@@ -580,6 +582,10 @@ final class CoordinatorChatController {
             return
         }
         switch resolved {
+        case .setup(let taskID):
+            if page?.showSetup(taskID: taskID, coordinator: taskCoordinator) != true {
+                setNotice("Open All tasks to see this task's setup controls.", isError: true)
+            }
         case .open(let item):
             if let taskID = item.taskID, hasCards(taskID: taskID) {
                 _ = show(taskID: taskID)

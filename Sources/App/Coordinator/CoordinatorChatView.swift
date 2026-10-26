@@ -20,7 +20,7 @@ struct CoordinatorChatView: NSViewRepresentable {
 }
 
 @MainActor
-final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
+final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPopoverDelegate {
     static let messageHandlerName = "toasttyCoordinatorChat"
     static let pageURL = URL(string: "toastty://coordinator/")!
 
@@ -28,6 +28,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
     let webView: WKWebView
     private var isPageReady = false
     private var pendingPayload: Data?
+    private var setupPopover: NSPopover?
 
     init(controller: CoordinatorChatController) {
         self.controller = controller
@@ -54,6 +55,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     func detach() {
+        setupPopover?.performClose(nil)
         controller?.detach(self)
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.messageHandlerName)
     }
@@ -74,6 +76,32 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page {
         guard let window, window.firstResponder !== webView,
               isHiddenOrHasHiddenAncestor == false, visibleRect.isEmpty == false else { return }
         window.makeFirstResponder(webView)
+    }
+
+    func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool {
+        guard window != nil, isHiddenOrHasHiddenAncestor == false else { return false }
+        setupPopover?.performClose(nil)
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.delegate = self
+        let host = NSHostingController(rootView:
+            TaskSetupCard(taskID: taskID, records: coordinator.records, coordinator: coordinator) { [weak popover] in
+                popover?.performClose(nil)
+            }
+            .setupPopoverChrome()
+        )
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
+        setupPopover = popover
+        // The page can refresh and move the row between groups. Use the
+        // stable page as the anchor; Start and Retry dismiss the card.
+        popover.show(relativeTo: NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1), of: self, preferredEdge: .maxX)
+        return popover.isShown
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        if notification.object as? NSPopover === setupPopover { setupPopover = nil }
     }
 
     func run(_ script: String) async -> Bool {

@@ -93,7 +93,7 @@ struct TaskLiveTriageRunner: TaskTriageRunning {
     }
 
     /// The last non-empty line of stderr, which usually says what went
-    /// wrong, cut to a length the Inbox can show.
+    /// wrong, cut to a length the setup card can show.
     static func failureDetail(stderr: String) -> String? {
         stderr
             .split(whereSeparator: \.isNewline)

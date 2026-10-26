@@ -1190,7 +1190,7 @@ final class TaskCoordinator {
         triageRunner != nil && config.triage?.command != nil
     }
 
-    /// Whether triage is on now, for the Inbox's Retry Triage. False when
+    /// Whether triage is on now, for setup's Retry Triage. False when
     /// tasks.toml cannot be read.
     var isTriageConfigured: Bool {
         (try? configLoader()).map(isTriageEnabled) ?? false

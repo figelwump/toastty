@@ -35,10 +35,11 @@ struct TaskSpaceCloseQuestion: Equatable {
               item.pullRequest == nil,
               record.archivedAt == nil, record.doneAt == nil,
               record.mergedAt == nil, record.shippedAt == nil else { return nil }
+        if item.stage == .running, TaskBoardPresentation.showsSetup(item) { return nil }
         switch item.stage {
         case .running, .needsYou:
             if case .needsYou(.cleanupStopped) = item.stage { return nil }
-        case .inbox, .toShip, .done, .archived:
+        case .toShip, .done, .archived:
             return nil
         }
         return Self(taskID: record.id, taskTitle: record.title, taskSpaceWorkspaceID: taskSpaceWorkspaceID)

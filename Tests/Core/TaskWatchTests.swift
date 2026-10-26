@@ -47,7 +47,6 @@ struct TaskWatchTests {
             TaskWatchEvaluation.stageConditions(stage: stage, merged: merged)
         }
         #expect(conditions(.running).isEmpty)
-        #expect(conditions(.inbox).isEmpty)
         #expect(conditions(.needsYou(.agentNeedsInput)).isEmpty)
         #expect(conditions(.needsYou(.review)) == [.readyForReview])
         #expect(conditions(.needsYou(.readyForReview)) == [.readyForReview])

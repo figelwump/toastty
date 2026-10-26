@@ -63,7 +63,7 @@ enum TaskActions {
     }
 
     /// Runs one item of a task's menu, as the detail pane's buttons do.
-    /// `openTaskSpace` selects a task space; the Inbox never offers it.
+    /// `openTaskSpace` selects a task space; setup tasks never offer it.
     static func run(
         _ item: TaskBoardPresentation.MenuItem,
         coordinator: TaskCoordinator,

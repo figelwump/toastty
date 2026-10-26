@@ -772,7 +772,7 @@ the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`
 worktree's commit then, or `null`),
 `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
-`group` (`inbox`, `needsYou`, `running`, `toShip`, `done`, or `archived`),
+`group` (`needsYou`, `running`, `toShip`, `done`, or `archived`),
 `needsUser`, and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.

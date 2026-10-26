@@ -471,7 +471,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .showScratchpadForCurrentSession:
             return ["scratchpad", "show", "current", "session", "agent", "visual"]
         case .newTask:
-            return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
+            return ["task", "new", "create", "quick", "entry", "todo", "capture"]
         case .showCoordinatorChat:
             return ["coordinator", "chat", "packets", "review", "needs", "show"]
         case .showAllTasks:

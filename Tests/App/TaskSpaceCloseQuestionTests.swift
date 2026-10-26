@@ -180,6 +180,10 @@ struct TaskSpaceCloseQuestionTests {
         // A launch that failed after it made the task space.
         _ = records.update(id: task.id) { $0.setup = .setupFailed(reason: "launch failed") }
         #expect(asks())
+        // In-progress setup now lists under Running, but closing it must
+        // still use the terminal confirmation instead of finishing it.
+        _ = records.update(id: task.id) { $0.setup = .settingUp }
+        #expect(asks() == false)
         _ = records.update(id: task.id) { $0.setup = .started }
 
         // A finished task: done on the task space, or archived.
