@@ -60,6 +60,7 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     var taskGroups: [CoordinatorAllTasks.Group] = []
     var tasks: [CoordinatorAllTasks.Row] = []
     var addresses: [CoordinatorComposerAddress] = []
+    var hasUserRequests = false
 
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
@@ -432,6 +433,11 @@ struct CoordinatorChatTranscript {
     private(set) var cursor: ConversationEventCursor?
     private var conversationID: RemoteConversationID?
     private var toolIndexByCallID: [String: Int] = [:]
+    /// Intro suggestions stay hidden after a real request, even when that
+    /// message falls out of the bounded timeline. Lives with this chat.
+    private(set) var hasUserRequests = false
+    private var isFirstUserMessage = true
+    private var bootstrapMessageID: String?
 
     /// A different conversation is a fresh coordinator session: its events
     /// follow the old ones.
@@ -441,6 +447,8 @@ struct CoordinatorChatTranscript {
             append(Item(type: .status, id: "session-\(conversationID.rawValue)", at: Date(), text: "A new coordinator session started"))
         }
         self.conversationID = conversationID
+        isFirstUserMessage = true
+        bootstrapMessageID = nil
         cursor = nil
         toolIndexByCallID = [:]
     }
@@ -450,6 +458,8 @@ struct CoordinatorChatTranscript {
         items.removeAll { $0.id.hasPrefix(conversationID.map { "\($0.rawValue)/" } ?? "") }
         cursor = nil
         toolIndexByCallID = [:]
+        isFirstUserMessage = true
+        // Keep bootstrap identity for a replay with late origin enrichment.
     }
 
     mutating func apply(_ page: ConversationEventPage) {
@@ -469,6 +479,13 @@ struct CoordinatorChatTranscript {
         case .userMessage(let message):
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.isEmpty == false else { return }
+            // Each fresh coordinator launch sends this exact first prompt.
+            // Restoring a session resumes it without sending the prompt again.
+            let isBootstrap = text == CoordinatorPrompts.initial &&
+                (id == bootstrapMessageID || (isFirstUserMessage && message.origin == .unknown))
+            isFirstUserMessage = false
+            if isBootstrap { bootstrapMessageID = id }
+            else { hasUserRequests = true }
             if let ask = CoordinatorTaskAsk(message: text) {
                 append(Item(
                     type: .message, id: id, at: event.timestamp, role: "user", text: ask.text,

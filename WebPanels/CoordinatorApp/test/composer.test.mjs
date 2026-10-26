@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { buildSync } from 'esbuild';
 const dir = mkdtempSync(join(tmpdir(), 'coordinator-composer-'));
 buildSync({ entryPoints: [resolve(import.meta.dirname, '../src/composer.ts')], bundle: true, format: 'esm', platform: 'neutral', outfile: join(dir, 'composer.mjs'), logLevel: 'silent' });
-const { addressFor, addressMatches, pickedAddress, showSuggestions } = await import(join(dir, 'composer.mjs'));
+const { addressFor, addressMatches, pickedAddress } = await import(join(dir, 'composer.mjs'));
 rmSync(dir, { recursive: true, force: true });
 const task = { kind: 'task', id: 't1', token: 'fix-totals', title: 'Fix rounding totals', version: 2 };
 const project = { kind: 'project', id: '/repos/billing', token: 'billing', title: 'Billing app', version: null };
@@ -34,8 +34,4 @@ test('picker searches slug and title, only for the leading address', () => {
   assert.deepEqual(addressMatches('@', choices), choices);
   assert.deepEqual(addressMatches('hi @bill', choices), []);
   assert.deepEqual(addressMatches('@billing hello', choices), []);
-});
-test('suggestions disappear after a user message', () => {
-  assert.equal(showSuggestions([{ type: 'message', role: 'assistant', text: 'hello' }]), true);
-  assert.equal(showSuggestions([{ type: 'message', role: 'user', text: 'hi' }]), false);
 });

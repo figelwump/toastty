@@ -556,18 +556,22 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             // hosts where Accessibility cannot reach web content.
             try requireAutomationMode(for: command)
             guard let elementID = payload.string("elementID"), elementID.isEmpty == false,
-                  let action = payload.string("action"), ["click", "type"].contains(action) else {
-                throw AutomationSocketError.invalidPayload("action (click or type) and elementID are required")
+                  let action = payload.string("action"), ["click", "type", "visible"].contains(action) else {
+                throw AutomationSocketError.invalidPayload("action (click, type or visible) and elementID are required")
             }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
             }
-            let matching = await chat.performPageAction(
-                action == "click" ? .click(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? "")
-            )
+            let pageAction: CoordinatorChatController.PageAction
+            switch action {
+            case "visible": pageAction = .visible(elementID: elementID)
+            case "click": pageAction = .click(elementID: elementID)
+            default: pageAction = .type(elementID: elementID, text: payload.string("text") ?? "")
+            }
+            let matching = await chat.performPageAction(pageAction)
             guard matching == 1 else {
                 throw AutomationSocketError.invalidPayload(matching == 0
-                    ? "no open chat page has element \(elementID)"
+                    ? "no open chat page has the requested element or visibility: \(elementID)"
                     : "\(matching) open chat pages have element \(elementID); close all but one")
             }
             return ["elementID": .string(elementID), "performed": .bool(true)]

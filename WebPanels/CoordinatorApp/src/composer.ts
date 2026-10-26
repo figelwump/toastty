@@ -1,5 +1,3 @@
-import type { ChatItem } from "./types";
-
 export interface ComposerAddress {
   kind: "task" | "project";
   id: string;
@@ -29,8 +27,4 @@ export function addressFor(text: string, choices: ComposerAddress[], pick: Addre
     return current ? { address: current, text: match[2].trim() } : null;
   }
   return matches.length === 1 ? { address: matches[0], text: match[2].trim() } : null;
-}
-
-export function showSuggestions(items: ChatItem[]): boolean {
-  return !items.some((i) => i.type === "message" && i.role === "user");
 }

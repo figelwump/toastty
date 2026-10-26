@@ -115,6 +115,8 @@ export interface TaskRow {
 }
 
 export interface ChatState {
+  /// Excludes the automatic launch prompt; stays true after timeline trimming.
+  hasUserRequests: boolean;
   addresses?: import("./composer").ComposerAddress[];
   coordinator: {
     title: string;

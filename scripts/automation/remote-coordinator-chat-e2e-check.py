@@ -262,6 +262,11 @@ def main():
         cli_result('coordinator', 'show')
         wait_for('the chat to accept a message', waiting(lambda: (lambda s: s['pages'] >= 1 and s['canSend'])(chat_state())),
                  timeout=300, interval=3)
+        startup = wait_for('the projected coordinator launch prompt', lambda: (lambda s: s if any(
+            i.get('role') == 'user' and i.get('text') == 'Use the toastty-coordinator skill.' for i in s['items']) else None)(chat_state()),
+            timeout=30, interval=1)
+        require(startup['hasUserRequests'] is False, 'The launch prompt hid the initial suggestions')
+        require(page('visible', 'suggestions'), 'The Try row is not rendered at startup')
         capture('e2e-1-chat-ready')
         step('1a chat ready', coordinator=coordinator['sessionID'])
 
@@ -276,6 +281,8 @@ def main():
         task = wait_for('the coordinator to create a task', waiting(lambda: (cli_result('task', 'list')['tasks'] or [None])[0]),
                         timeout=600, interval=5)
         task_id = task['taskID']
+        wait_for('the first real request to hide suggestions', lambda: chat_state()['hasUserRequests'], timeout=30, interval=1)
+        wait_for('the rendered Try row to hide', lambda: not page('visible', 'suggestions'), timeout=30, interval=1)
         capture('e2e-1-task-created')
         step('1b coordinator created the task', taskID=task_id, title=task['title'])
         # The terminal can scroll past the envelope while the coordinator

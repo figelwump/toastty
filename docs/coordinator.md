@@ -70,7 +70,8 @@ Coordinator Chat** open the chat too. **All tasks**, beside the chat, lists
 every task with its actions; see [All tasks](tasks.md#all-tasks).
 
 Before your first message, the composer shows **Try:** suggestions. They fill
-the composer so you can edit them before sending. Start a message with `@` to
+the composer so you can edit them before sending. Toastty's automatic launch
+prompt does not hide them. Start a message with `@` to
 pick a task or project. The list matches task slugs, task titles, and project
 names. Use the arrow keys and Return to pick, or click an option.
 

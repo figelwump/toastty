@@ -29,18 +29,22 @@ final class CoordinatorChatController {
     /// What `automation.coordinator_chat_action` does in the page.
     enum PageAction {
         case click(elementID: String)
+        case visible(elementID: String)
         /// Types the text into a field, then submits it as Return would.
         case type(elementID: String, text: String)
 
         var elementID: String {
             switch self {
-            case .click(let elementID), .type(let elementID, _): elementID
+            case .click(let elementID), .visible(let elementID), .type(let elementID, _): elementID
             }
         }
 
         /// True in a page that has the element.
         var probe: String {
-            "document.getElementById(\(Self.literal(elementID))) !== null"
+            if case .visible = self {
+                return "(() => { const e = document.getElementById(\(Self.literal(elementID))); if (!e) return false; const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).visibility === 'visible'; })()"
+            }
+            return "document.getElementById(\(Self.literal(elementID))) !== null"
         }
 
         private static func literal(_ value: String) -> String {
@@ -51,6 +55,8 @@ final class CoordinatorChatController {
         var script: String {
             let literal = Self.literal
             switch self {
+            case .visible:
+                return "true"
             case .click(let elementID):
                 return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; if (e.tagName === 'IMG') { const b = e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 })); } else e.click(); return true; })()"
             case .type(let elementID, let text):
@@ -319,7 +325,8 @@ final class CoordinatorChatController {
             view: viewRequest.map { .init(view: $0.view, filter: $0.filter, token: $0.token) },
             taskGroups: CoordinatorAllTasks.groups(items),
             tasks: rows,
-            addresses: composerAddresses()
+            addresses: composerAddresses(),
+            hasUserRequests: transcript.hasUserRequests
         )
     }
 
@@ -555,6 +562,7 @@ final class CoordinatorChatController {
         return [
             "pages": .int(pages.values.filter { $0.page != nil }.count),
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
+            "hasUserRequests": .bool(lastPayload?.hasUserRequests ?? false),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
             "currentTaskID": optional(currentTaskID?.uuidString),

@@ -395,6 +395,54 @@ struct CoordinatorChatTests {
         #expect(CoordinatorChatPageEvent(body: ["type": "project", "projectID": "", "text": "go"]) == nil)
     }
 
+    @Test func suggestionsIgnoreOnlyTheAutomaticFirstLaunchMessage() {
+        var transcript = CoordinatorChatTranscript()
+        let conversation = RemoteConversationID(rawValue: UUID())
+        var sequence: UInt64 = 0
+        func message(_ text: String, origin: ConversationMessageOrigin = .unknown) -> ConversationEvent {
+            sequence += 1
+            return ConversationEvent(conversationID: conversation, sequence: sequence, eventID: "\(sequence)", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: text, origin: origin)))
+        }
+        transcript.follow(conversation)
+        transcript.apply(message("  \n "))
+        let startup = message("  \(CoordinatorSessionController.initialPrompt)\n")
+        transcript.apply(startup)
+        transcript.apply(startup)
+        #expect(transcript.hasUserRequests == false)
+        let enriched = ConversationEvent(conversationID: conversation, sequence: startup.sequence, eventID: startup.eventID, timestamp: startup.timestamp, provider: .claude, payload: .userMessage(.init(text: CoordinatorSessionController.initialPrompt, origin: .local)))
+        transcript.apply(enriched)
+        #expect(transcript.hasUserRequests == false)
+        transcript.reset()
+        transcript.apply(enriched)
+        #expect(transcript.hasUserRequests == false)
+        transcript.apply(message(CoordinatorSessionController.initialPrompt))
+        #expect(transcript.hasUserRequests)
+        var restarted = CoordinatorChatTranscript()
+        restarted.follow(conversation)
+        restarted.apply(startup)
+        let nextConversation = RemoteConversationID(rawValue: UUID())
+        restarted.follow(nextConversation)
+        restarted.apply(ConversationEvent(conversationID: nextConversation, sequence: 1, eventID: "next-start", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: CoordinatorSessionController.initialPrompt))))
+        #expect(restarted.hasUserRequests == false)
+        restarted.apply(ConversationEvent(conversationID: nextConversation, sequence: 2, eventID: "next-request", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: "What needs me?"))))
+        #expect(restarted.hasUserRequests)
+        for index in 0...CoordinatorChatTranscript.maximumItems {
+            transcript.apply(ConversationEvent(conversationID: conversation, sequence: UInt64(100 + index), eventID: "assistant-\(index)", timestamp: Date(), provider: .claude, payload: .assistantMessage(.init(text: "Working"))))
+        }
+        #expect(!transcript.items.contains(where: { $0.role == "user" }))
+        #expect(transcript.hasUserRequests)
+        transcript.reset()
+        #expect(transcript.hasUserRequests)
+        transcript.follow(RemoteConversationID(rawValue: UUID()))
+        #expect(transcript.hasUserRequests)
+        for origin in [ConversationMessageOrigin.local, .remote] {
+            var fresh = CoordinatorChatTranscript()
+            fresh.follow(conversation)
+            fresh.apply(message(CoordinatorSessionController.initialPrompt, origin: origin))
+            #expect(fresh.hasUserRequests)
+        }
+    }
+
     @Test func theTranscriptFoldsToolCallsAndMarksNewSessions() {
         var transcript = CoordinatorChatTranscript()
         let first = RemoteConversationID(rawValue: UUID())

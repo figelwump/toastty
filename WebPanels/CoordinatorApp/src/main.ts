@@ -3,7 +3,7 @@
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
 import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
-import { addressFor, addressMatches, pickedAddress, showSuggestions } from "./composer";
+import { addressFor, addressMatches, pickedAddress } from "./composer";
 import type { AddressPick, ComposerAddress } from "./composer";
 import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
 import type { ChatEvent, ChatState, PageView } from "./types";
@@ -59,7 +59,7 @@ function renderComposerOptions() {
   if (matches.length) composerInput.setAttribute("aria-activedescendant", `address-option-${matchIndex}`);
   else composerInput.removeAttribute("aria-activedescendant");
   const firstTask = choices.find((c) => c.kind === "task");
-  suggestions.classList.toggle("hidden", view !== "chat" || !state || !showSuggestions(state.items));
+  suggestions.classList.toggle("hidden", view !== "chat" || !state || state.hasUserRequests);
   suggestions.innerHTML = `<span class="faint small">Try:</span>` + [
     ["a request it can route", "Fix the coupon field losing focus on mobile"],
     ["one it has to ask about", "Add a dark mode toggle"],
@@ -100,7 +100,7 @@ function render() {
   header.innerHTML = renderHeader(state, view);
   scroll.classList.toggle("hidden", view !== "chat");
   composer.classList.toggle("hidden", view !== "chat");
-  suggestions.classList.toggle("hidden", view !== "chat" || !showSuggestions(state.items));
+  suggestions.classList.toggle("hidden", view !== "chat" || state.hasUserRequests);
   tasksView.classList.toggle("hidden", view !== "tasks");
   normalize(state, tasksUI);
   if (view === "tasks") {
