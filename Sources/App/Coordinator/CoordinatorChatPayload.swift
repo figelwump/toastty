@@ -284,6 +284,50 @@ struct CoordinatorChatReport: Encodable {
     var createdAt: String?
 }
 
+/// What the chat sends the coordinator when the user asks about a card: the
+/// user's text, after a line that names the task. The agent needs the task
+/// ID; the chat shows only what the user typed, so the transcript reads the
+/// same format back with `init?(message:)`.
+struct CoordinatorTaskAsk: Equatable {
+    var taskID: UUID
+    var title: String
+    var packetVersion: Int?
+    var text: String
+
+    /// The title is quoted with `\"` and `\\` escaped, so nothing in it can
+    /// look like the end of the line that names the task.
+    var message: String {
+        let packet = packetVersion.map { ", packet v\($0)" } ?? ""
+        let quoted = title.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        return "About task \"\(quoted)\" (task ID \(taskID.uuidString)\(packet)): \(text)"
+    }
+
+    init(taskID: UUID, title: String, packetVersion: Int?, text: String) {
+        self.taskID = taskID
+        self.title = title
+        self.packetVersion = packetVersion
+        self.text = text
+    }
+
+    /// The ask a message carries, or `nil` for anything else the user typed.
+    /// An older message whose title has an unescaped quote stays as typed.
+    init?(message: String) {
+        // A regex is not Sendable, so it is built here rather than kept.
+        let pattern = /About task "(?<title>(?:[^"\\]|\\.)*)" \(task ID (?<id>[0-9A-Fa-f-]{36})(?:, packet v(?<version>[0-9]+))?\): (?<text>.*)/
+            .dotMatchesNewlines()
+        guard let match = message.wholeMatch(of: pattern),
+              let taskID = UUID(uuidString: String(match.output.id)) else { return nil }
+        let text = String(match.output.text)
+        guard text.isEmpty == false else { return nil }
+        self.init(
+            taskID: taskID,
+            title: String(match.output.title).replacing(/\\(.)/.dotMatchesNewlines()) { String($0.output.1) },
+            packetVersion: match.output.version.flatMap { Int($0) },
+            text: text
+        )
+    }
+}
+
 /// The coordinator's conversation as chat lines: messages, tool calls
 /// folded to one line each, and where a session began or ended. Kept to
 /// the last `maximumItems`.
@@ -303,6 +347,10 @@ struct CoordinatorChatTranscript {
         var name: String?
         var detail: String?
         var outcome: String?
+        /// For a question the user asked from a card: its task, which the
+        /// chat names beside the message.
+        var aboutTaskID: String?
+        var aboutTitle: String?
     }
 
     private(set) var items: [Item] = []
@@ -346,7 +394,14 @@ struct CoordinatorChatTranscript {
         case .userMessage(let message):
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.isEmpty == false else { return }
-            append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: text))
+            if let ask = CoordinatorTaskAsk(message: text) {
+                append(Item(
+                    type: .message, id: id, at: event.timestamp, role: "user", text: ask.text,
+                    aboutTaskID: ask.taskID.uuidString, aboutTitle: ask.title
+                ))
+            } else {
+                append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: text))
+            }
         case .assistantMessage(let message):
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.isEmpty == false else { return }

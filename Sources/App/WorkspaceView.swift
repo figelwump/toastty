@@ -677,7 +677,10 @@ struct WorkspaceView: View {
                 .frame(height: 1)
 
             Group {
-                if let workspace = selectedWorkspace {
+                // The coordinator chat stands for the whole workspace: its
+                // terminal's tab and running count stay hidden until the user
+                // opens the terminal.
+                if let workspace = selectedWorkspace, isCoveredByChat == false {
                     WorkspaceHeaderLayout(
                         tabCount: workspace.tabIDs.count,
                         titleSpacing: Self.workspaceTitleToTabsSpacing,

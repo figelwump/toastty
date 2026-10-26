@@ -109,19 +109,7 @@ function receive(next: ChatState) {
   // A focus older than a view request is spent: the view request wins.
   if (newFocus && (!newView || newFocus.token > newView.token)) {
     view = "chat";
-    const asked = newFocus.cardID;
-    const id = asked && next.items.some((item) => item.id === asked) ? asked : focusCardID(next, newFocus.taskID);
-    if (id) {
-      // Last in the set, so the app reads it as the card opened last.
-      ui.expanded.delete(id);
-      ui.expanded.add(id);
-      render();
-      const element = document.getElementById(`card-${id}`);
-      element?.scrollIntoView({ block: "center" });
-      element?.classList.add("flash");
-      setTimeout(() => element?.classList.remove("flash"), 1200);
-      return;
-    }
+    if (openCard(newFocus.taskID, newFocus.cardID)) return;
   }
   if (next.notice && next.notice.token !== lastNoticeToken) {
     lastNoticeToken = next.notice.token;
@@ -132,6 +120,25 @@ function receive(next: ChatState) {
   render();
   if (focusComposer && !composerInput.disabled) composerInput.focus();
   if (revealSelected && tasksUI.selected) document.getElementById(`task-row-${tasksUI.selected}`)?.scrollIntoView({ block: "nearest" });
+}
+
+/// Opens the task's card, scrolls to it and flashes it. False when the chat
+/// has no card for the task.
+/// Opens a task's card: `cardID` when the chat has it, as the app names the
+/// task's newest question, else the task's newest packet card or its last.
+function openCard(taskID: string, cardID?: string | null): boolean {
+  if (!state) return false;
+  const id = cardID && state.items.some((item) => item.id === cardID) ? cardID : focusCardID(state, taskID);
+  if (!id) return false;
+  // Last in the set, so the app reads it as the card opened last.
+  ui.expanded.delete(id);
+  ui.expanded.add(id);
+  render();
+  const element = document.getElementById(`card-${id}`);
+  element?.scrollIntoView({ block: "center" });
+  element?.classList.add("flash");
+  setTimeout(() => element?.classList.remove("flash"), 1200);
+  return true;
 }
 
 function setView(next: PageView) {
@@ -234,6 +241,9 @@ document.addEventListener("click", (event) => {
       break;
     case "open-task":
       post({ type: "openTaskSpace", taskID: data.task! });
+      break;
+    case "focus-task":
+      openCard(data.task!);
       break;
     case "open-url":
       post({ type: "openURL", url: data.url! });

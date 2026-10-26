@@ -17,8 +17,10 @@ captures the window with automation.capture_screenshot at each step:
    composer makes the coordinator create and start a task;
 2. the task publishes packet v1 with screenshots, and its packet card opens,
    and Full report opens in the right panel;
-3. a reply to the task reaches its agent as `Review note on packet v1: …`,
-   and the task leaves Needs you;
+3. a question asked from the card's **to coordinator** reply reaches the
+   coordinator with the task named, and the chat shows only the typed text,
+   tied to the task; then a reply to the task reaches its agent as
+   `Review note on packet v1: …`, and the task leaves Needs you;
 4. packet v2 adds a new card, and the v1 card collapses;
 5. with a pull request link on the task, Open PR opens it in the right panel;
    Merge asks first, naming the direct merge policy, and Merge in the
@@ -277,6 +279,19 @@ def main():
         capture('e2e-2-report')
         step('2b report opened', screenshots=len(packet['screenshots']))
 
+        # A question to the coordinator from the card: the coordinator gets
+        # it with the task named, and the chat shows only what was typed.
+        question = 'In one short sentence, what does this task change? Do not act on it.'
+        require(page('click', f"reply-to-coordinator-{open_card(task_id, 1)['id']}"), 'Could not switch the reply to the coordinator')
+        require(page('type', f"reply-{open_card(task_id, 1)['id']}", question), 'Could not type the question')
+        asked = wait_for('the question in the chat', waiting(lambda: next(
+            (i for i in chat_state()['items'] if i['type'] == 'message' and i.get('role') == 'user'
+             and i.get('aboutTaskID') == task_id), None)), timeout=600, interval=3)
+        require(asked['text'] == question, f'The chat shows more than the question: {asked}')
+        capture('e2e-3-asked')
+        step('3a question to the coordinator shows only its text', item=asked)
+        require(page('click', f"reply-to-task-{open_card(task_id, 1)['id']}"), 'Could not switch the reply back to the task')
+
         reply = 'Please change it to "Hello coordinator!" with an exclamation mark, then publish packet v2 with the same screenshots.'
         require(page('type', f"reply-{open_card(task_id, 1)['id']}", reply), 'Could not type the reply')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
@@ -289,7 +304,7 @@ def main():
         working = wait_for('the task to leave Needs you', lambda: (lambda r: r if not r['stage'].get('needsUser') else None)(
             cli_result('task', 'get', task_id)), timeout=120, interval=2)
         capture('e2e-3-replied')
-        step('3 reply sent to the task', stage=working.get('stage'))
+        step('3b reply sent to the task', stage=working.get('stage'))
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
