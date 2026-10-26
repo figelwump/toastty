@@ -168,3 +168,37 @@ test("an empty list says how to start, and empty groups are left out", () => {
   assert.ok(!html.includes('id="group-running"'));
   assert.ok(!html.includes('id="task-row-A"'));
 });
+
+test("a filter from the sidebar shows one project with its group open and its first row selected", () => {
+  const ui = tasks.newTasksUIState();
+  const s = state([
+    row("A", "needsYou"),
+    row("B", "done", { project: "docs" }),
+    row("C", "done"),
+    row("D", "done"),
+  ]);
+  ui.menuOpen = "A";
+  tasks.applyFilter(s, ui, { project: "lumen", group: "done" });
+  assert.equal(ui.project, "lumen");
+  assert.equal(tasks.isGroupOpen("done", ui), true);
+  // The docs task is hidden by the filter, so the first lumen row is chosen.
+  assert.equal(ui.selected, "C");
+  assert.equal(ui.menuOpen, null);
+  // The selection survives the next render's normalize.
+  tasks.normalize(s, ui);
+  assert.equal(ui.selected, "C");
+
+  // A group the user had closed opens again, and one already open stays open.
+  ui.toggledGroups.add("running");
+  tasks.applyFilter(s, ui, { project: null, group: "running" });
+  assert.equal(tasks.isGroupOpen("running", ui), true);
+  tasks.applyFilter(s, ui, { project: null, group: "done" });
+  assert.equal(tasks.isGroupOpen("done", ui), true);
+  assert.equal(ui.project, null);
+  assert.equal(ui.selected, "B");
+
+  // A project whose rows were not sent shows every project, but nothing of
+  // another project is selected.
+  tasks.applyFilter(s, ui, { project: "gone", group: "done" });
+  assert.equal(ui.selected, null);
+});

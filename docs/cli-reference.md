@@ -980,7 +980,8 @@ toastty coordinator tasks
 coordinator's own session, or a command outside any agent session, may post.
 `coordinator status` reports whether the coordinator runs, and where its files
 are. `coordinator show` shows the coordinator chat over its hidden workspace;
-with `--task`, the chat opens and scrolls to that task's newest packet card.
+with `--task`, the chat opens and scrolls to that task's newest packet card,
+or to its newest card when that is a question.
 `coordinator show-terminal` shows the same workspace with its raw terminal.
 `coordinator tasks` shows [All tasks](tasks.md#all-tasks) there instead of the chat.
 These are short forms of

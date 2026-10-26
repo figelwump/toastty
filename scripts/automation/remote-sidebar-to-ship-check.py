@@ -17,7 +17,11 @@ task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - "Show 2 more" lists the other two under the three, oldest last;
 - a To ship row opens the coordinator chat to its task;
 - with two To ship tasks and three done, the card shows both rows with no
-  "Show N more", and the footer keeps the Done count.
+  "Show N more", and the footer keeps the Done count and the Release pill;
+- the Done count opens All tasks at the project, with Done open and one of
+  the project's done tasks selected;
+- the Release pill makes the project's release task. The home folder is no
+  git repository, so its setup then fails; only the task's creation counts.
 The coordinator runs the fake agent too; opening its chat asks GitHub about
 every open pull request. Captures of each step and
 remote-sidebar-to-ship-check.json go to the artifacts directory; a missing
@@ -245,10 +249,27 @@ def main():
             cli_json('task', 'mark-done', tasks[title])
             wait_for(f'{title} to be done', lambda: stage(tasks[title])['group'] == 'done')
         wait_for('two card rows', lambda: sidebar_rows() == newest[:2])
-        done_label = 'Finished tasks: 3 done.'
+        done_label = 'Finished tasks: 3 done. Opens All tasks.'
         require(done_label in labels(), f'The footer should keep the Done count: {labels()}')
-        step('projects rows with two', rows=sidebar_rows(), doneCount=True)
+        require('Release' in labels(), f'The footer should offer Release for a project that can release: {labels()}')
+        step('projects rows with two', rows=sidebar_rows(), doneCount=True, release=True)
         capture('projects-two-to-ship')
+
+        # 3. The Done count opens All tasks at the project's Done group.
+        done_ids = {tasks[title] for title in TITLES[:3]}
+        press_label(done_label)
+        state = wait_for('All tasks at a done task', lambda: (lambda s: s if s['view'] == 'tasks'
+                         and s.get('selectedRowID') in done_ids else None)(chat_state()))
+        selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
+        require(selected == [coordinator['workspaceID']], f'The count did not open the coordinator: {selected}')
+        step('done count opened All tasks', selectedRowID=state['selectedRowID'])
+        capture('projects-done-count-opens-all-tasks')
+
+        # 4. Release makes the project's release task.
+        press_label('Release')
+        release = wait_for('the release task', lambda: next(
+            (t for t in cli_json('task', 'list')['tasks'] if t.get('release')), None), timeout=20, interval=0.5)
+        step('release pill made a release task', taskID=release.get('taskID'), title=release.get('title'))
 
         evidence['status'] = 'passed'
     except Exception:

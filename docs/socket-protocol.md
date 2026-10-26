@@ -532,7 +532,8 @@ Notable action-specific behavior:
   - selects the hidden coordinator workspace with the coordinator chat over
     its terminal, and returns the `coordinator.status` object with `taskID`.
     Takes optional `taskID`: the chat then opens and scrolls to that task's
-    newest packet card, or its last card. `INVALID_PAYLOAD` while the
+    newest card when that is a question, else its newest packet card, else
+    its last card. `INVALID_PAYLOAD` while the
     workspace does not exist, or for a task the caller may not see.
 - `window.tasks.show`, `window.tasks.hide`
   - aliases of `coordinator.chat.show`, kept for scripts from before the
@@ -540,6 +541,10 @@ Notable action-specific behavior:
 - `coordinator.tasks.show`
   - as `coordinator.chat.show` without `taskID`, but the page shows All tasks
     instead of the chat; returns the `coordinator.status` object.
+  - optional `group` (`needsYou`, `running`, `toShip`, `done` or `archived`)
+    opens that group and selects its first row. Optional `project`, which
+    needs `group`, filters the list to one project as its rows name it, as
+    the sidebar's To ship and Done counts do.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or

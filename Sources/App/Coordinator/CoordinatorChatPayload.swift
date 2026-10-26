@@ -16,6 +16,10 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     struct Focus: Encodable, Equatable {
         var taskID: String
         var token: Int
+        /// The card to open, when the task's newest card is a question: it
+        /// asks the user something newer than any packet. `nil` lets the
+        /// page open the newest packet card, else the last card.
+        var cardID: String?
     }
 
     struct Notice: Encodable, Equatable {
@@ -31,9 +35,19 @@ struct CoordinatorChatPayload: Encodable, Equatable {
         var ok: Bool
     }
 
+    /// What All tasks shows when a view request asks: one project's tasks,
+    /// with one stage group open and its first row selected.
+    struct TasksFilter: Encodable, Equatable {
+        /// The project as All tasks rows name it; `nil` for every project.
+        var project: String?
+        /// A group ID from `CoordinatorAllTasks.groupID`.
+        var group: String
+    }
+
     /// Asks the page to show the chat or All tasks; a new token asks again.
     struct ViewRequest: Encodable, Equatable {
         var view: CoordinatorChatPageView
+        var filter: TasksFilter?
         var token: Int
     }
 

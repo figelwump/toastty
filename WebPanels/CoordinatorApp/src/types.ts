@@ -75,6 +75,13 @@ export type ChatItem =
 
 export type PageView = "chat" | "tasks";
 
+export interface TasksFilter {
+  /// The project as rows name it; null for every project.
+  project: string | null;
+  /// A stage group ID, such as "toShip" or "done".
+  group: string;
+}
+
 export interface TaskGroup {
   id: string;
   title: string;
@@ -118,13 +125,17 @@ export interface ChatState {
   items: ChatItem[];
   /// Set by `coordinator.chat.show --task`: the card to open and scroll to.
   /// A new token asks again for the same task.
-  focus: { taskID: string; token: number } | null;
+  /// `cardID`, when set, is the task's newest card, a question, to open
+  /// instead of its newest packet.
+  focus: { taskID: string; token: number; cardID?: string | null } | null;
   /// A short line after an action, such as a failed send.
   notice: { text: string; isError: boolean; token: number } | null;
   /// Whether the send, reply or ask with `token` was taken.
   ack?: { token: number; ok: boolean } | null;
   /// Asks the page to show the chat or All tasks; a new token asks again.
-  view?: { view: PageView; token: number } | null;
+  /// A filter, from the sidebar's To ship and Done counts, shows one
+  /// project's tasks with one group open.
+  view?: { view: PageView; filter?: TasksFilter | null; token: number } | null;
   /// The stage groups, in order.
   taskGroups?: TaskGroup[];
   tasks?: TaskRow[];

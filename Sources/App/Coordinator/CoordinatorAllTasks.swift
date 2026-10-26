@@ -93,30 +93,30 @@ enum CoordinatorAllTasks {
     /// Newest change first within each group; the page orders the groups.
     static func rows(
         _ items: [TaskBoardItem],
-        hasCard: (UUID) -> Bool,
+        cards: (UUID) -> CoordinatorChatCardIndex.TaskCards?,
         canRelease: (TaskBoardItem) -> Bool,
         isTriageConfigured: Bool,
         mergePolicy: (TaskBoardItem) -> String
     ) -> [Row] {
         items.map { item in
-            let card = item.taskID.map(hasCard) ?? false
+            let taskCards = item.taskID.flatMap(cards)
             var sections = menu(item, isTriageConfigured: isTriageConfigured).map { $0.map(action) }
             if item.stage.group == .toShip, item.projectWorkspaceID != nil, canRelease(item) {
                 sections.append([releaseAction(item)])
             }
             let (label, tone) = CoordinatorChatTaskView.label(item)
-            let (primary, confirm) = primaryAction(item, hasCard: card, mergePolicy: mergePolicy)
+            let (primary, confirm) = primaryAction(item, cards: taskCards, mergePolicy: mergePolicy)
             return Row(
                 id: rowID(item),
                 taskID: item.taskID?.uuidString,
                 title: item.title,
-                project: item.projectTitle ?? item.record?.projectRoot.map { URL(filePath: $0).lastPathComponent },
+                project: projectTitle(item),
                 group: groupID(item.stage.group),
                 stageLabel: label,
                 stageTone: tone,
                 status: TaskBoardPresentation.statusLine(item),
                 activityAt: item.activityAt,
-                hasCard: card,
+                hasCard: taskCards != nil,
                 primary: primary,
                 confirm: confirm,
                 menu: sections
@@ -124,17 +124,23 @@ enum CoordinatorAllTasks {
         }
     }
 
+    /// The project a row names, which the page's project filter matches.
+    static func projectTitle(_ item: TaskBoardItem) -> String? {
+        item.projectTitle ?? item.record?.projectRoot.map { URL(filePath: $0).lastPathComponent }
+    }
+
     /// The Needs you row's primary action for a task that needs the user;
     /// Open for any other task that has a card or an open task space.
     static func primaryAction(
         _ item: TaskBoardItem,
-        hasCard: Bool,
+        cards: CoordinatorChatCardIndex.TaskCards?,
         mergePolicy: (TaskBoardItem) -> String
     ) -> (Action?, confirm: String?) {
+        let hasCard = cards != nil
         if TaskBoardPresentation.showsSetup(item), item.taskID != nil {
             return (Action(id: setupActionID, title: "Set Up"), nil)
         }
-        if item.stage.group == .needsYou, let primary = SidebarNeedsYouRow.primaryAction(item) {
+        if item.stage.group == .needsYou, let primary = SidebarNeedsYouRow.primaryAction(item, cards: cards) {
             switch primary {
             case .setup:
                 return (Action(id: setupActionID, title: "Set Up"), nil)
@@ -147,6 +153,9 @@ enum CoordinatorAllTasks {
                 return (Action(id: actionID(.openTaskSpace(workspaceID: workspaceID)), title: "Answer"), nil)
             case .openTaskSpace(let workspaceID):
                 return (Action(id: actionID(.openTaskSpace(workspaceID: workspaceID)), title: "Open"), nil)
+            case .openInChat:
+                // Open shows the task's card, which the task has.
+                return (Action(id: openActionID, title: primary.title), nil)
             }
         }
         guard hasCard || item.taskSpaceWorkspaceID != nil else { return (nil, nil) }
@@ -216,6 +225,8 @@ enum CoordinatorAllTasks {
             case .setup: break
             case .answer(let workspaceID), .openTaskSpace(let workspaceID):
                 candidates.append(.openTaskSpace(workspaceID: workspaceID))
+            case .openInChat:
+                break // Its action ID is `openActionID`, handled above.
             case .merge(let taskID, _):
                 candidates.append(.action(.merge, taskID: taskID))
             case .action(let detail, let taskID):

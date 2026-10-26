@@ -54,10 +54,10 @@ When a task publishes a newer packet, the chat adds a card for it at the end,
 marked **new**, and the task's older packet cards collapse to one line.
 **routing.md** in the chat's header opens the routing notes in the right panel.
 `toastty coordinator show --task <task-id>` opens the chat and scrolls to that
-task's newest packet card.
+task's newest packet card, or to its newest card when that is a question.
 
 The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
-one opens its newest packet in the chat; see
+one opens its card in the chat; see
 [The sidebar](tasks.md#the-sidebar). `Cmd+Shift+T` and **View > Show
 Coordinator Chat** open the chat too. **All tasks**, beside the chat, lists
 every task with its actions; see [All tasks](tasks.md#all-tasks).

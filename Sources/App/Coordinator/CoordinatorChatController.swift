@@ -88,6 +88,8 @@ final class CoordinatorChatController {
     let session: CoordinatorSessionController
     let conversations: ConversationService?
     let sessionRuntimeStore: SessionRuntimeStore?
+    /// Each task's cards, for the sidebar.
+    let cardIndex = CoordinatorChatCardIndex()
     private let now: () -> Date
 
     private var pages: [ObjectIdentifier: WeakPage] = [:]
@@ -108,7 +110,7 @@ final class CoordinatorChatController {
     private var notice: (text: String, isError: Bool, token: Int)?
     private var ack: (token: Int, ok: Bool)?
     private var tokenCounter = 0
-    private var viewRequest: (view: CoordinatorChatPageView, token: Int)?
+    private var viewRequest: (view: CoordinatorChatPageView, filter: CoordinatorChatPayload.TasksFilter?, token: Int)?
     private(set) var lastPayload: CoordinatorChatPayload?
     /// The cards an open page last reported expanded.
     private(set) var expandedCardIDs: [String] = []
@@ -167,21 +169,23 @@ final class CoordinatorChatController {
     }
 
     /// `coordinator.tasks.show`: the page shows All tasks instead of the chat.
-    func showTasks() -> Bool {
-        show(.tasks, taskID: nil)
+    /// With a filter, as the sidebar's To ship and Done counts ask, it shows
+    /// that project with that group open.
+    func showTasks(filter: CoordinatorChatPayload.TasksFilter? = nil) -> Bool {
+        show(.tasks, taskID: nil, filter: filter)
     }
 
-    private func show(_ view: CoordinatorChatPageView, taskID: UUID?) -> Bool {
+    private func show(_ view: CoordinatorChatPageView, taskID: UUID?, filter: CoordinatorChatPayload.TasksFilter? = nil) -> Bool {
         guard session.showChat() else {
             // No coordinator workspace yet, as in a dev run that does not
             // start the coordinator at launch: start it, then show.
             return session.startForRequest { [weak self] in
-                _ = self?.show(view, taskID: taskID)
+                _ = self?.show(view, taskID: taskID, filter: filter)
             }
         }
         taskCoordinator.board?.chatDidOpen()
         tokenCounter += 1
-        viewRequest = (view, tokenCounter)
+        viewRequest = (view, filter, tokenCounter)
         // The page may already show, with the keyboard elsewhere: typing,
         // and the arrow keys on All tasks, should reach it.
         for page in pages.values.compactMap(\.page) { page.takeKeyboardFocus() }
@@ -219,6 +223,7 @@ final class CoordinatorChatController {
             let events = session.files.events()
             let payload = await buildPayload(events: events)
             lastPayload = payload
+            updateCardIndex()
             if pages.isEmpty == false, let data = try? payload.encoded() {
                 pages = pages.filter { $0.value.page != nil }
                 for page in pages.values.compactMap(\.page) { page.receive(data) }
@@ -295,9 +300,10 @@ final class CoordinatorChatController {
         chatItems.sort { $0.at < $1.at }
         let board = taskCoordinator.board
         let isTriageConfigured = taskCoordinator.isTriageConfigured
+        let cardsByTaskID = CoordinatorChatCardIndex.tasks(from: chatItems)
         let rows = CoordinatorAllTasks.rows(
             CoordinatorAllTasks.shownItems(items),
-            hasCard: { taskIDs.contains($0) },
+            cards: { cardsByTaskID[$0] },
             canRelease: { board?.canRelease($0) ?? false },
             isTriageConfigured: isTriageConfigured,
             mergePolicy: { [taskCoordinator] item in
@@ -307,13 +313,23 @@ final class CoordinatorChatController {
         return CoordinatorChatPayload(
             coordinator: coordinatorView(),
             items: chatItems,
-            focus: focus.map { .init(taskID: $0.taskID.uuidString, token: $0.token) },
+            focus: focus.map { .init(taskID: $0.taskID.uuidString, token: $0.token, cardID: Self.questionCardID(taskID: $0.taskID, in: chatItems)) },
             notice: notice.map { .init(text: $0.text, isError: $0.isError, token: $0.token) },
             ack: ack.map { .init(token: $0.token, ok: $0.ok) },
-            view: viewRequest.map { .init(view: $0.view, token: $0.token) },
+            view: viewRequest.map { .init(view: $0.view, filter: $0.filter, token: $0.token) },
             taskGroups: CoordinatorAllTasks.groups(items),
             tasks: rows
         )
+    }
+
+    /// The task's newest card, when it is a question.
+    static func questionCardID(taskID: UUID, in items: [CoordinatorChatItem]) -> String? {
+        let newest = items.last { item in
+            if case .card(let card) = item { return card.task?.id == taskID.uuidString }
+            return false
+        }
+        guard case .card(let card)? = newest, card.kind == CoordinatorEvent.Kind.question.rawValue else { return nil }
+        return card.id
     }
 
     private func packet(taskID: UUID, version: Int) -> TaskPacket? {
@@ -400,6 +416,7 @@ final class CoordinatorChatController {
             expandedCardIDs = expanded
             pageView = view
             selectedTaskRowID = selectedRowID
+            updateCardIndex()
             return
         case .taskAction(let rowID, let actionID):
             runTaskAction(rowID: rowID, actionID: actionID, page: page)
@@ -440,6 +457,11 @@ final class CoordinatorChatController {
         if pageView == .tasks {
             return lastPayload?.tasks.first { $0.id == selectedTaskRowID }?.taskID.flatMap(UUID.init(uuidString:))
         }
+        return openCardTaskID
+    }
+
+    /// The task of the card the page opened last, in the chat.
+    private var openCardTaskID: UUID? {
         let cards = (lastPayload?.items ?? []).compactMap { item -> CoordinatorChatCardView? in
             if case .card(let card) = item { return card }
             return nil
@@ -448,6 +470,13 @@ final class CoordinatorChatController {
             if let id = cards.first(where: { $0.id == cardID })?.task?.id { return UUID(uuidString: id) }
         }
         return nil
+    }
+
+    private func updateCardIndex() {
+        cardIndex.update(
+            tasks: CoordinatorChatCardIndex.tasks(from: lastPayload?.items ?? []),
+            openTaskID: pageView == .chat ? openCardTaskID : nil
+        )
     }
 
     /// Whether the chat has a card for the task: one the coordinator posted,

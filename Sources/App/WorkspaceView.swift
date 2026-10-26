@@ -1263,7 +1263,9 @@ struct WorkspaceView: View {
                     // rather than replacing it, so the terminal stays
                     // attached; the right panel shows beside it.
                     .overlay {
-                        if isWorkspaceSelected, workspace.isCoordinator,
+                        // Only the selected tab hosts a page: the pages of
+                        // hidden tabs would report their own open cards.
+                        if isWorkspaceSelected, isTabSelected, workspace.isCoordinator,
                            store.state.showsCoordinatorChat(windowID: windowID),
                            let chat = CoordinatorChatController.shared {
                             CoordinatorChatView(controller: chat)
