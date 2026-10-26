@@ -277,7 +277,7 @@ CLI notes:
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
 | `RUN_LABEL` | timestamped `computer-use-*` value | Optional stable label for the remote Computer Use run. Prefer `--run-label` for explicit CLI usage. |
 | `TIMEOUT_SECONDS` | `300` | Default hard timeout for the Codex turn when `--timeout-seconds` is not passed. |
-| `CODEX_COMPUTER_USE_MODEL` | `gpt-6-luna` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_MODEL` | `gpt-6.1-terra` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
 | `CODEX_COMPUTER_USE_REASONING_EFFORT` | `high` | Codex reasoning effort passed explicitly to `codex app-server` for Computer Use turns. |
 | `CODEX_COMPUTER_USE_SERVICE_TIER` | `fast` | Codex service tier passed explicitly to `codex app-server`. Use `default` for standard mode. |
 
