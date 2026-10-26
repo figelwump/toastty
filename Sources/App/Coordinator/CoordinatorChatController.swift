@@ -443,7 +443,7 @@ final class CoordinatorChatController {
             if case .card(let card) = item { return card.task?.id == taskID.uuidString }
             return false
         }
-        guard case .card(let card)? = newest, card.kind == CoordinatorEvent.Kind.question.rawValue, card.answer == nil else { return nil }
+        guard case .card(let card)? = newest, card.kind == CoordinatorEvent.Kind.question.rawValue else { return nil }
         return card.id
     }
 

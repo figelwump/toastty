@@ -399,6 +399,28 @@ struct CoordinatorChatTests {
         #expect(fixture.card(forTask: task.id)?.answer == "Keep it")
     }
 
+    @Test func openingATaskKeepsItsNewestQuestionVisibleAfterItIsAnswered() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        let question = CoordinatorEvent(at: Date().addingTimeInterval(1), kind: .question, taskID: task.id,
+                                        text: "Staging only?", sessionID: nil)
+        try fixture.session.files.append(question)
+        await fixture.chat.refresh()
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Staging only",
+                                         cardID: question.id.uuidString, questionID: question.id), from: nil)
+        #expect(fixture.chat.show(taskID: task.id))
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.focus?.cardID == question.id.uuidString)
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == false)
+        #expect(fixture.card(forTask: task.id)?.answer == "Staging only")
+        // The older packet remains in the timeline, but Open names the
+        // current question so its thread and task actions stay reachable.
+        #expect(fixture.chat.lastPayload?.items.contains { item in
+            guard case .card(let card) = item else { return false }
+            return card.kind == "packet" && card.task?.id == task.id.uuidString
+        } == true)
+    }
+
     @Test func taskTranscriptRepliesAreCapturedOnceAcrossProjectionRebuildAndSessionExit() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithoutPacket()
