@@ -2,7 +2,9 @@
 // `window.toasttyCoordinatorChat.receive(state)`; the page sends actions back
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
-import { collapseNewlySuperseded, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
+import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
+import { addressFor, addressMatches, pickedAddress, showSuggestions } from "./composer";
+import type { AddressPick, ComposerAddress } from "./composer";
 import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
 import type { ChatEvent, ChatState, PageView } from "./types";
 
@@ -30,7 +32,7 @@ let lastViewToken: number | null = null;
 let lastNoticeToken: number | null = null;
 let nextToken = 1;
 /// Sends waiting for the app's answer: what to clear once it is taken.
-const pendingSends = new Map<number, { draftKey: string }>();
+const pendingSends = new Map<number, { draftKey: string; text: string }>();
 const composerDraftKey = "composer";
 
 const header = document.getElementById("header")!;
@@ -41,12 +43,64 @@ const composerInput = composer.querySelector("textarea") as HTMLTextAreaElement;
 const composerHint = document.getElementById("composer-hint-text")!;
 const composerTerminal = document.getElementById("composer-open-terminal")!;
 const notice = document.getElementById("notice")!;
+const suggestions = document.getElementById("suggestions")!;
+const addressOptions = document.getElementById("address-options")!;
+let addressPick: AddressPick | null = null;
+let matches: ComposerAddress[] = [];
+let matchIndex = 0;
+
+function renderComposerOptions() {
+  const choices = state?.addresses ?? [];
+  matches = addressMatches(composerInput.value, choices);
+  matchIndex = Math.min(matchIndex, Math.max(0, matches.length - 1));
+  addressOptions.classList.toggle("hidden", !matches.length);
+  addressOptions.innerHTML = matches.map((c, i) => `<button type="button" id="address-option-${i}" role="option" aria-selected="${i === matchIndex}" data-address="${i}"><span class="mono">@${esc(c.token)}</span><span>${esc(c.title)}</span><span class="dim">${c.kind}</span></button>`).join("");
+  composerInput.setAttribute("aria-expanded", String(!!matches.length));
+  if (matches.length) composerInput.setAttribute("aria-activedescendant", `address-option-${matchIndex}`);
+  else composerInput.removeAttribute("aria-activedescendant");
+  const firstTask = choices.find((c) => c.kind === "task");
+  suggestions.classList.toggle("hidden", view !== "chat" || !state || !showSuggestions(state.items));
+  suggestions.innerHTML = `<span class="faint small">Try:</span>` + [
+    ["a request it can route", "Fix the coupon field losing focus on mobile"],
+    ["one it has to ask about", "Add a dark mode toggle"],
+    ...(firstTask ? [["a note to a task", `@${firstTask.token} What is left to verify?`]] : []),
+    ["status", "status"],
+  ].map(([label, text]) => `<button type="button" data-suggest="${esc(text)}">${label}</button>`).join("");
+}
+
+function pickAddress(index: number) {
+  const choice = matches[index];
+  if (!choice) return;
+  addressPick = pickedAddress(choice);
+  composerInput.value = `@${choice.token} `;
+  renderComposerOptions();
+  composerInput.focus();
+}
+
+addressOptions.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>("[data-address]");
+  if (button) pickAddress(Number(button.dataset.address));
+});
+suggestions.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>("[data-suggest]");
+  if (!button) return;
+  composerInput.value = button.dataset.suggest!;
+  addressPick = null;
+  renderComposerOptions();
+  composerInput.focus();
+});
+composerInput.addEventListener("input", () => {
+  if (addressPick && !composerInput.value.startsWith(`@${addressPick.token} `)) addressPick = null;
+  matchIndex = 0;
+  renderComposerOptions();
+});
 
 function render() {
   if (!state) return;
   header.innerHTML = renderHeader(state, view);
   scroll.classList.toggle("hidden", view !== "chat");
   composer.classList.toggle("hidden", view !== "chat");
+  suggestions.classList.toggle("hidden", view !== "chat" || !showSuggestions(state.items));
   tasksView.classList.toggle("hidden", view !== "tasks");
   normalize(state, tasksUI);
   if (view === "tasks") {
@@ -71,7 +125,8 @@ function render() {
   composerInput.disabled = !state.coordinator.canSend;
   composerHint.textContent = state.coordinator.sendHint ?? "";
   composerTerminal.classList.toggle("hidden", state.coordinator.canSend || !state.coordinator.hasTerminal);
-  composerInput.placeholder = state.coordinator.canSend ? "Tell the coordinator…" : state.coordinator.sendHint ?? "The coordinator is not running";
+  composerInput.placeholder = state.coordinator.canSend ? "Tell the coordinator… @task to point at one, @project to route" : state.coordinator.sendHint ?? "The coordinator is not running";
+  renderComposerOptions();
 }
 
 function receive(next: ChatState) {
@@ -81,8 +136,10 @@ function receive(next: ChatState) {
     const sent = pendingSends.get(next.ack.token)!;
     pendingSends.delete(next.ack.token);
     if (next.ack.ok) {
-      ui.drafts.delete(sent.draftKey);
-      if (sent.draftKey === composerDraftKey) composerInput.value = "";
+      if (sent.draftKey === composerDraftKey && composerInput.value === sent.text) {
+        composerInput.value = "";
+        addressPick = null;
+      } else if (ui.drafts.get(sent.draftKey) === sent.text) ui.drafts.delete(sent.draftKey);
     }
   }
   // The newer of a view request and a card focus decides the view: a page
@@ -289,7 +346,7 @@ document.addEventListener("input", (event) => {
 
 function track(draftKey: string): number {
   const token = nextToken++;
-  pendingSends.set(token, { draftKey });
+  pendingSends.set(token, { draftKey, text: draftKey === composerDraftKey ? composerInput.value : ui.drafts.get(draftKey) ?? "" });
   return token;
 }
 
@@ -303,12 +360,33 @@ function checkLength(text: string): boolean {
 function sendComposer() {
   const text = composerInput.value.trim();
   if (!text || composerInput.disabled || !checkLength(text)) return;
-  post({ type: "send", text, token: track(composerDraftKey) });
+  if (addressPick && text === `@${addressPick.token}`) return;
+  if ([...pendingSends.values()].some((s) => s.draftKey === composerDraftKey)) return;
+  const resolved = addressFor(text, state?.addresses ?? [], addressPick);
+  if (addressPick && !resolved) {
+    notice.textContent = "That target is no longer available. Pick it again before sending.";
+    notice.className = "notice error";
+    return;
+  }
+  const token = track(composerDraftKey);
+  if (resolved?.address.kind === "task") {
+    post({ type: "ask", taskID: resolved.address.id, version: resolved.address.version, text: resolved.text, token });
+  } else if (resolved?.address.kind === "project") {
+    post({ type: "project", projectID: resolved.address.id, text: resolved.text, token });
+  } else post({ type: "send", text, token });
   scroll.scrollTop = scroll.scrollHeight;
 }
 
 composerInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (matches.length && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === "Enter" || event.key === "Tab") pickAddress(matchIndex);
+    else if (event.key === "Escape") { matches = []; addressOptions.classList.add("hidden"); }
+    else { matchIndex = (matchIndex + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length; renderComposerOptions(); }
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     sendComposer();
   }

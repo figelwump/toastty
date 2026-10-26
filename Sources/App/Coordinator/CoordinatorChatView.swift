@@ -183,3 +183,35 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         }
     }
 }
+
+/// Only the bundled report shell has this narrow action. The handler owns
+/// no runtime or controller, so WebKit cannot keep a panel alive through it.
+@MainActor
+final class CoordinatorReportBridge: NSObject, WKScriptMessageHandlerWithReply {
+    static let name = "toasttyCoordinatorReport"
+
+    static func reportRoute(url: URL?, isMainFrame: Bool) -> (taskID: UUID, version: Int)? {
+        guard isMainFrame, let url, url.scheme == "toastty", url.host == "coordinator",
+              case .report(let taskID, let version)? = ToasttyCoordinatorPageRoute(url: url) else { return nil }
+        return (taskID, version)
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage,
+        replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void
+    ) {
+        guard message.frameInfo.securityOrigin.protocol == "toastty", message.frameInfo.securityOrigin.host == "coordinator",
+              let route = Self.reportRoute(url: message.frameInfo.request.url, isMainFrame: message.frameInfo.isMainFrame),
+              let body = message.body as? [String: Any], let marks = CoordinatorReportMark.decode(body["marks"]),
+              let controller = CoordinatorChatController.shared else {
+            replyHandler(["ok": false, "error": "These marks could not be sent from this report."], nil)
+            return
+        }
+        switch controller.sendReportMarks(taskID: route.taskID, version: route.version, marks: marks) {
+        case .sent: replyHandler(["ok": true], nil)
+        case .rejected: replyHandler(["ok": false, "error": "The task, packet, or marks are no longer available for this send. Your notes are still here."], nil)
+        case .unconfirmed: replyHandler(["ok": false, "error": "Could not confirm delivery. Check the task terminal before sending again. Your notes are still here."], nil)
+        }
+    }
+}

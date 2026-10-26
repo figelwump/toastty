@@ -572,6 +572,19 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             }
             return ["elementID": .string(elementID), "performed": .bool(true)]
 
+        case "automation.coordinator_report_action":
+            try requireAutomationMode(for: command)
+            guard let elementID = payload.string("elementID"), !elementID.isEmpty,
+                  let action = payload.string("action"), ["click", "type"].contains(action),
+                  payload.string("panelID") != nil else {
+                throw AutomationSocketError.invalidPayload("panelID, action and elementID are required")
+            }
+            let target = try resolveBrowserTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.browserRuntime(for: target.panelID)
+            let performed = await runtime.performReportAction(action == "click" ? .click(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? ""))
+            guard performed else { throw AutomationSocketError.invalidPayload("the report control is not available") }
+            return ["elementID": .string(elementID), "performed": .bool(true)]
+
         case "automation.capture_screenshot":
             try requireAutomationMode(for: command)
             guard let step = payload.string("step"), step.isEmpty == false else {

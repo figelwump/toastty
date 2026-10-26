@@ -323,6 +323,56 @@ struct CoordinatorChatTests {
         #expect(CoordinatorChatController.reportURL(taskID: taskID, version: 2, screenshot: "a&b") == "toastty://coordinator/report/\(id)/2")
     }
 
+    @Test func reportMarksUseThePacketReplyAndRejectOtherScreenshots() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        let marks = [CoordinatorReportMark(shot: "after-390", note: "Move the bar up", x: 0.4, y: 0.5)]
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .sent)
+        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 marks on the screenshots:\n1. Move the bar up [after-390]")
+        let count = fixture.typed.entries.count
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 2, marks: marks) == .rejected)
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "missing", note: "Fix", x: 0, y: 0)]) == .rejected)
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "after-390", note: " ", x: 0, y: 0)]) == .rejected)
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "after-390", note: "Fix", x: .nan, y: 0)]) == .rejected)
+        #expect(fixture.typed.entries.count == count)
+        try fixture.tasks.coordinator.records.save(id: task.id) { $0.archivedAt = Date() }
+        #expect(fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .rejected)
+        #expect(fixture.typed.entries.count == count)
+    }
+
+    @Test func reportBridgeRejectsNonJSONBodiesBeforeSerialization() {
+        let good: [String: Any] = ["shot": "after-390", "note": "Move it", "x": 0.5, "y": 0.5]
+        #expect(CoordinatorReportMark.decode([good])?.count == 1)
+        for invalid in [Double.nan, Double.infinity, -Double.infinity] {
+            var raw = good
+            raw["x"] = invalid
+            #expect(CoordinatorReportMark.decode([raw]) == nil)
+        }
+        var raw = good
+        raw["note"] = Date()
+        #expect(CoordinatorReportMark.decode([raw]) == nil)
+        #expect(CoordinatorReportMark.decode(Array(repeating: good, count: 101)) == nil)
+        #expect(CoordinatorReportMark.message([.init(shot: "after-390", note: "\u{1b}[201~", x: 0, y: 0)], screenshotNames: ["after-390"]) == nil)
+    }
+
+    @Test func reportBridgeOnlyAcceptsItsOwnMainFrameRoute() {
+        let id = UUID()
+        let url = URL(string: "toastty://coordinator/report/\(id.uuidString)/1")!
+        #expect(CoordinatorReportBridge.reportRoute(url: url, isMainFrame: true) != nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: url, isMainFrame: false) == nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: URL(string: "https://coordinator/report/\(id)/1"), isMainFrame: true) == nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: URL(string: "toastty://coordinator/packet-data/\(id)/1"), isMainFrame: true) == nil)
+    }
+
+    @Test func projectRequestsRoundTripWithoutConfusingTaskQuestions() throws {
+        let request = CoordinatorProjectRequest(projectName: "Billing \"app\"", projectRoot: "/repos/billing", workspaceID: UUID(), text: "Fix totals\nplease")
+        #expect(CoordinatorProjectRequest(message: request.message) == request)
+        #expect(CoordinatorTaskAsk(message: request.message) == nil)
+        #expect(CoordinatorProjectRequest(message: "Route to billing please") == nil)
+        #expect(CoordinatorChatPageEvent(body: ["type": "project", "projectID": "/repos/billing", "text": "go"]) == .project(id: "/repos/billing", text: "go"))
+        #expect(CoordinatorChatPageEvent(body: ["type": "project", "projectID": "", "text": "go"]) == nil)
+    }
+
     @Test func theTranscriptFoldsToolCallsAndMarksNewSessions() {
         var transcript = CoordinatorChatTranscript()
         let first = RemoteConversationID(rawValue: UUID())

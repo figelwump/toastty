@@ -178,3 +178,24 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .task-row .menu button:hover, .task-row .menu button:focus-visible { background: var(--line); outline: none; }
 .task-row .menu button.destructive { color: var(--red); }
 .task-row .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+
+/* Composer suggestions and explicit targets. */
+.composer { position: relative; }
+.suggest { flex: none; margin: 0 18px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.suggest button { border: 1px dashed var(--line); border-radius: 20px; padding: 2px 8px; color: var(--dim); font-size: 11px; }
+.address-options { position: absolute; bottom: 100%; left: 0; right: 0; max-height: 280px; overflow-y: auto; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 4px; z-index: 2; }
+.address-options button { display: flex; gap: 8px; width: 100%; padding: 7px 10px; text-align: left; border-radius: 4px; }
+.address-options button[aria-selected="true"] { background: var(--raised2); }
+.address-options .dim { margin-left: auto; }
+.shot-image { position: relative; width: fit-content; max-width: 100%; }
+.annotating .shot-image img { cursor: crosshair; }
+.apin { position: absolute; transform: translate(-50%, -50%); background: var(--amber); color: #171717; border: 2px solid #fff; border-radius: 50%; width: 23px; height: 23px; display: grid; place-items: center; font: 600 11px var(--mono); pointer-events: none; box-shadow: 0 1px 4px #0008; }
+.report-notes { display: flex; flex-direction: column; gap: 6px; }
+.report-note { display: flex; align-items: center; gap: 8px; }
+.report-note input { flex: 1; min-width: 50px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.report-note > .small { overflow-wrap: anywhere; max-width: 25%; }
+.report-note > button { color: var(--dim); padding: 4px; }
+#report-send { align-self: flex-start; }
+.report .btn.amber { background: var(--amber); color: #2b1d06; border-color: transparent; font-weight: 600; }
+.report .btn:disabled { opacity: .5; cursor: default; }
+.report-status { color: var(--amber); min-height: 1em; }

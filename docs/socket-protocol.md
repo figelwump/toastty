@@ -1571,6 +1571,25 @@ Behavior:
 - Acts only when exactly one open chat page has the element; otherwise
   returns `INVALID_PAYLOAD`.
 
+### `automation.coordinator_report_action`
+
+Request payload:
+
+- `panelID: UUID`, the report's browser panel
+- `action: "click" | "type"`
+- `elementID: String`, such as `report-annotate`, `shot-after-390`,
+  `report-note-0`, or `report-send`
+- `text?: String`, for `type`
+
+Result: `elementID: String`, `performed: Bool`.
+
+Works only in automation mode and only on a loaded
+`toastty://coordinator/report/<task>/<version>` page. `click` on a screenshot
+drops a pin at its center. `type` fills the note through its input handler.
+The report sends marks through its normal WebKit bridge. This command does
+not accept JavaScript or send directly to an agent. A missing report or
+control returns `INVALID_PAYLOAD`.
+
 ### `automation.dump_state`
 
 Request payload:

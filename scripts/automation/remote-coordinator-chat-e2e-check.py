@@ -197,6 +197,17 @@ def main():
         shutil.copyfile(response['result']['path'], path)
         evidence['captures'].append(path.name)
 
+    def report_action(panel_id, action, element, text=None):
+        args = dict(panelID=panel_id, action=action, elementID=element)
+        if text is not None:
+            args['text'] = text
+        return instance.request('automation.coordinator_report_action', args).get('ok', False)
+
+    def report_panel(task_id, version):
+        snapshot = instance.query('workspace.snapshot', workspaceID=coordinator['workspaceID'])
+        return next((t['panelID'] for t in snapshot['rightPanel']['tabs']
+                     if (t.get('url') or '').startswith(f'toastty://coordinator/report/{task_id}/{version}')), None)
+
     answered = set()
 
     def answer_dialogs():
@@ -260,12 +271,19 @@ def main():
             f'before and after pair at width 390: {shots / "before-390.png"} and {shots / "after-390.png"}. '
             'Post the task-started card, and a packet card when its packet arrives.'
         )
-        require(page('type', 'composer-input', request), 'Could not type into the composer')
+        require(page('type', 'composer-input', f'@project {request}'), 'Could not type @project into the composer')
         task = wait_for('the coordinator to create a task', waiting(lambda: (cli_result('task', 'list')['tasks'] or [None])[0]),
                         timeout=600, interval=5)
         task_id = task['taskID']
         capture('e2e-1-task-created')
         step('1b coordinator created the task', taskID=task_id, title=task['title'])
+        wait_for('the explicit project envelope in the coordinator terminal',
+                 lambda: terminal_shows(coordinator['workspaceID'], 'Toastty project request:'), timeout=30, interval=1)
+        routing_path = Path(coordinator['routingFile'])
+        wait_for('the explicit project pick in routing.md',
+                 lambda: str(repository) in routing_path.read_text().split('## Picks', 1)[-1], timeout=120, interval=2)
+        shutil.copyfile(routing_path, artifacts / f'{PREFIX}-routing.md')
+        step('1c explicit project pick recorded', projectRoot=str(repository), routingFile=str(routing_path))
 
         wait_for('a packet card for v1', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1), None)), timeout=900, interval=5)
@@ -290,21 +308,41 @@ def main():
         require(asked['text'] == question, f'The chat shows more than the question: {asked}')
         capture('e2e-3-asked')
         step('3a question to the coordinator shows only its text', item=asked)
-        require(page('click', f"reply-to-task-{open_card(task_id, 1)['id']}"), 'Could not switch the reply back to the task')
+
+        # An exact known slug in the composer uses the same strict ask envelope.
+        addressed_question = 'What is left to verify? Answer briefly and do not change the task.'
+        record = cli_result('task', 'get', task_id)
+        wait_for('the composer to accept @task', waiting(lambda: chat_state()['canSend']), timeout=300, interval=2)
+        require(page('type', 'composer-input', f"@{record['slug']} {addressed_question}"), 'Could not send @task')
+        addressed = wait_for('the @task message with its About link', waiting(lambda: next(
+            (i for i in chat_state()['items'] if i.get('aboutTaskID') == task_id and i.get('text') == addressed_question), None)),
+            timeout=300, interval=2)
+        capture('e2e-3-addressed')
+        step('3b @task uses the strict task envelope', item=addressed, slug=record['slug'])
 
         reply = 'Please change it to "Hello coordinator!" with an exclamation mark, then publish packet v2 with the same screenshots.'
-        require(page('type', f"reply-{open_card(task_id, 1)['id']}", reply), 'Could not type the reply')
+        # Drive report controls and their WebKit bridge, not task.send.
+        require(page('click', f"report-{open_card(task_id, 1)['id']}"), 'Could not reopen the report')
+        report_id = wait_for('the report panel', lambda: report_panel(task_id, 1), timeout=20)
+        wait_for('the report controls', lambda: report_action(report_id, 'click', 'report-annotate'), timeout=20)
+        require(report_action(report_id, 'click', 'shot-after-390'), 'Could not drop a pin')
+        require(report_action(report_id, 'type', 'report-note-0', reply), 'Could not enter the mark note')
+        capture('e2e-3-report-mark')
+        require(report_action(report_id, 'click', 'report-send'), 'Could not send the marks')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
         after = cli_result('task', 'get', task_id)
         require(after['readyForReviewAt'] is None, f'The task is still ready for review: {after}')
         task_space = after['setup']['taskSpaceWorkspaceID']
         wait_for('the review note in the task terminal', lambda: terminal_shows(task_space, 'Review note on packet v1'),
                  timeout=60, interval=2)
+        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 marks on the screenshots:')
+                 and terminal_shows(task_space, '[after-390]'), timeout=60, interval=2)
         # The agent's turn starts a moment after the note arrives.
         working = wait_for('the task to leave Needs you', lambda: (lambda r: r if not r['stage'].get('needsUser') else None)(
             cli_result('task', 'get', task_id)), timeout=120, interval=2)
         capture('e2e-3-replied')
-        step('3b reply sent to the task', stage=working.get('stage'))
+        step('3c report marks sent to the task', stage=working.get('stage'),
+             expectedMessage=f'Review note on packet v1: 1 marks on the screenshots:\n1. {reply} [after-390]')
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)

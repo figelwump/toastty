@@ -240,6 +240,9 @@ export type ReportMode = "before" | "after" | "side";
 export interface ReportUIState {
   mode: ReportMode;
   width: number | null;
+  annotate?: boolean;
+  marks?: import("./marks").ReportMark[];
+  sending?: boolean;
 }
 
 /// The widths the screenshots were taken at, smallest first.
@@ -289,10 +292,17 @@ export function renderReport(packet: ReportPacket, ui: ReportUIState): string {
         + widths.map((w) => `<button type="button" class="${ui.width === w ? "on" : ""}" data-act="width" data-width="${w}">${w}</button>`).join("")
         + `</span>`;
     }
-    html += `</div><div class="viewer ${ui.mode === "side" ? "side" : ""}">`
-      + (shots.length ? shots.map((s) => `<figure class="shot"><figcaption class="mono dim small">${esc(s.name)}${s.width ? ` · ${s.width}` : ""}</figcaption><img src="${esc(s.url)}" alt="${esc(s.name)}"></figure>`).join("")
+    html += `<button id="report-annotate" type="button" class="btn ${ui.annotate ? "amber" : ""}" data-act="annotate" aria-pressed="${!!ui.annotate}" ${packet.canAnnotate === false || ui.sending ? "disabled" : ""}>✎ ${ui.annotate ? "Annotating" : "Annotate"}</button>`;
+    html += `</div><div class="viewer ${ui.mode === "side" ? "side" : ""} ${ui.annotate ? "annotating" : ""}">`
+      + (shots.length ? shots.map((s) => `<figure class="shot"><figcaption class="mono dim small">${esc(s.name)}${s.width ? ` · ${s.width}` : ""}</figcaption><div class="shot-image"><img id="shot-${esc(s.name)}" data-act="pin" data-shot="${esc(s.name)}" src="${esc(s.url)}" alt="${esc(s.name)}">`
+        + (ui.marks ?? []).map((m, i) => m.shot === s.name ? `<span class="apin" data-pin="${i}" aria-label="Mark ${i + 1}">${i + 1}</span>` : "").join("") + `</div></figure>`).join("")
         : `<div class="dim">No screenshot for this view.</div>`)
       + `</div>`;
+    if (ui.annotate && !ui.marks?.length) html += `<div class="dim small">Click the screenshot to drop a mark, then write what you see.</div>`;
+    if (ui.marks?.length) {
+      html += `<div class="report-notes">` + ui.marks.map((m, i) => `<div class="report-note"><span class="mono">${i + 1}</span><input id="report-note-${i}" data-note="${i}" value="${esc(m.note)}" placeholder="What's wrong here?" aria-label="Note ${i + 1}" ${ui.sending ? "disabled" : ""}><span class="mono dim small">${esc(m.shot)}</span><button type="button" data-act="remove-mark" data-index="${i}" aria-label="Remove mark ${i + 1}" ${ui.sending ? "disabled" : ""}>×</button></div>`).join("") + `</div>`;
+      html += `<button id="report-send" class="btn amber" data-act="send-marks" ${ui.sending ? "disabled" : ""}>${ui.sending ? "Sending…" : `Send ${ui.marks.length} mark${ui.marks.length === 1 ? "" : "s"} to ${esc(packet.slug ?? packet.title)}`}</button>`;
+    }
   }
   html += `<section class="rsec"><h2>What changed</h2><p>${esc(packet.summary)}</p></section>`
     + `<section class="rsec"><h2>Look at</h2><p>${esc(packet.lookAt)}</p></section>`

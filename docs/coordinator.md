@@ -46,7 +46,14 @@ verified, and screenshot thumbnails. Its actions are:
 - **Full report** and the thumbnails open the packet's report in the right
   panel, at `toastty://coordinator/report/<task-id>/<version>`. It shows the
   screenshots before, after or side by side, at each width they were taken
-  at. The report is an ordinary browser panel, so its annotation mode works.
+  at. Select **Annotate**, click a screenshot, and write a note for each
+  numbered mark. Marks stay with their screenshot when you change the view
+  or width. **Send N marks to <task>** sends one `Review note on packet vN:`
+  message to the task, with each note's screenshot name, then opens its card.
+  Marks clear only after Toastty confirms delivery. If delivery fails, check
+  the task terminal before sending again. The browser toolbar's annotation
+  tool still sends viewport captures to an agent; use the report's controls
+  for notes about a packet.
 - **Open task space**, and the pull request link, which opens in the right
   panel.
 
@@ -61,6 +68,22 @@ one opens its card in the chat; see
 [The sidebar](tasks.md#the-sidebar). `Cmd+Shift+T` and **View > Show
 Coordinator Chat** open the chat too. **All tasks**, beside the chat, lists
 every task with its actions; see [All tasks](tasks.md#all-tasks).
+
+Before your first message, the composer shows **Try:** suggestions. They fill
+the composer so you can edit them before sending. Start a message with `@` to
+pick a task or project. The list matches task slugs, task titles, and project
+names. Use the arrow keys and Return to pick, or click an option.
+
+A leading `@<task-slug>` sends the remaining text to the coordinator through
+the same task envelope as a card's **to coordinator** reply. The chat shows
+an **About <task>** link. A leading project pick gives the coordinator an
+explicit routing hint; it uses that project without asking again and records
+your pick in `routing.md`. Only the first token is an address. Later `@`
+tokens stay in the message. A complete, unique known token also works when
+typed exactly. Partial or ambiguous tokens stay ordinary text unless you
+pick from the list. If a picked target becomes unavailable, the draft stays
+so you can choose again. Project tokens use the directory name, with spaces
+percent-encoded; duplicate names require a list pick.
 
 ## How it runs
 
