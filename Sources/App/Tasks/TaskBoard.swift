@@ -18,6 +18,8 @@ struct TaskBoardItem: Identifiable, Equatable {
     /// The top-level workspace the task belongs to, while it is open.
     var projectWorkspaceID: UUID?
     var projectTitle: String?
+    /// The stored project root, or its workspace ID when it has no root.
+    var projectID: String? = nil
     var stage: TaskStage
     var agent: TaskAgentActivity
     /// A finished turn the user has not looked at yet, as the sidebar marks.
@@ -203,6 +205,7 @@ enum TaskBoard {
             taskSpaceWorkspaceID: taskSpaceID,
             projectWorkspaceID: project?.id,
             projectTitle: project?.title ?? root.map { ($0 as NSString).lastPathComponent },
+            projectID: root ?? project.map { "workspace:\($0.id.uuidString)" },
             stage: stage,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
@@ -279,6 +282,7 @@ enum TaskBoard {
             taskSpaceWorkspaceID: workspace.id,
             projectWorkspaceID: parentID,
             projectTitle: project?.title,
+            projectID: project?.rootDirectory ?? project.map { "workspace:\($0.id.uuidString)" },
             stage: stage,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: workspace),

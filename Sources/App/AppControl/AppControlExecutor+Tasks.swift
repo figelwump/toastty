@@ -162,12 +162,22 @@ extension AppControlExecutor {
                 }
             }
             let group = args.taskString("group")
-            let project = args.taskString("project")
+            var project = args.taskString("project")
             if let group, TaskStage.Group.allCases.map(CoordinatorAllTasks.groupID).contains(group) == false {
                 throw AutomationSocketError.invalidPayload("unknown group \"\(group)\"")
             }
             if project != nil, group == nil {
                 throw AutomationSocketError.invalidPayload("project needs group")
+            }
+            if let requested = project {
+                let projects = CoordinatorAllTasks.projects(coordinator.board?.items() ?? [])
+                if !projects.contains(where: { $0.id == requested }) {
+                    let matches = projects.filter { $0.title == requested }
+                    guard matches.count <= 1 else {
+                        throw AutomationSocketError.invalidPayload("project title \"\(requested)\" is ambiguous; use its project root")
+                    }
+                    project = matches.first?.id ?? requested
+                }
             }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")

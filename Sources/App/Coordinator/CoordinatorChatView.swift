@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import SwiftUI
 import WebKit
 
@@ -29,6 +30,11 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
     private var isPageReady = false
     private var pendingPayload: Data?
     private var setupPopover: NSPopover?
+    var windowID: UUID? { (window?.identifier?.rawValue).flatMap(UUID.init(uuidString:)) }
+
+    func inspection() async -> [String: AutomationJSONValue] {
+        await CoordinatorPageInspection.read(webView)
+    }
 
     init(controller: CoordinatorChatController) {
         self.controller = controller
@@ -130,7 +136,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
     }
 
     fileprivate func handle(_ body: Any) {
-        guard let event = CoordinatorChatPageEvent(body: body) else { return }
+        guard let event = CoordinatorChatPageEvent(body: body), CoordinatorSummaryPageBridge.accepts(event, isSummary: false) else { return }
         if event == .ready {
             isPageReady = true
             if let pendingPayload {

@@ -33,6 +33,10 @@ final class CoordinatorSessionController {
     let files: CoordinatorFiles
 
     var workspaceID: UUID? { store.state.coordinatorWorkspaceID }
+    var agentDisplayName: String {
+        launcher.launchProfileSummaries().first { $0.profileID == config.agent }?.displayName ?? config.agent ?? "Coordinator"
+    }
+    var configuredModel: String? { config.model }
     var onPanelChange: ((UUID?) -> Void)?
 
     private let store: AppStore

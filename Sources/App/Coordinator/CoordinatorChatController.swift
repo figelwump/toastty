@@ -17,6 +17,8 @@ final class CoordinatorChatController {
     /// One open chat page.
     @MainActor
     protocol Page: AnyObject {
+        var windowID: UUID? { get }
+        var isSummary: Bool { get }
         func receive(_ payload: Data)
         /// Runs a script in the page; true when it returned true.
         func run(_ script: String) async -> Bool
@@ -24,17 +26,19 @@ final class CoordinatorChatController {
         func takeKeyboardFocus()
         /// Opens setup controls on the page that received the action.
         func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool
+        func inspection() async -> [String: AutomationJSONValue]
     }
 
     /// What `automation.coordinator_chat_action` does in the page.
     enum PageAction {
         case click(elementID: String)
+        case focus(elementID: String)
         /// Types the text into a field, then submits it as Return would.
         case type(elementID: String, text: String)
 
         var elementID: String {
             switch self {
-            case .click(let elementID), .type(let elementID, _): elementID
+            case .click(let elementID), .focus(let elementID), .type(let elementID, _): elementID
             }
         }
 
@@ -53,6 +57,8 @@ final class CoordinatorChatController {
             switch self {
             case .click(let elementID):
                 return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; e.click(); return true; })()"
+            case .focus(let elementID):
+                return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; e.focus({ preventScroll: true }); return document.activeElement === e; })()"
             case .type(let elementID, let text):
                 return """
                 (() => {
@@ -79,7 +85,10 @@ final class CoordinatorChatController {
         for page in pages.values.compactMap(\.page) where await page.run(action.probe) {
             matching.append(page)
         }
-        if matching.count == 1 { _ = await matching[0].run(action.script) }
+        if matching.count == 1 {
+            if case .focus = action { matching[0].takeKeyboardFocus() }
+            _ = await matching[0].run(action.script)
+        }
         return matching.count
     }
 
@@ -99,6 +108,8 @@ final class CoordinatorChatController {
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
     private var changeTasks: [Task<Void, Never>] = []
     private var boardObservation: AnyCancellable?
+    private var dayRefreshTask: Task<Void, Never>?
+    private var projectFilters: [UUID: String] = [:]
     private var transcript = CoordinatorChatTranscript()
     private var packetCache: [String: TaskPacket] = [:]
     private var staleByTaskID: [UUID: Bool] = [:]
@@ -146,20 +157,57 @@ final class CoordinatorChatController {
     deinit {
         for task in changeTasks { task.cancel() }
         refreshTask?.cancel()
+        dayRefreshTask?.cancel()
     }
 
     // MARK: - Pages
 
     func attach(_ page: any Page) {
         pages[ObjectIdentifier(page)] = WeakPage(page: page)
-        if let lastPayload, let data = try? lastPayload.encoded() {
+        if let lastPayload, let data = try? payload(lastPayload, for: page).encoded() {
             page.receive(data)
+        }
+        if page.isSummary, dayRefreshTask == nil {
+            // Recheck the local date after sleep or a clock/timezone change,
+            // too. Only open summary pages need these periodic refreshes.
+            dayRefreshTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    guard !Task.isCancelled else { return }
+                    self?.setNeedsRefresh()
+                }
+            }
+        } else if !page.isSummary {
+            ensureSummary(showsTasks: false)
         }
         setNeedsRefresh()
     }
 
     func detach(_ page: any Page) {
         pages.removeValue(forKey: ObjectIdentifier(page))
+        if !pages.values.contains(where: { $0.page?.isSummary == true }) {
+            dayRefreshTask?.cancel()
+            dayRefreshTask = nil
+        }
+    }
+
+    private func windowID(for page: (any Page)?) -> UUID? {
+        page?.windowID ?? session.workspaceID.flatMap { store.state.workspaceSelection(containingWorkspaceID: $0)?.windowID }
+    }
+
+    private func payload(_ payload: CoordinatorChatPayload, for page: any Page) -> CoordinatorChatPayload {
+        var result = payload
+        result.projectFilter = windowID(for: page).flatMap { projectFilters[$0] }
+        // A late page uses this window's current selection, rather than
+        // replaying the project from an older footer navigation.
+        result.view?.filter?.project = result.projectFilter
+        return result
+    }
+
+    func inspectPages() async -> [[String: AutomationJSONValue]] {
+        var result: [[String: AutomationJSONValue]] = []
+        for page in pages.values.compactMap(\.page) { result.append(await page.inspection()) }
+        return result
     }
 
     /// `coordinator.chat.show`: the chat covers the coordinator's terminal,
@@ -168,7 +216,7 @@ final class CoordinatorChatController {
         show(.chat, taskID: taskID)
     }
 
-    /// `coordinator.tasks.show`: the page shows All tasks instead of the chat.
+    /// `coordinator.tasks.show`: All tasks opens beside the chat.
     /// With a filter, as the sidebar's To ship and Done counts ask, it shows
     /// that project with that group open.
     func showTasks(filter: CoordinatorChatPayload.TasksFilter? = nil) -> Bool {
@@ -184,11 +232,23 @@ final class CoordinatorChatController {
             }
         }
         taskCoordinator.board?.chatDidOpen()
+        if let filter, let windowID = windowID(for: nil) {
+            projectFilters[windowID] = filter.project
+        }
+        if let taskID, let windowID = windowID(for: nil), let selectedProject = projectFilters[windowID],
+           let item = taskCoordinator.board?.items().first(where: { $0.taskID == taskID }),
+           CoordinatorAllTasks.projectID(item) != selectedProject {
+            // Explicit navigation must reveal the requested card even if
+            // another project's filter was selected.
+            projectFilters[windowID] = CoordinatorAllTasks.projectID(item)
+        }
+        ensureSummary(showsTasks: view == .tasks)
         tokenCounter += 1
         viewRequest = (view, filter, tokenCounter)
+        pageView = view
         // The page may already show, with the keyboard elsewhere: typing,
         // and the arrow keys on All tasks, should reach it.
-        for page in pages.values.compactMap(\.page) { page.takeKeyboardFocus() }
+        for page in pages.values.compactMap(\.page) where page.isSummary == (view != .chat) { page.takeKeyboardFocus() }
         if let taskID {
             tokenCounter += 1
             focus = (taskID, tokenCounter)
@@ -224,9 +284,13 @@ final class CoordinatorChatController {
             let payload = await buildPayload(events: events)
             lastPayload = payload
             updateCardIndex()
-            if pages.isEmpty == false, let data = try? payload.encoded() {
+            let projectIDs = Set(payload.projects.map(\.id))
+            projectFilters = projectFilters.filter { projectIDs.contains($0.value) }
+            if pages.isEmpty == false {
                 pages = pages.filter { $0.value.page != nil }
-                for page in pages.values.compactMap(\.page) { page.receive(data) }
+                for page in pages.values.compactMap(\.page) {
+                    if let data = try? self.payload(payload, for: page).encoded() { page.receive(data) }
+                }
             }
         } while refreshAgain
         isRefreshing = false
@@ -301,8 +365,11 @@ final class CoordinatorChatController {
         let board = taskCoordinator.board
         let isTriageConfigured = taskCoordinator.isTriageConfigured
         let cardsByTaskID = CoordinatorChatCardIndex.tasks(from: chatItems)
+        let today = CoordinatorAllTasks.today(items, now: now())
+        let todayIDs = Set(today.completed.map(\.rowID))
+        let shownIDs = Set(CoordinatorAllTasks.shownItems(items).map(\.id))
         let rows = CoordinatorAllTasks.rows(
-            CoordinatorAllTasks.shownItems(items),
+            items.filter { shownIDs.contains($0.id) || todayIDs.contains(CoordinatorAllTasks.rowID($0)) },
             cards: { cardsByTaskID[$0] },
             canRelease: { board?.canRelease($0) ?? false },
             isTriageConfigured: isTriageConfigured,
@@ -311,14 +378,17 @@ final class CoordinatorChatController {
             }
         )
         return CoordinatorChatPayload(
-            coordinator: coordinatorView(),
+            coordinator: coordinatorView(items: items),
             items: chatItems,
             focus: focus.map { .init(taskID: $0.taskID.uuidString, token: $0.token, cardID: Self.questionCardID(taskID: $0.taskID, in: chatItems)) },
             notice: notice.map { .init(text: $0.text, isError: $0.isError, token: $0.token) },
             ack: ack.map { .init(token: $0.token, ok: $0.ok) },
             view: viewRequest.map { .init(view: $0.view, filter: $0.filter, token: $0.token) },
             taskGroups: CoordinatorAllTasks.groups(items),
-            tasks: rows
+            tasks: rows,
+            projects: CoordinatorAllTasks.projects(items),
+            projectFilter: windowID(for: nil).flatMap { projectFilters[$0] },
+            today: today
         )
     }
 
@@ -353,7 +423,7 @@ final class CoordinatorChatController {
         }
     }
 
-    private func coordinatorView() -> CoordinatorChatPayload.Coordinator {
+    private func coordinatorView(items: [TaskBoardItem]) -> CoordinatorChatPayload.Coordinator {
         let snapshot = conversationSnapshot()
         let (canSend, hint) = Self.sendState(status: session.status, snapshot: snapshot)
         var detail: String
@@ -362,7 +432,13 @@ final class CoordinatorChatController {
         case .waitingForWindow: detail = "Waiting for a window"
         case .waitingForRestore: detail = "Resuming its last session"
         case .starting: detail = "Starting"
-        case .running: detail = snapshot.map { "\($0.summary.provider.displayName) · running" } ?? "Running"
+        case .running:
+            let agent = snapshot?.summary.provider.displayName ?? session.agentDisplayName
+            let model = snapshot?.summary.executionProfile?.modelIdentifier ?? session.configuredModel ?? "default model"
+            let active = items.filter { $0.stage.group != .done && $0.stage.group != .archived }
+            let count = active.count
+            let projects = CoordinatorAllTasks.projects(active).count
+            detail = "\(agent) · \(model) · \(count) \(count == 1 ? "task" : "tasks") in \(projects) \(projects == 1 ? "project" : "projects")"
         case .failed(let reason): detail = "Stopped: \(reason)"
         }
         // The task board reads tasks.toml again each time the chat opens; an
@@ -413,9 +489,31 @@ final class CoordinatorChatController {
         case .ready:
             if let page { attach(page) }
         case .rendered(let expanded, let view, let selectedRowID):
-            expandedCardIDs = expanded
+            if page?.isSummary != true { expandedCardIDs = expanded }
+            // Background renders from the other surface do not change the
+            // command palette's target. Tests without a page keep this path.
+            if page == nil { pageView = view }
+            if view == .tasks { selectedTaskRowID = selectedRowID }
+            updateCardIndex()
+            return
+        case .projectFilter(let project):
+            guard project == nil || lastPayload?.projects.contains(where: { $0.id == project }) == true,
+                  let windowID = windowID(for: page) else { return }
+            projectFilters[windowID] = project
+            focus = nil
+            if var request = viewRequest {
+                request.filter = nil
+                viewRequest = request
+            }
+        case .showView(let view):
+            guard page?.isSummary == true else { return }
+            tokenCounter += 1
+            viewRequest = (view, nil, tokenCounter)
             pageView = view
-            selectedTaskRowID = selectedRowID
+        case .activate(let view, let selected):
+            guard page == nil || page?.isSummary == (view != .chat) else { return }
+            pageView = view
+            if view == .tasks { selectedTaskRowID = selected }
             updateCardIndex()
             return
         case .taskAction(let rowID, let actionID):
@@ -454,6 +552,7 @@ final class CoordinatorChatController {
     /// tasks, the selected row's; in the chat, the task of the card the page
     /// opened last. `nil` while neither is there.
     var currentTaskID: UUID? {
+        if pageView == .today { return nil }
         if pageView == .tasks {
             return lastPayload?.tasks.first { $0.id == selectedTaskRowID }?.taskID.flatMap(UUID.init(uuidString:))
         }
@@ -522,15 +621,22 @@ final class CoordinatorChatController {
             "currentTaskID": optional(currentTaskID?.uuidString),
             "view": .string(pageView.rawValue),
             "selectedRowID": optional(selectedTaskRowID),
+            "projectFilter": optional(windowID(for: nil).flatMap { projectFilters[$0] }),
+            "projects": .array((lastPayload?.projects ?? []).map { .object(["id": .string($0.id), "title": .string($0.title)]) }),
+            "detail": .string(lastPayload?.coordinator.detail ?? ""),
+            "today": .array((lastPayload?.today.completed ?? []).map { .object(["rowID": .string($0.rowID), "kind": .string($0.kind)]) }),
             "tasks": .array((lastPayload?.tasks ?? []).map { row in
                 .object([
                     "id": .string(row.id),
                     "taskID": optional(row.taskID),
                     "title": .string(row.title),
+                    "project": optional(row.project),
+                    "projectID": optional(row.projectID),
                     "group": .string(row.group),
                     "stage": .string(row.stageLabel),
                     "hasCard": .bool(row.hasCard),
                     "primary": optional(row.primary?.id),
+                    "confirm": optional(row.confirm),
                     "menu": .array(row.menu.joined().map { .string($0.id) }),
                 ])
             }),
@@ -695,6 +801,23 @@ final class CoordinatorChatController {
         )
     }
 
+    /// One live summary tab beside the chat. Ordinary chat navigation does
+    /// not select it over a report the user is reading.
+    private func ensureSummary(showsTasks: Bool) {
+        guard let workspaceID = session.workspaceID, let workspace = store.state.workspacesByID[workspaceID] else { return }
+        if let tab = workspace.rightAuxPanel.orderedTabs.first(where: {
+            guard case .web(let web) = $0.panelState, let url = web.restorableURL.flatMap(URL.init(string:)) else { return false }
+            return CoordinatorSummaryPageBridge.isSummaryURL(url)
+        }) {
+            if showsTasks { _ = store.send(.selectRightAuxPanelTab(workspaceID: workspaceID, tabID: tab.id, focus: true)) }
+            return
+        }
+        _ = store.createBrowserPanel(
+            workspaceID: workspaceID,
+            request: BrowserPanelCreateRequest(initialURL: "toastty://coordinator/\(showsTasks ? "tasks" : "today")", placementOverride: .rightPanel)
+        )
+    }
+
     private func openRouting() {
         guard let workspaceID = session.workspaceID else {
             setNotice("The coordinator workspace is not open.", isError: true)
@@ -728,6 +851,12 @@ final class CoordinatorChatController {
     private struct WeakPage {
         weak var page: (any Page)?
     }
+}
+
+extension CoordinatorChatController.Page {
+    var windowID: UUID? { nil }
+    var isSummary: Bool { false }
+    func inspection() async -> [String: AutomationJSONValue] { [:] }
 }
 
 // MARK: - Report data

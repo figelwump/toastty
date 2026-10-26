@@ -206,3 +206,73 @@ test("screenshots with pair and width left out still show, and long messages are
   assert.ok(render.fitsMessage("x".repeat(16 * 1024)));
   assert.ok(!render.fitsMessage("é".repeat(8 * 1024 + 1)));
 });
+
+test("the header uses native summary and stable project IDs with display titles", () => {
+  const html = render.renderHeader({
+    coordinator: { title: "Coordinator", detail: "Claude Code · opus · 7 tasks in 3 projects", hasTerminal: true },
+    projects: [{ id: '/projects/one"', title: "same" }, { id: "/projects/two", title: "same" }],
+    projectFilter: "/projects/two",
+  });
+  assert.match(html, /Claude Code · opus · 7 tasks in 3 projects/);
+  assert.match(html, /id="project-filter-0"[^>]*data-project="\/projects\/one&quot;"[^>]*>same/);
+  assert.match(html, /id="project-filter-1" class="on"[^>]*data-project="\/projects\/two"[^>]*>same/);
+  assert.ok(!html.includes("view-chat") && !html.includes("view-tasks"));
+  assert.match(html, /id="open-routing"/);
+});
+
+test("fallback project buttons keep distinct IDs with the same title and deduplicate repeated rows", () => {
+  const html = render.renderHeader({
+    coordinator: { title: "Coordinator", detail: "Codex", hasTerminal: false },
+    tasks: [
+      { project: "same", projectID: "one" }, { project: "same", projectID: "two" }, { project: "same", projectID: "two" },
+    ],
+    projectFilter: "two",
+  });
+  assert.equal([...html.matchAll(/data-project="/g)].length, 2);
+  assert.match(html, /data-project="one"/);
+  assert.match(html, /id="project-filter-1" class="on"[^>]*data-project="two"/);
+});
+
+test("project filtering hides only task cards and preserves hidden card drafts", () => {
+  const ui = render.newUIState();
+  ui.expanded.add("other");
+  ui.drafts.set("other", "Unsent reply");
+  const state = {
+    projects: [{ id: "one", title: "same" }, { id: "two", title: "same" }, { id: "empty", title: "Empty" }],
+    projectFilter: "one",
+    items: [
+      card({ id: "ours", task: task({ project: "same", projectID: "one" }) }),
+      card({ id: "other", task: task({ project: "same", projectID: "two" }) }),
+      card({ id: "note", task: null, packet: null, kind: "note", text: "A general note" }),
+      { type: "message", id: "message", role: "assistant", text: "A general message" },
+      { type: "tool", id: "tool", name: "Read", detail: null, outcome: "succeeded" },
+      { type: "status", id: "status", text: "Waiting" },
+    ],
+  };
+  let html = render.renderTimeline(state, ui);
+  for (const id of ["ours", "note", "message", "tool", "status"]) assert.ok(html.includes(`data-item="${id}"`));
+  assert.ok(!html.includes('data-item="other"'));
+  assert.deepEqual(render.visibleExpandedIDs(state, ui), []);
+  assert.ok(ui.expanded.has("other"));
+  assert.equal(ui.drafts.get("other"), "Unsent reply");
+  html = render.renderTimeline({ ...state, projectFilter: "empty" }, ui);
+  assert.ok(!html.includes('data-item="ours"') && !html.includes('data-item="other"'));
+  html = render.renderTimeline({ ...state, projectFilter: "two" }, ui);
+  assert.deepEqual(render.visibleExpandedIDs({ ...state, projectFilter: "two" }, ui), ["other"]);
+  assert.match(html, /Unsent reply/);
+  assert.equal(ui.drafts.get("other"), "Unsent reply");
+});
+
+test("a taskless card with the task property omitted stays visible under a project filter", () => {
+  const ui = render.newUIState();
+  const note = card({ id: "note", kind: "note", text: "A native coordinator note", packet: null });
+  delete note.task;
+  const state = {
+    projects: [{ id: "one", title: "Project one" }], projectFilter: "one",
+    items: [card({ id: "ours", task: task({ projectID: "one" }) }), note],
+  };
+  ui.expanded.add("ours");
+  assert.match(render.renderTimeline(state, ui), /A native coordinator note/);
+  ui.expanded.add("note");
+  assert.deepEqual(render.visibleExpandedIDs(state, ui), ["ours"]);
+});

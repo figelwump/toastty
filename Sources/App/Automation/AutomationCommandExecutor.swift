@@ -551,19 +551,26 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             let workspaceID = try resolveWorkspaceID(args: payload)
             return try workspaceRenderSnapshot(workspaceID: workspaceID)
 
+        case "automation.coordinator_page_state":
+            try requireAutomationMode(for: command)
+            guard let chat = CoordinatorChatController.shared else {
+                throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
+            }
+            return ["pages": .array(await chat.inspectPages().map(AutomationJSONValue.object))]
+
         case "automation.coordinator_chat_action":
             // Drives the chat page through its own handlers, for checks on
             // hosts where Accessibility cannot reach web content.
             try requireAutomationMode(for: command)
             guard let elementID = payload.string("elementID"), elementID.isEmpty == false,
-                  let action = payload.string("action"), ["click", "type"].contains(action) else {
-                throw AutomationSocketError.invalidPayload("action (click or type) and elementID are required")
+                  let action = payload.string("action"), ["click", "type", "focus"].contains(action) else {
+                throw AutomationSocketError.invalidPayload("action (click, type or focus) and elementID are required")
             }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
             }
             let matching = await chat.performPageAction(
-                action == "click" ? .click(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? "")
+                action == "click" ? .click(elementID: elementID) : action == "focus" ? .focus(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? "")
             )
             guard matching == 1 else {
                 throw AutomationSocketError.invalidPayload(matching == 0

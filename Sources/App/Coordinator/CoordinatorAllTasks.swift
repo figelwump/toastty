@@ -27,6 +27,7 @@ enum CoordinatorAllTasks {
         var taskID: String?
         var title: String
         var project: String?
+        var projectID: String? = nil
         var group: String
         var stageLabel: String
         var stageTone: String
@@ -111,6 +112,7 @@ enum CoordinatorAllTasks {
                 taskID: item.taskID?.uuidString,
                 title: item.title,
                 project: projectTitle(item),
+                projectID: projectID(item),
                 group: groupID(item.stage.group),
                 stageLabel: label,
                 stageTone: tone,
@@ -127,6 +129,49 @@ enum CoordinatorAllTasks {
     /// The project a row names, which the page's project filter matches.
     static func projectTitle(_ item: TaskBoardItem) -> String? {
         item.projectTitle ?? item.record?.projectRoot.map { URL(filePath: $0).lastPathComponent }
+    }
+
+    static func projectID(_ item: TaskBoardItem) -> String? {
+        item.projectID ?? item.record?.projectRoot ?? item.projectWorkspaceID.map { "workspace:\($0.uuidString)" }
+    }
+
+    struct Project: Encodable, Equatable {
+        var id: String
+        var title: String
+    }
+
+    static func projects(_ items: [TaskBoardItem]) -> [Project] {
+        var titles: [String: String] = [:]
+        for item in items {
+            if let id = projectID(item), let title = projectTitle(item) { titles[id] = title }
+        }
+        return titles.map { Project(id: $0.key, title: $0.value) }.sorted {
+            $0.title == $1.title ? $0.id < $1.id : $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+    }
+
+    struct Today: Encodable, Equatable {
+        struct Completion: Encodable, Equatable {
+            var rowID: String
+            var kind: String
+            var at: Date
+        }
+        var completed: [Completion] = []
+    }
+
+    /// A release today takes precedence over a merge today. Mark Done and
+    /// unrelated activity do not turn an old merge into today's work.
+    static func today(_ items: [TaskBoardItem], now: Date, calendar: Calendar = .autoupdatingCurrent) -> Today {
+        let completed = items.compactMap { item -> Today.Completion? in
+            if let at = item.record?.shippedAt, calendar.isDate(at, inSameDayAs: now) {
+                return .init(rowID: rowID(item), kind: "released", at: at)
+            }
+            if let at = item.record?.mergedAt, calendar.isDate(at, inSameDayAs: now) {
+                return .init(rowID: rowID(item), kind: "merged", at: at)
+            }
+            return nil
+        }.sorted { $0.at != $1.at ? $0.at > $1.at : $0.rowID < $1.rowID }
+        return Today(completed: completed)
     }
 
     /// The Needs you row's primary action for a task that needs the user;

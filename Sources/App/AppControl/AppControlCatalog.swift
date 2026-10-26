@@ -716,7 +716,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Show All tasks: select the coordinator workspace, with the list of every task, in stage groups, over its terminal. With group, that group opens with its first row selected, and project filters the list to one project as its rows name it. Fails while the coordinator workspace does not exist.",
+                summary: "Show All tasks in the coordinator workspace's right panel beside the chat. With group, that group opens with its first row selected. Project selects the window's shared project filter by project root or unique title. Fails while the coordinator workspace does not exist.",
                 selectors: [],
                 parameters: [
                     .init(
@@ -726,7 +726,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                         required: false,
                         allowedValues: TaskStage.Group.allCases.map(CoordinatorAllTasks.groupID)
                     ),
-                    .init(name: "project", summary: "Project to show, as All tasks rows name it. Needs group.", valueType: .string, required: false),
+                    .init(name: "project", summary: "Project root or unique project title to show. Needs group.", valueType: .string, required: false),
                 ]
             )
         }

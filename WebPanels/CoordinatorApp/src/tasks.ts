@@ -2,6 +2,7 @@
 // The app sends the rows with their actions; the page keeps only the project
 // filter, the selected row, open groups and an open menu or question.
 import { esc } from "./render";
+import { currentProject, projectID, projectTitle } from "./projects";
 import type { ChatState, TaskAction, TaskRow, TasksFilter, TasksUIState, Tone } from "./types";
 
 /// Groups that start closed, since they only grow.
@@ -25,16 +26,10 @@ export function taskAge(activityAt: string, now: Date): string {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-export function projectsOf(rows: TaskRow[]): string[] {
-  // The app leaves `project` out for a task with no project.
-  return [...new Set(rows.map((row) => row.project).filter((p): p is string => typeof p === "string"))].sort((a, b) => a.localeCompare(b));
-}
-
 function shownRows(state: ChatState, ui: TasksUIState): TaskRow[] {
   const rows = state.tasks ?? [];
-  // A filter for a project that has no tasks now shows every task.
-  const project = ui.project !== null && projectsOf(rows).includes(ui.project) ? ui.project : null;
-  return project === null ? rows : rows.filter((row) => row.project === project);
+  const project = currentProject(state, ui.project);
+  return project === null ? rows : rows.filter((row) => projectID(row) === project);
 }
 
 /// The rows the arrow keys move through, top to bottom: those in open groups.
@@ -58,8 +53,7 @@ export function normalize(state: ChatState, ui: TasksUIState) {
 }
 
 /// Shows what a filter asks for: the project, the group open, and the
-/// group's first row selected. A project with no rows now shows every
-/// project, as the filter buttons do.
+/// group's first row selected. A known project with no rows stays empty.
 export function applyFilter(state: ChatState, ui: TasksUIState, filter: TasksFilter) {
   ui.project = filter.project;
   if (!isGroupOpen(filter.group, ui)) {
@@ -68,10 +62,10 @@ export function applyFilter(state: ChatState, ui: TasksUIState, filter: TasksFil
   }
   ui.menuOpen = null;
   ui.confirming = null;
-  // A project with no rows here shows every project, but the selection
-  // stays in the project asked for.
+  // An unknown stale project falls back to all rows, but must not select
+  // a row from a different project.
   ui.selected = shownRows(state, ui).find((row) => row.group === filter.group
-    && (filter.project === null || row.project === filter.project))?.id ?? null;
+    && (filter.project === null || projectID(row) === filter.project))?.id ?? null;
 }
 
 /// The row after (`delta` 1) or before (-1) the selected one; the first row
@@ -86,16 +80,6 @@ export function moveSelection(state: ChatState, ui: TasksUIState, delta: number)
 
 function badge(text: string, tone: Tone): string {
   return `<span class="badge b-${tone}">${esc(text)}</span>`;
-}
-
-function renderFilter(state: ChatState, ui: TasksUIState): string {
-  const projects = projectsOf(state.tasks ?? []);
-  if (projects.length < 2) return "";
-  const current = ui.project !== null && projects.includes(ui.project) ? ui.project : null;
-  return `<div class="pfilter" role="group" aria-label="Project">`
-    + `<button type="button" id="task-filter-all" class="${current === null ? "on" : ""}" data-act="task-filter">All projects</button>`
-    + projects.map((project, index) => `<button type="button" id="task-filter-${index}" class="${current === project ? "on" : ""}" data-act="task-filter" data-project="${esc(project)}">${esc(project)}</button>`).join("")
-    + `</div>`;
 }
 
 function actionButton(row: TaskRow, action: TaskAction): string {
@@ -132,17 +116,18 @@ export function renderTaskRow(row: TaskRow, ui: TasksUIState, now: Date): string
 
 export function renderTasks(state: ChatState, ui: TasksUIState, now: Date): string {
   const rows = shownRows(state, ui);
-  let html = `<div class="tasks-head">${renderFilter(state, ui)}<span class="mono faint small">↑ ↓ to move · ↩ to open</span></div>`;
+  let html = `<div class="tasks-head"><span class="mono faint small">${esc(projectTitle(state, currentProject(state, ui.project)))}</span><span class="mono faint small">↑ ↓ to move · ↩ to open</span></div>`;
   if ((state.tasks ?? []).length === 0) {
     return html + `<div class="empty-chat"><p>No tasks yet.</p><p class="dim">Tell the coordinator what you want done, or press the + by Coordinator in the sidebar.</p></div>`;
   }
+  if (rows.length === 0) return html + `<div class="empty-chat"><p>No tasks in this project.</p></div>`;
   html += `<div class="task-list" role="listbox" aria-label="All tasks">`;
   for (const group of state.taskGroups ?? []) {
     const inGroup = rows.filter((row) => row.group === group.id);
     if (inGroup.length === 0) continue;
     const open = isGroupOpen(group.id, ui);
     // The filter counts what it shows; without it, the group's total.
-    const count = ui.project === null ? Math.max(group.total ?? 0, inGroup.length) : inGroup.length;
+    const count = currentProject(state, ui.project) === null ? Math.max(group.total ?? 0, inGroup.length) : inGroup.length;
     html += `<button type="button" class="grp" id="group-${esc(group.id)}" data-act="task-group" data-group="${esc(group.id)}" aria-expanded="${open}">`
       + `<span>${open ? "▾" : "▸"} ${esc(group.title)}</span><span>${count}</span></button>`;
     if (open) {

@@ -539,12 +539,13 @@ Notable action-specific behavior:
   - aliases of `coordinator.chat.show`, kept for scripts from before the
     coordinator chat replaced the Tasks view. Both open the chat.
 - `coordinator.tasks.show`
-  - as `coordinator.chat.show` without `taskID`, but the page shows All tasks
-    instead of the chat; returns the `coordinator.status` object.
+  - opens All tasks in the coordinator workspace's right panel beside the
+    chat; returns the `coordinator.status` object.
   - optional `group` (`needsYou`, `running`, `toShip`, `done` or `archived`)
     opens that group and selects its first row. Optional `project`, which
-    needs `group`, filters the list to one project as its rows name it, as
-    the sidebar's To ship and Done counts do.
+    needs `group`, selects the window's shared project filter by project root
+    or unique display title, as the sidebar's To ship and Done counts do.
+    Ambiguous titles return `INVALID_PAYLOAD`.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
