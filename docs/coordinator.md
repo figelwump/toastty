@@ -9,13 +9,18 @@ You talk to the coordinator in its chat: click **Coordinator** at the top of
 the sidebar, run `toastty coordinator show`, or choose **Show Coordinator
 Chat** in the command palette. The chat covers the
 coordinator's terminal in the main area, and the right panel stays beside it.
-`toastty coordinator show-terminal` shows the raw terminal instead.
+While it does, the top bar shows only the Coordinator title, not the terminal's
+tab. `toastty coordinator show-terminal`, or **Open terminal** in the chat's
+header, shows the raw terminal instead.
 
 ## The chat
 
 The chat shows the coordinator's conversation and the cards it posts, in time
 order. The conversation comes from the coordinator's transcript, as the iPhone
-app shows it; tool calls fold to one line each. Type in the box at the bottom
+app shows it; tool calls fold to one line each. The coordinator's messages
+show as Markdown: emphasis, code, lists, tables and links, which open in the
+right panel. Raw HTML in a message shows as text, and images show as links.
+Type in the box at the bottom
 to send the coordinator a message. While its turn runs, the message waits and
 goes in when the turn ends.
 
@@ -32,7 +37,9 @@ verified, and screenshot thumbnails. Its actions are:
 - **Reply**, to the task: Toastty sends `Review note on packet vN: <your
   text>` to the task's agent with `task send`, and the task leaves Needs you
   until its next packet. Switch the reply to **to coordinator** to ask the
-  coordinator about the task instead.
+  coordinator about the task instead. The coordinator receives your text after
+  a line that names the task and its ID; the chat shows only your text, with
+  an **About <task>** link that opens the task's card.
 - **Merge**: asks first, naming what Merge does in the task's project from
   `tasks.toml`, then runs the same merge as the task's Merge button. The
   coordinator never merges on its own.

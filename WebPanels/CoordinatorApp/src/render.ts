@@ -1,6 +1,8 @@
 // Pure HTML builders for the chat and the report. Every value from the app
 // is text that an agent or a task wrote, so it is escaped here; the only
 // markup is ours.
+import { micromark } from "micromark";
+import { gfm, gfmHtml } from "micromark-extension-gfm";
 import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, PageView, ReportPacket, Tone } from "./types";
 
 export function esc(value: unknown): string {
@@ -28,6 +30,17 @@ export function linkify(text: string): string {
     last = start + url.length;
   }
   return html + esc(text.slice(last));
+}
+
+/// Markdown that an agent wrote, as HTML. micromark escapes raw HTML and
+/// drops links with unsafe schemes, so the agent's text never becomes markup
+/// of its own. Images are left as text: the page loads nothing remote.
+/// Links open in the right panel; the page's click handler routes them.
+export function markdown(text: string): string {
+  return micromark(text, {
+    extensions: [gfm(), { disable: { null: ["labelStartImage"] } }],
+    htmlExtensions: [gfmHtml()],
+  });
 }
 
 function badge(text: string, tone: Tone): string {
@@ -87,9 +100,14 @@ export function renderTimeline(state: ChatState, ui: ChatUIState): string {
 export function renderItem(item: ChatItem, ui: ChatUIState): string {
   switch (item.type) {
     case "message":
-      return item.role === "user"
-        ? `<div class="msg-user" data-item="${esc(item.id)}">${linkify(item.text)}</div>`
-        : `<div class="msg-co" data-item="${esc(item.id)}"><span class="cmark">C</span><div class="bubble">${linkify(item.text)}</div></div>`;
+      if (item.role === "assistant") {
+        return `<div class="msg-co" data-item="${esc(item.id)}"><span class="cmark">C</span><div class="bubble md">${markdown(item.text)}</div></div>`;
+      }
+      return `<div class="msg-user" data-item="${esc(item.id)}">`
+        + (item.aboutTaskID
+          ? `<button class="about" data-act="focus-task" data-task="${esc(item.aboutTaskID)}" title="Show the task's card">About ${esc(item.aboutTitle ?? "a task")}</button>`
+          : "")
+        + `${linkify(item.text)}</div>`;
     case "tool":
       return `<div class="tool" data-item="${esc(item.id)}"><span class="tool-mark ${esc(item.outcome)}"></span>`
         + `<span class="mono">${esc(item.name)}</span>${item.detail ? ` <span class="dim">${esc(item.detail)}</span>` : ""}</div>`;
@@ -114,7 +132,7 @@ export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>): st
   const task = item.task;
   if (!task) {
     // A note that names no task is the coordinator speaking.
-    return `<div class="note-card">${linkify(item.text ?? "")}</div>`;
+    return `<div class="note-card md">${markdown(item.text ?? "")}</div>`;
   }
   const kindBadge = item.kind === "question" ? badge("question", "amber") : badge(task.stageLabel, task.stageTone);
   if (item.superseded && item.packet) {
@@ -149,8 +167,8 @@ function renderReplyBox(item: Extract<ChatItem, { type: "card" }>, task: ChatTas
   if (!task.canReply) return "";
   const target = item.kind === "question" ? "coordinator" : ui.replyTarget.get(item.id) ?? "task";
   const segment = item.kind === "question" ? "" : `<span class="seg" role="group" aria-label="Send reply to">`
-    + `<button type="button" class="${target === "task" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="task">to task</button>`
-    + `<button type="button" class="${target === "coordinator" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="coordinator">to coordinator</button></span>`;
+    + `<button type="button" id="reply-to-task-${esc(item.id)}" class="${target === "task" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="task">to task</button>`
+    + `<button type="button" id="reply-to-coordinator-${esc(item.id)}" class="${target === "coordinator" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="coordinator">to coordinator</button></span>`;
   const placeholder = target === "task" ? `Review note for ${task.slug}…` : "Ask the coordinator about this…";
   return `<form class="replybox" data-act="reply" data-id="${esc(item.id)}" data-task="${esc(task.id)}" data-version="${item.packet?.version ?? ""}" data-to="${target}">`
     + segment + `<input id="reply-${esc(item.id)}" name="text" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${maximumTextLength}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(ui.drafts.get(item.id) ?? "")}"><span class="kbd">↩</span></form>`;
@@ -171,7 +189,7 @@ export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: Ch
     + `<button class="collapse" id="collapse-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" aria-expanded="true">▾ collapse</button></div>`;
 
   if (item.kind === "question" || item.kind === "note") {
-    html += `<div class="card-text">${linkify(item.text ?? "")}</div>`;
+    html += `<div class="card-text md">${markdown(item.text ?? "")}</div>`;
   }
   if (packet && item.kind === "packet") {
     html += `<div class="pgrid">`

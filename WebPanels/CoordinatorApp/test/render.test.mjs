@@ -47,12 +47,15 @@ function card(overrides = {}) {
   return { type: "card", id: "c1", at: "2026-10-24T10:00:00Z", kind: "packet", text: null, superseded: false, isNew: false, task: task(), packet: packet(), ...overrides };
 }
 
-test("agent text is escaped everywhere, and links become right-panel buttons", () => {
+test("agent text is escaped everywhere, and links open in the right panel", () => {
   const ui = render.newUIState();
   const html = render.renderItem({ type: "message", id: "m1", at: "", role: "assistant", text: "<img src=x onerror=alert(1)> see https://example.com/a." }, ui);
   assert.ok(!html.includes("<img"));
   assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
-  assert.ok(html.includes('data-act="open-url" data-url="https://example.com/a"'));
+  // The page routes clicks on markdown links to the right panel.
+  assert.ok(html.includes('class="bubble md"') && html.includes('<a href="https://example.com/a">'));
+  const user = render.renderItem({ type: "message", id: "u1", at: "", role: "user", text: "see https://example.com/b" }, ui);
+  assert.ok(user.includes('data-act="open-url" data-url="https://example.com/b"'));
   const hostile = card({ task: task({ title: '"><script>x</script>' }), packet: packet({ lookAt: "<b>bold</b>" }) });
   const compact = render.renderItem(hostile, ui);
   assert.ok(!compact.includes("<script>") && !compact.includes("<b>bold"));
@@ -104,7 +107,48 @@ test("a question replies to the coordinator, and a note without a task is plain 
   assert.ok(question.includes("Which base branch?"));
   assert.ok(question.includes('data-to="coordinator"') && !question.includes("to task</button>"));
   const note = render.renderItem(card({ id: "n1", kind: "note", text: "Fresh session.", task: null, packet: null }), ui);
-  assert.ok(note.includes('class="note-card"') && note.includes("Fresh session."));
+  assert.ok(note.includes('class="note-card md"') && note.includes("Fresh session."));
+});
+
+test("the coordinator's markdown renders, and stays safe", () => {
+  const html = render.markdown([
+    "**Running (1 task)**",
+    "- **Fix totals** (`AB41B01A`, Claude)",
+    "",
+    "First line",
+    "second line",
+    "",
+    "| a | b |", "|---|---|", "| 1 | 2 |",
+    "",
+    "```sh", "ls -la", "```",
+  ].join("\n"));
+  assert.ok(html.includes("<p><strong>Running (1 task)</strong></p>"));
+  assert.ok(html.includes("<li><strong>Fix totals</strong> (<code>AB41B01A</code>, Claude)</li>"));
+  // The line break stays in the paragraph; the stylesheet shows it.
+  assert.ok(html.includes("<p>First line\nsecond line</p>"));
+  assert.ok(html.includes("<table>") && html.includes("<td>1</td>"));
+  assert.ok(html.includes('<pre><code class="language-sh">ls -la'));
+
+  const hostile = render.markdown("<script>alert(1)</script>\n\nText <b onclick=x>b</b> [x](javascript:alert(1)) ![i](https://e.com/a.png)");
+  assert.ok(!/<script|<b |<img/.test(hostile));
+  assert.ok(hostile.includes("&lt;script&gt;") && hostile.includes("&lt;b onclick=x&gt;"));
+  // An unsafe link loses its target; an image becomes a link to it.
+  assert.ok(hostile.includes('<a href="">x</a>') && !hostile.includes("javascript:"));
+  assert.ok(hostile.includes('!<a href="https://e.com/a.png">i</a>'));
+});
+
+test("a question asked from a card shows only what the user typed, with its task", () => {
+  const ui = render.newUIState();
+  const html = render.renderItem({
+    type: "message", id: "u1", at: "", role: "user", text: "yes, **move it**",
+    aboutTaskID: "T1", aboutTitle: 'the "coordinator" session',
+  }, ui);
+  assert.ok(html.includes('data-act="focus-task" data-task="T1"'));
+  assert.ok(html.includes("About the &quot;coordinator&quot; session"));
+  // What the user typed is plain text, not markdown.
+  assert.ok(html.includes("yes, **move it**"));
+  const plain = render.renderItem({ type: "message", id: "u2", at: "", role: "user", text: "hi" }, ui);
+  assert.ok(!plain.includes("focus-task"));
 });
 
 test("focus opens the task's newest packet card, else its last card", () => {

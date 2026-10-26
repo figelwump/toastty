@@ -408,9 +408,13 @@ final class CoordinatorChatController {
         case .reply(let taskID, let version, let text):
             acknowledge(token, ok: reply(taskID: taskID, version: version, text: text))
         case .ask(let taskID, let version, let text):
-            let title = taskCoordinator.records.record(id: taskID)?.title ?? taskID.uuidString
-            let packet = version.map { ", packet v\($0)" } ?? ""
-            acknowledge(token, ok: await sendToCoordinator("About task \"\(title)\" (task ID \(taskID.uuidString)\(packet)): \(text)"))
+            let ask = CoordinatorTaskAsk(
+                taskID: taskID,
+                title: taskCoordinator.records.record(id: taskID)?.title ?? taskID.uuidString,
+                packetVersion: version,
+                text: text
+            )
+            acknowledge(token, ok: await sendToCoordinator(ask.message))
         case .merge(let taskID):
             if perform("Merge", { try taskCoordinator.requestMerge(taskID: taskID) }) != nil {
                 setNotice("Merge requested. It follows the project's merge policy.", isError: false)
@@ -458,7 +462,13 @@ final class CoordinatorChatController {
         let items: [AutomationJSONValue] = (lastPayload?.items ?? []).map { item in
             switch item {
             case .transcript(let line):
-                return .object(["type": .string(line.type.rawValue), "id": .string(line.id), "text": optional(line.text ?? line.name)])
+                return .object([
+                    "type": .string(line.type.rawValue),
+                    "id": .string(line.id),
+                    "text": optional(line.text ?? line.name),
+                    "role": optional(line.role),
+                    "aboutTaskID": optional(line.aboutTaskID),
+                ])
             case .card(let card):
                 return .object([
                     "type": .string("card"),

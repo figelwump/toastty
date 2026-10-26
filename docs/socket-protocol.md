@@ -750,7 +750,9 @@ failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 
 `coordinator.chat.state` returns `pages` (open chat pages), `canSend`,
 `items` in time order (each with `type`: `message`, `tool`, `status` or `card`,
-and `id`; a card also has `kind`, `taskID`, `packetVersion`, `superseded`,
+and `id`; a message, tool or status line also has `text`; a message has `role`
+(`user` or `assistant`), and `aboutTaskID` when the user asked it from a
+task's card, whose `text` is then only what the user typed; a card also has `kind`, `taskID`, `packetVersion`, `superseded`,
 `isNew`, `stage`, `canMerge`, `mergePolicy` and `pullRequestURL`),
 `expandedCardIDs`, the cards an open page has expanded, `currentTaskID`, the
 task the command palette acts on (on All tasks the selected row's, else the
