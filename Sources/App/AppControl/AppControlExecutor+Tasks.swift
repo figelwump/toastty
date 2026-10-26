@@ -385,9 +385,17 @@ extension AppControlExecutor {
                 guard includeReply else { return .object(snapshots[record.id] ?? [:]) }
                 return .object(liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true))
             }
+            // A caller already knows the tasks it created, so they never
+            // count as new to it.
+            let callerSessionID = requestContext().callerSessionID
+            let created = listed.filter { record in
+                changes.createdTaskIDs.contains(record.id)
+                    && (callerSessionID == nil || Self.visibility(of: record).creatorSessionID != callerSessionID)
+            }
             return [
                 "tasks": .array(tasks),
                 "cursor": .string(changes.cursor),
+                "createdTaskIDs": .array(created.map { .string($0.id.uuidString) }),
                 "deletedTaskIDs": .array(changes.deletedTasks.filter { callerMaySee($0.visibility) }.map { .string($0.id.uuidString) }),
                 "reset": .bool(args.taskString("changedSince") != nil && changes.reset),
             ]

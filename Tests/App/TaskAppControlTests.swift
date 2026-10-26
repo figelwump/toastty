@@ -392,6 +392,7 @@ struct TaskAppControlTests {
         } == ["idle", "idle"])
         let quiet = try executor.runQuery(id: "task.list", args: ["changedSince": .string(cursor)])
         #expect(quiet["tasks"] == .array([]))
+        #expect(quiet["createdTaskIDs"] == .array([]))
 
         // The producer starts a turn: only it is listed as changed.
         fixture.sessionRuntimeStore.updateStatus(
@@ -405,6 +406,35 @@ struct TaskAppControlTests {
         #expect(changedTasks.count == 1)
         #expect(busy["taskID"] == .string(producer.id.uuidString))
         #expect(agentState(busy) == "busy")
+        // A change to a task is not a new task.
+        #expect(changed["createdTaskIDs"] == .array([]))
+
+        // A task made elsewhere, such as in quick entry, is new to the
+        // consumer's agent; the task that agent creates itself is not.
+        let elsewhere = try await create("Write the release notes")
+        let ownOutcome = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("Split out the docs"), "workspace": .string(fixture.workspaceID.uuidString), "agent": .string("claude")],
+            context: context(consumerSession)
+        )
+        let own = try taskID(ownOutcome.result)
+        await fixture.waitForSetup(own)
+        let created = try executor.runQuery(
+            id: "task.list",
+            args: ["changedSince": .string(cursor)],
+            context: AutomationRequestContext(callerSessionID: consumerSession, commandName: "app_control.run_query")
+        )
+        #expect(created["createdTaskIDs"] == .array([.string(elsewhere.id.uuidString)]))
+        // Another caller did not create either task, so both are new to it.
+        let createdForAll = try executor.runQuery(id: "task.list", args: ["changedSince": .string(cursor)])
+        guard case .array(let createdIDs)? = createdForAll["createdTaskIDs"] else {
+            Issue.record("task.list has no createdTaskIDs: \(createdForAll)")
+            return
+        }
+        #expect(Set(createdIDs.compactMap { id -> String? in
+            guard case .string(let value) = id else { return nil }
+            return value
+        }) == [elsewhere.id.uuidString, own.uuidString])
 
         // A follow-up by task ID reaches the producer's terminal.
         let sent = try executor.runAction(

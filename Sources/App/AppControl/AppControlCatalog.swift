@@ -842,7 +842,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage or agentState changed since are listed, deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage or agentState changed since are listed, deleted task IDs are in deletedTaskIDs, tasks first listed after the cursor are in createdTaskIDs (leaving out tasks the calling session created), and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
                 selectors: [],
                 parameters: [
                     .taskChangedSince(required: false),
