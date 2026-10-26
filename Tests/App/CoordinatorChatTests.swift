@@ -143,7 +143,6 @@ struct CoordinatorChatTests {
                 configLoader: { TasksConfig() },
                 files: CoordinatorFiles(directoryURL: tasks.root.appendingPathComponent("coordinator", isDirectory: true)),
                 isRestorePending: { _ in false },
-                homeDirectoryPath: "/Users/tester",
                 relaunchDelay: .milliseconds(10),
                 terminalReadinessTimeout: .milliseconds(200)
             )

@@ -166,8 +166,10 @@ percent-encoded; duplicate names require a list pick.
 
 At launch, Toastty starts the agent that `[coordinator]` in
 `~/.toastty/tasks.toml` names, Claude Code unless you change it. It runs in a
-hidden workspace called Coordinator, in your home directory, with no workspace
-scope. The sidebar, the workspace switch shortcuts and the task project choices
+hidden workspace called Coordinator, in `~/.toastty/coordinator`, with no
+workspace scope. It does not run in your home directory, because Claude Code
+asks again for folder trust there at each start; you trust
+`~/.toastty/coordinator` once. The sidebar, the workspace switch shortcuts and the task project choices
 leave this workspace out, and it does not hold up quitting Toastty.
 
 The agent's first message is `Use the toastty-coordinator skill.` The shipped

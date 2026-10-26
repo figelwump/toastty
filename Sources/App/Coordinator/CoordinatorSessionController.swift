@@ -50,7 +50,6 @@ final class CoordinatorSessionController {
     /// Whether the terminal still has to type the command that resumes its
     /// restored agent.
     private let isRestorePending: (UUID) -> Bool
-    private let homeDirectoryPath: String
     private let now: () -> Date
     private let relaunchDelay: Duration
     private let restoreGrace: Duration
@@ -87,7 +86,6 @@ final class CoordinatorSessionController {
         configLoader: @escaping () throws -> TasksConfig,
         files: CoordinatorFiles,
         isRestorePending: @escaping (UUID) -> Bool = { _ in false },
-        homeDirectoryPath: String = NSHomeDirectory(),
         now: @escaping () -> Date = Date.init,
         relaunchDelay: Duration = .seconds(2),
         restoreGrace: Duration = .seconds(20),
@@ -102,7 +100,6 @@ final class CoordinatorSessionController {
         self.configLoader = configLoader
         self.files = files
         self.isRestorePending = isRestorePending
-        self.homeDirectoryPath = homeDirectoryPath
         self.now = now
         self.relaunchDelay = relaunchDelay
         self.restoreGrace = restoreGrace
@@ -345,7 +342,10 @@ final class CoordinatorSessionController {
         ready.forEach { $0() }
         let model = profile.supportsModel ? config.model : nil
         let effort = profile.supportsReasoningEffort ? config.effort : nil
-        let cwd = homeDirectoryPath
+        // The coordinator's own directory, not the home directory: Claude
+        // Code never remembers folder trust for the home directory, so a
+        // launch there asks for trust every time.
+        let cwd = files.directoryURL.path
         launchTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -440,7 +440,7 @@ final class CoordinatorSessionController {
                 workspaceID: workspaceID,
                 tabID: UUID(),
                 panelID: panelID,
-                terminalCWD: homeDirectoryPath
+                terminalCWD: files.directoryURL.path
             )) else { return nil }
             return Target(workspaceID: workspaceID, panelID: panelID)
         }
@@ -450,7 +450,7 @@ final class CoordinatorSessionController {
             windowID: windowID,
             workspaceID: workspaceID,
             panelID: panelID,
-            terminalCWD: homeDirectoryPath
+            terminalCWD: files.directoryURL.path
         )) else { return nil }
         return Target(workspaceID: workspaceID, panelID: panelID)
     }
