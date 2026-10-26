@@ -16,7 +16,7 @@ KEEP_REMOTE=0
 FULL_ARTIFACTS=0
 PROMPT_FILE=""
 PROMPT_TEXT=""
-CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-6-luna}"
+CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-6.1-terra}"
 CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-high}"
 CODEX_COMPUTER_USE_SERVICE_TIER="${CODEX_COMPUTER_USE_SERVICE_TIER:-fast}"
 CURRENT_CODEX_APP_CLI="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
@@ -81,7 +81,7 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
-  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6-luna)
+  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6.1-terra)
   CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
   CODEX_COMPUTER_USE_SERVICE_TIER       Codex service tier for app-server turns (default: fast)
 
