@@ -148,6 +148,10 @@ public enum LinuxCommandTable {
                   keywords: ["tab", "move", "left", "reorder"]),
             .init("workspace.tab.move-right", "Move Tab Right", ["<Control><Shift>Page_Down"], section: .tabs,
                   keywords: ["tab", "move", "right", "reorder"]),
+            .init("browser.tab.create", "New Browser Tab", ["<Control><Alt><Shift>b"], section: .tabs,
+                  macOS: "Cmd+Ctrl+Shift+B", keywords: ["browser", "tab", "new", "create", "web"]),
+            .init("local-document.open-tab", "Open Local File in Tab", section: .tabs,
+                  keywords: ["open", "local", "file", "document", "tab", "markdown"]),
 
             // MARK: Panes and splits
             .init("layout.split.horizontal", "Split Right", ["<Control><Shift>o"], section: .panesAndSplits,
@@ -186,6 +190,10 @@ public enum LinuxCommandTable {
                   macOS: "Cmd+Shift+F", keywords: ["focus", "panel", "layout", "restore", "zoom"]),
             .init("panel.reopen-last-closed", "Reopen Closed Panel", section: .panesAndSplits,
                   keywords: ["reopen", "closed", "panel", "undo"]),
+            .init("browser.split.create", "New Browser Split", section: .panesAndSplits,
+                  keywords: ["browser", "split", "new", "create", "web"]),
+            .init("local-document.open-split", "Open Local File in Split", section: .panesAndSplits,
+                  keywords: ["open", "local", "file", "document", "split", "markdown"]),
 
             // MARK: Right panel
             .init("window.toggle-right-panel", "Toggle Right Panel", ["<Shift>F9"], section: .rightPanel,
@@ -196,20 +204,12 @@ public enum LinuxCommandTable {
                   section: .rightPanel, macOS: "Cmd+Ctrl+]", keywords: ["right", "panel", "tab", "next", "right", "forward"]),
             .init("browser.create", "New Browser", ["<Control><Alt>b"], section: .rightPanel,
                   macOS: "Cmd+Ctrl+B", keywords: ["browser", "new", "create", "web"]),
-            .init("browser.tab.create", "New Browser Tab", ["<Control><Alt><Shift>b"], section: .rightPanel,
-                  macOS: "Cmd+Ctrl+Shift+B", keywords: ["browser", "tab", "new", "create", "web"]),
-            .init("browser.split.create", "New Browser Split", section: .rightPanel,
-                  keywords: ["browser", "split", "new", "create", "web"]),
             .init("scratchpad.create", "New Scratchpad", ["<Control><Alt>s"], section: .rightPanel,
                   macOS: "Cmd+Ctrl+S", keywords: ["scratchpad", "new", "create", "visual", "canvas", "diagram", "wireframe"]),
             .init("scratchpad.show-current-session", "Show Scratchpad For Current Session", section: .rightPanel,
                   keywords: ["scratchpad", "show", "current", "session", "agent", "visual"]),
             .init("local-document.open", "Open Local File", section: .rightPanel,
                   keywords: ["open", "local", "file", "document", "code", "markdown", "yaml", "toml", "json"]),
-            .init("local-document.open-tab", "Open Local File in Tab", section: .rightPanel,
-                  keywords: ["open", "local", "file", "document", "tab", "markdown"]),
-            .init("local-document.open-split", "Open Local File in Split", section: .rightPanel,
-                  keywords: ["open", "local", "file", "document", "split", "markdown"]),
 
             // MARK: Sessions and attention
             .init("panel.focus-next-unread-or-active", "Jump to Next Active", ["<Control><Shift>j"], section: .attention,

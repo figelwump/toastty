@@ -27,7 +27,7 @@ public final class RightPanelController {
         adw_header_bar_set_title_widget(cast(header), adw_window_title_new("Right Panel", nil))
         let newBrowser = Gtk.iconButton(
             "tab-new-symbolic",
-            tooltip: "New Browser Tab (\(ShortcutLabels.label(forCommand: "browser.tab.create") ?? ""))",
+            tooltip: "New Browser (\(ShortcutLabels.label(forCommand: "browser.create") ?? ""))",
             action: "win.browser.create"
         )
         adw_header_bar_pack_start(cast(header), newBrowser)
