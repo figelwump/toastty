@@ -214,6 +214,20 @@ struct ToasttyCLITaskTests {
 
         #expect(try ToasttyCLI.parse(arguments: ["task", "list", "--changed-since", "ab12.7", "--include-reply"], environment: [:]).command
             == .appControlRun(kind: .query, id: "task.list", args: ["changedSince": .string("ab12.7"), "includeReply": .bool(true)]))
+        let listWait = try ToasttyCLI.parse(
+            arguments: ["task", "list", "--changed-since", "ab12.7", "--wait", "--until", "created", "--timeout", "60"],
+            environment: [:]
+        )
+        #expect(listWait.command == .appControlRun(kind: .query, id: "task.list", args: ["changedSince": .string("ab12.7")]))
+        #expect(listWait.listWait == CLIListWait(timeout: 60))
+        for arguments in [
+            ["task", "list", "--wait", "--until", "created"],
+            ["task", "list", "--changed-since", "ab12.7", "--wait"],
+            ["task", "list", "--changed-since", "ab12.7", "--wait", "--until", "idle"],
+            ["task", "list", "--changed-since", "ab12.7", "--until", "created"],
+        ] {
+            #expect(throws: ToasttyCLIError.self) { try ToasttyCLI.parse(arguments: arguments, environment: [:]) }
+        }
         #expect(try ToasttyCLI.parse(arguments: ["task", "watches", "--notify", other], environment: [:]).command
             == .appControlRun(kind: .query, id: "task.watches", args: ["notifyTaskID": .string(other)]))
         #expect(try ToasttyCLI.parse(arguments: ["task", "get"], environment: [:]).command

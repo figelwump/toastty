@@ -373,6 +373,24 @@ struct TaskChangeFeedTests {
         #expect(after.changedTaskIDs.isEmpty && after.deletedTasks.isEmpty)
     }
 
+    @Test func aCursorReportsTasksFirstSeenAfterIt() {
+        let feed = TaskChangeFeed(launchID: "launch")
+        let first = feed.observe(entries([a: "a1"]), since: nil)
+        #expect(first.createdTaskIDs.isEmpty)
+
+        // b appears and a changes: only b is new.
+        let next = feed.observe(entries([a: "a2", b: "b1"]), since: first.cursor)
+        #expect(next.changedTaskIDs == [a, b])
+        #expect(next.createdTaskIDs == [b])
+        // b stays new to the first cursor after it changes again, and is
+        // not new to the later one.
+        let later = feed.observe(entries([a: "a2", b: "b2"]), since: first.cursor)
+        #expect(later.createdTaskIDs == [b])
+        #expect(feed.observe(entries([a: "a2", b: "b2"]), since: next.cursor).createdTaskIDs.isEmpty)
+        // A deleted task is no longer new.
+        #expect(feed.observe(entries([a: "a2"]), since: first.cursor).createdTaskIDs.isEmpty)
+    }
+
     @Test func onePollerDoesNotHideAChangeFromAnother() {
         let feed = TaskChangeFeed(launchID: "launch")
         let start = feed.observe(entries([a: "a1"]), since: nil).cursor

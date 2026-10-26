@@ -305,7 +305,10 @@ worktree.
   `cursor`. With `--changed-since <cursor>`, it lists only the tasks whose
   record, stage or agent state changed since that answer, and the IDs of deleted tasks
   in `deletedTaskIDs`. A cursor from before a relaunch gets every task back with
-  `reset: true`. `--include-reply` adds each task's `lastReply`.
+  `reset: true`. `--include-reply` adds each task's `lastReply`. With
+  `--wait --until created`, it blocks until a task appears that the calling
+  session did not create, such as one made in quick entry, so an agent can learn
+  of new tasks without polling.
 - `toastty task send <task-id> "<message>"` types the message into the task's
   agent and submits it. A busy agent queues it as typed input. It fails when the
   task has no running agent, and says so when the message was typed but may not

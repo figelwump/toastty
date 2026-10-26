@@ -21,12 +21,15 @@ and stop.
 ## Start of a session
 
 1. Read the tasks: `"$TOASTTY_CLI_PATH" --json task list`. Note the tasks in
-   Needs you and Running, and the cursor it returns.
+   Needs you and Running, and the cursor it returns. Watches made with `--wait`
+   end with the session that ran them, so follow each Running task again, as in
+   [Follow tasks](#follow-tasks).
 2. Find the routing notes: `"$TOASTTY_CLI_PATH" --json coordinator status`
    names `routingFile` and `eventsFile`. Read `routingFile`.
 3. Give the user a short summary: what needs them, then what is running. Do not
    repeat a summary of tasks that did not change since the last card in
    `eventsFile`.
+4. Start the wait for new tasks; see [Notice new tasks](#notice-new-tasks).
 
 ## Route a request to a task
 
@@ -45,6 +48,28 @@ When the user asks for work:
    notes under "Picks", such as `- "billing emails" → ~/repos/billing`.
 
 Do not do the task's work yourself, and do not open files in its project.
+
+## Notice new tasks
+
+Tasks also start without you: from quick entry, the CLI, or another task's
+agent. Keep one wait for them running as a background command:
+
+`"$TOASTTY_CLI_PATH" --json task list --changed-since <cursor> --wait --until created`
+
+It returns when a task you did not create appears, or when the cursor is from
+an earlier launch. Its `createdTaskIDs` names the new tasks, and its `cursor` is
+the one to wait from next. With `reset: true`, Toastty relaunched and
+`createdTaskIDs` is empty: do step 1 of [Start of a session](#start-of-a-session)
+again instead.
+
+Follow each new task to review as you follow your own, as in
+[Follow tasks](#follow-tasks), so its packet reaches the chat. It already shows
+in All tasks, so it needs no card now. Do more only when you have a reason:
+
+- It repeats or overlaps a running task: post a `note` card that names both.
+- It is in the wrong project by the routing notes: post a `question` card.
+
+Then start the wait again with the new cursor. Keep exactly one running.
 
 ## Follow tasks
 
@@ -90,8 +115,8 @@ it; change or remove a line only when the user corrects it. Keep each line short
 ## End a session
 
 Your context fills over a long day. At a natural break, when no command of yours
-is running and the user is not waiting for an answer, end the session so Toastty
-starts a fresh one:
+is running other than the wait for new tasks, and the user is not waiting for an
+answer, end the session so Toastty starts a fresh one:
 
 1. Add anything worth keeping to the routing notes.
 2. Post `"$TOASTTY_CLI_PATH" coordinator post note "Starting a fresh coordinator session."`.

@@ -18,6 +18,9 @@ struct CLIInvocation: Equatable {
     /// Set by `toastty task watch --wait`: poll `task.watches` until the
     /// watch fires.
     var watchWait: CLIWatchWait? = nil
+    /// Set by `toastty task list --wait --until created`: poll `task.list`
+    /// until a task the caller did not create appears.
+    var listWait: CLIListWait? = nil
 }
 
 struct CLITaskWait: Equatable {
@@ -30,6 +33,12 @@ struct CLITaskWait: Equatable {
 struct CLIWatchWait: Equatable {
     static let pollInterval: TimeInterval = 1
     /// `nil` waits until the watch fires.
+    var timeout: TimeInterval?
+}
+
+struct CLIListWait: Equatable {
+    static let pollInterval: TimeInterval = 1
+    /// `nil` waits until a task appears.
     var timeout: TimeInterval?
 }
 
@@ -799,6 +808,16 @@ public enum ToasttyCLI {
                         callerSessionID: callerSessionID
                     )
                 }
+                if let listWait = invocation.listWait, response.ok {
+                    return try runListWait(
+                        client: client,
+                        firstResponse: response,
+                        command: invocation.command,
+                        wait: listWait,
+                        options: invocation.options,
+                        callerSessionID: callerSessionID
+                    )
+                }
                 if let watchWait = invocation.watchWait, response.ok {
                     return try runWatchWait(
                         client: client,
@@ -938,7 +957,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
-      toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
+      toastty [--json] [--socket-path <path>] task list [--changed-since <cursor> [--wait --until created [--timeout <seconds>]]] [--include-reply] [--parent <task-id>]
       toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
@@ -2043,7 +2062,11 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.adopt", args: args))
 
         case "list":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--changed-since", "--parent"], flagOptions: ["--include-reply"])
+            let parsed = try parseCommandArguments(
+                remaining,
+                valueOptions: ["--changed-since", "--parent", "--until", "--timeout"],
+                flagOptions: ["--include-reply", "--wait"]
+            )
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("task list does not accept arguments\n\n\(usage)")
             }
@@ -2060,7 +2083,30 @@ public enum ToasttyCLI {
             if parsed.hasFlag("--include-reply") {
                 args["includeReply"] = .bool(true)
             }
-            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.list", args: args))
+            var listWait: CLIListWait?
+            if parsed.hasFlag("--wait") {
+                guard args["changedSince"] != nil else {
+                    throw ToasttyCLIError.usage("--wait needs --changed-since <cursor>\n\n\(usage)")
+                }
+                guard parsed.singleValue("--until") == "created" else {
+                    throw ToasttyCLIError.usage("task list --wait needs --until created\n\n\(usage)")
+                }
+                var timeout: TimeInterval?
+                if let rawTimeout = parsed.singleValue("--timeout") {
+                    guard let seconds = TimeInterval(rawTimeout), seconds > 0 else {
+                        throw ToasttyCLIError.usage("--timeout must be a positive number of seconds\n\n\(usage)")
+                    }
+                    timeout = seconds
+                }
+                listWait = CLIListWait(timeout: timeout)
+            } else if parsed.singleValue("--until") != nil || parsed.singleValue("--timeout") != nil {
+                throw ToasttyCLIError.usage("--until and --timeout need --wait\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .query, id: "task.list", args: args),
+                listWait: listWait
+            )
 
         case "workspace-choices":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
@@ -2400,6 +2446,74 @@ public enum ToasttyCLI {
             }
             Thread.sleep(forTimeInterval: CLIWatchWait.pollInterval)
         }
+    }
+
+    /// Polls `task.list` at the same cursor until a task the caller did not
+    /// create appears, or the cursor is from an earlier launch, then prints
+    /// that answer. Exits 1 on timeout.
+    private static func runListWait(
+        client: ToasttySocketClient,
+        firstResponse: AutomationResponseEnvelope,
+        command: CLICommand,
+        wait: CLIListWait,
+        options: CLIOptions,
+        callerSessionID: String?
+    ) throws -> Int32 {
+        guard let request = command.makeRequestEnvelope(callerSessionID: callerSessionID) else {
+            throw ToasttyCLIError.runtime("could not build the task.list request")
+        }
+        let deadline = wait.timeout.map { Date().addingTimeInterval($0) }
+        var response = firstResponse
+        while true {
+            guard case .array(let created)? = response.result?["createdTaskIDs"] else {
+                throw ToasttyCLIError.runtime("task.list did not return createdTaskIDs; Toastty may need an update")
+            }
+            let reset = response.result?["reset"] == .bool(true)
+            if created.isEmpty == false || reset {
+                if options.jsonOutput {
+                    try writeStdout(jsonString(for: response))
+                } else {
+                    try writeStdout(renderCreatedTasks(response: response, createdTaskIDs: created, reset: reset))
+                }
+                return 0
+            }
+            if let deadline, Date() >= deadline {
+                fputs("no new task within \(Int(wait.timeout ?? 0)) s\n", stderr)
+                return 1
+            }
+            Thread.sleep(forTimeInterval: CLIListWait.pollInterval)
+            response = try client.send(request)
+            guard response.ok else {
+                if let error = response.error {
+                    throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+                }
+                throw ToasttyCLIError.runtime("task.list failed")
+            }
+        }
+    }
+
+    /// One line per new task, then the cursor to wait from next.
+    private static func renderCreatedTasks(
+        response: AutomationResponseEnvelope,
+        createdTaskIDs: [AutomationJSONValue],
+        reset: Bool
+    ) -> String {
+        var lines: [String] = []
+        if reset {
+            lines.append("the cursor is from an earlier launch; read every task again")
+        }
+        if case .array(let tasks)? = response.result?["tasks"] {
+            for case .object(let task) in tasks {
+                guard let id = task["taskID"], createdTaskIDs.contains(id), case .string(let taskID) = id else { continue }
+                var title = ""
+                if case .string(let value)? = task["title"] { title = value }
+                lines.append("new task \(taskID) \(title)")
+            }
+        }
+        if case .string(let cursor)? = response.result?["cursor"] {
+            lines.append("cursor \(cursor)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func parseKeyValueAssignment(_ value: String) throws -> (key: String, value: String) {

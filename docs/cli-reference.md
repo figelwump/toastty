@@ -872,7 +872,7 @@ toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
-toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
+toastty task list [--changed-since <cursor> [--wait --until created [--timeout <seconds>]]] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>]
 toastty task send <task-id> (<text> | --text-file <path>)
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
@@ -929,6 +929,11 @@ and talk to other tasks by task ID; see
 agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition
 held, or 1 when it can never hold or `--timeout` ran out.
+`task list --changed-since <cursor> --wait --until created` blocks until a task
+appears after the cursor that the calling session did not create, such as one
+made in quick entry, then prints the list at that cursor and exits 0. It also
+returns at once when the cursor is from an earlier launch. Exits 1 when
+`--timeout` runs out.
 
 `task merge` is what a merge skill runs once its checks pass; without a task
 ID it merges the calling agent's own task. Toastty merges at the checkout's

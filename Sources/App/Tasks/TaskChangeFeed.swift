@@ -24,6 +24,9 @@ final class TaskChangeFeed {
 
     struct Changes {
         var changedTaskIDs: Set<UUID>
+        /// Tasks the feed first saw after the cursor; a subset of
+        /// `changedTaskIDs`. Empty on `reset`, when the feed cannot tell.
+        var createdTaskIDs: Set<UUID>
         var deletedTasks: [(id: UUID, visibility: Visibility)]
         var cursor: String
         /// The cursor was missing, malformed, or from another launch, so
@@ -38,6 +41,7 @@ final class TaskChangeFeed {
     private var sequence = 0
     private var entries: [UUID: Entry] = [:]
     private var changedAt: [UUID: Int] = [:]
+    private var createdAt: [UUID: Int] = [:]
     private var tombstones: [(id: UUID, sequence: Int, visibility: Visibility)] = []
     /// The newest sequence whose tombstones were dropped; an older cursor
     /// may have missed a deletion.
@@ -61,12 +65,16 @@ final class TaskChangeFeed {
             return sequence
         }
         for (id, entry) in current where entries[id]?.snapshot != entry.snapshot {
+            if entries[id] == nil {
+                createdAt[id] = nextSequence()
+            }
             entries[id] = entry
             changedAt[id] = nextSequence()
         }
         for (id, entry) in entries where current[id] == nil {
             entries[id] = nil
             changedAt[id] = nil
+            createdAt[id] = nil
             tombstones.append((id, nextSequence(), entry.visibility))
         }
         if tombstones.count > Self.maximumTombstones {
@@ -77,10 +85,11 @@ final class TaskChangeFeed {
 
         let newCursor = "\(launchID).\(sequence)"
         guard let since = parse(cursor), since >= droppedThrough else {
-            return Changes(changedTaskIDs: Set(current.keys), deletedTasks: [], cursor: newCursor, reset: true)
+            return Changes(changedTaskIDs: Set(current.keys), createdTaskIDs: [], deletedTasks: [], cursor: newCursor, reset: true)
         }
         return Changes(
             changedTaskIDs: Set(changedAt.compactMap { $0.value > since ? $0.key : nil }),
+            createdTaskIDs: Set(createdAt.compactMap { $0.value > since ? $0.key : nil }),
             deletedTasks: tombstones.filter { $0.sequence > since }.map { ($0.id, $0.visibility) },
             cursor: newCursor,
             reset: false

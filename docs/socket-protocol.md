@@ -795,11 +795,12 @@ session that continues in the worktree, `conversationConfirmed`,
 16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the
 session's transcript. `task.list` returns `tasks`, oldest first, with the same
 scope rule as `task.retry`, with `agentState` but without `lastReply` unless
-`args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, and
+`args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, `createdTaskIDs`, and
 `reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
-the tasks whose record, `stage` or `agentState` changed since, and `deletedTaskIDs` the
-tasks deleted since; a cursor from another launch, or one Toastty cannot read,
-returns every task with `reset: true`. `task.watches` returns `watches`, each
+the tasks whose record, `stage` or `agentState` changed since, `deletedTaskIDs` the
+tasks deleted since, and `createdTaskIDs` the listed tasks that appeared since,
+leaving out tasks the calling session created; a cursor from another launch, or one Toastty cannot read,
+returns every task with `reset: true` and an empty `createdTaskIDs`. `task.watches` returns `watches`, each
 with `watchID`, `taskID` (the watched task), `until`, `notifyTaskID` (`null` for
 `wait=true`), `createdAt`, and `state` (`pending`, `fired`, or `impossible`,
 with `firedAt`, `reason`, and `delivered`). Fired watches stay listed for up to
