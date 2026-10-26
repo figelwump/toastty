@@ -255,7 +255,8 @@ def main():
         return card
 
     try:
-        workspace_id = instance.wait_until_ready()[0]['workspaceID']
+        workspace = instance.wait_until_ready()[0]
+        workspace_id = workspace['workspaceID']
         coordinator = wait_for('the coordinator to run', waiting(lambda: (lambda s: s if s['state'] == 'running' else None)(
             instance.query('coordinator.status'))), timeout=120, interval=2)
         cli_result('coordinator', 'show')
@@ -277,13 +278,17 @@ def main():
         task_id = task['taskID']
         capture('e2e-1-task-created')
         step('1b coordinator created the task', taskID=task_id, title=task['title'])
-        wait_for('the explicit project envelope in the coordinator terminal',
-                 lambda: terminal_shows(coordinator['workspaceID'], 'Toastty project request:'), timeout=30, interval=1)
+        # The terminal can scroll past the envelope while the coordinator
+        # creates the task. Its decoded transcript is the durable receipt:
+        # only a valid project envelope renders as @<project title> here.
+        project_user = wait_for('the decoded explicit project request', lambda: next(
+            (i for i in chat_state()['items'] if i.get('role') == 'user'
+             and i.get('text') == f"@{workspace['title']} {request}"), None), timeout=30, interval=1)
         routing_path = Path(coordinator['routingFile'])
         wait_for('the explicit project pick in routing.md',
                  lambda: str(repository) in routing_path.read_text().split('## Picks', 1)[-1], timeout=120, interval=2)
         shutil.copyfile(routing_path, artifacts / f'{PREFIX}-routing.md')
-        step('1c explicit project pick recorded', projectRoot=str(repository), routingFile=str(routing_path))
+        step('1c explicit project pick recorded', projectRoot=str(repository), routingFile=str(routing_path), item=project_user)
 
         wait_for('a packet card for v1', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1), None)), timeout=900, interval=5)
@@ -406,6 +411,10 @@ def main():
             step('could not record terminals', error=str(error))
         raise
     finally:
+        if 'coordinator' in locals():
+            routing_path = Path(coordinator['routingFile'])
+            if routing_path.is_file():
+                shutil.copyfile(routing_path, artifacts / f'{PREFIX}-routing.md')
         try:
             instance.kill()
         except Exception:
