@@ -29,6 +29,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
     private var isPageReady = false
     private var pendingPayload: Data?
     private var setupPopover: NSPopover?
+    private var isTaskMenuPending = false
 
     init(controller: CoordinatorChatController) {
         self.controller = controller
@@ -104,19 +105,9 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
     /// Uses the same native task menu and action guard as the sidebar.
     func showTaskMenu(sections: [[TaskBoardPresentation.MenuItem]], rect: CGRect, run: @escaping (TaskBoardPresentation.MenuItem) -> Void) -> Bool {
         guard window != nil, !isHiddenOrHasHiddenAncestor else { return false }
-        let menu = NSMenu()
-        var actions: [TaskMenuAction] = []
-        for (index, section) in sections.filter({ !$0.isEmpty }).enumerated() {
-            if index > 0 { menu.addItem(.separator()) }
-            for item in section {
-                let action = TaskMenuAction { run(item) }
-                actions.append(action)
-                let native = NSMenuItem(title: item.title, action: #selector(TaskMenuAction.invoke), keyEquivalent: "")
-                native.target = action
-                menu.addItem(native)
-            }
-        }
-        guard !actions.isEmpty else { return false }
+        guard !isTaskMenuPending else { return true }
+        let offered = sections.filter { !$0.isEmpty }
+        guard !offered.isEmpty else { return false }
         let scale = CGFloat(webView.pageZoom) * webView.magnification
         let scaled = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
         let pageRect = webView.isFlipped ? scaled : CGRect(x: scaled.minX, y: webView.bounds.height - scaled.maxY, width: scaled.width, height: scaled.height)
@@ -125,17 +116,40 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         let point = NSPoint(x: anchor.minX, y: webView.isFlipped ? anchor.maxY : anchor.minY)
         // Finish the WebKit bridge callback before AppKit enters its menu
         // tracking loop. A menu action can remove this page from its window.
-        DispatchQueue.main.async { [weak webView] in
-            guard let webView, webView.window != nil else { return }
-            _ = withExtendedLifetime(actions) { menu.popUp(positioning: nil, at: point, in: webView) }
+        isTaskMenuPending = true
+        // The main-actor action owns all non-Sendable UI state. The queue
+        // captures only that actor-isolated object, across SDK versions.
+        let presentation = TaskMenuAction { [weak self] in
+            guard let self else { return }
+            defer { self.isTaskMenuPending = false }
+            let webView = self.webView
+            guard webView.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
+            let menu = NSMenu()
+            for (index, section) in offered.enumerated() {
+                if index > 0 { menu.addItem(.separator()) }
+                for item in section {
+                    let action = TaskMenuAction { run(item) }
+                    let native = NSMenuItem(title: item.title, action: #selector(TaskMenuAction.invoke), keyEquivalent: "")
+                    native.target = action
+                    // NSMenuItem.target is weak; representedObject owns it
+                    // for the whole menu lifetime without a nested closure.
+                    native.representedObject = action
+                    if item.isDestructive {
+                        native.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.systemRed])
+                    }
+                    menu.addItem(native)
+                }
+            }
+            menu.popUp(positioning: nil, at: point, in: webView)
         }
+        DispatchQueue.main.async { presentation.invoke() }
         return true
     }
 
     @MainActor
     private final class TaskMenuAction: NSObject {
-        let run: () -> Void
-        init(run: @escaping () -> Void) { self.run = run }
+        let run: @MainActor () -> Void
+        init(run: @escaping @MainActor () -> Void) { self.run = run }
         @objc func invoke() { run() }
     }
 
