@@ -13,8 +13,8 @@ never selects a workspace or moves focus.
 
 It checks that:
 - Toastty starts the default agent at launch, once, in one hidden Coordinator
-  workspace, in the user home, with `Use the toastty-coordinator skill.`, and
-  creates routing.md;
+  workspace, in the coordinator directory that holds routing.md, with
+  `Use the toastty-coordinator skill.`, and creates routing.md;
 - the visible workspace keeps its selection;
 - `toastty coordinator post` from outside any agent session appends a card to
   events.jsonl, and a bad card is refused;
@@ -131,7 +131,10 @@ def main():
         message = wait_for('the fake agent to record its first message', lambda: recorded_message(first['sessionID']))
         require(message == FIRST_MESSAGE, f'Unexpected first message: {message!r}')
         session = json.loads((sessions_dir / f"{first['sessionID']}.json").read_text())
-        require(os.path.realpath(session['cwd']) == str(user_home), f'The coordinator did not start in the home: {session}')
+        # Not the user home: Claude Code asks for folder trust there at every start.
+        coordinator_dir = os.path.realpath(Path(first['routingFile']).parent)
+        require(os.path.realpath(session['cwd']) == coordinator_dir,
+                f'The coordinator did not start in {coordinator_dir}: {session}')
         require(session['panelID'].lower() == first['panelID'].lower(), f'Wrong panel: {session} {first}')
         hidden = coordinator_workspaces()
         require([w['workspaceID'] for w in hidden] == [first['workspaceID']], f'Expected one coordinator workspace: {hidden}')

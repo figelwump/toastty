@@ -23,7 +23,8 @@ real agent runs. Through the real CLI and the page itself it checks that:
 - the project filter keeps one current task card, and Today and All tasks
   open that same card beside the chat;
 - Try chips fill the composer without sending, then hide after a user request;
-- the blocked composer's Open terminal button shows the raw terminal again.
+- before the agent reports anything, the blocked composer's hint names folder
+  trust, and its Open terminal button shows the raw terminal again.
 - a question with two options changes a finished task's sidebar badge to
   question; a page button answers it and restores the finished badge;
 - a typed question reply reaches a waiting task that has no packet;
@@ -511,8 +512,12 @@ def main():
 
         # 5. This fake agent emits no ready/turn events, as at first-load
         # setup. The blocked composer must offer a way to its terminal.
-        require(chat_state()['canSend'] is False, 'The fake agent unexpectedly accepts chat input')
-        opened = instance.request('automation.coordinator_chat_action',
+        blocked = chat_state()
+        require(blocked['canSend'] is False, 'The fake agent unexpectedly accepts chat input')
+        # Before the provider reports anything, the hint names folder trust.
+        require('trust the folder' in (blocked.get('sendHint') or ''), f"The composer hint does not mention folder trust: {blocked.get('sendHint')!r}")
+        capture('coordinator-composer-starting')
+        opened =instance.request('automation.coordinator_chat_action',
                                   dict(action='click', elementID='composer-open-terminal'))
         require(opened.get('ok'), f'The blocked composer did not offer Open terminal: {opened}')
         wait_for('the chat to uncover the terminal', lambda: rendered('chat') is None, timeout=15, interval=0.3)

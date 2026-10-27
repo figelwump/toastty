@@ -31,7 +31,6 @@ struct CoordinatorSessionControllerTests {
                 configLoader: { [unowned self] in config },
                 files: CoordinatorFiles(directoryURL: directory),
                 isRestorePending: { [unowned self] _ in restorePending },
-                homeDirectoryPath: "/Users/tester",
                 now: { [unowned self] in clock },
                 relaunchDelay: .milliseconds(10),
                 restoreGrace: restoreGrace,
@@ -80,7 +79,12 @@ struct CoordinatorSessionControllerTests {
         let workspace = try #require(fixture.coordinatorWorkspace)
         #expect(call.profileID == "claude")
         #expect(call.workspaceID == workspace.id)
-        #expect(call.cwd == "/Users/tester")
+        #expect(call.cwd == fixture.directory.path)
+        guard case .terminal(let terminal)? = workspace.panelState(for: call.panelID) else {
+            Issue.record("The coordinator workspace has no terminal")
+            return
+        }
+        #expect(terminal.cwd == fixture.directory.path)
         #expect(call.prompt == "Use the toastty-coordinator skill.")
         #expect(call.scopedWorkspaceIDs == nil)
         #expect(fixture.controller.status == .running(sessionID: "launched-1"))
