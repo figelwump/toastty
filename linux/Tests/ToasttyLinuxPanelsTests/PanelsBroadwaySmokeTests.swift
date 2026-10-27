@@ -7,7 +7,8 @@ import Testing
 /// panels with the in-process automation script: a browser on a local
 /// `file://` page (target=_blank → new tab, page zoom), Getting Started on
 /// `toastty://`, a Markdown local document (rendered text checked through
-/// JavaScript, edit → save → disk, external change → reload, find), and a
+/// JavaScript, long lines wrapping in the editor, edit → save → disk,
+/// external change → reload, find), and a
 /// Scratchpad. Screenshots land in `artifacts/manual/linux-panels/`.
 ///
 /// Skip with `TOASTTY_LINUX_SKIP_GUI_TESTS=1`.
@@ -53,6 +54,7 @@ struct PanelsBroadwaySmokeTests {
         web-command local-document.edit
         wait 300
         expect webEditing=true
+        web-expect (() => { const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.startsWith("Wrapped prose")); return line.getBoundingClientRect().height > 2 * parseFloat(getComputedStyle(line).lineHeight); })() => true
         web-expect (() => { const b = window.ToasttyLocalDocumentPanel.getCurrentBootstrap(); window.webkit.messageHandlers.toasttyLocalDocumentPanel.postMessage({type: "draftDidChange", content: "Edited Title\\n\\nSaved from smoke", baseContentRevision: b.contentRevision}); return b.isEditing; })() => true
         wait 200
         expect webDirty=true
@@ -93,6 +95,8 @@ struct PanelsBroadwaySmokeTests {
         # Panel Notes
 
         Rendered **Markdown** in the local document panel.
+
+        Wrapped prose: \(String(repeating: "this long markdown line wraps in the editor instead of scrolling sideways. ", count: 8))
 
         - alpha
         - beta
