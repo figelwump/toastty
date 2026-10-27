@@ -118,6 +118,7 @@ button.work-strip:hover { color: var(--fg); }
 /* An open question: its start and answers show without opening the card.
    The height fits about five lines; Show more opens the whole card. */
 .qcard { gap: 7px; padding: 9px 12px; }
+[data-expand-body] { cursor: pointer; }
 .qhead { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
 .qhead .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qhead:hover .chev { color: var(--dim); }

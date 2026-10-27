@@ -7,6 +7,12 @@ public enum SessionStatusKind: String, Codable, Equatable, Sendable {
     case needsApproval = "needs_approval"
     case ready
     case error
+
+    /// A waiting session keeps its working status for lifecycle tracking,
+    /// but its own turn is quiet. Display activity only while it is working.
+    public func showsWorkingIndicator(isWaiting: Bool) -> Bool {
+        self == .working && isWaiting == false
+    }
 }
 
 public struct SessionStatus: Codable, Equatable, Sendable {
@@ -45,6 +51,7 @@ public struct SessionChildRow: Equatable, Sendable {
     public var executionProfile: SessionAgentExecutionProfile?
     public var startedAt: Date
     public var statusKind: SessionStatusKind?
+    public var isWaiting: Bool
     public var panelID: UUID?
     public var workspaceID: UUID?
     public var sessionID: String?
@@ -57,6 +64,7 @@ public struct SessionChildRow: Equatable, Sendable {
         executionProfile: SessionAgentExecutionProfile? = nil,
         startedAt: Date,
         statusKind: SessionStatusKind? = nil,
+        isWaiting: Bool = false,
         panelID: UUID? = nil,
         workspaceID: UUID? = nil,
         sessionID: String? = nil
@@ -68,9 +76,14 @@ public struct SessionChildRow: Equatable, Sendable {
         self.executionProfile = executionProfile?.isEmpty == false ? executionProfile : nil
         self.startedAt = startedAt
         self.statusKind = statusKind
+        self.isWaiting = isWaiting
         self.panelID = panelID
         self.workspaceID = workspaceID
         self.sessionID = sessionID
+    }
+
+    public var showsWorkingIndicator: Bool {
+        statusKind?.showsWorkingIndicator(isWaiting: isWaiting) ?? false
     }
 }
 
@@ -104,6 +117,10 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
 
     public var isWorkspaceScoped: Bool {
         scopedWorkspaceIDs != nil
+    }
+
+    public var showsWorkingIndicator: Bool {
+        status.kind.showsWorkingIndicator(isWaiting: projection.isWaitingOnChildren)
     }
 
     public init(
@@ -186,8 +203,8 @@ public struct WorkspaceAgentSummary: Equatable, Sendable {
             guard let workspaceID else { return true }
             return child.workspaceID == workspaceID
         }
-        let active = agents.filter { $0.status.kind == .working }.count +
-            nestedSessionChildren.filter { $0.statusKind == .working }.count
+        let active = agents.filter(\.showsWorkingIndicator).count +
+            nestedSessionChildren.filter(\.showsWorkingIndicator).count
         return WorkspaceAgentSummary(
             running: agents.count + nestedSessionChildren.count,
             active: active

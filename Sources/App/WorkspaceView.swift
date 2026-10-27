@@ -312,7 +312,7 @@ struct WorkspaceView: View {
 
             return sessionStatus.isActive &&
                 sessionStatus.agent != .processWatch &&
-                sessionStatus.status.kind == .working
+                sessionStatus.showsWorkingIndicator
         }
 
         return hasWorkingAgent ? .spinner : .hidden
@@ -4288,7 +4288,8 @@ struct PanelCardView: View {
         return PanelHeaderAppearance.resolve(
             isFocused: isFocused,
             hasUnreadNotification: hasUnreadNotification,
-            sessionStatusKind: panelSessionStatus?.status.kind
+            sessionStatusKind: panelSessionStatus?.status.kind,
+            isWaiting: panelSessionStatus?.projection.isWaitingOnChildren ?? false
         )
     }
 

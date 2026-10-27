@@ -278,8 +278,16 @@ document.addEventListener("pointerdown", activate);
 document.addEventListener("focusin", activate);
 
 document.addEventListener("click", (event) => {
-  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
+  const clicked = event.target as HTMLElement;
+  const target = clicked.closest<HTMLElement>("[data-act]");
   if (!target || target.tagName === "FORM") return;
+  // The question body also opens its card. Keep nested controls and text
+  // selection independent of that larger pointer target.
+  if (target.dataset.expandBody != null) {
+    const selection = window.getSelection();
+    if (clicked.closest("button, a, input, textarea, select, [contenteditable]")
+      || selection?.isCollapsed === false && (target.contains(selection.anchorNode) || target.contains(selection.focusNode))) return;
+  }
   const data = target.dataset;
   switch (data.act) {
     case "project-filter":

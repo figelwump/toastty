@@ -9,7 +9,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: true,
             hasUnreadNotification: false,
-            sessionStatusKind: nil
+            sessionStatusKind: nil,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .focused)
@@ -21,7 +22,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,
-            sessionStatusKind: nil
+            sessionStatusKind: nil,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .unread(.bell))
@@ -33,7 +35,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: true,
             hasUnreadNotification: true,
-            sessionStatusKind: nil
+            sessionStatusKind: nil,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .unread(.bell))
@@ -45,7 +48,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,
-            sessionStatusKind: .needsApproval
+            sessionStatusKind: .needsApproval,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .unread(.needsApproval))
@@ -56,7 +60,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,
-            sessionStatusKind: .ready
+            sessionStatusKind: .ready,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .unread(.ready))
@@ -67,7 +72,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let treatment = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,
-            sessionStatusKind: .ready
+            sessionStatusKind: .ready,
+            isWaiting: false
         ).treatment
 
         let backgroundColor = try XCTUnwrap(
@@ -99,7 +105,8 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,
-            sessionStatusKind: .error
+            sessionStatusKind: .error,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .unread(.error))
@@ -110,11 +117,35 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         let appearance = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: false,
-            sessionStatusKind: .working
+            sessionStatusKind: .working,
+            isWaiting: false
         )
 
         XCTAssertEqual(appearance.treatment, .neutral)
         XCTAssertEqual(appearance.indicatorState, .spinner)
         XCTAssertFalse(appearance.showsTintedFill)
+    }
+
+    func testWaitingDoesNotSpinAndPreservesUnreadTreatment() {
+        for focused in [false, true] {
+            let waiting = PanelHeaderAppearance.resolve(
+                isFocused: focused, hasUnreadNotification: false, sessionStatusKind: .working,
+                isWaiting: true
+            )
+            XCTAssertEqual(waiting.indicatorState, .hidden)
+            XCTAssertEqual(waiting.treatment, focused ? .focused : .neutral)
+
+            let unread = PanelHeaderAppearance.resolve(
+                isFocused: focused, hasUnreadNotification: true, sessionStatusKind: .working,
+                isWaiting: true
+            )
+            XCTAssertEqual(unread.indicatorState, .dot)
+            XCTAssertEqual(unread.treatment, .unread(.bell))
+        }
+        let resuming = PanelHeaderAppearance.resolve(
+            isFocused: false, hasUnreadNotification: false, sessionStatusKind: .working,
+            isWaiting: false
+        )
+        XCTAssertEqual(resuming.indicatorState, .spinner)
     }
 }

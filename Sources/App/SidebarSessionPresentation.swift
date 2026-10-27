@@ -171,7 +171,7 @@ enum SidebarSessionPresentation {
                 unreadCount: sessions.filter { unreadSessionRowIDs.contains($0) }.count
                     + subspaces.filter { $0.status == .ready }.count,
                 hasWorking: sessions.contains { workingSessionRowIDs.contains($0) }
-                    || subspaces.contains { $0.status == .working },
+                    || subspaces.contains { $0.status == .working && $0.isWaiting == false },
                 subspaceCount: subspaces.count
             )
         }
@@ -265,11 +265,12 @@ enum SidebarSessionPresentation {
 
     nonisolated static func sessionRailState(
         for kind: SessionStatusKind,
+        isWaiting: Bool,
         showsUnreadSessionAccent: Bool
     ) -> SessionRailState {
         switch kind {
         case .working:
-            return .spinner
+            return kind.showsWorkingIndicator(isWaiting: isWaiting) ? .spinner : .empty
         case .needsApproval:
             return .approvalDot
         case .error:
@@ -631,7 +632,7 @@ enum SidebarSessionPresentation {
     /// Working rows lean while the agent generates. A waiting row stands
     /// upright: the agent itself is not generating.
     static func sessionTextUsesItalic(for kind: SessionStatusKind, projection: SessionStatusProjection) -> Bool {
-        kind == .working && projection.isWaitingOnChildren == false
+        kind.showsWorkingIndicator(isWaiting: projection.isWaitingOnChildren)
     }
 
     /// What a waiting session waits on, or `nil` when it is not waiting. A

@@ -38,6 +38,7 @@ function element(overrides = {}) {
 function page() {
   const events = new Map();
   const posted = [];
+  const selection = { isCollapsed: true, anchorNode: null, focusNode: null };
   const input = element({ tagName: "TEXTAREA" });
   const composer = element({ tagName: "FORM", querySelector: () => input });
   const nodes = new Map([
@@ -48,14 +49,14 @@ function page() {
   ]);
   const window = { webkit: { messageHandlers: { toasttyCoordinatorChat: {
     postMessage: (event) => posted.push(JSON.parse(JSON.stringify(event))),
-  } } }, addEventListener: (name, handler) => events.set(`window:${name}`, handler) };
+  } } }, addEventListener: (name, handler) => events.set(`window:${name}`, handler), getSelection: () => selection };
   nodes.set("composer-input", input);
   const getElement = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   const document = { body: { dataset: {} }, focused: true, hasFocus() { return this.focused; }, activeElement: null, getElementById: getElement,
     addEventListener: (name, handler) => events.set(name, handler) };
   vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0, setInterval: () => 0 });
   return {
-    posted, nodes, events: posted, document, element: getElement,
+    posted, nodes, events: posted, document, selection, element: getElement,
     focusEvent() { events.get("focusin")?.({}); },
     focusProject(project) {
       const button = element({ dataset: { act: "project-filter", project } });
@@ -83,6 +84,7 @@ function page() {
       target.closest = () => target;
       events.get("click")({ target });
     },
+    clickTarget(target) { events.get("click")({ target }); },
     draft(text, id = "q1") {
       const form = element({ dataset: { id } });
       const input = element({ value: text, closest: () => form });
@@ -143,6 +145,66 @@ test("a compact question answers from its options without opening the card", () 
   app.click({ act: "answer", id: "q1", index: "1" });
   assert.deepEqual(app.sends().map(({ type, text, questionID }) => ({ type, text, questionID })),
     [{ type: "ask", text: "Prepare prod", questionID: "q1" }]);
+  assert.ok(!app.nodes.get("scroll").innerHTML.includes("replybox"), "answering does not also expand the card");
+});
+
+test("a compact question opens from its body and padding without sending an answer", () => {
+  for (const tagName of ["DIV", "P", "STRONG", "CODE"]) {
+    const app = page();
+    app.receive({ ...state(), focus: null });
+    const body = element({ tagName: "DIV", dataset: { act: "expand", id: "q1", expandBody: "" } });
+    const clicked = element({ tagName, closest: (selector) => selector === "[data-act]" ? body : null });
+    app.clickTarget(clicked);
+    assert.ok(app.nodes.get("scroll").innerHTML.includes('id="collapse-q1"'), `${tagName} opens the question`);
+    assert.deepEqual(app.posted.filter((event) => event.type === "rendered").at(-1).expanded, ["q1"]);
+    assert.deepEqual(app.sends(), []);
+  }
+});
+
+test("selecting question text leaves it folded, while its explicit expand button still works", () => {
+  const app = page();
+  app.receive({ ...state(), focus: null });
+  const body = element({ tagName: "DIV", dataset: { act: "expand", id: "q1", expandBody: "" } });
+  const text = element({ tagName: "P", closest: (selector) => selector === "[data-act]" ? body : null });
+  body.contains = (node) => node === text;
+  const before = app.nodes.get("scroll").innerHTML;
+  app.selection.isCollapsed = false;
+  app.selection.anchorNode = text;
+  app.selection.focusNode = text;
+  app.clickTarget(text);
+  assert.equal(app.nodes.get("scroll").innerHTML, before, "selection does not replace the selected text");
+  app.click({ act: "expand", id: "q1" });
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('id="collapse-q1"'), "the header remains an independent button");
+});
+
+test("a selection elsewhere in the feed does not block a question body click", () => {
+  const app = page();
+  app.receive({ ...state(), focus: null });
+  const body = element({ tagName: "DIV", dataset: { act: "expand", id: "q1", expandBody: "" }, contains: () => false });
+  const text = element({ tagName: "P", closest: (selector) => selector === "[data-act]" ? body : null });
+  app.selection.isCollapsed = false;
+  app.selection.anchorNode = element({ tagName: "P" });
+  app.selection.focusNode = app.selection.anchorNode;
+  app.clickTarget(text);
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('id="collapse-q1"'));
+  assert.deepEqual(app.sends(), []);
+});
+
+test("question body expansion leaves links and nested disabled controls independent", () => {
+  const app = page();
+  app.receive({ ...state({ text: "Read [the report](https://example.com/report) or [a local file](file:///tmp/report)." }), focus: null });
+  app.click({ act: "open-url", url: "https://example.com/report" });
+  assert.deepEqual(app.posted.filter((event) => event.type === "openURL"), [{ type: "openURL", url: "https://example.com/report" }]);
+  assert.ok(!app.nodes.get("scroll").innerHTML.includes("replybox"), "opening a link does not expand the card");
+  const before = app.nodes.get("scroll").innerHTML;
+  const body = element({ tagName: "DIV", dataset: { act: "expand", id: "q1", expandBody: "" } });
+  for (const tagName of ["BUTTON", "INPUT", "A"]) {
+    const control = element({ tagName, disabled: true });
+    const clicked = element({ tagName: "SPAN", closest: (selector) => selector === "[data-act]" ? body : control });
+    app.clickTarget(clicked);
+    assert.equal(app.nodes.get("scroll").innerHTML, before, `${tagName} does not fall through to body expansion`);
+  }
+  assert.deepEqual(app.sends(), []);
 });
 
 test("a typed answer goes to the coordinator and keeps its draft after a failed send", () => {

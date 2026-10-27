@@ -577,31 +577,39 @@ final class SidebarSessionPresentationTests: XCTestCase {
 
     func testSessionRailStateMapsEachStatusAndSplitsReadyOnUnread() {
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .working, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .working, isWaiting: false, showsUnreadSessionAccent: false),
             .spinner
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .needsApproval, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .needsApproval, isWaiting: false, showsUnreadSessionAccent: false),
             .approvalDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .error, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .error, isWaiting: false, showsUnreadSessionAccent: false),
             .errorDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: true),
             .unreadDot
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: false),
+            SidebarSessionPresentation.sessionRailState(for: .ready, isWaiting: false, showsUnreadSessionAccent: false),
             .empty
         )
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRailState(for: .idle, showsUnreadSessionAccent: true),
+            SidebarSessionPresentation.sessionRailState(for: .idle, isWaiting: false, showsUnreadSessionAccent: true),
             .empty
         )
-        // A waiting row keeps the spinner but stands upright: the agent's own
-        // turn has ended.
+        // A waiting row has no spinner: the agent's own turn has ended.
+        XCTAssertEqual(SidebarSessionPresentation.sessionRailState(
+            for: .working, isWaiting: true, showsUnreadSessionAccent: false
+        ), .empty)
+        XCTAssertEqual(SidebarSessionPresentation.sessionRailState(
+            for: .needsApproval, isWaiting: true, showsUnreadSessionAccent: false
+        ), .approvalDot)
+        XCTAssertEqual(SidebarSessionPresentation.sessionRailState(
+            for: .ready, isWaiting: true, showsUnreadSessionAccent: true
+        ), .unreadDot)
         XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(
             for: .working,
             projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0)
@@ -1318,6 +1326,28 @@ final class SidebarSessionPresentationTests: XCTestCase {
                        "1 task space hidden above, working")
         XCTAssertEqual(state.below.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
                        "2 task spaces hidden below, 1 unread")
+    }
+
+    func testHiddenSubspaceWaitingDoesNotShowWorking() {
+        for hasActiveSibling in [false, true] {
+            var sessions = [SidebarSubspacePresentation.SessionLine(
+                title: "Waiting", panelID: UUID(), statusKind: .working, isWaiting: true, summary: nil
+            )]
+            if hasActiveSibling {
+                sessions.append(.init(title: "Active", panelID: UUID(), statusKind: .working, isWaiting: false, summary: nil))
+            }
+            let row = SidebarSubspacePresentation.Row(
+                id: UUID(), title: "Task", status: .working, annotations: [:], summary: nil,
+                spawningSessionID: nil, spawnerName: nil, sessions: sessions, creationIndex: 0
+            )
+            let state = SidebarSessionPresentation.hiddenSessionPillState(
+                orderedSessionRowIDs: [], measuredSessionRowFramesByID: [:], unreadSessionRowIDs: [],
+                subspaceRows: [row], measuredSubspaceRowFramesByID: [row.id: CGRect(x: 0, y: -40, width: 240, height: 32)],
+                viewportHeight: 200, visibleTop: 32
+            )
+            XCTAssertEqual(state.above?.count, 1)
+            XCTAssertEqual(state.above?.hasWorking, hasActiveSibling)
+        }
     }
 
     func testHiddenSessionPillsCombineSessionsAndBarelyVisibleSubspaces() {

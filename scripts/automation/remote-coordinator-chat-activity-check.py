@@ -25,6 +25,8 @@ page it checks that:
   counts, the final message shows, and the working row goes away;
 - a fold opens on click and shows the tool lines;
 - work after a background wake-up, with no user message, folds as well.
+- a pending background shell keeps its waiting state without a Working row,
+  including when the user sends another message or a background task wakes it.
 No real provider runs; this proves the page and the app's state, not what a
 real Claude session writes.
 """
@@ -209,6 +211,9 @@ def main():
                        stdin=json.dumps(dict(hook_event_name=name, session_id=native_id,
                                              transcript_path=str(transcript), cwd=session['cwd'], **fields)))
 
+        background_tasks = [dict(id='fixture-watch', type='shell', status='running',
+                                 description='Watch for new tasks')]
+
         def shows(text):
             return any(item.get('text') == text for item in chat_state()['items'])
 
@@ -222,10 +227,12 @@ def main():
         launch_final = 'No tasks need you. I am waiting for new requests.'
         say(launch_final, final=True)
         wait_for('the launch turn in the chat', lambda: shows(launch_final), timeout=30, interval=0.3)
-        hook('Stop', turn_id='launch', last_assistant_message=launch_final)
+        hook('Stop', turn_id='launch', last_assistant_message=launch_final, background_tasks=background_tasks)
         wait_for('the coordinator prompt after the launch turn', lambda: (state := chat_state())
                  and state['inputState'] == 'openPrompt' and state['canSend'], timeout=30, interval=0.3)
         facts = page_facts()
+        check(chat_state().get('waiting') and not chat_state()['working'],
+              'The pending background watch did not settle into a non-working wait')
         capture('activity-1-launch-settled')
         page = rendered()
         launch_visible = session_check.FIRST_MESSAGE in (page.get('visibleMessageTexts') or [])
@@ -273,7 +280,7 @@ def main():
         request_final = 'I started a task to clean up worktrees in the main toastty repo.'
         say(request_final, final=True)
         wait_for('the final message', lambda: shows(request_final), timeout=30, interval=0.3)
-        hook('Stop', turn_id='request', last_assistant_message=request_final)
+        hook('Stop', turn_id='request', last_assistant_message=request_final, background_tasks=background_tasks)
         wait_for('the coordinator prompt after the request', lambda: chat_state()['inputState'] == 'openPrompt',
                  timeout=30, interval=0.3)
         time.sleep(1.0)
@@ -287,6 +294,13 @@ def main():
         check(request_final in (facts['visibleMessageTexts'] or []), f'The final message is hidden: {facts}')
         step('turn settled into one fold', **facts, order=[(item['type'], (item.get('text') or item.get('kind') or '')[:40], item.get('at'))
                                                              for item in chat_state()['items']])
+        cli_result('coordinator', 'show-terminal')
+        capture('activity-4-terminal-waiting')
+        cli_result('coordinator', 'show')
+        wait_for('the chat page after the native terminal',
+                 lambda: (page := rendered()) and any(strip['elementID'] == strips[-1]['elementID']
+                                                      for strip in page.get('workStrips', [])),
+                 timeout=30, interval=0.3)
 
         # 5. A fold opens on click.
         if strips:
@@ -301,10 +315,19 @@ def main():
 
         # 6. A background wake-up: Claude drops the task-notification record,
         # so the transcript has work and a reply with no user message.
-        tool('"$TOASTTY_CLI_PATH" --json task get 6F337EB3')
+        wake_command = '"$TOASTTY_CLI_PATH" --json task get 6F337EB3'
+        hook('PreToolUse', tool_name='Bash', tool_input=dict(command=wake_command))
+        tool(wake_command)
+        if not capture_only:
+            wait_for('the background wake-up to show active work', lambda: chat_state()['working'] and not chat_state()['waiting'],
+                     timeout=30, interval=0.3)
         wake_final = 'The cleanup task removed 18 merged worktrees and is waiting for your answer.'
         say(wake_final, final=True)
         wait_for('the wake-up reply', lambda: shows(wake_final), timeout=30, interval=0.3)
+        hook('Stop', last_assistant_message=wake_final, background_tasks=background_tasks)
+        if not capture_only:
+            wait_for('the coordinator to wait after the wake-up', lambda: chat_state()['waiting'] and not chat_state()['working'],
+                     timeout=30, interval=0.3)
         time.sleep(1.0)
         facts = page_facts()
         capture('activity-6-wake-up')

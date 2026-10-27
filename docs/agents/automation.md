@@ -37,6 +37,26 @@ For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` 
 
 When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
 
+### Coordinator background waits
+
+Run the focused check against real Claude Code in the remote GUI session:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-background-idle-check.py'
+```
+
+This builds a disposable remote app and starts a coordinator with the GUI
+session's Claude subscription. It needs an unlocked screen and consumes provider
+usage. The check asks Claude to run a bounded background process, verifies that
+the coordinator returns to an idle prompt without a Working row, then sends a
+foreground command and verifies that activity appears and clears again. It
+captures the chat and terminal. It releases its background process and removes
+its temporary project and trust entries. It does not change the installed app.
+The run's remote artifacts include `remote-coordinator-background-idle-check.json`
+and screenshots. The deterministic hook and WebKit companion check is
+`scripts/automation/remote-coordinator-chat-activity-check.py --gui-session`.
+
 ### Detached Browser Status
 
 Run the focused background-browser check through a disposable remote app:
