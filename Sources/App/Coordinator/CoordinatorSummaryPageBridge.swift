@@ -45,7 +45,7 @@ final class CoordinatorSummaryPageBridge: NSObject, CoordinatorChatController.Pa
         case .ready: true
         case .rendered(_, let view, _), .activate(let view, _): isSummary == (view != .chat)
         case .taskAction, .showView: isSummary
-        case .projectFilter, .send, .reply, .ask, .merge, .openTaskSpace, .openURL, .openReport, .openRouting, .openTerminal: !isSummary
+        case .project, .taskMenu, .projectFilter, .send, .reply, .ask, .merge, .openTaskSpace, .openURL, .openReport, .openRouting, .openTerminal: !isSummary
         }
     }
 
@@ -172,6 +172,9 @@ enum CoordinatorPageInspection {
             view: document.body.dataset.view || (document.getElementById('composer') ? 'chat' : tab?.dataset.view || 'today'),
             headerText: document.getElementById('header')?.textContent || '',
             visibleItemIDs: ids('[data-item]'),
+            visibleThreadItemIDs: [...document.querySelectorAll('[data-thread-item]')].filter(shown).map(e => e.dataset.threadItem),
+            suggestionsVisible: shown(document.getElementById('suggestions')),
+            suggestionLabels: [...document.querySelectorAll('[data-suggest]')].filter(shown).map(e => e.textContent),
             visibleTaskRowIDs: ids('.task-row, [data-row-id]'),
             todayCounts: {needsYou:count('needsYou'),running:count('running'),toShip:count('toShip')},
             todaySections: {needsYou:ids('#today-needsYou [data-row-id]'),running:ids('#today-running [data-row-id]'),completed:ids('#today-completed [data-row-id]')},

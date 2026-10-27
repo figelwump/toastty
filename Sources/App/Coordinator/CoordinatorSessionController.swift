@@ -1,6 +1,10 @@
 import CoreState
 import Foundation
 
+enum CoordinatorPrompts {
+    static let initial = "Use the toastty-coordinator skill."
+}
+
 /// Keeps the coordinator's agent running: starts it at launch in the hidden
 /// coordinator workspace, and starts a fresh session there whenever the
 /// last one exits. The agent keeps no state of its own; it rebuilds from
@@ -20,7 +24,7 @@ final class CoordinatorSessionController {
         case failed(String)
     }
 
-    static let initialPrompt = "Use the toastty-coordinator skill."
+    static let initialPrompt = CoordinatorPrompts.initial
 
     private(set) var status: Status = .off {
         didSet { if status != oldValue { onStatusChange?(status) } }

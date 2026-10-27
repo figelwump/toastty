@@ -563,20 +563,38 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             // hosts where Accessibility cannot reach web content.
             try requireAutomationMode(for: command)
             guard let elementID = payload.string("elementID"), elementID.isEmpty == false,
-                  let action = payload.string("action"), ["click", "type", "focus"].contains(action) else {
-                throw AutomationSocketError.invalidPayload("action (click, type or focus) and elementID are required")
+                  let action = payload.string("action"), ["click", "type", "visible", "focus"].contains(action) else {
+                throw AutomationSocketError.invalidPayload("action (click, type, visible or focus) and elementID are required")
             }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
             }
-            let matching = await chat.performPageAction(
-                action == "click" ? .click(elementID: elementID) : action == "focus" ? .focus(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? "")
-            )
+            let pageAction: CoordinatorChatController.PageAction
+            switch action {
+            case "visible": pageAction = .visible(elementID: elementID)
+            case "focus": pageAction = .focus(elementID: elementID)
+            case "click": pageAction = .click(elementID: elementID)
+            default: pageAction = .type(elementID: elementID, text: payload.string("text") ?? "")
+            }
+            let matching = await chat.performPageAction(pageAction)
             guard matching == 1 else {
                 throw AutomationSocketError.invalidPayload(matching == 0
-                    ? "no open chat page has element \(elementID)"
+                    ? "no open chat page has the requested element or visibility: \(elementID)"
                     : "\(matching) open chat pages have element \(elementID); close all but one")
             }
+            return ["elementID": .string(elementID), "performed": .bool(true)]
+
+        case "automation.coordinator_report_action":
+            try requireAutomationMode(for: command)
+            guard let elementID = payload.string("elementID"), !elementID.isEmpty,
+                  let action = payload.string("action"), ["click", "type"].contains(action),
+                  payload.string("panelID") != nil else {
+                throw AutomationSocketError.invalidPayload("panelID, action and elementID are required")
+            }
+            let target = try resolveBrowserTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.browserRuntime(for: target.panelID)
+            let performed = await runtime.performReportAction(action == "click" ? .click(elementID: elementID) : .type(elementID: elementID, text: payload.string("text") ?? ""))
+            guard performed else { throw AutomationSocketError.invalidPayload("the report control is not available") }
             return ["elementID": .string(elementID), "performed": .bool(true)]
 
         case "automation.capture_screenshot":

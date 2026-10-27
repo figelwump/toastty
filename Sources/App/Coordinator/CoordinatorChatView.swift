@@ -35,6 +35,7 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
     func inspection() async -> [String: AutomationJSONValue] {
         await CoordinatorPageInspection.read(webView)
     }
+    private var isTaskMenuPending = false
 
     init(controller: CoordinatorChatController) {
         self.controller = controller
@@ -105,6 +106,57 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
         // stable page as the anchor; Start and Retry dismiss the card.
         popover.show(relativeTo: NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1), of: self, preferredEdge: .maxX)
         return popover.isShown
+    }
+
+    /// Uses the same native task menu and action guard as the sidebar.
+    func showTaskMenu(sections: [[TaskBoardPresentation.MenuItem]], rect: CGRect, run: @escaping (TaskBoardPresentation.MenuItem) -> Void) -> Bool {
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return false }
+        guard !isTaskMenuPending else { return true }
+        let offered = sections.filter { !$0.isEmpty }
+        guard !offered.isEmpty else { return false }
+        let scale = CGFloat(webView.pageZoom) * webView.magnification
+        let scaled = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+        let pageRect = webView.isFlipped ? scaled : CGRect(x: scaled.minX, y: webView.bounds.height - scaled.maxY, width: scaled.width, height: scaled.height)
+        let anchor = pageRect.intersection(webView.bounds)
+        guard !anchor.isNull, !anchor.isEmpty else { return false }
+        let point = NSPoint(x: anchor.minX, y: webView.isFlipped ? anchor.maxY : anchor.minY)
+        // Finish the WebKit bridge callback before AppKit enters its menu
+        // tracking loop. A menu action can remove this page from its window.
+        isTaskMenuPending = true
+        // The main-actor action owns all non-Sendable UI state. The queue
+        // captures only that actor-isolated object, across SDK versions.
+        let presentation = TaskMenuAction { [weak self] in
+            guard let self else { return }
+            defer { self.isTaskMenuPending = false }
+            let webView = self.webView
+            guard webView.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
+            let menu = NSMenu()
+            for (index, section) in offered.enumerated() {
+                if index > 0 { menu.addItem(.separator()) }
+                for item in section {
+                    let action = TaskMenuAction { run(item) }
+                    let native = NSMenuItem(title: item.title, action: #selector(TaskMenuAction.invoke), keyEquivalent: "")
+                    native.target = action
+                    // NSMenuItem.target is weak; representedObject owns it
+                    // for the whole menu lifetime without a nested closure.
+                    native.representedObject = action
+                    if item.isDestructive {
+                        native.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.systemRed])
+                    }
+                    menu.addItem(native)
+                }
+            }
+            menu.popUp(positioning: nil, at: point, in: webView)
+        }
+        DispatchQueue.main.async { presentation.invoke() }
+        return true
+    }
+
+    @MainActor
+    private final class TaskMenuAction: NSObject {
+        let run: @MainActor () -> Void
+        init(run: @escaping @MainActor () -> Void) { self.run = run }
+        @objc func invoke() { run() }
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -185,6 +237,40 @@ final class CoordinatorChatWebView: NSView, CoordinatorChatController.Page, NSPo
                 guard frame.isMainFrame, frame.securityOrigin.protocol == page.scheme,
                       frame.securityOrigin.host == page.host else { return }
                 view?.handle(body)
+            }
+        }
+    }
+}
+
+/// Only the bundled report shell has this narrow action. The handler owns
+/// no runtime or controller, so WebKit cannot keep a panel alive through it.
+@MainActor
+final class CoordinatorReportBridge: NSObject, WKScriptMessageHandlerWithReply {
+    static let name = "toasttyCoordinatorReport"
+
+    static func reportRoute(url: URL?, isMainFrame: Bool) -> (taskID: UUID, version: Int)? {
+        guard isMainFrame, let url, url.scheme == "toastty", url.host == "coordinator",
+              case .report(let taskID, let version)? = ToasttyCoordinatorPageRoute(url: url) else { return nil }
+        return (taskID, version)
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage,
+        replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void
+    ) {
+        guard message.frameInfo.securityOrigin.protocol == "toastty", message.frameInfo.securityOrigin.host == "coordinator",
+              let route = Self.reportRoute(url: message.frameInfo.request.url, isMainFrame: message.frameInfo.isMainFrame),
+              let body = message.body as? [String: Any], let marks = CoordinatorReportMark.decode(body["marks"]),
+              let controller = CoordinatorChatController.shared else {
+            replyHandler(["ok": false, "error": "These marks could not be sent from this report."], nil)
+            return
+        }
+        Task { @MainActor in
+            switch await controller.sendReportMarks(taskID: route.taskID, version: route.version, marks: marks) {
+            case .sent: replyHandler(["ok": true], nil)
+            case .rejected: replyHandler(["ok": false, "error": "The task, packet, or marks are no longer available for this send. Your notes are still here."], nil)
+            case .unconfirmed: replyHandler(["ok": false, "error": "Could not confirm delivery. Check the task terminal before sending again. Your notes are still here."], nil)
             }
         }
     }

@@ -18,6 +18,18 @@ Run every command with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, the coordinator's,
 and stop.
 
+## Talk to the user
+
+Keep each chat message to one to three short sentences. State what changed or
+what needs the user. Put review details and evidence in the task's packet,
+rather than repeating them in chat.
+
+Post questions with useful answer choices through repeated `--option` flags.
+Use at most six different choices, each at most 120 characters. The user can
+also type their own answer. For a reply about a task, use
+`"$TOASTTY_CLI_PATH" coordinator post note --task <task-id> "<reply>"` so it
+stays in that task's card thread.
+
 ## Start of a session
 
 1. Read the tasks: `"$TOASTTY_CLI_PATH" --json task list`. Note the tasks in
@@ -38,6 +50,15 @@ When the user asks for work:
 1. Pick the project. Use the user's words first, then the routing notes, then
    `"$TOASTTY_CLI_PATH" --json task workspace-choices`. When two projects fit
    equally, ask the user one short question with the choices.
+   The composer can send an explicit project pick as a message starting with
+   `Toastty project request: ` followed by one JSON object. Its `projectRoot`,
+   `projectName`, and optional `workspaceID` identify the user's chosen project;
+   `text` is the user's request. Use that project without asking again. Check
+   the current workspace choices before using an ID. If the workspace closed,
+   use the recorded project directory through the task's project picker. Do
+   not choose another project silently. Record this pick under "Picks" in
+   `routing.md`, using the request and project path, not the workspace ID.
+   Ordinary messages without this envelope still use the routing rules above.
 2. Create the task with
    `"$TOASTTY_CLI_PATH" --json task create "<request>" --workspace <id>`. Pass
    the user's request in their own words, with any detail they gave. Use
@@ -86,12 +107,14 @@ When a task needs the user, post one card:
 - The task published a review packet:
   `"$TOASTTY_CLI_PATH" coordinator post packet --task <task-id>`.
 - The task asks something only the user can answer:
-  `"$TOASTTY_CLI_PATH" coordinator post question --task <task-id> "<the question in one or two sentences>"`.
+  `"$TOASTTY_CLI_PATH" coordinator post question --task <task-id> "<the question in one or two sentences>" --option "<answer>" --option "<another answer>"`.
 - Anything else the user should know:
   `"$TOASTTY_CLI_PATH" coordinator post note [--task <task-id>] "<one or two sentences>"`.
 
 The chat shows each card from the task's live state, so keep the text to what
-the task does not already say. Do not post a card for every status change.
+the task does not already say. A note with `--task` goes into that task's card
+thread; a note without it appears in the main chat. Do not post a card for every
+status change.
 
 When the user answers a task's question, send the answer to that task with
 `"$TOASTTY_CLI_PATH" task send <task-id> "<answer>"`. Send the user's words; do

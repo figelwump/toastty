@@ -124,6 +124,19 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .btn:hover { border-color: var(--dim); }
 .btn.primary { background: var(--green); color: #10241a; border-color: transparent; font-weight: 600; }
 .confirm { background: var(--raised2); border-radius: 8px; padding: 9px 11px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.thread { border-top: 1px solid var(--line); padding-top: 9px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+.tmsg { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; }
+.tmsg .who { font-family: var(--mono); font-size: 10.5px; color: var(--dim); padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmsg .who.agent { color: var(--blue); }
+.tmsg .who.co { color: var(--amber); }
+.tmsg .txt { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.tmsg .txt.md { white-space: normal; }
+.opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.answer { display: flex; align-items: baseline; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.answer .txt { min-width: 0; white-space: pre-wrap; }
+.card button:disabled { cursor: default; opacity: .5; }
+.card button:disabled:hover { border-color: var(--line); }
+@media (max-width: 640px) { .tmsg { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .replybox { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 5px 6px; }
 .replybox:focus-within { border-color: var(--dim); }
 .replybox input { flex: 1; min-width: 0; padding: 3px 2px; }
@@ -211,3 +224,24 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .dashboard .task-line .sub { white-space: normal; }
 .dashboard .task-line .age { margin-left: auto; }
 .dashboard .task-row .menu { right: 0; max-width: 100%; }
+
+/* Composer suggestions and explicit targets. */
+.composer { position: relative; }
+.suggest { flex: none; margin: 0 18px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.suggest button { border: 1px dashed var(--line); border-radius: 20px; padding: 2px 8px; color: var(--dim); font-size: 11px; }
+.address-options { position: absolute; bottom: 100%; left: 0; right: 0; max-height: 280px; overflow-y: auto; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 4px; z-index: 2; }
+.address-options button { display: flex; gap: 8px; width: 100%; padding: 7px 10px; text-align: left; border-radius: 4px; }
+.address-options button[aria-selected="true"] { background: var(--raised2); }
+.address-options .dim { margin-left: auto; }
+.shot-image { position: relative; width: fit-content; max-width: 100%; }
+.annotating .shot-image img { cursor: crosshair; }
+.apin { position: absolute; transform: translate(-50%, -50%); background: var(--amber); color: #171717; border: 2px solid #fff; border-radius: 50%; width: 23px; height: 23px; display: grid; place-items: center; font: 600 11px var(--mono); pointer-events: none; box-shadow: 0 1px 4px #0008; }
+.report-notes { display: flex; flex-direction: column; gap: 6px; }
+.report-note { display: flex; align-items: center; gap: 8px; }
+.report-note input { flex: 1; min-width: 50px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.report-note > .small { overflow-wrap: anywhere; max-width: 25%; }
+.report-note > button { color: var(--dim); padding: 4px; }
+#report-send { align-self: flex-start; }
+.report .btn.amber { background: var(--amber); color: #2b1d06; border-color: transparent; font-weight: 600; }
+.report .btn:disabled { opacity: .5; cursor: default; }
+.report-status { color: var(--amber); min-height: 1em; }

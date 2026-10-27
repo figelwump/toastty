@@ -180,6 +180,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var annotationObservation: AnyCancellable?
     private var coordinatorSummaryBridge: CoordinatorSummaryPageBridge?
     private var didRecoverCoordinatorSummaryProcess = false
+    private var hasReportBridge = false
 
     init(
         panelID: UUID,
@@ -625,6 +626,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             ignoreNavigation(webView.loadHTMLString(Self.invalidURLHTML(for: urlString), baseURL: nil))
             return
         }
+        updateReportBridge(for: url)
         clearFavicon()
         if forceReload, !webView.isLoading, webView.url == url,
            let navigation = webView.reloadFromOrigin() {
@@ -1340,6 +1342,25 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return configuration
     }
 
+    private func updateReportBridge(for url: URL?) {
+        let isReport = CoordinatorReportBridge.reportRoute(url: url, isMainFrame: true) != nil
+        guard isReport != hasReportBridge else { return }
+        hasReportBridge = isReport
+        let content = webView.configuration.userContentController
+        if isReport {
+            content.addScriptMessageHandler(CoordinatorReportBridge(), contentWorld: .page, name: CoordinatorReportBridge.name)
+        } else {
+            content.removeScriptMessageHandler(forName: CoordinatorReportBridge.name, contentWorld: .page)
+        }
+    }
+
+    /// Automation uses the real report controls. No arbitrary script is
+    /// accepted, and ordinary browser pages cannot be driven by this path.
+    func performReportAction(_ action: CoordinatorChatController.PageAction) async -> Bool {
+        guard CoordinatorReportBridge.reportRoute(url: webView.url, isMainFrame: true) != nil else { return false }
+        return (try? await webView.evaluateJavaScript(action.script)) as? Bool == true
+    }
+
     private func effectiveModifierFlags(for navigationAction: WKNavigationAction) -> NSEvent.ModifierFlags {
         let actionModifierFlags = navigationAction.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if actionModifierFlags.contains(.command) {
@@ -1487,6 +1508,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             return
         }
 
+        if navigationAction.targetFrame?.isMainFrame == true { updateReportBridge(for: navigationAction.request.url) }
         switch GettingStartedActionNavigationPolicy.decision(
             for: navigationAction.request.url,
             sourceFrameURL: navigationAction.sourceFrame.request.url,

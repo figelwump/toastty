@@ -59,7 +59,7 @@ function badge(text: string, tone: Tone): string {
 }
 
 export function newUIState(): ChatUIState {
-  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), replyTarget: new Map(), confirmingMerge: null };
+  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), replyTarget: new Map(), pendingCards: new Set(), confirmingMerge: null };
 }
 
 /// Folds a card that a newer packet just replaced, once; the user can open
@@ -73,7 +73,7 @@ export function collapseNewlySuperseded(state: ChatState, ui: ChatUIState) {
 }
 
 export function isExpanded(item: ChatItem, ui: ChatUIState): boolean {
-  return item.type === "card" && item.task !== null && ui.expanded.has(item.id);
+  return item.type === "card" && item.task != null && ui.expanded.has(item.id);
 }
 
 /// The card to open for `coordinator.chat.show --task`: the task's newest
@@ -119,10 +119,10 @@ export function renderTimeline(state: ChatState, ui: ChatUIState): string {
     return `<div class="empty-chat"><div class="cmark big">C</div><p>Tell the coordinator what you want done.</p>`
       + `<p class="dim">It routes each request to a task in the right project and posts here when one needs you.</p></div>`;
   }
-  return visibleItems(state).map((item) => renderItem(item, ui)).join("");
+  return visibleItems(state).map((item) => renderItem(item, ui, state.coordinator.canSend)).join("");
 }
 
-export function renderItem(item: ChatItem, ui: ChatUIState): string {
+export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend = true): string {
   switch (item.type) {
     case "message":
       if (item.role === "assistant") {
@@ -140,11 +140,17 @@ export function renderItem(item: ChatItem, ui: ChatUIState): string {
       return `<div class="status-line" data-item="${esc(item.id)}">${esc(item.text)}</div>`;
     case "card":
       return `<div class="msg-co card-row" id="card-${esc(item.id)}" data-item="${esc(item.id)}"><span class="cmark">C</span><div class="bubble">`
-        + (isExpanded(item, ui) ? renderOpenCard(item, ui) : renderCompactCard(item)) + `</div></div>`;
+        + (isExpanded(item, ui) ? renderOpenCard(item, ui, coordinatorCanSend) : renderCompactCard(item)) + `</div></div>`;
   }
 }
 
 function cardSubtitle(item: Extract<ChatItem, { type: "card" }>): string {
+  if (item.kind === "question" && item.answer !== null) return `Answered: ${item.answer}`;
+  const last = item.thread.at(-1);
+  if (last) {
+    const who = last.role === "agent" ? item.task?.slug ?? "agent" : last.role === "coordinator" ? "coordinator" : "you";
+    return `${who}: ${last.text}`;
+  }
   if (item.kind === "packet") {
     if (item.packet) return item.packet.lookAt;
     return "no packet yet";
@@ -159,7 +165,7 @@ export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>): st
     // A note that names no task is the coordinator speaking.
     return `<div class="note-card md">${markdown(item.text ?? "")}</div>`;
   }
-  const kindBadge = item.kind === "question" ? badge("question", "amber") : badge(task.stageLabel, task.stageTone);
+  const kindBadge = cardBadge(item, task);
   if (item.superseded && item.packet) {
     return `<button class="compact superseded" id="expand-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" aria-expanded="false">`
       + `<span class="chev">v${item.packet.version}</span><span class="grow dim">${esc(task.title)} · replaced by v${item.packet.latestVersion}</span><span class="chev">▸</span></button>`;
@@ -188,22 +194,46 @@ function renderThumbs(task: ChatTask, packet: ChatPacket): string {
     + `<span class="mono faint small">click a screenshot to open the report</span></div>`;
 }
 
-function renderReplyBox(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState): string {
-  if (!task.canReply) return "";
-  const target = item.kind === "question" ? "coordinator" : ui.replyTarget.get(item.id) ?? "task";
-  const segment = item.kind === "question" ? "" : `<span class="seg" role="group" aria-label="Send reply to">`
-    + `<button type="button" id="reply-to-task-${esc(item.id)}" class="${target === "task" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="task">to task</button>`
-    + `<button type="button" id="reply-to-coordinator-${esc(item.id)}" class="${target === "coordinator" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="coordinator">to coordinator</button></span>`;
-  const placeholder = target === "task" ? `Review note for ${task.slug}…` : "Ask the coordinator about this…";
-  return `<form class="replybox" data-act="reply" data-id="${esc(item.id)}" data-task="${esc(task.id)}" data-version="${item.packet?.version ?? ""}" data-to="${target}">`
-    + segment + `<input id="reply-${esc(item.id)}" name="text" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${maximumTextLength}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(ui.drafts.get(item.id) ?? "")}"><span class="kbd">↩</span></form>`;
+function cardBadge(item: Extract<ChatItem, { type: "card" }>, task: ChatTask): string {
+  if (item.kind !== "question") return badge(task.stageLabel, task.stageTone);
+  return item.answer !== null ? badge("answered", "green") : badge("question", "amber");
 }
 
-export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState): string {
+export function replyTarget(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState): "task" | "coordinator" {
+  return ui.replyTarget.get(item.id) ?? (item.kind === "question"
+    ? item.task?.defaultReplyTarget ?? "coordinator"
+    : item.task?.canReply ? "task" : "coordinator");
+}
+
+function renderReplyBox(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
+  const target = replyTarget(item, ui);
+  const pending = ui.pendingCards.has(item.id);
+  const available = target === "task" ? task.canReply : coordinatorCanSend;
+  const segment = `<span class="seg" role="group" aria-label="Send reply to">`
+    + `<button type="button" id="reply-to-task-${esc(item.id)}" class="${target === "task" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="task" aria-pressed="${target === "task"}"${!task.canReply || pending ? " disabled" : ""}>to task</button>`
+    + `<button type="button" id="reply-to-coordinator-${esc(item.id)}" class="${target === "coordinator" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="coordinator" aria-pressed="${target === "coordinator"}"${!coordinatorCanSend || pending ? " disabled" : ""}>to coordinator</button></span>`;
+  const placeholder = target === "task"
+    ? `${item.kind === "packet" ? "Review note for" : "Reply to"} ${task.slug}…`
+    : "Ask the coordinator about this…";
+  return `<form class="replybox" data-act="reply" data-id="${esc(item.id)}" data-task="${esc(task.id)}" data-version="${item.packet?.version ?? ""}" data-to="${target}">`
+    + segment + `<input id="reply-${esc(item.id)}" name="text" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${maximumTextLength}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(ui.drafts.get(item.id) ?? "")}"${!available || pending ? " disabled" : ""}><span class="kbd">↩</span></form>`
+    + (!available ? `<div class="reply-hint dim small">${target === "task" ? "The task cannot receive replies now." : "The coordinator cannot receive messages now."}</div>` : "");
+}
+
+function renderThread(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
+  return `<div class="thread">` + item.thread.map((message) => {
+    const who = message.role === "agent" ? task.slug : message.role === "coordinator" ? "coordinator" : message.role === "user-task" ? "You → task" : "You → coordinator";
+    const agent = message.role === "agent" || message.role === "coordinator";
+    const tone = message.role === "agent" ? " agent" : message.role === "coordinator" ? " co" : "";
+    return `<div class="tmsg" data-thread-item="${esc(message.id)}"><span class="who${tone}">${esc(who)}</span><div class="txt${agent ? " md" : ""}">${agent ? markdown(message.text) : linkify(message.text)}</div></div>`;
+  }).join("") + renderReplyBox(item, task, ui, coordinatorCanSend) + `</div>`;
+}
+
+export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState, coordinatorCanSend = true): string {
   const task = item.task!;
   const packet = item.packet;
   let html = `<div class="card ${task.needsUser ? "need" : ""}"><div class="crow">`
-    + (item.kind === "question" ? badge("question", "amber") : badge(task.stageLabel, task.stageTone))
+    + cardBadge(item, task)
     + (item.isNew ? badge("new", "green") : "")
     + `<span class="grow ctitle">${esc(task.title)}</span>`
     + (task.project ? badge(task.project, "plain") : "")
@@ -215,6 +245,14 @@ export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: Ch
 
   if (item.kind === "question" || item.kind === "note") {
     html += `<div class="card-text md">${markdown(item.text ?? "")}</div>`;
+  }
+  if (item.kind === "question") {
+    if (item.answer !== null) {
+      html += `<div class="answer"><span class="mono dim small">Answered</span><span class="txt">${linkify(item.answer)}</span></div>`;
+    } else if (item.options.length) {
+      const available = replyTarget(item, ui) === "task" ? task.canReply : coordinatorCanSend;
+      html += `<div class="opts">` + item.options.map((option, index) => `<button class="btn" id="option-${esc(item.id)}-${index}" data-act="answer" data-id="${esc(item.id)}" data-index="${index}"${!available || ui.pendingCards.has(item.id) ? " disabled" : ""}>${esc(option)}</button>`).join("") + `</div>`;
+    }
   }
   if (packet && item.kind === "packet") {
     html += `<div class="pgrid">`
@@ -229,21 +267,24 @@ export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: Ch
   } else if (item.kind === "task-started") {
     html += `<div class="dim">Started${task.project ? ` in ${esc(task.project)}` : ""}.</div>`;
   }
-  html += renderReplyBox(item, task, ui);
+  html += renderThread(item, task, ui, coordinatorCanSend);
 
-  if (packet && item.kind === "packet" && !item.superseded) {
-    if (ui.confirmingMerge === item.id) {
+  const current = item.isCurrent && !item.superseded;
+  const showPacketActions = packet && item.kind === "packet" && !item.superseded;
+  if (current || showPacketActions) {
+    if (current && task.canMerge && ui.confirmingMerge === item.id) {
       html += `<div class="confirm"><div>Merge ${esc(task.pullRequestLabel ?? "the pull request")} as it is now? ${esc(task.mergePolicy)}</div>`
         + `<div class="btns"><button class="btn primary" id="merge-go-${esc(item.id)}" data-act="merge-go" data-task="${esc(task.id)}">Merge</button><button class="btn" data-act="merge-cancel">Cancel</button></div></div>`;
     } else {
       html += `<div class="btns">`
-        + (task.canMerge ? `<button class="btn primary" id="merge-${esc(item.id)}" data-act="merge" data-id="${esc(item.id)}">Merge</button>` : "")
-        + `<button class="btn" id="report-${esc(item.id)}" data-act="open-report" data-task="${esc(task.id)}" data-version="${packet.version}">Full report</button>`
+        + (current && task.canMerge ? `<button class="btn primary" id="merge-${esc(item.id)}" data-act="merge" data-id="${esc(item.id)}">Merge</button>` : "")
+        + (current ? `<button class="btn more" id="menu-${esc(item.id)}" data-act="card-menu" data-task="${esc(task.id)}" aria-label="Actions for ${esc(task.title)}" aria-haspopup="menu">▾</button>` : "")
+        + (showPacketActions ? `<button class="btn" id="report-${esc(item.id)}" data-act="open-report" data-task="${esc(task.id)}" data-version="${packet.version}">Full report</button>` : "")
         + (task.hasTaskSpace ? `<button class="btn" data-act="open-task" data-task="${esc(task.id)}">Open task space</button>` : "")
         + (task.pullRequestURL ? `<button class="btn" id="open-pr-${esc(item.id)}" data-act="open-url" data-url="${esc(task.pullRequestURL)}">Open PR</button>` : "")
         + `</div>`;
     }
-    html += `<div class="policy">${esc(task.project ?? "this project")}: ${esc(task.mergePolicy)}</div>`;
+    if (current && task.canMerge) html += `<div class="policy">${esc(task.project ?? "this project")}: ${esc(task.mergePolicy)}</div>`;
   }
   return html + `</div>`;
 }
@@ -255,6 +296,9 @@ export type ReportMode = "before" | "after" | "side";
 export interface ReportUIState {
   mode: ReportMode;
   width: number | null;
+  annotate?: boolean;
+  marks?: import("./marks").ReportMark[];
+  sending?: boolean;
 }
 
 /// The widths the screenshots were taken at, smallest first.
@@ -304,10 +348,17 @@ export function renderReport(packet: ReportPacket, ui: ReportUIState): string {
         + widths.map((w) => `<button type="button" class="${ui.width === w ? "on" : ""}" data-act="width" data-width="${w}">${w}</button>`).join("")
         + `</span>`;
     }
-    html += `</div><div class="viewer ${ui.mode === "side" ? "side" : ""}">`
-      + (shots.length ? shots.map((s) => `<figure class="shot"><figcaption class="mono dim small">${esc(s.name)}${s.width ? ` · ${s.width}` : ""}</figcaption><img src="${esc(s.url)}" alt="${esc(s.name)}"></figure>`).join("")
+    html += `<button id="report-annotate" type="button" class="btn ${ui.annotate ? "amber" : ""}" data-act="annotate" aria-pressed="${!!ui.annotate}" ${packet.canAnnotate === false || ui.sending ? "disabled" : ""}>✎ ${ui.annotate ? "Annotating" : "Annotate"}</button>`;
+    html += `</div><div class="viewer ${ui.mode === "side" ? "side" : ""} ${ui.annotate ? "annotating" : ""}">`
+      + (shots.length ? shots.map((s) => `<figure class="shot"><figcaption class="mono dim small">${esc(s.name)}${s.width ? ` · ${s.width}` : ""}</figcaption><div class="shot-image"><img id="shot-${esc(s.name)}" data-act="pin" data-shot="${esc(s.name)}" src="${esc(s.url)}" alt="${esc(s.name)}">`
+        + (ui.marks ?? []).map((m, i) => m.shot === s.name ? `<span class="apin" data-pin="${i}" aria-label="Mark ${i + 1}">${i + 1}</span>` : "").join("") + `</div></figure>`).join("")
         : `<div class="dim">No screenshot for this view.</div>`)
       + `</div>`;
+    if (ui.annotate && !ui.marks?.length) html += `<div class="dim small">Click the screenshot to drop a mark, then write what you see.</div>`;
+    if (ui.marks?.length) {
+      html += `<div class="report-notes">` + ui.marks.map((m, i) => `<div class="report-note"><span class="mono">${i + 1}</span><input id="report-note-${i}" data-note="${i}" value="${esc(m.note)}" placeholder="What's wrong here?" aria-label="Note ${i + 1}" ${ui.sending ? "disabled" : ""}><span class="mono dim small">${esc(m.shot)}</span><button type="button" data-act="remove-mark" data-index="${i}" aria-label="Remove mark ${i + 1}" ${ui.sending ? "disabled" : ""}>×</button></div>`).join("") + `</div>`;
+      html += `<button id="report-send" class="btn amber" data-act="send-marks" ${ui.sending ? "disabled" : ""}>${ui.sending ? "Sending…" : `Send ${ui.marks.length} mark${ui.marks.length === 1 ? "" : "s"} to ${esc(packet.slug ?? packet.title)}`}</button>`;
+    }
   }
   html += `<section class="rsec"><h2>What changed</h2><p>${esc(packet.summary)}</p></section>`
     + `<section class="rsec"><h2>Look at</h2><p>${esc(packet.lookAt)}</p></section>`
