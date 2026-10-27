@@ -919,7 +919,8 @@ code hops back to the main thread with `MainLoop.dispatch` (g_idle_add), not
 - `scripts/linux/install.sh [--prefix ~/.local] [--debug] [--no-build]
   [--build-dir DIR] [--uninstall] [--dry-run]`: installs under
   `PREFIX/lib/toastty/{bin,lib,share}` (Ghostty libs + the Swift runtime in
-  `lib`, `Resources` incl. WebPanels, the Toastty agent skills as
+  `lib`, the Swift crash backtracer in `libexec/swift/linux` so crashes
+  print a backtrace to the journal, `Resources` incl. WebPanels, the Toastty agent skills as
   `ToasttyAgentPluginBundle/{.agents/plugins/marketplace.json,plugins/toastty}`
   and `WorkflowExamples/skills` laid out as on macOS, Ghostty
   `share/{ghostty,terminfo}`),

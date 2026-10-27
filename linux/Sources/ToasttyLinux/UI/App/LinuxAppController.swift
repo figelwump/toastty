@@ -148,7 +148,30 @@ public final class LinuxAppController {
         existingDesktopNotifications?.withdrawObsolete(in: state)
     }
 
+    /// Creating a window controller renders its panels, and restoring a
+    /// terminal can apply a store action synchronously. The state observer
+    /// then calls back in here before the new controller is registered, which
+    /// built a second window for the same `WindowState` (two windows sharing,
+    /// and stealing, the same terminal widgets). Nested calls are deferred
+    /// until the outer pass finishes.
+    private var isReconcilingWindows = false
+    private var needsWindowReconcile = false
+
     private func reconcileWindows(_ state: AppState) {
+        guard isReconcilingWindows == false else {
+            needsWindowReconcile = true
+            return
+        }
+        isReconcilingWindows = true
+        defer { isReconcilingWindows = false }
+        reconcileWindowsOnce(state)
+        while needsWindowReconcile {
+            needsWindowReconcile = false
+            reconcileWindowsOnce(store.state)
+        }
+    }
+
+    private func reconcileWindowsOnce(_ state: AppState) {
         let liveIDs = state.windows.map(\.id)
         for windowID in liveIDs where windows[windowID] == nil {
             let controller = LinuxWindowController(
