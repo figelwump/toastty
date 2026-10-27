@@ -973,7 +973,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
-      toastty [--json] [--socket-path <path>] coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>]
+      toastty [--json] [--socket-path <path>] coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>] [--option <answer>]...
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator show-terminal
       toastty [--json] [--socket-path <path>] coordinator show [--task <task-id>]
@@ -1822,7 +1822,7 @@ public enum ToasttyCLI {
         let remaining = Array(arguments.dropFirst())
         switch verb {
         case "post":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--task", "--text"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--task", "--text", "--option"])
             guard let kind = parsed.positionals.first else {
                 throw ToasttyCLIError.usage("coordinator post requires a kind: packet, task-started, question or note\n\n\(usage)")
             }
@@ -1842,6 +1842,10 @@ public enum ToasttyCLI {
             }
             if let text = texts.first {
                 args["text"] = .string(text)
+            }
+            let choices = parsed.values("--option")
+            if choices.isEmpty == false {
+                args["options"] = .array(choices.map(AutomationJSONValue.string))
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.post", args: args))
 

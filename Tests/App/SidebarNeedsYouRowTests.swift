@@ -179,6 +179,34 @@ struct SidebarNeedsYouRowTests {
     }
 
     @Test
+    func anUnansweredQuestionOverridesFinishedUntilAnsweredWithoutHidingLiveAgentInput() throws {
+        let unanswered = CoordinatorChatCardIndex.TaskCards(latestKind: .question, isNew: false)
+        let answered = CoordinatorChatCardIndex.TaskCards(latestKind: .question, isNew: false, questionAnswered: true)
+        let finishedItem = item(.needsYou(.agentFinished), pullRequest: false)
+        let question = SidebarNeedsYouRow.make(finishedItem, cards: unanswered, lookAt: { _ in nil })
+        #expect(question.reason == "question")
+        #expect(question.tone == .question)
+        #expect(question.accessibilityLabel.hasPrefix("fix-dot, question,"))
+
+        let restored = SidebarNeedsYouRow.make(finishedItem, cards: answered, lookAt: { _ in nil })
+        #expect(restored.reason == "finished")
+        #expect(restored.tone == .finished)
+        #expect(restored.accessibilityLabel.hasPrefix("fix-dot, finished,"))
+
+        // The stored answer settles the chat question, not the live agent's
+        // separate request. Answer now goes to that agent's task space.
+        let waitingItem = item(.needsYou(.agentNeedsInput), pullRequest: false)
+        let waiting = SidebarNeedsYouRow.make(waitingItem, cards: answered, lookAt: { _ in nil })
+        #expect(waiting.reason == "question")
+        #expect(waiting.tone == .question)
+        #expect(waiting.primary == .answer(workspaceID: taskSpace))
+        #expect(waiting.primary?.title == "Answer")
+        #expect(waiting.hasCard)
+        let inChat = SidebarNeedsYouRow.make(waitingItem, cards: unanswered, lookAt: { _ in nil })
+        #expect(inChat.primary == .openInChat(taskID: try #require(inChat.taskID), isAnswer: true))
+    }
+
+    @Test
     func theRowWhoseCardIsOpenIsMarkedAndANewPacketSaysSo() throws {
         let open = item(.needsYou(.review))
         let other = item(.needsYou(.agentFinished), pullRequest: false)

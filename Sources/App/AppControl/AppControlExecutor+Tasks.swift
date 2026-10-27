@@ -479,6 +479,7 @@ extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("kind is required")
         }
         let taskID = try args.taskString("taskID").map { _ in try visibleTask(args: args, coordinator: coordinator).id }
+        let options = try Self.taskStrings("options", args: args)
         let event: CoordinatorEvent
         do {
             event = try CoordinatorEvent.validated(
@@ -486,7 +487,8 @@ extension AppControlExecutor {
                 taskID: taskID,
                 text: args.taskString("text"),
                 sessionID: callerSessionID,
-                at: Date()
+                at: Date(),
+                options: options
             )
             try session.files.append(event)
             CoordinatorChatController.shared?.setNeedsRefresh()

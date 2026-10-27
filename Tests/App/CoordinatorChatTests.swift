@@ -133,6 +133,14 @@ struct CoordinatorChatTests {
                 return nil
             }.last
         }
+
+        func taskWithoutPacket() async throws -> TaskRecord {
+            let created = try await tasks.coordinator.create(TaskCreateRequest(
+                text: "Keep the coupon visible", workspaceID: tasks.workspaceID, agent: "codex"
+            ))
+            await tasks.waitForSetup(created.id)
+            return try #require(tasks.record(created.id))
+        }
     }
 
     @Test func chatShowCoversTheCoordinatorTerminalAndOpensTheTasksPacket() async throws {
@@ -268,6 +276,283 @@ struct CoordinatorChatTests {
         #expect(fixture.chat.lastPayload?.notice == .init(text: "The coordinator is not running.", isError: true, token: 2))
     }
 
+    @Test func aQuestionAnswerNeedsNoPacketAndSurvivesANewChatController() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let sessionID = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.tasks.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .needsApproval, summary: "Needs an answer"), at: Date()
+        )
+        let question = CoordinatorEvent(at: Date(), kind: .question, taskID: task.id,
+                                        text: "Where should this go?", sessionID: nil, options: ["Staging only", "Prepare prod"])
+        try fixture.session.files.append(question)
+        await fixture.chat.refresh()
+        let initial = try #require(fixture.card(forTask: task.id))
+        #expect(initial.id == question.id.uuidString)
+        #expect(initial.options == ["Staging only", "Prepare prod"])
+        #expect(initial.answer == nil)
+        #expect(initial.thread.isEmpty)
+        #expect(initial.packet == nil)
+        #expect(initial.task?.defaultReplyTarget == .task)
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == true)
+        let payload = try #require(fixture.chat.lastPayload)
+        let payloadJSON = try #require(try JSONSerialization.jsonObject(with: payload.encoded()) as? [String: Any])
+        let jsonItems = try #require(payloadJSON["items"] as? [[String: Any]])
+        let jsonCard = try #require(jsonItems.first { $0["id"] as? String == initial.id })
+        #expect(jsonCard["answer"] is NSNull)
+        #expect(jsonCard["options"] as? [String] == ["Staging only", "Prepare prod"])
+        #expect((jsonCard["thread"] as? [[String: Any]])?.isEmpty == true)
+
+        let answer = CoordinatorChatPageEvent.reply(taskID: task.id, version: nil, text: "Staging only",
+                                                     cardID: initial.id, questionID: question.id)
+        await fixture.chat.handle(answer, from: nil)
+        await fixture.chat.refresh()
+        let answered = try #require(fixture.card(forTask: task.id))
+        #expect(fixture.typed.entries.count == 1)
+        let delivery = try #require(fixture.typed.entries.first)
+        #expect(delivery.panelID == panelID)
+        #expect(delivery.text.hasPrefix("Answer from the task card: "))
+        let envelope = try #require(CoordinatorTaskAsk(message: String(delivery.text.dropFirst("Answer from the task card: ".count))))
+        #expect(envelope.taskID == task.id)
+        #expect(envelope.packetVersion == nil)
+        #expect(envelope.questionID == question.id)
+        #expect(envelope.text == "Staging only")
+        #expect(envelope.replyID != nil)
+        #expect(answered.answer == "Staging only")
+        #expect(answered.thread.map(\.text) == ["Staging only"])
+        #expect(answered.thread.map(\.role) == [.userTask])
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.questionAnswered == true)
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == false)
+        let savedReplies = CoordinatorFiles(directoryURL: fixture.session.files.directoryURL).events().filter { $0.kind == .reply }
+        #expect(savedReplies.count == 1)
+        #expect(savedReplies.first?.id == envelope.replyID)
+        #expect(savedReplies.first?.questionID == question.id)
+
+        // A second click from an old page cannot deliver or append again.
+        await fixture.chat.handle(answer, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.typed.entries.count == 1)
+        #expect(fixture.session.files.events().filter { $0.kind == .reply }.count == 1)
+        #expect(fixture.chat.lastPayload?.notice?.isError == true)
+
+        let restored = CoordinatorChatController(
+            store: fixture.tasks.store, taskCoordinator: fixture.tasks.coordinator, session: fixture.session,
+            conversations: nil, sessionRuntimeStore: fixture.tasks.sessionRuntimeStore
+        )
+        await restored.refresh()
+        let restoredCard = try #require(restored.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+            guard case .card(let card) = item, card.id == initial.id else { return nil }
+            return card
+        }.first)
+        #expect(restoredCard.answer == answered.answer)
+        #expect(restoredCard.thread == answered.thread)
+        #expect(restored.cardIndex.tasks[task.id]?.questionAnswered == true)
+        await restored.handle(answer, from: nil)
+        #expect(fixture.typed.entries.count == 1)
+        #expect(fixture.session.files.events().filter { $0.kind == .reply }.count == 1)
+
+        // A typed follow-up remains available after the one question answer.
+        await restored.handle(.reply(taskID: task.id, version: nil, text: "Keep the coupon row visible too.",
+                                     cardID: initial.id, questionID: nil), from: nil)
+        await restored.refresh()
+        #expect(fixture.typed.entries.count == 2)
+        let replies = fixture.session.files.events().filter { $0.kind == .reply }
+        #expect(replies.map(\.questionID) == [question.id, nil])
+        let followedUp = try #require(restored.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+            guard case .card(let card) = item, card.id == initial.id else { return nil }
+            return card
+        }.first)
+        #expect(followedUp.answer == "Staging only")
+        #expect(followedUp.thread.map(\.text) == ["Staging only", "Keep the coupon row visible too."])
+    }
+
+    @Test func aQuestionRejectsWrongTaskAndUnknownReferencesAndDoesNotRecordAFailedSend() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let other = try await fixture.taskWithoutPacket()
+        let question = CoordinatorEvent(at: Date(), kind: .question, taskID: task.id,
+                                        text: "Keep the coupon?", sessionID: nil)
+        try fixture.session.files.append(question)
+        await fixture.chat.refresh()
+        await fixture.chat.handle(.reply(taskID: other.id, version: nil, text: "Wrong task",
+                                         cardID: question.id.uuidString, questionID: question.id), from: nil)
+        let unknown = UUID()
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Old page",
+                                         cardID: unknown.uuidString, questionID: unknown), from: nil)
+        // There is no coordinator conversation in this fixture.
+        await fixture.chat.handle(.ask(taskID: task.id, version: nil, text: "Ask first",
+                                       cardID: question.id.uuidString, questionID: question.id), from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.typed.entries.isEmpty)
+        #expect(fixture.session.files.events().filter { $0.kind == .reply }.isEmpty)
+        #expect(fixture.card(forTask: task.id)?.answer == nil)
+        #expect(fixture.card(forTask: task.id)?.thread.isEmpty == true)
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == true)
+        #expect(fixture.chat.lastPayload?.notice?.isError == true)
+
+        // Refusal releases the question so a later valid task reply works.
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep it",
+                                         cardID: question.id.uuidString, questionID: question.id), from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.typed.entries.count == 1)
+        #expect(fixture.card(forTask: task.id)?.answer == "Keep it")
+    }
+
+    @Test func openingATaskKeepsItsNewestQuestionVisibleAfterItIsAnswered() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        let question = CoordinatorEvent(at: Date().addingTimeInterval(1), kind: .question, taskID: task.id,
+                                        text: "Staging only?", sessionID: nil)
+        try fixture.session.files.append(question)
+        await fixture.chat.refresh()
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Staging only",
+                                         cardID: question.id.uuidString, questionID: question.id), from: nil)
+        #expect(fixture.chat.show(taskID: task.id))
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.focus?.cardID == question.id.uuidString)
+        #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == false)
+        #expect(fixture.card(forTask: task.id)?.answer == "Staging only")
+        // The older packet remains in the timeline, but Open names the
+        // current question so its thread and task actions stay reachable.
+        #expect(fixture.chat.lastPayload?.items.contains { item in
+            guard case .card(let card) = item else { return false }
+            return card.kind == "packet" && card.task?.id == task.id.uuidString
+        } == true)
+    }
+
+    @Test func taskTranscriptRepliesAreCapturedOnceAcrossProjectionRebuildAndSessionExit() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let agent = try #require(fixture.tasks.coordinator.liveAgentSession(of: task))
+        let question = CoordinatorEvent(at: Date(), kind: .question, taskID: task.id,
+                                        text: "Keep the coupon row?", sessionID: nil)
+        try fixture.session.files.append(question)
+        let replyID = UUID()
+        let answer = CoordinatorTaskAsk(taskID: task.id, title: task.title, packetVersion: nil,
+                                        text: "Keep it visible", replyID: replyID, questionID: question.id)
+        let nativeID = UUID().uuidString
+        let transcriptURL = fixture.tasks.root.appendingPathComponent("task-rollout.jsonl")
+        let timestamp = "2026-10-26T10:00:00.000Z"
+        // Synthetic records use the native Codex rollout format. The real
+        // provider parser and transcript tailer turn them into events.
+        let records: [[String: Any]] = [
+            ["timestamp": timestamp, "type": "session_meta", "payload": [
+                "id": nativeID, "session_id": nativeID, "timestamp": timestamp,
+                "cwd": fixture.tasks.projectRoot, "originator": "codex_cli", "source": "cli"
+            ]],
+            ["timestamp": timestamp, "type": "event_msg", "payload": [
+                "type": "user_message", "message": "Answer from the task card: \(answer.message)"
+            ]],
+            ["timestamp": timestamp, "type": "event_msg", "payload": ["type": "task_started", "turn_id": "thread-turn"]],
+            ["timestamp": timestamp, "type": "response_item", "payload": [
+                "type": "message", "role": "assistant", "id": "thread-assistant-1", "phase": "commentary",
+                "content": [["type": "output_text", "text": "I will keep the coupon row visible."]],
+                "internal_chat_message_metadata_passthrough": ["turn_id": "thread-turn"]
+            ]],
+        ]
+        var transcript = Data()
+        for record in records {
+            transcript.append(try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]))
+            transcript.append(10)
+        }
+        try transcript.write(to: transcriptURL)
+        let resume = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: nativeID,
+                                             sessionFilePath: transcriptURL.path, cwd: fixture.tasks.projectRoot, capturedAt: Date())
+        #expect(fixture.tasks.sessionRuntimeStore.confirmNativeSessionBinding(
+            managedSessionID: agent.sessionID, panelID: agent.panelID, record: resume
+        ))
+        #expect(fixture.tasks.store.send(.updateTerminalPanelResumeRecord(panelID: agent.panelID, resumeRecord: resume)))
+        let paths = ToasttyRuntimePaths.resolve(homeDirectoryPath: fixture.tasks.root.path, environment: [
+            ToasttyRuntimePaths.environmentKey: fixture.tasks.root.appendingPathComponent("thread-runtime").path
+        ])
+        func service() -> ConversationService {
+            ConversationService(store: fixture.tasks.store, sessionRuntimeStore: fixture.tasks.sessionRuntimeStore,
+                                terminalRuntimeRegistry: TerminalRuntimeRegistry(), runtimePaths: paths)
+        }
+        func controller(_ service: ConversationService) -> CoordinatorChatController {
+            CoordinatorChatController(store: fixture.tasks.store, taskCoordinator: fixture.tasks.coordinator,
+                                      session: fixture.session, conversations: service,
+                                      sessionRuntimeStore: fixture.tasks.sessionRuntimeStore)
+        }
+        func page(_ service: ConversationService) -> ConversationEventPage? {
+            guard let id = service.conversationID(for: agent.panelID),
+                  case .page(let page) = service.events(for: id, after: nil, limit: 500) else { return nil }
+            return page
+        }
+        func hasAssistant(_ service: ConversationService, text: String) -> Bool {
+            page(service)?.events.contains { event in
+                guard case .assistantMessage(let message) = event.payload else { return false }
+                return message.text == text
+            } == true
+        }
+        func card(_ chat: CoordinatorChatController) -> CoordinatorChatCardView? {
+            chat.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+                guard case .card(let card) = item, card.id == question.id.uuidString else { return nil }
+                return card
+            }.first
+        }
+        let firstService = service()
+        var firstChat: CoordinatorChatController? = controller(firstService)
+        defer { firstService.setTaskPanelIDs([]) }
+        await firstChat?.refresh()
+        await fixture.tasks.waitUntil("the real task tailer reads its assistant message") {
+            hasAssistant(firstService, text: "I will keep the coupon row visible.")
+        }
+        await firstChat?.refresh()
+        let captured = try #require(firstChat.flatMap(card))
+        #expect(captured.answer == answer.text)
+        #expect(captured.thread.map(\.role) == [.userTask, .agent])
+        #expect(captured.thread.map(\.text) == [answer.text, "I will keep the coupon row visible."])
+        #expect(firstService.localPanelIDs.contains(agent.panelID) == false)
+        #expect(fixture.typed.entries.isEmpty)
+
+        // Explicit stop clears the terminal's resume record. Task read demand
+        // keeps the confirmed transcript source until the thread detaches.
+        fixture.tasks.sessionRuntimeStore.stopSession(sessionID: agent.sessionID, at: Date())
+        #expect(fixture.tasks.coordinator.liveAgentSession(of: task) == nil)
+        let final: [String: Any] = ["timestamp": "2026-10-26T10:00:01.000Z", "type": "response_item", "payload": [
+            "type": "message", "role": "assistant", "id": "thread-assistant-2", "phase": "final",
+            "content": [["type": "output_text", "text": "The coupon row now stays visible."]],
+            "internal_chat_message_metadata_passthrough": ["turn_id": "thread-turn"]
+        ]]
+        let file = try FileHandle(forWritingTo: transcriptURL)
+        defer { try? file.close() }
+        try file.seekToEnd()
+        try file.write(contentsOf: JSONSerialization.data(withJSONObject: final, options: [.sortedKeys]))
+        try file.write(contentsOf: Data([10]))
+        await firstChat?.refresh()
+        await fixture.tasks.waitUntil("the inactive terminal tailer reads the final reply") {
+            hasAssistant(firstService, text: "The coupon row now stays visible.")
+        }
+        await firstChat?.refresh()
+        let finished = try #require(firstChat.flatMap(card))
+        #expect(finished.thread.map(\.role) == [.userTask, .agent, .agent])
+        #expect(finished.thread.last?.text == "The coupon row now stays visible.")
+        let saved = fixture.session.files.events().filter { $0.kind == .reply }
+        #expect(saved.count == 3)
+        #expect(Set(saved.compactMap(\.sourceID)).count == 3)
+        #expect(saved.filter { $0.id == replyID }.count == 1)
+        let firstRun = try #require(page(firstService)?.projectionRunID)
+        firstChat = nil
+        firstService.setTaskPanelIDs([])
+
+        // Republish the saved native source to exercise a fresh projection
+        // rebuild as a restored terminal would, independently of the cache.
+        #expect(fixture.tasks.store.send(.updateTerminalPanelResumeRecord(panelID: agent.panelID, resumeRecord: resume)))
+        let rebuiltService = service()
+        let rebuiltChat = controller(rebuiltService)
+        defer { rebuiltService.setTaskPanelIDs([]) }
+        await rebuiltChat.refresh()
+        await fixture.tasks.waitUntil("the new projection replays the inactive task transcript") {
+            hasAssistant(rebuiltService, text: "The coupon row now stays visible.")
+        }
+        await rebuiltChat.refresh()
+        #expect(page(rebuiltService)?.projectionRunID != firstRun)
+        #expect(card(rebuiltChat)?.thread == finished.thread)
+        #expect(fixture.session.files.events().filter { $0.kind == .reply } == saved)
+    }
+
     @Test func reportsAndRoutingOpenInTheCoordinatorsRightPanel() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()
@@ -306,6 +591,20 @@ struct CoordinatorChatTests {
         #expect(CoordinatorChatPageEvent(body: ["type": "reply", "taskID": taskID.uuidString, "version": 2, "text": "ok"])
             == .reply(taskID: taskID, version: 2, text: "ok"))
         #expect(CoordinatorChatPageEvent(body: ["type": "reply", "taskID": "nope", "version": 2, "text": "ok"]) == nil)
+        let questionID = UUID()
+        #expect(CoordinatorChatPageEvent(body: ["type": "reply", "taskID": taskID.uuidString, "text": "ok",
+                                               "cardID": questionID.uuidString, "questionID": questionID.uuidString])
+            == .reply(taskID: taskID, version: nil, text: "ok", cardID: questionID.uuidString, questionID: questionID))
+        #expect(CoordinatorChatPageEvent(body: ["type": "reply", "taskID": taskID.uuidString, "text": "ok", "questionID": "bad"]) == nil)
+        for type in ["reply", "ask"] {
+            #expect(CoordinatorChatPageEvent(body: ["type": type, "taskID": taskID.uuidString, "text": "ok", "cardID": 12]) == nil)
+            #expect(CoordinatorChatPageEvent(body: ["type": type, "taskID": taskID.uuidString, "text": "ok", "questionID": 12]) == nil)
+            #expect(CoordinatorChatPageEvent(body: ["type": type, "taskID": taskID.uuidString, "text": "ok", "version": -1]) == nil)
+        }
+        #expect(CoordinatorChatPageEvent(body: ["type": "reply", "taskID": taskID.uuidString, "text": "ok", "version": NSNull()])
+            == .reply(taskID: taskID, version: nil, text: "ok"))
+        #expect(CoordinatorChatPageEvent(body: ["type": "ask", "taskID": taskID.uuidString, "text": "ok", "version": NSNull()])
+            == .ask(taskID: taskID, version: nil, text: "ok"))
         #expect(CoordinatorChatPageEvent(body: ["type": "openURL", "url": "file:///etc/passwd"]) == nil)
         #expect(CoordinatorChatPageEvent(body: ["type": "openURL", "url": "https://example.com"]) == .openURL("https://example.com"))
         #expect(CoordinatorChatPageEvent(body: ["type": "merge"]) == nil)
@@ -321,6 +620,20 @@ struct CoordinatorChatTests {
         #expect(route("toastty://coordinator/report/not-a-task/3") == nil)
         #expect(route("toastty://coordinator/index.html") == nil)
         #expect(CoordinatorChatController.reportURL(taskID: taskID, version: 2, screenshot: "a&b") == "toastty://coordinator/report/\(id)/2")
+    }
+
+    @Test func taskMenuEventsRequireAFiniteVisibleRectangle() {
+        let taskID = UUID()
+        func event(x: Double = 10, y: Double = 20, width: Double = 30, height: Double = 40) -> CoordinatorChatPageEvent? {
+            CoordinatorChatPageEvent(body: ["type": "taskMenu", "taskID": taskID.uuidString,
+                                            "x": x, "y": y, "width": width, "height": height])
+        }
+        #expect(event() == .taskMenu(taskID: taskID, rect: CGRect(x: 10, y: 20, width: 30, height: 40)))
+        #expect(event(x: .nan) == nil)
+        #expect(event(y: .infinity) == nil)
+        #expect(event(width: 0) == nil)
+        #expect(event(height: -1) == nil)
+        #expect(event(x: 100_001) == nil)
     }
 
     @Test func theTranscriptFoldsToolCallsAndMarksNewSessions() {
@@ -354,6 +667,13 @@ struct CoordinatorChatTests {
         #expect(CoordinatorTaskAsk(message: ask.message) == ask)
         let noPacket = CoordinatorTaskAsk(taskID: taskID, title: "Fix totals", packetVersion: nil, text: "ok")
         #expect(CoordinatorTaskAsk(message: noPacket.message) == noPacket)
+        #expect(CoordinatorTaskAsk(message: noPacket.message)?.replyID == nil)
+        #expect(CoordinatorTaskAsk(message: noPacket.message)?.questionID == nil)
+        let referenced = CoordinatorTaskAsk(taskID: taskID, title: "Fix totals", packetVersion: nil, text: "ok\nkeep it",
+                                            replyID: UUID(), questionID: UUID())
+        #expect(CoordinatorTaskAsk(message: referenced.message) == referenced)
+        let followup = CoordinatorTaskAsk(taskID: taskID, title: "Fix totals", packetVersion: 2, text: "One more thing", replyID: UUID())
+        #expect(CoordinatorTaskAsk(message: followup.message) == followup)
         // A title that looks like the end of the task line stays in the title.
         let lookalike = CoordinatorTaskAsk(
             taskID: taskID, title: #"A" (task ID BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB): B"#, packetVersion: nil, text: "ok"
@@ -377,6 +697,14 @@ struct CoordinatorChatTests {
         #expect(transcript.items.map(\.text) == ["yes\nmove it", "What needs me?"])
         #expect(transcript.items.map(\.aboutTaskID) == [taskID.uuidString, nil])
         #expect(transcript.items.first?.aboutTitle == #"the "coordinator" session \ log"#)
+
+        transcript.apply(ConversationEvent(
+            conversationID: conversation, sequence: 3, eventID: "3", timestamp: Date(), provider: .claude,
+            payload: .userMessage(.init(text: referenced.message))
+        ))
+        #expect(transcript.items.last?.text == referenced.text)
+        #expect(transcript.items.last?.replyID == referenced.replyID)
+        #expect(transcript.items.last?.questionID == referenced.questionID)
     }
 
     @Test func cardsDescribeTheStageAndTheProjectsMergePolicy() {

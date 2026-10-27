@@ -968,7 +968,7 @@ replaced the Tasks view, now open the chat, as `coordinator.chat.show` does.
 ### `coordinator`
 
 ```text
-toastty coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>]
+toastty coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>] [--option <answer>]...
 toastty coordinator status
 toastty coordinator show-terminal
 toastty coordinator show [--task <task-id>]
@@ -978,6 +978,10 @@ toastty coordinator tasks
 `coordinator post` adds a card to the coordinator's chat. Every kind except
 `note` names its task, and `question` and `note` need text. Only the
 coordinator's own session, or a command outside any agent session, may post.
+A question can include repeated `--option` flags, in display order. It accepts
+up to six different, nonempty choices, each at most 120 characters after trimming
+spaces at each end. Other kinds reject choices. A note with `--task` goes into that
+task's card thread; a note without it appears in the main chat.
 `coordinator status` reports whether the coordinator runs, and where its files
 are. `coordinator show` shows the coordinator chat over its hidden workspace;
 with `--task`, the chat opens and scrolls to that task's newest packet card,

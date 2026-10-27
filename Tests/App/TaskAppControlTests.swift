@@ -589,7 +589,10 @@ extension TaskAppControlTests {
 
         let posted = try executor.runAction(
             id: "coordinator.post",
-            args: ["kind": .string("question"), "taskID": .string(id.uuidString), "text": .string("Which base branch?")],
+            args: [
+                "kind": .string("question"), "taskID": .string(id.uuidString), "text": .string("Which base branch?"),
+                "options": .array([.string(" Remote main "), .string("Feature branch")]),
+            ],
             context: context()
         )
         #expect(posted.result?["kind"] == .string("question"))
@@ -597,6 +600,7 @@ extension TaskAppControlTests {
         #expect(events.map(\.kind) == [.question])
         #expect(events.first?.taskID == id)
         #expect(events.first?.text == "Which base branch?")
+        #expect(events.first?.options == ["Remote main", "Feature branch"])
         #expect(FileManager.default.fileExists(atPath: files.routingFileURL.path))
 
         // A task's own agent reports through its task, not by posting cards.
@@ -618,6 +622,25 @@ extension TaskAppControlTests {
         }
         await expectInvalidPayload("A packet card names its task with --task <task-id>.") {
             _ = try executor.runAction(id: "coordinator.post", args: ["kind": .string("packet")], context: context())
+        }
+        await expectInvalidPayload("options must be strings") {
+            _ = try executor.runAction(
+                id: "coordinator.post",
+                args: ["kind": .string("question"), "taskID": .string(id.uuidString), "text": .string("Which base?"), "options": .array([.bool(true)])],
+                context: context()
+            )
+        }
+        await expectInvalidPayload("Only a question card accepts options.") {
+            _ = try executor.runAction(
+                id: "coordinator.post", args: ["kind": .string("note"), "text": .string("A note."), "options": .array([.string("Main")])],
+                context: context()
+            )
+        }
+        #expect(throws: AutomationSocketError.self) {
+            _ = try executor.runAction(
+                id: "coordinator.post", args: ["kind": .string("reply"), "taskID": .string(id.uuidString), "text": .string("Main")],
+                context: context()
+            )
         }
         let missing = UUID()
         await expectInvalidPayload("No task has ID \(missing.uuidString).") {

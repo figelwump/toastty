@@ -52,8 +52,9 @@ struct CoordinatorFiles {
         }
     }
 
-    /// Appends one event as one line. A single `write` with `O_APPEND` keeps
-    /// lines whole even if another writer appends at the same time.
+    /// Appends one event as one line. All writers hold the file lock while
+    /// checking its source and appending, so the same source is saved once
+    /// per task. Events without a source always append.
     func append(_ event: CoordinatorEvent) throws {
         try prepare()
         var line = try event.jsonLine()
@@ -63,6 +64,16 @@ struct CoordinatorFiles {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: eventsFileURL.path])
         }
         defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: eventsFileURL.path])
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        if let sourceID = event.sourceID {
+            let existing = try Data(contentsOf: eventsFileURL)
+            if CoordinatorEvent.decodeLog(existing).contains(where: { $0.taskID == event.taskID && $0.sourceID == sourceID }) {
+                return
+            }
+        }
         // A line cut short by a crash would swallow this one; end it first.
         var lastByte: UInt8 = 0
         let size = lseek(descriptor, 0, SEEK_END)
