@@ -103,6 +103,8 @@ export type PageView = "chat" | "today" | "tasks";
 export interface ChatProject {
   id: string;
   title: string;
+  /// Native's normalized absolute root, while id keeps the stored identity.
+  rootPath?: string | null;
 }
 
 export interface TasksFilter {
@@ -158,6 +160,8 @@ export interface ChatState {
   };
   items: ChatItem[];
   projects: ChatProject[];
+  /// Native resolves stored route values without changing project IDs.
+  routeProjects?: { value: string; project: ChatProject }[];
   /// The window's shared project filter, using a stable project ID.
   projectFilter?: string | null;
   /// Native selects today's actual merge or release timestamps.

@@ -274,6 +274,35 @@ test("route choices stay disabled when the coordinator is unavailable or deliver
   }
 });
 
+test("route project titles use exact native identities while the choice payload keeps its saved option index", () => {
+  const app = page();
+  const options = ["project-billing", "/private/tmp/coordinator-docs", "/recent/tools", "Ask me later"];
+  const current = { ...state({ task: null, options }),
+    projects: [{ id: "project-billing", rootPath: "/repos/billing", title: "Billing app" }, { id: "/tmp/coordinator-docs", rootPath: "/tmp/coordinator-docs", title: "Documentation" }],
+    routeProjects: [{ value: "/private/tmp/coordinator-docs", project: { id: "/tmp/coordinator-docs", rootPath: "/tmp/coordinator-docs", title: "Documentation" } }],
+    addresses: [
+      { kind: "project", id: "/tmp/coordinator-docs", title: "An older documentation title", token: "docs", version: null },
+      { kind: "project", id: "/recent/tools", title: "Recent tools", token: "tools", version: null },
+    ],
+  };
+  app.receive(current);
+  const html = app.nodes.get("scroll").innerHTML;
+  assert.match(html, /id="option-q1-0"[^>]*>Billing app<\/button>/);
+  assert.match(html, /id="option-q1-1"[^>]*>Documentation<\/button>/);
+  assert.match(html, /id="option-q1-2"[^>]*>Recent tools<\/button>/);
+  assert.match(html, /id="option-q1-3"[^>]*>Ask me later<\/button>/);
+  assert.ok(!html.includes("An older documentation title"), "the canonical project's title takes precedence over the address alias");
+  assert.ok(!html.includes('title="/repos/billing"') && !html.includes('title="/tmp/coordinator-docs"'), "unique project titles do not show path tooltips");
+  app.click({ act: "answer-route", id: "q1", index: "0" });
+  app.receive({ ...current, ack: { token: 1, ok: false } });
+  app.click({ act: "answer-route", id: "q1", index: "1" });
+  assert.deepEqual(app.routeAnswers(), [
+    { type: "answerRoute", questionID: "q1", optionIndex: 0, token: 1 },
+    { type: "answerRoute", questionID: "q1", optionIndex: 1, token: 2 },
+  ]);
+  assert.deepEqual(current.items[0].options, options, "labels never replace persisted route options");
+});
+
 test("a replacement card retains expansion, draft and recipient while a pending send remains protected", () => {
   const app = page();
   app.receive(state());

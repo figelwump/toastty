@@ -240,6 +240,42 @@ struct CoordinatorAllTasksTests {
         }
     }
 
+    @Test func projectChoicesExposeTheirCanonicalRootWithoutChangingTheStoredID() throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("coordinator-project-choice-\(UUID().uuidString)", isDirectory: true)
+        let checkout = root.appendingPathComponent("checkout", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try files.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: root) }
+        try files.createSymbolicLink(at: alias, withDestinationURL: checkout)
+        let item = TaskBoardItem(id: .task(UUID()), title: "Task", projectTitle: "Workspace 1",
+            projectID: alias.path, stage: .running, agent: .none, activityAt: Date())
+        let project = try #require(CoordinatorAllTasks.projects([item]).first)
+        #expect(project.id == alias.path)
+        #expect(project.title == "Workspace 1")
+        #expect(project.rootPath == checkout.path)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(project)) as? [String: String])
+        #expect(encoded["rootPath"] == checkout.path)
+    }
+
+    @Test func routeChoiceMatchesTheActualPrivateTmpOptionAndKeepsItsValue() throws {
+        let path = "/private/tmp/coordinator-route-choice-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let storedID = String(path.dropFirst("/private".count))
+        let project = CoordinatorAllTasks.Project(id: storedID, title: "Workspace 1", rootPath: storedID)
+        let recent = CoordinatorAllTasks.Project(id: storedID, title: "Old title", rootPath: storedID)
+        let choice = try #require(CoordinatorChatPayload.RouteProject.make(
+            value: path, projects: [project], fallbackProjects: [recent], homeDirectoryPath: "/"))
+        #expect(choice.value == path)
+        #expect(choice.project == project)
+        #expect(CoordinatorChatPayload.RouteProject.make(value: storedID, projects: [project], homeDirectoryPath: "/")?.project == project)
+        #expect(CoordinatorChatPayload.RouteProject.make(value: "Workspace 1", projects: [project], homeDirectoryPath: "/") == nil)
+        let opaque = CoordinatorAllTasks.Project(id: "workspace:example", title: "No folder")
+        #expect(CoordinatorChatPayload.RouteProject.make(value: opaque.id, projects: [opaque], homeDirectoryPath: "/")?.project == opaque)
+    }
+
     @Test func todayUsesMergeAndReleaseDatesInTheLocalDayAndKeepsProjectIdentity() throws {
         let iso = ISO8601DateFormatter()
         let now = try #require(iso.date(from: "2026-10-26T06:30:00Z")) // October 25 in Los Angeles.

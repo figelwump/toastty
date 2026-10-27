@@ -11,7 +11,7 @@ rmSync(dir, { recursive: true, force: true });
 const mark = { shot: 'after-390', note: 'Move this up', x: .25, y: .5 };
 test('marks keep screenshot names and order in one review message', () => {
   assert.equal(marksMessage([mark, { ...mark, shot: 'before-390', note: 'Keep the\n old label' }]), '2 marks on the screenshots:\n1. Move this up [after-390]\n2. Keep the old label [before-390]');
-  assert.equal(marksMessage([mark]), '1 marks on the screenshots:\n1. Move this up [after-390]');
+  assert.equal(marksMessage([mark]), '1 mark on the screenshots:\n1. Move this up [after-390]');
 });
 test('send requires notes, available screenshots, bounded pins and message size', () => {
   assert.equal(validMarks([], ['after-390']), false);

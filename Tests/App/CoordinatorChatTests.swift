@@ -804,11 +804,13 @@ struct CoordinatorChatTests {
         let task = try await fixture.taskWithPacket()
         let marks = [CoordinatorReportMark(shot: "after-390", note: "Move the bar up", x: 0.4, y: 0.5)]
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .sent)
-        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 marks on the screenshots:\n1. Move the bar up [after-390]")
+        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 mark on the screenshots:\n1. Move the bar up [after-390]")
         await fixture.chat.refresh()
         let card = try #require(fixture.card(forTask: task.id))
-        #expect(card.thread.map(\.text) == ["1 marks on the screenshots:\n1. Move the bar up [after-390]"])
+        #expect(card.thread.map(\.text) == ["1 mark on the screenshots:\n1. Move the bar up [after-390]"])
         #expect(card.thread.map(\.role) == [.userTask])
+        #expect(CoordinatorReportMark.message(marks + marks, screenshotNames: ["after-390"])
+            == "2 marks on the screenshots:\n1. Move the bar up [after-390]\n2. Move the bar up [after-390]")
         let count = fixture.typed.entries.count
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 2, marks: marks) == .rejected)
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "missing", note: "Fix", x: 0, y: 0)]) == .rejected)

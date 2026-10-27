@@ -175,6 +175,9 @@ enum CoordinatorPageInspection {
             visibleThreadItemIDs: [...document.querySelectorAll('[data-thread-item]')].filter(shown).map(e => e.dataset.threadItem),
             suggestionsVisible: shown(document.getElementById('suggestions')),
             suggestionLabels: [...document.querySelectorAll('[data-suggest]')].filter(shown).map(e => e.textContent),
+            routeChoices: [...document.querySelectorAll('[data-act="answer-route"]')].filter(shown).map(e => ({
+              questionID:e.dataset.id,index:Number(e.dataset.index),label:e.textContent,tooltip:e.getAttribute('title')
+            })),
             visibleTaskRowIDs: ids('.task-row, [data-row-id]'),
             todayCounts: {needsYou:count('needsYou'),running:count('running'),toShip:count('toShip')},
             todaySections: {needsYou:ids('#today-needsYou [data-row-id]'),running:ids('#today-running [data-row-id]'),completed:ids('#today-completed [data-row-id]')},

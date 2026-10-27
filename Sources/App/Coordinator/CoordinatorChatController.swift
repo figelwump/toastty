@@ -526,6 +526,18 @@ final class CoordinatorChatController {
                 CoordinatorChatTaskView.mergePolicy(record: item.record, config: config, homeDirectoryPath: taskCoordinator.homeDirectoryPath)
             }
         )
+        let projects = CoordinatorAllTasks.projects(items)
+        let fallbackProjects = composerProjects().map {
+            CoordinatorAllTasks.Project(id: $0.root, title: $0.name, rootPath: $0.root)
+        }
+        let routeValues = Set(chatItems.flatMap { item -> [String] in
+            guard case .card(let card) = item, card.task == nil, card.kind == "question" else { return [] }
+            return card.options
+        })
+        let routeProjects = routeValues.sorted().compactMap {
+            CoordinatorChatPayload.RouteProject.make(value: $0, projects: projects,
+                fallbackProjects: fallbackProjects, homeDirectoryPath: taskCoordinator.homeDirectoryPath)
+        }
         return CoordinatorChatPayload(
             coordinator: coordinatorView(items: items),
             items: chatItems,
@@ -535,7 +547,8 @@ final class CoordinatorChatController {
             view: viewRequest.map { .init(view: $0.view, filter: $0.filter, token: $0.token) },
             taskGroups: CoordinatorAllTasks.groups(items),
             tasks: rows,
-            projects: CoordinatorAllTasks.projects(items),
+            projects: projects,
+            routeProjects: routeProjects,
             projectFilter: windowID(for: nil).flatMap { projectFilters[$0] },
             today: today,
             addresses: composerAddresses(),

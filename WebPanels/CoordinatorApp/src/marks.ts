@@ -1,7 +1,7 @@
 export interface ReportMark { shot: string; note: string; x: number; y: number }
 
 export function marksMessage(marks: ReportMark[]): string {
-  return `${marks.length} marks on the screenshots:\n` + marks.map((m, i) => `${i + 1}. ${m.note.trim().replace(/\s+/g, " ")} [${m.shot}]`).join("\n");
+  return `${marks.length} mark${marks.length === 1 ? "" : "s"} on the screenshots:\n` + marks.map((m, i) => `${i + 1}. ${m.note.trim().replace(/\s+/g, " ")} [${m.shot}]`).join("\n");
 }
 
 export function validMarks(marks: ReportMark[], screenshots: string[]): boolean {

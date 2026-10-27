@@ -89,6 +89,8 @@ and packet version it was written for.
 
 Before a task exists, the coordinator can post a project question without
 `--task`. It shows the request, the reason for asking, and project choices.
+Known projects show their titles. If two titles are the same, a tooltip shows
+the path. Unknown choices stay literal. The answer keeps the posted ID or path.
 A pick reaches the coordinator in a `Coordinator route answer: ` JSON envelope
 with `questionID`, `replyID`, `question`, and `answer`. The coordinator resolves
 the project, starts the task, and adds the pick to `routing.md`. The app saves

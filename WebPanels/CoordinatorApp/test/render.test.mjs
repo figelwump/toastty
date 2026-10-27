@@ -277,6 +277,15 @@ test("the report pairs before and after by width, and keeps unpaired shots", () 
   }
 });
 
+test("report annotation send buttons use singular and plural mark labels", () => {
+  const report = { ...packet(), taskID: "T1", title: "Fix", slug: "fix-totals", canAnnotate: true, headCommit: null, createdAt: null };
+  const mark = { shot: "after-390", note: "Move this up", x: 0.5, y: 0.5 };
+  const single = render.renderReport(report, { mode: "after", width: 390, marks: [mark] });
+  assert.match(single, /id="report-send"[^>]*>Send 1 mark to fix-totals<\/button>/);
+  const multiple = render.renderReport(report, { mode: "after", width: 390, marks: [mark, { ...mark, note: "Keep this label" }] });
+  assert.match(multiple, /id="report-send"[^>]*>Send 2 marks to fix-totals<\/button>/);
+});
+
 test("a reply draft is kept while its card is closed, and a newly superseded card folds once", () => {
   const ui = render.newUIState();
   ui.expanded.add("c1");
@@ -313,6 +322,49 @@ test("taskless route questions stay expanded and offer only the saved choices", 
   const answered = render.renderItem({ ...route, answer: "Lumen" }, ui);
   assert.ok(answered.includes(">answered<") && answered.includes(">Lumen</span>"));
   assert.ok(!answered.includes('data-act="answer-route"'));
+});
+
+test("route project choices disambiguate duplicate titles with exact path tooltips and leave unknown choices literal", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, text: "Which project?", options: ["project-one", "/repos/two", "/unknown/<three>"] });
+  const state = { coordinator: { canSend: true }, items: [route], projects: [
+    { id: "project-one", rootPath: "/repos/one", title: "Same <name>" },
+    { id: "project-two", rootPath: "/repos/two", title: "Same <name>" },
+  ] };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*title="\/repos\/one"[^>]*>Same &lt;name&gt;<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*title="\/repos\/two"[^>]*>Same &lt;name&gt;<\/button>/);
+  assert.match(html, /id="option-c1-2"[^>]*>\/unknown\/&lt;three&gt;<\/button>/);
+  const answered = render.renderTimeline({ ...state, items: [{ ...route, answer: "/repos/two" }] }, ui);
+  assert.match(answered, /class="txt" title="\/repos\/two">Same &lt;name&gt;<\/span>/);
+});
+
+test("an unknown literal matching a project title stays literal and makes the known project's path available", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, options: ["billing-project", "Billing app"] });
+  const state = { coordinator: { canSend: true }, items: [route], projects: [{ id: "billing-project", rootPath: "/repos/billing", title: "Billing app" }] };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*title="\/repos\/billing"[^>]*>Billing app<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*>Billing app<\/button>/);
+  assert.ok(!/id="option-c1-1"[^>]*title=/.test(html), "the literal choice does not gain a project identity");
+  assert.deepEqual(route.options, ["billing-project", "Billing app"]);
+});
+
+test("a project's raw ID and canonical-root choices share its title without a false collision", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, options: ["/stored/project", "/canonical/project"] });
+  const state = { coordinator: { canSend: true }, items: [route],
+    projects: [
+      { id: "/stored/project", rootPath: "/canonical/project", title: "One project" },
+      { id: "/canonical/project", rootPath: "/canonical/project", title: "One project" },
+    ],
+    addresses: [{ kind: "project", id: "/canonical/project", title: "Address alias", token: "project", version: null }],
+  };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*>One project<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*>One project<\/button>/);
+  assert.ok(!/id="option-c1-[01]"[^>]*title=/.test(html), "one project's aliases are not two projects with colliding titles");
+  assert.ok(!html.includes("Address alias"));
 });
 
 test("a legacy taskless question without options renders as a safe markdown note", () => {

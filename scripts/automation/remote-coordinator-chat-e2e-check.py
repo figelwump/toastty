@@ -349,7 +349,7 @@ def main():
         capture('e2e-3-report-mark')
         require(report_action(report_id, 'click', 'report-send'), 'Could not send the marks')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
-        mark_text = f'1 marks on the screenshots:\n1. {reply} [after-390]'
+        mark_text = f'1 mark on the screenshots:\n1. {reply} [after-390]'
         marked = wait_for('the report marks in the task thread',
                           lambda: thread_entry(task_id, 'user-task', mark_text), timeout=30, interval=1)
         current_thread = next(c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent'))['thread']
@@ -361,14 +361,14 @@ def main():
         task_space = after['setup']['taskSpaceWorkspaceID']
         wait_for('the review note in the task terminal', lambda: terminal_shows(task_space, 'Review note on packet v1'),
                  timeout=60, interval=2)
-        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 marks on the screenshots:')
+        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 mark on the screenshots:')
                  and terminal_shows(task_space, '[after-390]'), timeout=60, interval=2)
         # The agent's turn starts a moment after the note arrives.
         working = wait_for('the task to leave Needs you', lambda: (lambda r: r if not r['stage'].get('needsUser') else None)(
             cli_result('task', 'get', task_id)), timeout=120, interval=2)
         capture('e2e-3-replied')
         step('3c report marks sent to the task', stage=working.get('stage'),
-             expectedMessage=f'Review note on packet v1: 1 marks on the screenshots:\n1. {reply} [after-390]')
+             expectedMessage=f'Review note on packet v1: 1 mark on the screenshots:\n1. {reply} [after-390]')
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)

@@ -51,6 +51,26 @@ struct CoordinatorChatPayload: Encodable, Equatable {
         var token: Int
     }
 
+    struct RouteProject: Encodable, Equatable {
+        var value: String
+        var project: CoordinatorAllTasks.Project
+
+        static func make(value: String, projects: [CoordinatorAllTasks.Project],
+                         fallbackProjects: [CoordinatorAllTasks.Project] = [], homeDirectoryPath: String) -> Self? {
+            if let project = projects.first(where: { $0.id == value }) {
+                return Self(value: value, project: project)
+            }
+            let isPath = value.hasPrefix("/") || value == "~" || value.hasPrefix("~/")
+            let root = isPath ? TasksConfigFile.normalizedPath(value, homeDirectoryPath: homeDirectoryPath) : nil
+            if let project = projects.first(where: { root != nil && $0.rootPath == root })
+                ?? fallbackProjects.first(where: { $0.id == value })
+                ?? fallbackProjects.first(where: { root != nil && $0.rootPath == root }) {
+                return Self(value: value, project: project)
+            }
+            return nil
+        }
+    }
+
     var coordinator: Coordinator
     var items: [CoordinatorChatItem]
     var focus: Focus?
@@ -60,6 +80,7 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     var taskGroups: [CoordinatorAllTasks.Group] = []
     var tasks: [CoordinatorAllTasks.Row] = []
     var projects: [CoordinatorAllTasks.Project] = []
+    var routeProjects: [RouteProject] = []
     var projectFilter: String?
     var today = CoordinatorAllTasks.Today()
     var addresses: [CoordinatorComposerAddress] = []
@@ -404,7 +425,8 @@ struct CoordinatorReportMark: Codable, Equatable {
                   mark.x.isFinite, mark.y.isFinite, (0...1).contains(mark.x), (0...1).contains(mark.y) else { return nil }
             lines.append("\(index + 1). \(note) [\(mark.shot)]")
         }
-        let text = "\(marks.count) marks on the screenshots:\n" + lines.joined(separator: "\n")
+        let noun = marks.count == 1 ? "mark" : "marks"
+        let text = "\(marks.count) \(noun) on the screenshots:\n" + lines.joined(separator: "\n")
         return text.utf8.count <= CoordinatorChatPageEvent.maximumTextLength ? text : nil
     }
 }

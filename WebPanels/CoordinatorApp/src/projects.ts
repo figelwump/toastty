@@ -28,3 +28,14 @@ export function currentProject(state: ChatState, requested = state.projectFilter
 export function projectTitle(state: ChatState, id = currentProject(state)): string {
   return projectsFor(state).find((project) => project.id === id)?.title ?? "All projects";
 }
+
+/// Stored IDs and canonical roots come from native. Prefer the project
+/// filter's title, then an open or recent project known to the composer.
+export function projectForOption(state: ChatState, option: string): ChatProject | null {
+  const projects = projectsFor(state);
+  return state.routeProjects?.find((choice) => choice.value === option)?.project
+    ?? projects.find((project) => project.id === option)
+    ?? projects.find((project) => project.rootPath === option)
+    ?? state.addresses?.find((address) => address.kind === "project" && address.id === option)
+    ?? null;
+}

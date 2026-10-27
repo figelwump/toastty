@@ -3,7 +3,7 @@
 // markup is ours.
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
-import { currentProject, projectID, projectsFor } from "./projects";
+import { currentProject, projectForOption, projectID, projectsFor } from "./projects";
 import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, ReportPacket, Tone } from "./types";
 
 export function esc(value: unknown): string {
@@ -146,10 +146,10 @@ export function renderTimeline(state: ChatState, ui: ChatUIState): string {
     return `<div class="empty-chat"><div class="cmark big">C</div><p>Tell the coordinator what you want done.</p>`
       + `<p class="dim">It routes each request to a task in the right project and posts here when one needs you.</p></div>`;
   }
-  return visibleItems(state).map((item) => renderItem(item, ui, state.coordinator.canSend)).join("");
+  return visibleItems(state).map((item) => renderItem(item, ui, state.coordinator.canSend, state)).join("");
 }
 
-export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend = true): string {
+export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend = true, state?: ChatState): string {
   switch (item.type) {
     case "message":
       if (item.role === "assistant") {
@@ -167,7 +167,7 @@ export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend =
       return `<div class="status-line" data-item="${esc(item.id)}">${esc(item.text)}</div>`;
     case "card":
       return `<div class="msg-co card-row" id="card-${esc(item.id)}" data-item="${esc(item.id)}"${item.task ? ` data-task="${esc(item.task.id)}"` : ""}><span class="cmark">C</span><div class="bubble">`
-        + (!item.task ? item.kind === "question" && item.options.length > 0 ? renderRoute(item, ui, coordinatorCanSend) : renderCompactCard(item)
+        + (!item.task ? item.kind === "question" && item.options.length > 0 ? renderRoute(item, ui, coordinatorCanSend, state) : renderCompactCard(item)
           : isExpanded(item, ui) ? renderOpenCard(item, ui, coordinatorCanSend) : renderCompactCard(item)) + `</div></div>`;
   }
 }
@@ -256,16 +256,26 @@ function renderReplyBox(item: Extract<ChatItem, { type: "card" }>, task: ChatTas
     + (!available ? `<div class="reply-hint dim small">${target === "task" ? "The task cannot receive replies now." : "The coordinator cannot receive messages now."}</div>` : "");
 }
 
-function renderRoute(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState, coordinatorCanSend: boolean): string {
+function renderRoute(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState, coordinatorCanSend: boolean, state?: ChatState): string {
   const [title, ...why] = (item.text ?? "").split(/\r?\n/);
   const answered = item.answer !== null;
   const pending = item.answerPending || ui.pendingCards.has(cardStateKey(item));
+  const choices = item.options.map((value) => ({ value, project: state ? projectForOption(state, value) : null }));
+  const tooltip = ({ project }: typeof choices[number]) => {
+    if (!project) return "";
+    const identity = project.rootPath ?? project.id;
+    const collision = choices.some((other) => other.project
+      ? (other.project.rootPath ?? other.project.id) !== identity && other.project.title === project.title
+      : other.value === project.title);
+    return collision ? ` title="${esc(identity)}"` : "";
+  };
+  const answer = choices.find((choice) => choice.value === item.answer);
   return `<div class="card${answered ? "" : " need"}"><div class="crow">`
     + badge(answered ? "answered" : "question", answered ? "green" : "amber")
     + `<span class="grow ctitle">${esc(title)}</span></div>`
     + (why.length ? `<div class="card-text dim md">${markdown(why.join("\n"))}</div>` : "")
-    + (answered ? `<div class="answer"><span class="mono dim small">Answered</span><span class="txt">${esc(item.answer)}</span></div>`
-      : `<div class="opts">${item.options.map((option, index) => `<button class="btn" id="option-${esc(item.id)}-${index}" data-act="answer-route" data-id="${esc(item.id)}" data-index="${index}"${!coordinatorCanSend || pending ? " disabled" : ""}>${esc(option)}</button>`).join("")}</div>`)
+    + (answered ? `<div class="answer"><span class="mono dim small">Answered</span><span class="txt"${answer ? tooltip(answer) : ""}>${esc(answer?.project?.title ?? item.answer)}</span></div>`
+      : `<div class="opts">${choices.map((choice, index) => `<button class="btn" id="option-${esc(item.id)}-${index}" data-act="answer-route" data-id="${esc(item.id)}" data-index="${index}"${tooltip(choice)}${!coordinatorCanSend || pending ? " disabled" : ""}>${esc(choice.project?.title ?? choice.value)}</button>`).join("")}</div>`)
     + (pending && !answered ? `<div class="dim small">Waiting for the coordinator to confirm this answer.</div>` : "")
     + `</div>`;
 }

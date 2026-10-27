@@ -500,7 +500,7 @@ def main():
         require(report_action(report_id, 'type', 'report-note-0', mark_note), 'Could not enter the report mark note')
         capture('coordinator-report-mark')
         require(report_action(report_id, 'click', 'report-send'), 'Could not send the report mark')
-        mark_text = f'1 marks on the screenshots:\n1. {mark_note} [after-390]'
+        mark_text = f'1 mark on the screenshots:\n1. {mark_note} [after-390]'
         mark_entry = wait_for('the report mark in the task thread', lambda: thread_entry(task_id, 'user-task', mark_text))
         mark_input = wait_for('the report mark in fake task input', lambda: received(task_session['sessionID'], mark_note))
         require(sum(entry['role'] == 'user-task' and entry['text'] == mark_text
@@ -982,7 +982,7 @@ def main():
         wait_for('the coordinator prompt after the addressed request', route_input_ready, timeout=30, interval=0.3)
         route_question = """Which project is “Add a dark mode toggle” for?
 Both projects have settings."""
-        route_options = [str(user_home), str(work)]
+        route_options = [str(user_home), str(other_root)]
         cli_result('coordinator', 'post', 'question', '--option', route_options[0],
                    '--option', route_options[1], route_question)
         cli_result('coordinator', 'show')
@@ -998,6 +998,19 @@ Both projects have settings."""
                     if (event := json.loads(line)).get('kind') == 'reply' and event.get('questionID') == route_id]
 
         wait_for('the route input prompt after showing the question', route_input_ready, timeout=30, interval=0.3)
+        project_titles = {project['id']: project['title'] for project in chat_state()['projects']}
+        expected_labels = [project_titles[project_id], project_titles[other_project_id]]
+
+        def titled_route_choices():
+            choices = [choice for choice in (rendered('chat') or {}).get('routeChoices', [])
+                       if choice['questionID'] == route_id]
+            return choices if [choice['label'] for choice in choices] == expected_labels \
+                and [choice['index'] for choice in choices] == list(range(len(route_options))) \
+                and all(choice['tooltip'] is None for choice in choices) else None
+
+        choice_labels = wait_for('known project titles on the actual route buttons', titled_route_choices)
+        step('route choices show known project titles and keep original values', choices=choice_labels,
+             originalOptions=route_options)
         capture('coordinator-route-question')
         require(route_input_ready(), 'The coordinator input prompt changed before the route click')
         page_action('click', f'option-{route_id}-0')
