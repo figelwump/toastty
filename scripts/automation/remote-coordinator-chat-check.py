@@ -877,6 +877,11 @@ def main():
         typed_id = typed_card['id']
         require(typed_card['packetVersion'] is None, f'The second task unexpectedly has a packet: {typed_card}')
         wait_for('the second question to open', lambda: typed_id in chat_state()['expandedCardIDs'])
+        page_action('click', f'collapse-{typed_id}')
+        wait_for('the second question to fold', lambda: typed_id not in chat_state()['expandedCardIDs'])
+        page_action('click', f'expand-body-{typed_id}')
+        wait_for('the question body click to expand the card', lambda: typed_id in chat_state()['expandedCardIDs'])
+        step('question body click opened the card', cardID=typed_id)
         page_action('type', f'reply-{typed_id}', TYPED_REPLY)
         typed_answer = wait_for('the typed answer in its card thread', lambda: answered(typed_id, TYPED_REPLY))
         typed_input = coordinator_line(TYPED_REPLY)

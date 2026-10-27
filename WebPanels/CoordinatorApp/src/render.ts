@@ -269,7 +269,7 @@ export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>, ui:
 /// card: the start of its text, and its answers. The page shows Show more
 /// only when the text is cut off; see `measureClampedText` in main.ts.
 function renderCompactQuestion(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
-  return `<div class="card need qcard">`
+  return `<div class="card need qcard" id="expand-body-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" data-expand-body>`
     + `<button class="qhead" id="expand-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" aria-expanded="false">`
     + cardBadge(item, task)
     + (item.isNew ? badge("new", "green") : "")

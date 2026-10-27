@@ -117,6 +117,7 @@ test("a folded open question shows its text, a Show more link and its answers", 
     text: "Add the hint to PR #213?\nRecommended: add the hint.\n\n- **Add the hint**: small, fits this PR.\n- **Keep it**: no change. <img src=x>" });
   const html = render.renderItem(question, ui);
   assert.ok(html.includes('class="card need qcard"'));
+  assert.ok(html.includes('class="card need qcard" id="expand-body-q1" data-act="expand" data-id="q1" data-expand-body>'), "the body has its own stable expansion target without wrapping controls in a button");
   assert.ok(html.includes('id="expand-q1" data-act="expand"') && html.includes("Fix the totals bar"));
   assert.ok(html.includes("Recommended: add the hint.") && html.includes("<strong>Add the hint</strong>"));
   assert.ok(html.includes('data-clamp="q1"'));
