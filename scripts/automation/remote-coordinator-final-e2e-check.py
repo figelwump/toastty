@@ -21,8 +21,9 @@ covers:
    task, A;
 3. A's packet puts it in the sidebar's Needs you list with its action and ▾
    menu, and the row opens the packet card in the chat;
-4. Full report opens in the right panel; a reply to A takes it out of Needs
-   you; packet v2 updates the only task card and keeps v1 in report history;
+4. Full report opens in the right panel; a reply typed on A's card goes to
+   the coordinator, which passes it on to A, and A leaves Needs you; packet
+   v2 updates the only task card and keeps v1 in report history;
 5. with a pull request link, Open PR opens it in the right panel, and Merge
    from A's sidebar row, after its question, merges it: A is Done;
 6. a second task, B, merges from its card in the chat;

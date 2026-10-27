@@ -115,6 +115,15 @@ button.work-strip:hover { color: var(--fg); }
 .compact .sub { color: var(--dim); font-size: 12px; }
 .chev { color: var(--faint); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 .flash .compact, .flash .card { box-shadow: 0 0 0 3px rgba(228,169,68,.45); }
+/* An open question: its start and answers show without opening the card.
+   The height fits about five lines; Show more opens the whole card. */
+.qcard { gap: 7px; padding: 9px 12px; }
+.qhead { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
+.qhead .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qhead:hover .chev { color: var(--dim); }
+.qtext { max-height: 7.4em; overflow: hidden; }
+.qtext.clamped { -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent); mask-image: linear-gradient(to bottom, #000 65%, transparent); }
+.lnk.more { align-self: flex-start; margin-top: -3px; }
 
 .card { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; transition: box-shadow .3s; }
 .card.need { border-color: var(--amber-line); }

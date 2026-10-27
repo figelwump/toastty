@@ -22,7 +22,8 @@ and stop.
 
 Keep each chat message to one to three short sentences. State what changed or
 what needs the user. Put review details and evidence in the task's packet,
-rather than repeating them in chat.
+rather than repeating them in chat. A task's question card is the exception;
+see [Ask the user for a task](#ask-the-user-for-a-task).
 
 Post questions with useful answer choices through repeated `--option` flags.
 Use at most six different choices, each at most 120 characters. The user can
@@ -138,8 +139,8 @@ When a task needs the user, post one card:
 
 - The task published a review packet:
   `"$TOASTTY_CLI_PATH" coordinator post packet --task <task-id>`.
-- The task asks something only the user can answer:
-  `"$TOASTTY_CLI_PATH" coordinator post question --task <task-id> "<the question in one or two sentences>" --option "<answer>" --option "<another answer>"`.
+- The task asks something only the user can answer: post a question card, as
+  in [Ask the user for a task](#ask-the-user-for-a-task).
 - The task went idle without a packet, and its reply says it is finished or
   blocked: post a note that says so, with `--task`.
 - Anything else the user should know:
@@ -150,9 +151,56 @@ the task does not already say. A note with `--task` goes into that task's card
 thread; a note without it appears in the main chat. Do not post a card for every
 status change.
 
-When the user answers a task's question, send the answer to that task with
-`"$TOASTTY_CLI_PATH" task send <task-id> "<answer>"`. Send the user's words; do
-not add your own instructions.
+## Ask the user for a task
+
+The question card is where the user makes the decision. They should not need
+to open the task to understand it. The chat does not show the task's
+transcript, so the card must carry the context that the task gave.
+
+First read the task's question in its `lastReply`, from
+`"$TOASTTY_CLI_PATH" --json task get <task-id>`. Then post:
+
+`"$TOASTTY_CLI_PATH" coordinator post question --task <task-id> "<text>" --option "<answer>" --option "<another answer>"`
+
+Write the text in this order:
+
+1. The first line is the question, in one sentence.
+2. The task's recommendation, if it gave one, on the next line, such as
+   `Recommended: add the hint in PR #213.`
+3. After a blank line, two to six short lines of context: what the task found
+   or why it is asking, and each choice with its trade-off. Use a Markdown list
+   when there are several choices.
+
+Keep the text under about 1,000 characters. The chat shows the first five
+lines and a Show more link, so put the most important facts first. Use the task's
+own choices and recommendation; do not invent choices or pick a side for the
+task. Make each `--option` a short label for one of those choices, such as
+`Add the hint to PR #213`, and put the trade-off in the text, not the label.
+
+## Replies from cards
+
+Every reply that the user types on a task's card, and every answer button they
+press, comes to you. It arrives as one message in this form:
+
+`About task "<title>" (task ID <id>[, packet v<N>][, reply ID <id>][, question ID <id>]): <text>`
+
+The task does not receive it directly. Decide what it is for:
+
+- An answer to the task's question, or a note or instruction for the task:
+  send it with `"$TOASTTY_CLI_PATH" task send <task-id> "<text>"`. Send the
+  user's words; do not add your own instructions. When the message names a
+  packet version, start the text with `Review note on packet v<N>: `.
+- A question for you about the task, such as its status: answer it with
+  `"$TOASTTY_CLI_PATH" coordinator post note --task <task-id> "<answer>"`.
+
+When it is not clear which one it is, send it to the task. Do not post a card
+that repeats the user's message; the chat already shows it in the card's
+thread.
+
+A message with a question ID counts as the answer to that question, and the
+card stops offering its choices. If it only asks you to explain the question,
+answer with a note and post the question again, so the user can still answer
+it from the card.
 
 ## Merge and release
 

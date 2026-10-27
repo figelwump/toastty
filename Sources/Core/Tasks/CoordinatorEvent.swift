@@ -26,6 +26,8 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         case userTask = "user-task"
         case userCoordinator = "user-coordinator"
         case coordinator
+        /// A task agent's message. Older builds copied these from each
+        /// task's transcript; the chat no longer writes or shows them.
         case agent
     }
 
@@ -60,7 +62,7 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
     public var canAnchorTaskCard: Bool {
         guard taskID != nil, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         if kind == .note { return true }
-        return kind == .reply && questionID == nil && threadRole != nil
+        return kind == .reply && questionID == nil && threadRole != nil && threadRole != .agent
             && (delivery == nil || delivery == .accepted)
     }
 

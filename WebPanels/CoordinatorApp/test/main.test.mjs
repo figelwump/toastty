@@ -48,7 +48,7 @@ function page() {
   ]);
   const window = { webkit: { messageHandlers: { toasttyCoordinatorChat: {
     postMessage: (event) => posted.push(JSON.parse(JSON.stringify(event))),
-  } } } };
+  } } }, addEventListener: (name, handler) => events.set(`window:${name}`, handler) };
   nodes.set("composer-input", input);
   const getElement = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   const document = { body: { dataset: {} }, focused: true, hasFocus() { return this.focused; }, activeElement: null, getElementById: getElement,
@@ -111,21 +111,20 @@ function state(card = {}, task = {}, coordinator = {}) {
       isNew: true, superseded: false, packet: null,
       task: { id: "T1", title: "Rotate keys", slug: "rotate-keys", project: "infra", stageLabel: "question", stageTone: "amber",
         needsUser: true, hasTaskSpace: true, pullRequestURL: null, pullRequestLabel: null, packetVersion: null,
-        stale: false, mergePolicy: "Ask before merging.", canMerge: false, canReply: true, defaultReplyTarget: "task", ...task },
+        stale: false, mergePolicy: "Ask before merging.", canMerge: false, canReply: true, ...task },
       ...card }],
     focus: { taskID: "T1", cardID: "q1", token: 1 }, notice: null,
   };
 }
 
-test("an option uses the selected target, accepts no packet, and blocks repeated clicks until ack", () => {
+test("an option answers through the coordinator, accepts no packet, and blocks repeated clicks until ack", () => {
   const app = page();
-  app.receive(state({}, { defaultReplyTarget: "coordinator" }));
+  app.receive(state());
   app.draft("Keep this draft");
-  app.click({ act: "reply-to", id: "q1", to: "task" });
   app.click({ act: "answer", id: "q1", index: "0" });
   app.click({ act: "answer", id: "q1", index: "1" });
-  assert.deepEqual(app.sends(), [{ type: "reply", taskID: "T1", version: null, text: "Staging only", token: 1, cardID: "q1", questionID: "q1" }]);
-  app.receive({ ...state({}, { defaultReplyTarget: "coordinator" }), ack: { token: 1, ok: false } });
+  assert.deepEqual(app.sends(), [{ type: "ask", taskID: "T1", version: null, text: "Staging only", token: 1, cardID: "q1", questionID: "q1" }]);
+  app.receive({ ...state(), ack: { token: 1, ok: false } });
   assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Keep this draft"'));
   app.click({ act: "answer", id: "q1", index: "1" });
   assert.equal(app.sends().length, 2);
@@ -133,21 +132,25 @@ test("an option uses the selected target, accepts no packet, and blocks repeated
   assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Keep this draft"'), "an option does not erase the typed draft");
   app.click({ act: "answer", id: "q1", index: "0" });
   assert.equal(app.sends().length, 2, "an answered question rejects a stale option click");
-  const coordinator = page();
-  coordinator.receive(state({}, { defaultReplyTarget: "coordinator" }));
-  coordinator.click({ act: "answer", id: "q1", index: "0" });
-  assert.equal(coordinator.sends()[0].type, "ask");
-  assert.equal(coordinator.sends()[0].questionID, "q1");
 });
 
-test("a typed answer keeps its recipient across updates and keeps its draft after a failed send", () => {
+test("a compact question answers from its options without opening the card", () => {
+  const app = page();
+  app.receive({ ...state(), focus: null });
+  const html = app.nodes.get("scroll").innerHTML;
+  assert.ok(html.includes("Rotate prod keys?") && html.includes('id="option-q1-0"'), "the question and its answers show while the card is folded");
+  assert.ok(!html.includes("replybox"), "the folded card has no reply box");
+  app.click({ act: "answer", id: "q1", index: "1" });
+  assert.deepEqual(app.sends().map(({ type, text, questionID }) => ({ type, text, questionID })),
+    [{ type: "ask", text: "Prepare prod", questionID: "q1" }]);
+});
+
+test("a typed answer goes to the coordinator and keeps its draft after a failed send", () => {
   const app = page();
   app.receive(state());
   app.draft("Staging first");
-  app.receive(state({}, { defaultReplyTarget: "coordinator" }));
-  assert.match(app.nodes.get("scroll").innerHTML, /<form[^>]*data-to="task"/);
   app.submit("Staging first");
-  assert.equal(app.sends()[0].type, "reply");
+  assert.equal(app.sends()[0].type, "ask");
   assert.equal(app.sends()[0].version, null);
   assert.equal(app.sends()[0].questionID, "q1");
   app.submit("Duplicate");
@@ -159,76 +162,37 @@ test("a typed answer keeps its recipient across updates and keeps its draft afte
   assert.ok(app.nodes.get("scroll").innerHTML.includes('value=""'));
   app.submit("What changed?");
   assert.equal(app.sends().at(-1).questionID, null, "a followup is not another answer");
+  assert.ok(app.sends().every((send) => send.type === "ask"));
 });
 
-test("a packet snapshots its task target even when the question default is coordinator", () => {
+test("a packet note goes to the coordinator with its packet version", () => {
   const app = page();
   const packet = { version: 2, latestVersion: 2, summary: "Updated", lookAt: "Review it", checks: [], notVerified: [], screenshots: [] };
-  app.receive(state({ kind: "packet", packet }, { defaultReplyTarget: "coordinator" }));
-  assert.match(app.nodes.get("scroll").innerHTML, /<form[^>]*data-to="task"/);
-  assert.ok(app.nodes.get("scroll").innerHTML.includes('aria-label="Review note for rotate-keys…"'));
+  app.receive(state({ kind: "packet", packet }));
+  const html = app.nodes.get("scroll").innerHTML;
+  assert.ok(html.includes('aria-label="Review note for rotate-keys, through the coordinator…"'));
+  assert.ok(!html.includes('data-act="reply-to"'), "the card has no recipient switch");
   app.submit("Adjust the plan");
-  assert.equal(app.sends()[0].type, "reply");
-  assert.equal(app.sends()[0].version, 2);
-  assert.equal(app.sends()[0].questionID, null);
+  assert.deepEqual(app.sends().map(({ type, version, questionID }) => ({ type, version, questionID })),
+    [{ type: "ask", version: 2, questionID: null }]);
 });
 
-test("opening a card does not pin a fresh draft to an unavailable task", () => {
-  const app = page();
-  app.receive(state({ kind: "task-started" }));
-  app.receive(state({ kind: "task-started" }, { canReply: false, stageLabel: "stuck" }));
-  assert.match(app.nodes.get("scroll").innerHTML, /<form[^>]*data-to="coordinator"/);
-  app.draft("Please inspect the failure");
-  app.submit("Please inspect the failure");
-  assert.equal(app.sends()[0].type, "ask");
-});
-
-test("a cleared or accepted draft releases its default recipient while explicit choices survive", () => {
-  const cleared = page();
-  cleared.receive(state());
-  cleared.draft("Old question draft");
-  cleared.receive(state({}, { defaultReplyTarget: "coordinator" }));
-  assert.match(cleared.nodes.get("scroll").innerHTML, /<form[^>]*data-to="task"/);
-  cleared.draft("");
-  assert.match(cleared.nodes.get("scroll").innerHTML, /<form[^>]*data-to="coordinator"/, "clearing the input also refreshes the visible recipient");
-  cleared.draft("Fresh question draft");
-  cleared.submit("Fresh question draft");
-  assert.equal(cleared.sends()[0].type, "ask");
-
-  const accepted = page();
-  accepted.receive(state());
-  accepted.submit("First answer");
-  accepted.receive({ ...state({ answer: "First answer" }, { defaultReplyTarget: "coordinator" }), ack: { token: 1, ok: true } });
-  accepted.submit("Fresh follow-up");
-  assert.equal(accepted.sends()[1].type, "ask");
-
-  const explicit = page();
-  explicit.receive(state());
-  explicit.click({ act: "reply-to", id: "q1", to: "coordinator" });
-  explicit.draft("Discarded");
-  explicit.draft("");
-  explicit.receive(state());
-  explicit.submit("Keep my explicit recipient");
-  assert.equal(explicit.sends()[0].type, "ask");
-});
-
-test("unavailable recipients preserve the draft and never reroute it", () => {
-  const app = page();
-  app.receive(state());
-  app.draft("Do staging");
-  app.receive(state({}, { canReply: false, defaultReplyTarget: "coordinator" }));
-  app.submit("Do staging");
-  app.click({ act: "answer", id: "q1", index: "0" });
-  assert.equal(app.sends().length, 0);
-  assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Do staging"'));
-  assert.ok(app.nodes.get("notice").textContent.includes("Your draft is kept"));
-  app.click({ act: "reply-to", id: "q1", to: "coordinator" });
-  app.receive(state({}, { canReply: false }, { canSend: false }));
-  app.submit("Do staging");
-  assert.equal(app.sends().length, 0);
-  app.receive(state({}, { canReply: false }));
-  app.submit("Do staging");
-  assert.equal(app.sends()[0].type, "ask");
+test("an unavailable task, coordinator or pending answer preserves the draft", () => {
+  for (const [card, task, coordinator] of [[{}, { canReply: false }, {}], [{}, {}, { canSend: false }], [{ answerPending: true }, {}, {}]]) {
+    const app = page();
+    app.receive(state());
+    app.draft("Do staging");
+    app.receive(state(card, task, coordinator));
+    app.submit("Do staging");
+    app.click({ act: "answer", id: "q1", index: "0" });
+    assert.equal(app.sends().length, 0);
+    assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Do staging"'));
+    assert.ok(app.nodes.get("notice").textContent.includes("Your draft is kept"));
+    assert.match(app.nodes.get("scroll").innerHTML, /<button[^>]*data-act="answer"[^>]*disabled/);
+    app.receive(state());
+    app.submit("Do staging");
+    assert.equal(app.sends()[0].type, "ask");
+  }
 });
 
 test("a card menu sends only its task and viewport bounds to the native app", () => {
@@ -303,17 +267,15 @@ test("route project titles use exact native identities while the choice payload 
   assert.deepEqual(current.items[0].options, options, "labels never replace persisted route options");
 });
 
-test("a replacement card retains expansion, draft and recipient while a pending send remains protected", () => {
+test("a replacement card retains expansion and draft while a pending send remains protected", () => {
   const app = page();
   app.receive(state());
   app.draft("Keep this note");
-  app.click({ act: "reply-to", id: "q1", to: "coordinator" });
   app.submit("Keep this note");
-  const replacement = state({ id: "packet-2", kind: "task-started", options: [] }, { defaultReplyTarget: "task" });
+  const replacement = state({ id: "packet-2", kind: "task-started", options: [] });
   app.receive(replacement);
   const html = app.nodes.get("scroll").innerHTML;
   assert.ok(html.includes('id="collapse-packet-2"'));
-  assert.match(html, /<form[^>]*data-to="coordinator"/);
   assert.match(html, /<input[^>]*value="Keep this note"[^>]*disabled/);
   assert.deepEqual(app.posted.at(-1).expanded, ["packet-2"]);
   app.draft("Newer edit", "packet-2");
@@ -338,7 +300,7 @@ test("a retained question draft answers its original question after a new questi
   const html = app.nodes.get("scroll").innerHTML;
   assert.ok(html.includes("Draft for earlier question: Use staging or production?"));
   app.submit("Staging first", "q2");
-  assert.deepEqual(app.sends(), [{ type: "reply", taskID: "T1", version: null, text: "Staging first", token: 1, cardID: "q1", questionID: "q1" }]);
+  assert.deepEqual(app.sends(), [{ type: "ask", taskID: "T1", version: null, text: "Staging first", token: 1, cardID: "q1", questionID: "q1" }]);
   app.receive({ ...state({ id: "q2" }), ack: { token: 1, ok: false } });
   app.click({ act: "answer", id: "q2", index: "1" });
   assert.equal(app.sends().at(-1).cardID, "q2", "an option answers the current question");
@@ -371,7 +333,7 @@ test("an accepted question answer keeps newer text as a follow-up to the origina
   app.draft("A new note before acknowledgement");
   app.receive({ ...state({ id: "q2", text: "The next question?", packet: { ...packet, version: 2, latestVersion: 2 } }), ack: { token: 1, ok: true } });
   app.submit("A new note before acknowledgement", "q2");
-  assert.deepEqual(app.sends()[1], { type: "reply", taskID: "T1", version: 1, text: "A new note before acknowledgement", token: 2, cardID: "q1", questionID: null });
+  assert.deepEqual(app.sends()[1], { type: "ask", taskID: "T1", version: 1, text: "A new note before acknowledgement", token: 2, cardID: "q1", questionID: null });
 });
 
 test("an earlier question answered elsewhere releases a retained draft after the current card changes", () => {
@@ -382,7 +344,7 @@ test("an earlier question answered elsewhere releases a retained draft after the
   const replacement = state({ id: "q2", text: "The next question?", packet: { ...packet, version: 2, latestVersion: 2 }, answeredQuestionIDs: ["other-question", "q1"] });
   app.receive(replacement);
   app.submit("Keep this note about the first report", "q2");
-  assert.deepEqual(app.sends()[0], { type: "reply", taskID: "T1", version: 1, text: "Keep this note about the first report", token: 1, cardID: "q1", questionID: null });
+  assert.deepEqual(app.sends()[0], { type: "ask", taskID: "T1", version: 1, text: "Keep this note about the first report", token: 1, cardID: "q1", questionID: null });
   app.receive({ ...replacement, ack: { token: 1, ok: true } });
   app.click({ act: "answer", id: "q2", index: "0" });
   assert.equal(app.sends()[1].questionID, "q2", "the current unanswered question keeps its own identity");
@@ -647,13 +609,12 @@ test("a live header push preserves project focus but a new dashboard request doe
   assert.equal(button.focusCount, 1);
 });
 
-test("a project filter preserves a hidden replacement card's pending draft, recipient and original question context", () => {
+test("a project filter preserves a hidden replacement card's pending draft and original question context", () => {
   const app = page();
   const projects = [{ id: "one", title: "same" }, { id: "two", title: "same" }];
   const packet = (version) => ({ version, latestVersion: version, summary: "Updated", lookAt: "Review", checks: [], notVerified: [], screenshots: [] });
   const original = { ...state({ packet: packet(1) }, { projectID: "one" }), projects, projectFilter: "one" };
   app.receive(original);
-  app.click({ act: "reply-to", id: "q1", to: "coordinator" });
   app.draft("Keep the first report note");
   app.submit("Keep the first report note");
   app.click({ act: "project-filter", project: "two" });
@@ -667,7 +628,6 @@ test("a project filter preserves a hidden replacement card's pending draft, reci
   app.click({ act: "project-filter", project: "one" });
   const html = app.nodes.get("scroll").innerHTML;
   assert.ok(html.includes('id="collapse-q2"'));
-  assert.match(html, /<form[^>]*data-to="coordinator"/);
   assert.match(html, /<input[^>]*value="Keep the first report note"[^>]*disabled/);
   assert.deepEqual(app.posted.filter((event) => event.type === "rendered").at(-1).expanded, ["q2"]);
   app.submit("Duplicate", "q2");

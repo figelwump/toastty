@@ -2,7 +2,7 @@
 // `window.toasttyCoordinatorChat.receive(state)`; the page sends actions back
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
-import { cardStateKey, collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, visibleExpandedIDs, replyTarget, retainTaskCards } from "./render";
+import { cardStateKey, collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, visibleExpandedIDs, retainTaskCards } from "./render";
 import { currentProject, projectID } from "./projects";
 import { post } from "./bridge";
 import { addressFor, addressMatches, pickedAddress } from "./composer";
@@ -110,6 +110,7 @@ function render(preserveFocus = true) {
   const focusedAnchor = focusedForm?.dataset.id
     ? anchors.find((anchor) => anchor.id === focusedForm.dataset.id) : null;
   scroll.innerHTML = renderTimeline(state, ui);
+  measureClampedText();
 
   if (focusedCard) {
     const input = scroll.querySelector<HTMLFormElement>(`form.replybox[data-id="${CSS.escape(focusedCard)}"]`)?.querySelector("input");
@@ -229,6 +230,16 @@ function openCard(taskID: string, cardID?: string | null, revealHidden = false):
   return true;
 }
 
+/// Shows Show more only on question text that its height limit cuts off.
+/// Runs before the scroll position is restored, since it changes heights.
+function measureClampedText() {
+  for (const text of scroll.querySelectorAll<HTMLElement>("[data-clamp]")) {
+    const clamped = text.scrollHeight > text.clientHeight + 1;
+    text.classList.toggle("clamped", clamped);
+    scroll.querySelector(`[data-more="${CSS.escape(text.dataset.clamp!)}"]`)?.classList.toggle("hidden", !clamped);
+  }
+}
+
 // The app uses the active surface for command-palette actions. A state
 // refresh must not make a background right-panel page the active surface.
 function activate() {
@@ -243,9 +254,10 @@ function card(id: string | undefined): Extract<ChatItem, { type: "card" }> | nul
 function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clearDraft: boolean) {
   const key = cardStateKey(item);
   if (!state || !item.task || !text || ui.pendingCards.has(key) || !checkLength(text)) return;
-  const target = replyTarget(item, ui);
-  if (target === "task" ? !item.task.canReply : !state.coordinator.canSend) {
-    notice.textContent = target === "task" ? "The task cannot receive replies now. Your draft is kept." : "The coordinator cannot receive messages now. Your draft is kept.";
+  if (!state.coordinator.canSend || !item.task.canReply || item.answerPending) {
+    notice.textContent = !item.task.canReply ? "The task cannot take replies now. Your draft is kept."
+      : item.answerPending ? "Waiting for the coordinator to confirm the earlier answer. Your draft is kept."
+      : "The coordinator cannot receive messages now. Your draft is kept.";
     notice.className = "notice error";
     return;
   }
@@ -256,8 +268,9 @@ function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clear
     taskID: item.task.id, version: context ? context.version : item.packet?.version ?? null, text, token, cardID: context?.cardID ?? item.id,
     questionID,
   };
-  post({ type: target === "task" ? "reply" : "ask", ...fields });
-  if (target === "coordinator") awaitCoordinator(token);
+  // The coordinator passes the reply on to the task when it is for it.
+  post({ type: "ask", ...fields });
+  awaitCoordinator(token);
   render();
 }
 
@@ -289,15 +302,6 @@ document.addEventListener("click", (event) => {
       else ui.expanded.add(id);
       if (ui.confirmingMerge === id) ui.confirmingMerge = null;
       render();
-      break;
-    }
-    case "reply-to": {
-      const item = card(data.id);
-      const to = data.to === "coordinator" ? "coordinator" : "task";
-      if (!item?.task || ui.pendingCards.has(cardStateKey(item)) || (to === "task" ? !item.task.canReply : !state?.coordinator.canSend)) break;
-      ui.replyTarget.set(cardStateKey(item), to);
-      render();
-      document.getElementById(`reply-${item.id}`)?.focus();
       break;
     }
     case "answer": {
@@ -405,7 +409,6 @@ function rememberDraft(item: Extract<ChatItem, { type: "card" }>, text: string) 
     questionID: item.kind === "question" && item.answer === null ? item.id : null,
     version: item.packet?.version ?? null,
     questionText: item.kind === "question" ? item.text : null,
-    target: replyTarget(item, ui),
   });
 }
 
@@ -449,6 +452,9 @@ function sendComposer() {
   render(false);
   scroll.scrollTop = scroll.scrollHeight;
 }
+
+// A wider or narrower panel changes where question text is cut off.
+window.addEventListener("resize", () => measureClampedText());
 
 composerInput.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;

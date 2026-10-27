@@ -25,7 +25,7 @@ function task(overrides = {}) {
     stageLabel: "review", stageTone: "blue", needsUser: true, hasTaskSpace: true,
     pullRequestURL: "https://github.com/o/r/pull/12", pullRequestLabel: "PR #12",
     packetVersion: 2, stale: false, mergePolicy: "Merge sends toastty-task-merge to the task's agent.",
-    canMerge: true, canReply: true, defaultReplyTarget: "task", ...overrides,
+    canMerge: true, canReply: true, ...overrides,
   };
 }
 
@@ -74,7 +74,7 @@ test("a packet card is one line until opened, then shows the packet and its acti
   ui.expanded.add("c1");
   const open = render.renderItem(card(), ui);
   for (const part of ["What changed", "Moves the totals up.", "Look at", "Checks · 1/2 passed", "✗", "Not verified · 1", "Safari",
-    'data-shot="after-1280"', 'data-act="merge"', "Full report", "Open task space", 'data-to="task"', "PR #12 ↗"]) {
+    'data-shot="after-1280"', 'data-act="merge"', "Full report", "Open task space", 'class="replybox"', "PR #12 ↗"]) {
     assert.ok(open.includes(part), `missing ${part}`);
   }
   assert.ok(open.includes('data-version="2"'));
@@ -102,31 +102,46 @@ test("new, stale and superseded cards say so", () => {
   assert.ok(!render.renderItem(card({ superseded: true, packet: packet({ version: 1 }) }), ui).includes('data-act="merge"'));
 });
 
-test("question cards use the app's default reply target and keep the target switch", () => {
+test("an open question sends replies to the coordinator, with no target switch", () => {
   const ui = render.newUIState();
   ui.expanded.add("q1");
-  const questionCard = card({ id: "q1", kind: "question", text: "Which base branch?", packet: null,
-    task: task({ defaultReplyTarget: "coordinator" }) });
-  const question = render.renderItem(questionCard, ui);
+  const question = render.renderItem(card({ id: "q1", kind: "question", text: "Which base branch?", packet: null }), ui);
   assert.ok(question.includes("Which base branch?"));
-  assert.match(question, /<form[^>]*data-to="coordinator"/);
-  assert.ok(question.includes("to task</button>") && question.includes("to coordinator</button>"));
-  const waiting = render.renderItem({ ...questionCard, task: task({ defaultReplyTarget: "task" }) }, ui);
-  assert.match(waiting, /<form[^>]*data-to="task"/);
-  assert.ok(waiting.includes("Reply to fix-totals…"));
-  ui.replyTarget.set("task:T1", "task");
-  assert.match(render.renderItem(questionCard, ui), /<form[^>]*data-to="task"/);
+  assert.ok(question.includes('aria-label="Reply to the coordinator about fix-totals…"'));
+  assert.ok(!question.includes('data-act="reply-to"') && !question.includes("data-to="));
 });
 
-test("packet and task-started cards keep their task default and packet input label", () => {
+test("a folded open question shows its text, a Show more link and its answers", () => {
+  const ui = render.newUIState();
+  const question = card({ id: "q1", kind: "question", packet: null, options: ["Add the hint", "Keep it"],
+    text: "Add the hint to PR #213?\nRecommended: add the hint.\n\n- **Add the hint**: small, fits this PR.\n- **Keep it**: no change. <img src=x>" });
+  const html = render.renderItem(question, ui);
+  assert.ok(html.includes('class="card need qcard"'));
+  assert.ok(html.includes('id="expand-q1" data-act="expand"') && html.includes("Fix the totals bar"));
+  assert.ok(html.includes("Recommended: add the hint.") && html.includes("<strong>Add the hint</strong>"));
+  assert.ok(html.includes('data-clamp="q1"'));
+  assert.match(html, /<button class="lnk more hidden" id="more-q1" data-act="expand" data-id="q1"/, "Show more waits for the page to measure the text");
+  assert.ok(html.includes('id="option-q1-0"') && html.includes('id="option-q1-1"'));
+  assert.ok(!html.includes("replybox") && !html.includes("<img src=x>"));
+  const answered = render.renderItem({ ...question, answer: "Keep it" }, ui);
+  assert.ok(answered.includes('class="compact') && answered.includes("Answered: Keep it") && !answered.includes('data-act="answer"'));
+  const stuck = render.renderItem({ ...question, task: task({ stageLabel: "stuck", stageTone: "red" }) }, ui);
+  assert.ok(stuck.includes('class="compact') && !stuck.includes("qcard"), "a stuck task's folded card shows its failure line");
+  const closed = render.renderItem({ ...question, task: task({ canReply: false }) }, ui);
+  assert.match(closed, /<button[^>]*id="option-q1-0"[^>]*disabled/);
+  assert.ok(closed.includes("The task cannot take replies now."));
+});
+
+test("packet and task-started reply boxes name the task, and an unavailable task disables them", () => {
   const ui = render.newUIState();
   ui.expanded.add("c1");
   for (const kind of ["packet", "task-started"]) {
-    const item = card({ kind, task: task({ defaultReplyTarget: "coordinator" }) });
-    assert.match(render.renderItem(item, ui), /<form[^>]*data-to="task"/);
-    assert.match(render.renderItem({ ...item, task: task({ canReply: false, defaultReplyTarget: "task" }) }, ui), /<form[^>]*data-to="coordinator"/);
+    const item = card({ kind });
+    assert.match(render.renderItem(item, ui), /<input[^>]*id="reply-c1"(?![^>]*disabled)[^>]*>/);
+    assert.match(render.renderItem({ ...item, task: task({ canReply: false }) }, ui), /<input[^>]*id="reply-c1"[^>]*disabled/);
   }
-  assert.ok(render.renderItem(card(), ui).includes('aria-label="Review note for fix-totals…"'));
+  assert.ok(render.renderItem(card(), ui).includes('aria-label="Review note for fix-totals, through the coordinator…"'));
+  assert.ok(render.renderItem(card({ kind: "task-started" }), ui).includes('aria-label="Reply to the coordinator about fix-totals…"'));
 });
 
 test("a note without a task is plain text", () => {
@@ -145,7 +160,7 @@ test("an open card shows explicit task thread roles and keeps agent text safe", 
     { id: "r4", at: "", role: "agent", text: "Updated the [report](https://example.com/report)." },
   ] }), ui);
   assert.ok(html.includes('class="thread"'));
-  assert.ok(html.includes("You → task") && html.includes("You → coordinator"));
+  assert.equal(html.match(/class="who">You<\/span>/g)?.length, 2, "both kinds of user reply read as yours");
   assert.ok(html.includes('class="who co">coordinator</span>'));
   assert.ok(html.includes('class="who agent">fix-totals</span>'));
   assert.ok(html.includes("Use **this** &lt;button&gt;"));
@@ -158,7 +173,7 @@ test("question options are escaped buttons, and the saved answer replaces them",
   const ui = render.newUIState();
   ui.expanded.add("q1");
   const question = card({ id: "q1", kind: "question", text: "Which base?", packet: null,
-    options: ['Use "staging"', "<main>"], task: task({ defaultReplyTarget: "coordinator" }) });
+    options: ['Use "staging"', "<main>"] });
   const html = render.renderItem(question, ui);
   assert.ok(html.includes('id="option-q1-0"'));
   assert.ok(html.includes('data-act="answer" data-id="q1" data-index="1"'));
@@ -198,12 +213,14 @@ test("a pending card disables its answers and reply without changing its draft",
   const unavailable = render.renderItem({ ...question, task: task({ canReply: false }) }, { ...render.newUIState(), expanded: new Set(["q1"]) });
   assert.match(unavailable, /<button[^>]*id="option-q1-0"[^>]*disabled/);
   assert.match(unavailable, /<input[^>]*disabled/);
-  assert.ok(unavailable.includes("The task cannot receive replies now."));
-  const coordinatorButton = unavailable.match(/<button[^>]*id="reply-to-coordinator-q1"[^>]*>/)?.[0];
-  assert.ok(coordinatorButton && !coordinatorButton.includes("disabled"));
-  const coordinatorUnavailable = render.renderItem({ ...question, task: task({ defaultReplyTarget: "coordinator" }) }, { ...render.newUIState(), expanded: new Set(["q1"]) }, false);
+  assert.ok(unavailable.includes("The task cannot take replies now."));
+  const coordinatorUnavailable = render.renderItem(question, { ...render.newUIState(), expanded: new Set(["q1"]) }, false);
   assert.match(coordinatorUnavailable, /<button[^>]*id="option-q1-0"[^>]*disabled/);
   assert.ok(coordinatorUnavailable.includes("The coordinator cannot receive messages now."));
+  const uncertain = render.renderItem({ ...question, answerPending: true }, { ...render.newUIState(), expanded: new Set(["q1"]) });
+  assert.match(uncertain, /<button[^>]*id="option-q1-0"[^>]*disabled/);
+  assert.match(uncertain, /<input[^>]*disabled/);
+  assert.ok(uncertain.includes("Waiting for the coordinator to confirm this answer."));
 });
 
 test("only the current card can merge, regardless of its kind, and menus stay native", () => {

@@ -44,12 +44,10 @@ export interface ChatTask {
   /// What Merge does in this project, from tasks.toml.
   mergePolicy: string;
   canMerge: boolean;
+  /// The task is open, so the coordinator can pass a card reply on to it.
   canReply: boolean;
   failureText?: string | null;
   canArchive?: boolean;
-  /// A question's default: the task when its agent waits for input,
-  /// and the coordinator otherwise.
-  defaultReplyTarget: "task" | "coordinator";
 }
 
 export type CardKind = "packet" | "task-started" | "question" | "note";
@@ -203,7 +201,6 @@ export type ChatEvent =
   | { type: "taskAction"; rowID: string; actionID: string }
   | { type: "send"; text: string; token: number }
   | { type: "project"; projectID: string; text: string; token: number }
-  | { type: "reply"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "ask"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "answerRoute"; questionID: string; optionIndex: number; token: number }
   | { type: "archiveTask"; taskID: string }
@@ -220,12 +217,10 @@ export interface ChatUIState {
   expanded: Set<string>;
   /// Cards seen superseded, so each folds only once.
   superseded: Set<string>;
-  /// Drafts and recipients use task identity, so new cards retain them.
+  /// Drafts use task identity, so new cards retain them.
   drafts: Map<string, string>;
   /// The content the user was replying to when this draft began.
-  draftContext: Map<string, { cardID: string; questionID: string | null; version: number | null; questionText: string | null; target: "task" | "coordinator" }>;
-  /// A recipient the user chose explicitly, independent of a draft default.
-  replyTarget: Map<string, "task" | "coordinator">;
+  draftContext: Map<string, { cardID: string; questionID: string | null; version: number | null; questionText: string | null }>;
   /// Task or route identities waiting for acknowledgement.
   pendingCards: Set<string>;
   confirmingMerge: string | null;

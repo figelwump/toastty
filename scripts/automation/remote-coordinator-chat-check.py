@@ -16,8 +16,9 @@ real agent runs. Through the real CLI and the page itself it checks that:
 - packet v1, packet v2 and a question share one task card at its newest
   activity, with both reports reachable from that card;
 - `coordinator show --task` opens and scrolls to the task's packet card;
-- a reply typed into the open card reaches the task's agent as
-  `Review note on packet v1: …`, and the task leaves Needs you;
+- a reply typed into the open card reaches the coordinator in a task
+  envelope with the packet version, and the task leaves Needs you; the check
+  then passes it on with `task send` from the coordinator's session;
 - Full report opens toastty://coordinator/report/<task>/1 in the right panel;
 - report marks and an addressed composer message remain in the task thread;
 - the project filter keeps one current task card, and Today and All tasks
@@ -26,8 +27,10 @@ real agent runs. Through the real CLI and the page itself it checks that:
 - before the agent reports anything, the blocked composer's hint names folder
   trust, and its Open terminal button shows the raw terminal again.
 - a question with two options changes a finished task's sidebar badge to
-  question; a page button answers it and restores the finished badge;
-- a typed question reply reaches a waiting task that has no packet;
+  question; a button on the folded card answers it through the coordinator
+  and restores the finished badge;
+- a typed question reply for a waiting task with no packet reaches the
+  coordinator without a packet version;
 - answers and task-scoped threads survive an app relaunch in the same runtime.
 - a question's native task menu opens its task space;
 - a question with a fake mergeable pull request offers Merge, and Cancel
@@ -290,7 +293,7 @@ def main():
     def answered(card_id, answer):
         current = card(card_id)
         if current and current.get('answer') == answer and any(
-                entry['text'] == answer and entry['role'] == 'user-task' for entry in current.get('thread', [])):
+                entry['text'] == answer and entry['role'] == 'user-coordinator' for entry in current.get('thread', [])):
             return current
         return None
 
@@ -404,44 +407,7 @@ def main():
         wait_for('the packet card to open', lambda: packet_card['id'] in chat_state()['expandedCardIDs'], timeout=15, interval=0.3)
         capture('coordinator-chat-expanded')
 
-        # 3. A reply typed into the card reaches the task as a review note.
-        bring_to_front()
-        wait_for_page_element(f"reply-{packet_card['id']}")
-        reply_field = f"title:Review note for {task['slug']}"
-        # WebKit builds the page's Accessibility tree lazily, so the first
-        # lookups after a render can miss.
-        focused = False
-        for _ in range(20):
-            if run_tool(helper, 'focus', pid, reply_field, check=False).returncode == 0:
-                focused = True
-                break
-            time.sleep(0.5)
-        if not focused:
-            # Leave the tree for diagnosis: web content shows as AXWebArea.
-            (artifacts / f'{PREFIX}-ax.txt').write_text(run_tool(helper, 'dump', pid, check=False).stdout)
-            raise AssertionError(f'No {reply_field} in the Accessibility tree; see {PREFIX}-ax.txt')
-        time.sleep(0.3)
-        run_tool(driver, 'type', REPLY)
-        focused_input = json.loads(run_tool(driver, 'focused', pid).stdout)
-        step('keyboard reply entered', focusedInput=focused_input,
-             frontmostPID=run_tool(helper, 'frontmost-pid').stdout.strip())
-        require(focused_input.get('value') == REPLY,
-                f'The keyboard reply did not reach the focused field: {focused_input}')
-        run_tool(driver, 'key', KEY_RETURN)
-        expected = f'Review note on packet v1: {REPLY}'
-
-        sent_notice = f"Sent to {task['slug']}."
-        notice = wait_for('the chat to report the reply sent', lambda: (lambda n: n if n and n['text'] == sent_notice else None)(
-            chat_state().get('notice')), timeout=20, interval=0.5)
-        # The task's terminal is in a workspace that is not selected, so its
-        # screen text may not be drawn; record it as evidence.
-        task_text = instance.query('terminal.visible-text', panelID=task_session['panelID'], tail=40, includeScrollback=True).get('text', '')
-        after = cli_result('task', 'get', task_id)
-        require(after['readyForReviewAt'] is None, f'The task is still ready for review: {after}')
-        step('reply reached the task', notice=notice, stage=after.get('stage'),
-             noteInTaskTerminal=expected in task_text.replace('\n', ''), taskTerminal=task_text[-300:])
-
-        # 4. Full report opens in the coordinator workspace's right panel.
+        # 3. Full report opens in the coordinator workspace's right panel.
         wait_for('Full report to press', lambda: run_tool(helper, 'press', pid, 'title:Full report', check=False).returncode == 0,
                  timeout=10, interval=0.5)
         report_url = f'toastty://coordinator/report/{task_id}/1'
@@ -510,7 +476,7 @@ def main():
         step('report mark reached the task and its thread once', taskID=task_id, entry=mark_entry,
              fakeAgentReceived=mark_input[-400:])
 
-        # 5. This fake agent emits no ready/turn events, as at first-load
+        # 4. This fake agent emits no ready/turn events, as at first-load
         # setup. The blocked composer must offer a way to its terminal.
         blocked = chat_state()
         require(blocked['canSend'] is False, 'The fake agent unexpectedly accepts chat input')
@@ -532,6 +498,142 @@ def main():
         wait_for('the CLI to uncover the terminal', lambda: rendered('chat') is None, timeout=15, interval=0.3)
         step('CLI showed the raw terminal')
 
+        # 5. Bind a synthetic coordinator conversation through the public
+        # Claude hook ingestion route, so card replies can reach it. A
+        # transcript's end_turn alone cannot authorize input. No real provider
+        # or new automation API is involved.
+        coordinator_session_path = fake_bin / 'sessions' / f"{coordinator['sessionID']}.json"
+        coordinator_session = json.loads(coordinator_session_path.read_text())
+        route_context = dict(sessionID=coordinator['sessionID'], questionID=None)
+        native_id = str(uuid.uuid4())
+        transcript = root / f'{native_id}.jsonl'
+
+        def transcript_message(role, text, record_id):
+            message = dict(role=role, content=text if role == 'user' else [dict(type='text', text=text)])
+            if role == 'assistant':
+                message['stop_reason'] = 'end_turn'
+            row = dict(type=role, sessionId=native_id, uuid=record_id, isSidechain=False,
+                       timestamp=datetime.now(timezone.utc).isoformat(), message=message)
+            with transcript.open('a') as stream:
+                stream.write(json.dumps(row) + '\n')
+
+        def hook(name, **fields):
+            cli_result('session', 'ingest-agent-event', '--source', 'claude-hooks',
+                       session=coordinator_session, stdin=json.dumps(dict(hook_event_name=name,
+                       session_id=native_id, transcript_path=str(transcript), cwd=coordinator_session['cwd'], **fields)))
+
+        transcript.touch()
+        hook('SessionStart')
+        transcript_message('user', session_check.FIRST_MESSAGE, 'fixture-initial-user')
+        transcript_message('assistant', 'Ready for the project choice.', 'fixture-initial-answer')
+        wait_for('the synthetic transcript to bind', lambda: any(
+            item.get('text') == 'Ready for the project choice.' for item in chat_state()['items']))
+        hook('UserPromptSubmit', turn_id='fixture-initial-turn', prompt='Synthetic coordinator ready check')
+        wait_for('the submitted coordinator turn to become working',
+                 lambda: chat_state().get('inputState') == 'working', timeout=30, interval=0.3)
+        hook('Stop', turn_id='fixture-initial-turn', last_assistant_message='Ready for the project choice.')
+
+        def route_input_ready():
+            state = chat_state()
+            return state if state.get('inputState') == 'openPrompt' and state['canSend'] else None
+
+        wait_for('the coordinator input prompt after Stop', route_input_ready, timeout=30, interval=0.3)
+
+        # A Try chip fills a draft. It must not send until the user submits.
+        # Run it before any card reply: a user message hides the chips.
+        cli_result('coordinator', 'show')
+        wait_for('the chat to show again', lambda: rendered('chat'), timeout=15, interval=0.3)
+        prepare_wide_chat('Try chips and card replies')
+        suggestions = wait_for('Try chips after the launch prompt', lambda: (page := rendered('chat'))
+                               and page['suggestionsVisible'] and 'one it has to ask about' in page['suggestionLabels'] and page)
+        coordinator_input = fake_bin / 'sessions' / f"{coordinator['sessionID']}.input"
+        input_before_suggestion = coordinator_input.read_text() if coordinator_input.exists() else ''
+        bring_to_front()
+        wait_for('the Try chip to press', lambda: run_tool(helper, 'press', pid,
+                 'title:one it has to ask about', check=False).returncode == 0, timeout=15, interval=0.3)
+        suggestion_draft = wait_for('the Try chip draft in the focused composer', lambda: (focused := json.loads(
+            run_tool(driver, 'focused', pid).stdout)) and focused.get('value') == 'Add a dark mode toggle' and focused)
+        require((coordinator_input.read_text() if coordinator_input.exists() else '') == input_before_suggestion,
+                'The Try chip sent a request instead of preparing a draft')
+        capture('coordinator-try-chip-draft')
+        step('Try chip prepared a composer draft without sending', labels=suggestions['suggestionLabels'],
+             focusedInput=suggestion_draft)
+
+        def coordinator_line(text):
+            """The task envelope line that the fake coordinator received for text."""
+            got = wait_for('the card message in fake coordinator input', lambda: received(coordinator['sessionID'], text))
+            line = next((line for line in got.splitlines()
+                         if line.startswith('About task ') and line.endswith(f'): {text}')), None)
+            require(line, f'The fake coordinator did not receive a task envelope for {text!r}: {got[-400:]}')
+            return line
+
+        def coordinator_turn(line, turn_id):
+            """The synthetic coordinator reads one message and ends its turn."""
+            marker = f'The synthetic coordinator read {turn_id}.'
+            transcript_message('user', line, f'{turn_id}-echo')
+            transcript_message('assistant', marker, f'{turn_id}-read')
+            wait_for(f'the {turn_id} transcript receipt', lambda: any(
+                item.get('text') == marker for item in chat_state()['items']))
+            hook('UserPromptSubmit', turn_id=turn_id, prompt=line)
+            wait_for(f'the {turn_id} coordinator turn to become working',
+                     lambda: chat_state().get('inputState') == 'working', timeout=30, interval=0.3)
+            hook('Stop', turn_id=turn_id, last_assistant_message=marker)
+            wait_for(f'the coordinator prompt after {turn_id}', route_input_ready, timeout=30, interval=0.3)
+            return marker
+
+        # A reply typed into the packet card goes to the coordinator, with the
+        # task and packet version. The task leaves Needs you. The fake
+        # coordinator then passes it on with task send, as the skill says.
+        # The report marks already ended the first review; start it again so
+        # the reply is what ends it.
+        cli_result('task', 'ready-for-review', session=task_session)
+        require(cli_result('task', 'get', task_id)['readyForReviewAt'], 'The task did not return to review')
+        cli_result('coordinator', 'show', '--task', task_id)
+        wait_for('the packet card to open again', lambda: packet_card['id'] in chat_state()['expandedCardIDs'],
+                 timeout=15, interval=0.3)
+        bring_to_front()
+        wait_for_page_element(f"reply-{packet_card['id']}")
+        switch = instance.request('automation.coordinator_chat_action',
+                                  dict(action='visible', elementID=f"reply-to-task-{packet_card['id']}"))
+        require(not switch.get('ok'), f'The card still offers a reply target switch: {switch}')
+        reply_field = f"title:Review note for {task['slug']}"
+        # WebKit builds the page's Accessibility tree lazily, so the first
+        # lookups after a render can miss.
+        focused = False
+        for _ in range(20):
+            if run_tool(helper, 'focus', pid, reply_field, check=False).returncode == 0:
+                focused = True
+                break
+            time.sleep(0.5)
+        if not focused:
+            # Leave the tree for diagnosis: web content shows as AXWebArea.
+            (artifacts / f'{PREFIX}-ax.txt').write_text(run_tool(helper, 'dump', pid, check=False).stdout)
+            raise AssertionError(f'No {reply_field} in the Accessibility tree; see {PREFIX}-ax.txt')
+        time.sleep(0.3)
+        run_tool(driver, 'type', REPLY)
+        focused_input = json.loads(run_tool(driver, 'focused', pid).stdout)
+        step('keyboard reply entered', focusedInput=focused_input,
+             frontmostPID=run_tool(helper, 'frontmost-pid').stdout.strip())
+        require(focused_input.get('value') == REPLY,
+                f'The keyboard reply did not reach the focused field: {focused_input}')
+        run_tool(driver, 'key', KEY_RETURN)
+        reply_line = coordinator_line(REPLY)
+        require(f'(task ID {task_id}, packet v1, reply ID ' in reply_line, f'The reply lost its task or packet: {reply_line}')
+        require(not received(task_session['sessionID'], REPLY), 'The card reply went straight to the task')
+        coordinator_turn(reply_line, 'fixture-packet-reply')
+        reply_entry = wait_for('the reply in the task thread', lambda: thread_entry(task_id, 'user-coordinator', REPLY))
+        after = wait_for('the review to leave Needs you', lambda: (record := cli_result('task', 'get', task_id))
+                         and record['readyForReviewAt'] is None and record)
+        forwarded = f'Review note on packet v1: {REPLY}'
+        cli_result('task', 'send', task_id, forwarded, session=coordinator_session)
+        forwarded_input = wait_for('the forwarded note in fake task input', lambda: received(task_session['sessionID'], forwarded))
+        require(sum(entry['text'] == REPLY for item in task_cards(task_id) for entry in item.get('thread', [])) == 1,
+                'The transcript echo duplicated the card reply')
+        step('packet reply reached the coordinator, left Needs you, and was passed on', coordinatorInput=reply_line,
+             threadEntry=reply_entry, stage=after.get('stage'), fakeTaskReceived=forwarded_input[-300:],
+             providerEvidence='Synthetic coordinator: the check runs task send itself; real forwarding is in the chat E2E.')
+
+
         # 6. A posted question takes precedence over the task's finished
         # badge. Choosing an option uses the same page reply route as typing.
         revised_packet = json.loads((work / 'packet.json').read_text())
@@ -547,11 +649,12 @@ def main():
         require(chat_state()['items'][-1]['id'] == second_packet['id'], 'Packet v2 did not move the task card to the end')
         cli_result('coordinator', 'show', '--task', task_id)
         wait_for('the v2 packet card to open', lambda: second_packet['id'] in chat_state()['expandedCardIDs'])
-        page_action('click', f"reply-to-task-{second_packet['id']}")
-        page_action('type', f"reply-{second_packet['id']}", 'Confirm the v2 coupon placement.')
-        wait_for('the v2 review note in the fake task input',
-                 lambda: received(task_session['sessionID'], 'Review note on packet v2:'))
+        v2_note = 'Confirm the v2 coupon placement.'
+        page_action('type', f"reply-{second_packet['id']}", v2_note)
+        v2_line = coordinator_line(v2_note)
+        require(f'(task ID {task_id}, packet v2, reply ID ' in v2_line, f'The v2 note lost its packet version: {v2_line}')
         wait_for('the v2 review to leave Needs you', lambda: cli_result('task', 'get', task_id)['readyForReviewAt'] is None)
+        coordinator_turn(v2_line, 'fixture-v2-note')
         for kind in ('working', 'ready'):
             cli_result('session', 'status', '--session', task_session['sessionID'], '--kind', kind, '--summary', kind)
         wait_for('the packet task to finish its turn',
@@ -575,18 +678,24 @@ def main():
         step('one task card retained both packet versions and opened v1', cardID=option_id,
              packetVersions=option_card['packetVersions'], reportURL=report_url)
         require(option_card.get('answer') is None, f'The new question is already answered: {option_card}')
-        require(option_card.get('defaultReplyTarget') == 'coordinator',
-                f'A finished task should default to the coordinator: {option_card}')
         question_row = wait_for('the question sidebar row', lambda: sidebar_row(task['title'], 'question'))
         capture('coordinator-question-options')
         step('question replaced the finished sidebar badge', taskID=task_id,
              before=finished_row, question=question_row, options=option_card['options'],
              capture='coordinator-question-options.png', colorCheck='Compare the question badge with the amber prototype badge.')
-        page_action('click', f'reply-to-task-{option_id}')
-        capture('coordinator-question-options-enabled')
+        # The folded question shows its text and answers; answer from there.
+        page_action('click', f'collapse-{option_id}')
+        wait_for('the question card to fold', lambda: option_id not in chat_state()['expandedCardIDs'])
+        wait_for_page_element(f'option-{option_id}-0')
+        compact_page = rendered('chat')
+        capture('coordinator-question-compact')
+        step('folded question shows its text and answers', cardID=option_id, capture='coordinator-question-compact.png')
         page_action('click', f'option-{option_id}-0')
         option_answer = wait_for('the selected answer in the card thread', lambda: answered(option_id, OPTIONS[0]))
-        input_text = wait_for('the option in the fake task input', lambda: received(task_session['sessionID'], OPTIONS[0]))
+        input_text = coordinator_line(OPTIONS[0])
+        require(f', question ID {option_id}): ' in input_text, f'The answer lost its question: {input_text}')
+        require(option_id not in chat_state()['expandedCardIDs'], 'Answering opened the folded card')
+        coordinator_turn(input_text, 'fixture-option-answer')
         restored_row = wait_for('the underlying finished sidebar badge', lambda: sidebar_row(task['title'], 'finished'))
         require(sidebar_row(task['title'], 'question') is None, 'The answered question still owns the sidebar badge')
         require(cli_result('task', 'get', task_id)['stage'].get('attention') == 'agentFinished',
@@ -600,8 +709,9 @@ def main():
         require(not any(item['type'] == 'card' and item['kind'] == 'note' and item['taskID'] == task_id
                         for item in chat_state()['items']), 'The task-scoped coordinator note became a separate card')
         capture('coordinator-question-answered')
-        step('option answered and restored the finished stage', cardID=option_id, answer=option_answer['answer'],
-             thread=option_answer['thread'], sidebar=restored_row, fakeAgentReceived=input_text[-300:])
+        step('option answered from the folded card and restored the finished stage', cardID=option_id,
+             answer=option_answer['answer'], thread=option_answer['thread'], sidebar=restored_row,
+             fakeCoordinatorReceived=input_text, compactPage=compact_page and compact_page.get('viewportWidth'))
 
         # One unrelated project makes filtering observable. Use the existing
         # shell-readiness gate before changing that disposable terminal's cwd.
@@ -750,15 +860,16 @@ def main():
             and item.get('isCurrent') is True), None))
         typed_id = typed_card['id']
         require(typed_card['packetVersion'] is None, f'The second task unexpectedly has a packet: {typed_card}')
-        require(typed_card.get('defaultReplyTarget') == 'task', f'A waiting task should default to the task: {typed_card}')
         wait_for('the second question to open', lambda: typed_id in chat_state()['expandedCardIDs'])
         page_action('type', f'reply-{typed_id}', TYPED_REPLY)
         typed_answer = wait_for('the typed answer in its card thread', lambda: answered(typed_id, TYPED_REPLY))
-        typed_input = wait_for('the typed answer in the fake task input', lambda: received(typed_session_id, TYPED_REPLY))
-        require('Review note on packet' not in typed_input, f'The no-packet reply used a review note: {typed_input}')
+        typed_input = coordinator_line(TYPED_REPLY)
+        require(f'(task ID {typed_task_id}, reply ID ' in typed_input and ', packet v' not in typed_input,
+                f'The no-packet answer carried a packet or lost its task: {typed_input}')
+        coordinator_turn(typed_input, 'fixture-typed-answer')
         capture('coordinator-question-typed-answer')
         step('typed answer reached a task without a packet', taskID=typed_task_id, cardID=typed_id,
-             answer=typed_answer['answer'], thread=typed_answer['thread'], fakeAgentReceived=typed_input[-300:])
+             answer=typed_answer['answer'], thread=typed_answer['thread'], fakeCoordinatorReceived=typed_input)
 
         # 8. A current question offers the same Merge confirmation as a
         # packet. Cancel it; the fake gh only permits read-only pr view calls.
@@ -889,62 +1000,6 @@ def main():
         step('stuck task opened its space and canceled native Archive', taskID=typed_task_id,
              failure=failure, archivedAt=archive_record.get('archivedAt'), preservedFile=str(sentinel))
 
-        # 10. Use the public Claude hook ingestion route to bind a synthetic
-        # transcript and open a prompt. A transcript's end_turn alone cannot
-        # authorize input. No real provider or new automation API is involved.
-        coordinator_session_path = fake_bin / 'sessions' / f"{coordinator['sessionID']}.json"
-        coordinator_session = json.loads(coordinator_session_path.read_text())
-        route_context = dict(sessionID=coordinator['sessionID'], questionID=None)
-        native_id = str(uuid.uuid4())
-        transcript = root / f'{native_id}.jsonl'
-
-        def transcript_message(role, text, record_id):
-            message = dict(role=role, content=text if role == 'user' else [dict(type='text', text=text)])
-            if role == 'assistant':
-                message['stop_reason'] = 'end_turn'
-            row = dict(type=role, sessionId=native_id, uuid=record_id, isSidechain=False,
-                       timestamp=datetime.now(timezone.utc).isoformat(), message=message)
-            with transcript.open('a') as stream:
-                stream.write(json.dumps(row) + '\n')
-
-        def hook(name, **fields):
-            cli_result('session', 'ingest-agent-event', '--source', 'claude-hooks',
-                       session=coordinator_session, stdin=json.dumps(dict(hook_event_name=name,
-                       session_id=native_id, transcript_path=str(transcript), cwd=coordinator_session['cwd'], **fields)))
-
-        transcript.touch()
-        hook('SessionStart')
-        transcript_message('user', session_check.FIRST_MESSAGE, 'fixture-initial-user')
-        transcript_message('assistant', 'Ready for the project choice.', 'fixture-initial-answer')
-        wait_for('the synthetic transcript to bind', lambda: any(
-            item.get('text') == 'Ready for the project choice.' for item in chat_state()['items']))
-        hook('UserPromptSubmit', turn_id='fixture-initial-turn', prompt='Synthetic coordinator ready check')
-        wait_for('the submitted coordinator turn to become working',
-                 lambda: chat_state().get('inputState') == 'working', timeout=30, interval=0.3)
-        hook('Stop', turn_id='fixture-initial-turn', last_assistant_message='Ready for the project choice.')
-
-        def route_input_ready():
-            state = chat_state()
-            return state if state.get('inputState') == 'openPrompt' and state['canSend'] else None
-
-        wait_for('the coordinator input prompt after Stop', route_input_ready, timeout=30, interval=0.3)
-
-        # A Try chip fills a draft. It must not send until the user submits.
-        prepare_wide_chat('Try chips and addressed composer')
-        suggestions = wait_for('Try chips after the launch prompt', lambda: (page := rendered('chat'))
-                               and page['suggestionsVisible'] and 'one it has to ask about' in page['suggestionLabels'] and page)
-        coordinator_input = fake_bin / 'sessions' / f"{coordinator['sessionID']}.input"
-        input_before_suggestion = coordinator_input.read_text() if coordinator_input.exists() else ''
-        bring_to_front()
-        wait_for('the Try chip to press', lambda: run_tool(helper, 'press', pid,
-                 'title:one it has to ask about', check=False).returncode == 0, timeout=15, interval=0.3)
-        suggestion_draft = wait_for('the Try chip draft in the focused composer', lambda: (focused := json.loads(
-            run_tool(driver, 'focused', pid).stdout)) and focused.get('value') == 'Add a dark mode toggle' and focused)
-        require((coordinator_input.read_text() if coordinator_input.exists() else '') == input_before_suggestion,
-                'The Try chip sent a request instead of preparing a draft')
-        capture('coordinator-try-chip-draft')
-        step('Try chip prepared a composer draft without sending', labels=suggestions['suggestionLabels'],
-             focusedInput=suggestion_draft)
 
         addressed_text = 'Keep the report marks and the question together in this task.'
         require(route_input_ready(), 'The coordinator cannot receive the addressed composer request')

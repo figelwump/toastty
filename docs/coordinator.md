@@ -42,17 +42,21 @@ On first start, the agent can wait for setup, such as Claude Code's folder-trust
 prompt. The message box stays disabled until the agent can take a message.
 Use **Open terminal** beside the disabled box to review and answer the prompt.
 
-A card is one line until you click it. It shows its task's live state: title,
+A card is one line until you click it. An unanswered question is the
+exception: it shows the first five lines of the question, a **Show more** link
+when the text is longer, and its answer choices, so you can answer without
+opening the card. Every card shows its task's live state: title,
 project, stage, packet version, and **stale** when commits landed in the
 task's worktree after the packet. An open packet card shows what changed,
 what to look at, the checks with pass or fail and their logs, what was not
 verified, and screenshot thumbnails. Its actions are:
 
-- **Reply**, to the task: Toastty sends `Review note on packet vN: <your
-  text>` to the task's agent with `task send`. Switch the reply to
-  **to coordinator** to ask the coordinator about the task instead. The coordinator receives your text after
-  a line that names the task and its ID. Your reply appears in the task's card
-  thread.
+- **Reply**, to the coordinator: it receives your text after a line that
+  names the task, its ID, and the packet version. The coordinator passes a
+  note for the task on with `task send`, as `Review note on packet vN: <your
+  text>`, or answers a question about the task with a note. A reply on a
+  packet card takes the task out of Needs you, as before. Your reply appears
+  in the task's card thread.
 - **Merge**: asks first, naming what Merge does in the task's project from
   `tasks.toml`, then runs the same merge as the task's Merge button. The
   coordinator never merges on its own.
@@ -71,19 +75,22 @@ verified, and screenshot thumbnails. Its actions are:
 - **Open task space**, and the pull request link, which opens in the right
   panel.
 
-Each task has one current card. Its thread includes your replies to the task
-or coordinator, notes the coordinator posts with `--task`, and replies from
-that task's own agent conversation. Replies from a card appear only in its
+Each task has one current card. Its thread includes your replies, an answer
+you type in the task's terminal, and the notes the coordinator posts with
+`--task`. It does not repeat the task agent's
+conversation; open the task space to read that. Replies from a card appear only in its
 thread, so the main conversation does not repeat them. Ordinary coordinator
 messages stay in the main conversation; the coordinator uses a task note for
 a reply that belongs in a thread. Earlier user replies with an **About <task>**
 link also move into that task's thread.
 
-Question cards can show answer choices. Click one, or type a reply, and choose
-**to task** or **to coordinator**. The default is **to task** while the task's
-agent waits for input, and **to coordinator** otherwise. Your chosen target
-stays fixed while you compose the reply. After a successful send, the card
-shows **Answered** with your answer. The chat no longer counts that question as
+Question cards can show answer choices. Click one, or type a reply. Both go to
+the coordinator, which passes the answer on to the task. After a successful
+send, the card shows **Answered** with your answer. If receipt is uncertain,
+the choices stay disabled until the coordinator's transcript confirms the
+answer or Toastty quits; check its terminal before you answer another way. An answer that the
+coordinator queued during its turn is lost if the coordinator session ends
+before that turn finishes. The chat no longer counts that question as
 unanswered. The task keeps its live agent status and any other reason it needs you.
 An answer typed in the task's own terminal also closes the question, as does
 any later message to the task except a task watch notice. The card's badge
@@ -94,8 +101,7 @@ Threads and answers survive a relaunch. Each card shows the latest 100 thread
 entries; the full event log stays on disk.
 
 When the coordinator posts about a task, you reply about it, or it publishes a
-packet, its card moves to that time in the chat. The task agent's own progress
-messages join the card's thread without moving it. Transcript messages stay in
+packet, its card moves to that time in the chat. Transcript messages stay in
 place. A newer packet is marked **new**;
 **Earlier reports** inside the card opens older reports. An unanswered
 question stays visible when a packet arrives. A saved reply keeps the question
@@ -164,7 +170,7 @@ pick a task or project. The list matches task slugs, task titles, and project
 names. Use the arrow keys and Return to pick, or click an option.
 
 A leading `@<task-slug>` sends the remaining text to the coordinator through
-the same task envelope as a card's **to coordinator** reply. The question
+the same task envelope as a card reply. The question
 appears in that task's card thread. Toastty keeps a card for the thread even
 if the coordinator has not posted one yet. Known done and archived tasks remain
 available for these questions. A leading project pick gives the coordinator an

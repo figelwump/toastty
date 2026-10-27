@@ -17,9 +17,9 @@ captures the window with automation.capture_screenshot at each step:
    composer makes the coordinator create and start a task;
 2. the task publishes packet v1 with screenshots, and its packet card opens,
    and Full report opens in the right panel;
-3. a question asked from the card's **to coordinator** reply reaches the
-   coordinator with the task named, and the chat shows only the typed text,
-   in the task card's thread; then a reply to the task reaches its agent as
+3. a question typed into the card's reply reaches the coordinator with the
+   task named, and the chat shows only the typed text, in the task card's
+   thread; then report marks reach the task's agent as
    `Review note on packet v1: …`, and the task leaves Needs you;
 4. packet v2 updates the only task card and retains v1 in report history;
 5. with a pull request link on the task, Open PR opens it in the right panel;
@@ -317,7 +317,6 @@ def main():
         # A question to the coordinator from the card: the coordinator gets
         # it with the task named, and the chat shows only what was typed.
         question = 'In one short sentence, what does this task change? Do not act on it.'
-        require(page('click', f"reply-to-coordinator-{open_card(task_id, 1)['id']}"), 'Could not switch the reply to the coordinator')
         require(page('type', f"reply-{open_card(task_id, 1)['id']}", question), 'Could not type the question')
         asked = wait_for('the coordinator question in the task thread',
                          waiting(lambda: thread_entry(task_id, 'user-coordinator', question)), timeout=600, interval=3)

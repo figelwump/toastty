@@ -45,7 +45,7 @@ final class CoordinatorSummaryPageBridge: NSObject, CoordinatorChatController.Pa
         case .ready: true
         case .rendered(_, let view, _), .activate(let view, _): isSummary == (view != .chat)
         case .taskAction, .showView: isSummary
-        case .project, .taskMenu, .projectFilter, .send, .reply, .ask, .answerRoute, .archiveTask, .merge, .openTaskSpace, .openURL, .openReport, .openRouting, .openTerminal: !isSummary
+        case .project, .taskMenu, .projectFilter, .send, .ask, .answerRoute, .archiveTask, .merge, .openTaskSpace, .openURL, .openReport, .openRouting, .openTerminal: !isSummary
         }
     }
 
