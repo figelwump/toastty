@@ -105,7 +105,12 @@ enum CoordinatorAllTasks {
             if item.stage.group == .toShip, item.projectWorkspaceID != nil, canRelease(item) {
                 sections.append([releaseAction(item)])
             }
-            let (label, tone) = CoordinatorChatTaskView.label(item)
+            var (label, tone) = CoordinatorChatTaskView.label(item)
+            // Match the task's chat card and the sidebar: an open question
+            // outranks every stage but a failed agent.
+            if taskCards?.hasUnansweredQuestion == true, item.stage != .needsYou(.agentError) {
+                (label, tone) = ("question", "amber")
+            }
             let (primary, confirm) = primaryAction(item, cards: taskCards, mergePolicy: mergePolicy)
             return Row(
                 id: rowID(item),

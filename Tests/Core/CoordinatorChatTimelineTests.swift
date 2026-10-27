@@ -119,7 +119,7 @@ struct CoordinatorChatTimelineTests {
     }
 
     @Test
-    func notesAndRepliesMoveTheTaskButPreserveItsQuestionAndAnswer() throws {
+    func notesAndUserRepliesMoveTheTaskButAgentRepliesOnlyJoinItsThread() throws {
         let question = CoordinatorEvent(
             at: start, kind: .question, taskID: taskID, text: "Which base?", sessionID: nil,
             options: ["Main", "Feature"]
@@ -140,14 +140,16 @@ struct CoordinatorChatTimelineTests {
             data.append(UInt8(ascii: "\n"))
         }
         let cards = CoordinatorChatTimeline.cards(events: CoordinatorEvent.decodeLog(data), packets: [:])
-        #expect(cards.map(\.id) == [standalone.id.uuidString, question.id.uuidString])
-        #expect(cards[1].kind == .question && cards[1].text == "Which base?")
-        #expect(cards[1].options == ["Main", "Feature"] && cards[1].answer == "Feature")
-        #expect(cards[1].at == agent.at)
-        #expect(cards[1].thread.map(\.text) == ["I checked both branches.", "Feature", "The branch is ready."])
-        #expect(cards[1].thread.map(\.role) == [.coordinator, .userCoordinator, .agent])
-        #expect(cards.map(\.isCurrent) == [false, true])
-        #expect(cards[0].thread.isEmpty)
+        // The agent's later message stays in the thread; the card keeps the
+        // user's reply time, before the standalone note.
+        #expect(cards.map(\.id) == [question.id.uuidString, standalone.id.uuidString])
+        #expect(cards[0].kind == .question && cards[0].text == "Which base?")
+        #expect(cards[0].options == ["Main", "Feature"] && cards[0].answer == "Feature")
+        #expect(cards[0].at == reply.at)
+        #expect(cards[0].thread.map(\.text) == ["I checked both branches.", "Feature", "The branch is ready."])
+        #expect(cards[0].thread.map(\.role) == [.coordinator, .userCoordinator, .agent])
+        #expect(cards.map(\.isCurrent) == [true, false])
+        #expect(cards[1].thread.isEmpty)
     }
 
     @Test

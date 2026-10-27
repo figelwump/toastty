@@ -2,7 +2,7 @@
 // coordinator's transcript, its cards in events.jsonl and each task's live
 // state, already in time order; the page only renders it.
 
-export type Tone = "blue" | "amber" | "green" | "violet" | "red" | "plain";
+export type Tone = "blue" | "amber" | "green" | "violet" | "red" | "plain" | "working";
 
 export interface ChatCheck {
   name: string;

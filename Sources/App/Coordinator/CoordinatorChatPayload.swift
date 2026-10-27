@@ -244,7 +244,8 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
     /// What the stage looks like on a card: the prototype's badges.
     static func label(_ stage: TaskStage) -> (String, String) {
         switch stage {
-        case .running: ("working", "amber")
+        // Amber is for what needs the user; working stays calm.
+        case .running: ("working", "working")
         case .toShip: ("merged · to ship", "violet")
         case .done: ("done", "green")
         case .archived: ("archived", "plain")

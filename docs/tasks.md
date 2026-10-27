@@ -155,7 +155,9 @@ directory, one per root directory.
 
 1. Toastty finds the workspace's root directory: the git root of its first
    terminal, or that terminal's directory outside a repository. It saves the
-   root on the workspace and on the task, where it never changes.
+   root on the task, where it never changes. It saves a git root on the
+   workspace too, but not a directory outside a repository, so a later task
+   finds the repository after you `cd` into it.
 2. It makes a task space nested under the workspace, with one terminal in the
    root directory. The task space is named after the task's slug and is not
    selected, so your focus stays where it is.

@@ -319,6 +319,23 @@ struct CoordinatorAllTasksTests {
         // "open" shows the card in the chat; without one, the task space.
         #expect(primary(.init(latestKind: .question, isNew: false)) == CoordinatorAllTasks.openActionID)
         #expect(primary(nil) == "openTaskSpace")
+
+        // The row names an open question as the chat card and sidebar do.
+        func label(_ item: TaskBoardItem, _ cards: CoordinatorChatCardIndex.TaskCards?) -> String? {
+            CoordinatorAllTasks.rows([item], cards: { _ in cards }, canRelease: { _ in false }, isTriageConfigured: false, mergePolicy: { _ in "" })
+                .first.map { "\($0.stageLabel)/\($0.stageTone)" }
+        }
+        let open = CoordinatorChatCardIndex.TaskCards(latestKind: .question, isNew: false)
+        let answered = CoordinatorChatCardIndex.TaskCards(latestKind: .question, isNew: false, questionAnswered: true)
+        var running = finished
+        running.stage = .running
+        var stuck = finished
+        stuck.stage = .needsYou(.agentError)
+        #expect(label(finished, open) == "question/amber")
+        #expect(label(finished, answered) == "finished/blue")
+        #expect(label(running, open) == "question/amber")
+        #expect(label(running, answered) == "working/working")
+        #expect(label(stuck, open) == "stuck/red")
     }
 
     @Test func toShipRowsOfAProjectThatCanReleaseOfferRelease() {

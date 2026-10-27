@@ -232,8 +232,9 @@ function renderThumbs(task: ChatTask, packet: ChatPacket): string {
 
 function cardBadge(item: Extract<ChatItem, { type: "card" }>, task: ChatTask): string {
   if (task.stageLabel === "stuck") return badge("stuck", task.stageTone);
-  if (item.kind !== "question") return badge(task.stageLabel, task.stageTone);
-  return item.answer !== null ? badge("answered", "green") : badge("question", "amber");
+  // An answered question shows the task's live stage; the subtitle keeps the answer.
+  if (item.kind !== "question" || item.answer !== null) return badge(task.stageLabel, task.stageTone);
+  return badge("question", "amber");
 }
 
 export function replyTarget(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState): "task" | "coordinator" {

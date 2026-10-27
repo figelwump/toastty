@@ -77,12 +77,18 @@ agent waits for input, and **to coordinator** otherwise. Your chosen target
 stays fixed while you compose the reply. After a successful send, the card
 shows **Answered** with your answer. The chat no longer counts that question as
 unanswered. The task keeps its live agent status and any other reason it needs you.
+An answer typed in the task's own terminal also closes the question, as does
+any later message to the task except a task watch notice. The card's badge
+then shows the task's live status. Amber badges mark what needs you; a working
+task has a neutral badge with a spinner.
 
 Threads and answers survive a relaunch. Each card shows the latest 100 thread
 entries; the full event log stays on disk.
 
-When a task gets a new event or packet, its card moves to that time in the
-chat. Transcript messages stay in place. A newer packet is marked **new**;
+When the coordinator posts about a task, you reply about it, or it publishes a
+packet, its card moves to that time in the chat. The task agent's own progress
+messages join the card's thread without moving it. Transcript messages stay in
+place. A newer packet is marked **new**;
 **Earlier reports** inside the card opens older reports. An unanswered
 question stays visible when a packet arrives. A saved reply keeps the question
 and packet version it was written for.

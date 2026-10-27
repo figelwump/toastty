@@ -164,11 +164,26 @@ test("question options are escaped buttons, and the saved answer replaces them",
   assert.ok(html.includes('data-act="answer" data-id="q1" data-index="1"'));
   assert.ok(html.includes("Use &quot;staging&quot;") && html.includes("&lt;main&gt;"));
   const answered = render.renderItem({ ...question, answer: 'Use "staging"' }, ui);
-  assert.ok(answered.includes(">answered<") && answered.includes("Use &quot;staging&quot;"));
+  assert.ok(answered.includes(">Answered<") && answered.includes("Use &quot;staging&quot;"));
   assert.ok(!answered.includes('data-act="answer"'));
   assert.ok(!answered.includes(">question<"));
+  // Once answered, the badge shows the task's live stage.
+  assert.ok(answered.includes('<span class="badge b-blue">review</span>'));
   ui.expanded.clear();
-  assert.ok(render.renderItem({ ...question, answer: 'Use "staging"' }, ui).includes(">answered<"));
+  const compact = render.renderItem({ ...question, answer: 'Use "staging"' }, ui);
+  assert.ok(compact.includes("Answered: Use &quot;staging&quot;") && compact.includes(">review<"));
+});
+
+test("a working task's badge is neutral, and only an open question is amber", () => {
+  const ui = render.newUIState();
+  const working = task({ stageLabel: "working", stageTone: "working", needsUser: false });
+  const started = render.renderItem(card({ id: "s1", kind: "task-started", packet: null, task: working }), ui);
+  assert.ok(started.includes('<span class="badge b-working">working</span>'));
+  assert.ok(!started.includes("b-amber"));
+  const question = card({ id: "q1", kind: "question", text: "Change the hint?", packet: null, task: working });
+  assert.ok(render.renderItem(question, ui).includes('<span class="badge b-amber">question</span>'));
+  const answered = render.renderItem({ ...question, answer: "Yes" }, ui);
+  assert.ok(answered.includes('<span class="badge b-working">working</span>') && !answered.includes("b-amber"));
 });
 
 test("a pending card disables its answers and reply without changing its draft", () => {
