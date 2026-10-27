@@ -3642,7 +3642,7 @@ struct SidebarView: View {
         }
         return SidebarSubspacePresentation.Row(
             id: subspaceID,
-            title: workspace.title,
+            title: boardItem?.title ?? workspace.title,
             status: SidebarSubspacePresentation.rowStatus(
                 sessionStatus: SidebarSubspacePresentation.rowStatus(
                     sessionStatuses: sessions.map { session in

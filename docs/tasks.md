@@ -107,7 +107,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. `[defaults]` in `tasks.toml` fills what you leave out. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
-| `--title`, `--slug` | The task's title and the task space's name. They default to the first line of the text. |
+| `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
 | `--start-work` | Make a git worktree during setup and start the agent there. See [Work in a git worktree](#work-in-a-git-worktree). |
 | `--base <ref>`, `--branch-prefix <prefix>` | With `--start-work`: what the worktree starts from, and the first part of its branch name. |
@@ -448,6 +448,11 @@ request waiting for review, violet ↑ for a merge waiting for a release, a gree
 check for done, and a dashed box for a task that is starting.
 When an agent splits its work, the new tasks draw under the task that started
 them, and that task shows how many of them have merged.
+
+The sidebar and Tasks view use the task's agent session title when it is
+available. Until then, they keep the initial task title. An explicit task
+title stays fixed. A task space made without a task record uses its first
+named agent session. Session title changes do not rename branches or directories.
 
 The Tasks view covers the workspace while it shows; selecting a workspace or
 pressing Esc leaves it. It lists every task in the same groups, with Done and

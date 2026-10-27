@@ -48,6 +48,7 @@ enum TaskBoard {
         var pullRequestState: (WorkspacePullRequestLink) -> TaskPullRequestState?
         var config: TasksConfig?
         var homeDirectory: String = NSHomeDirectory()
+        var sessionRegistry = SessionRegistry()
         /// The merge Toastty runs for a task space, if any.
         var mergeRequest: (UUID) -> WorkspaceMergeRequest? = { _ in nil }
     }
@@ -138,6 +139,43 @@ enum TaskBoard {
         return records.first { $0.id == watch.targetTaskID }?.title ?? "another task"
     }
 
+    /// Uses the task's own pane, including a session restored there under a
+    /// new ID. Stopped entries keep the name if a session exits before the
+    /// board copies it. Other agents in a recorded task cannot rename it.
+    static func sessionTitle(record: TaskRecord?, workspaceID: UUID?, registry: SessionRegistry) -> String? {
+        guard record?.titleSetByUser != true, let workspaceID else { return nil }
+        func session(panelID: UUID?, sessionID: String?) -> SessionRecord? {
+            func eligible(_ candidate: SessionRecord?) -> SessionRecord? {
+                guard let candidate, candidate.workspaceID == workspaceID, candidate.agent != .processWatch else { return nil }
+                return candidate
+            }
+            if let active = panelID.flatMap({ registry.activeSession(for: $0) }).flatMap(eligible) { return active }
+            // A restored session can receive a name and exit before the
+            // deferred sync. Its saved task may still name the old ID.
+            if let panelID, let last = registry.sessionOrder.reversed().lazy.compactMap({ registry.sessionsByID[$0] }).first(where: {
+                $0.panelID == panelID && eligible($0) != nil
+            }) { return last }
+            return sessionID.flatMap { eligible(registry.sessionsByID[$0]) }
+        }
+        func title(_ owner: SessionRecord?) -> String? {
+            [owner?.displayTitleOverride, owner?.providerSessionName].compactMap { value in
+                value.flatMap { taskNonEmpty($0) }
+            }.first
+        }
+        if let record {
+            let owner = record.operation.worktreeSession.flatMap { session(panelID: $0.panelID, sessionID: $0.sessionID) }
+                ?? session(panelID: record.operation.taskSpace?.panelID, sessionID: record.operation.agentLaunch?.sessionID)
+            return title(owner)
+        }
+        // Older task spaces have no saved owner. Use the first named
+        // agent's pane in registry order, which is stable across turns.
+        return registry.sessionOrder.lazy.compactMap { registry.sessionsByID[$0] }.filter {
+            $0.workspaceID == workspaceID && $0.agent != .processWatch
+        }.compactMap {
+            title(session(panelID: $0.panelID, sessionID: $0.sessionID))
+        }.first
+    }
+
     private static func item(for record: TaskRecord, inputs: Inputs) -> TaskBoardItem {
         let state = inputs.state
         let waitingOn = waitingOnTitle(record, records: inputs.records)
@@ -189,7 +227,7 @@ enum TaskBoard {
         return TaskBoardItem(
             id: .task(record.id),
             record: record,
-            title: record.title,
+            title: sessionTitle(record: record, workspaceID: taskSpaceID, registry: inputs.sessionRegistry) ?? record.title,
             taskSpaceWorkspaceID: taskSpaceID,
             projectWorkspaceID: project?.id,
             projectTitle: project?.title ?? root.map { ($0 as NSString).lastPathComponent },
@@ -265,7 +303,7 @@ enum TaskBoard {
         return TaskBoardItem(
             id: .taskSpace(workspace.id),
             record: nil,
-            title: workspace.title,
+            title: sessionTitle(record: nil, workspaceID: workspace.id, registry: inputs.sessionRegistry) ?? workspace.title,
             taskSpaceWorkspaceID: workspace.id,
             projectWorkspaceID: parentID,
             projectTitle: project?.title,
@@ -356,7 +394,10 @@ final class TaskBoardStore: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.now = now
         coordinator.records.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+                self?.scheduleSessionCheck()
+            }
             .store(in: &cancellables)
         pullRequests.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -369,12 +410,7 @@ final class TaskBoardStore: ObservableObject {
             .sink { [weak self] _ in
                 // The registry publishes before it changes; read it after,
                 // once for a burst of changes.
-                guard let self, self.isTurnCheckScheduled == false else { return }
-                self.isTurnCheckScheduled = true
-                Task { @MainActor [weak self] in
-                    self?.isTurnCheckScheduled = false
-                    self?.refreshAfterTurnsEnded()
-                }
+                self?.scheduleSessionCheck()
             }
             .store(in: &cancellables)
         pullRequests.answerObserver = { [weak self] link, state in
@@ -385,6 +421,7 @@ final class TaskBoardStore: ObservableObject {
         }
         reloadConfig()
         syncRecords(state: store.state)
+        syncSessionTitles()
         coordinator.removeExpiredAttachments()
         if let refreshInterval {
             refreshLoop = Task { [weak self] in
@@ -423,6 +460,7 @@ final class TaskBoardStore: ObservableObject {
             },
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
+            sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
             mergeRequest: { [weak sessionRuntimeStore] workspaceID in
                 sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
             }
@@ -442,6 +480,7 @@ final class TaskBoardStore: ObservableObject {
             statuses: { _ in statuses },
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
+            sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
             mergeRequest: { [weak sessionRuntimeStore] workspaceID in
                 sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
             }
@@ -497,6 +536,28 @@ final class TaskBoardStore: ObservableObject {
         refreshOpenPullRequests()
         Task { [weak coordinator] in
             await coordinator?.checkReleases()
+        }
+    }
+
+    private func scheduleSessionCheck() {
+        guard isTurnCheckScheduled == false else { return }
+        isTurnCheckScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isTurnCheckScheduled = false
+            self.syncSessionTitles()
+            self.refreshAfterTurnsEnded()
+            self.objectWillChange.send()
+        }
+    }
+
+    private func syncSessionTitles() {
+        guard let coordinator, let sessionRuntimeStore else { return }
+        for record in coordinator.records.records {
+            guard let workspaceID = record.taskSpaceWorkspaceID,
+                  let title = TaskBoard.sessionTitle(record: record, workspaceID: workspaceID, registry: sessionRuntimeStore.sessionRegistry),
+                  title != record.title else { continue }
+            _ = coordinator.records.update(id: record.id) { $0.title = title }
         }
     }
 
