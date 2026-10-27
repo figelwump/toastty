@@ -98,11 +98,15 @@ export function retainTaskCards(previous: ChatState | null, next: ChatState, ui:
     const before = previous?.items.find((item) => item.type === "card" && item.id === ui.confirmingMerge);
     const after = next.items.find((item) => item.type === "card" && item.id === ui.confirmingMerge);
     // Keep confirmation across turn updates when merge safety is unchanged.
-    // task.stale reports new commits; CoordinatorChatTaskView.label marks errors red.
+    // Cancel only when the card becomes stale (new commits) or becomes an
+    // error (CoordinatorChatTaskView.label marks errors red), so a card the
+    // user confirmed in either state keeps its question.
+    const becameStale = !before?.task?.stale && after?.task?.stale;
+    const becameError = (after?.task?.stageLabel === "stuck" || after?.task?.stageTone === "red")
+      && !(before?.task?.stageLabel === "stuck" || before?.task?.stageTone === "red");
     if (before?.type !== "card" || after?.type !== "card" || !after.isCurrent || after.superseded || !after.task?.canMerge
       || before.packet?.version !== after.packet?.version || before.task?.packetVersion !== after.task.packetVersion
-      || before.task?.id !== after.task.id || after.task.stale || after.task.stageLabel === "stuck"
-      || after.task.stageTone === "red") ui.confirmingMerge = null;
+      || before.task?.id !== after.task.id || becameStale || becameError) ui.confirmingMerge = null;
   }
 }
 

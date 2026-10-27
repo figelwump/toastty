@@ -437,6 +437,17 @@ test("Merge confirmation survives safe stage and thread updates", () => {
   }
 });
 
+test("Merge confirmation survives updates to a card that was already stale or red", () => {
+  const reply = { id: "agent-ready", at: "2026-10-24T10:01:00Z", role: "agent", text: "READY-B" };
+  for (const fields of [{ stale: true }, { stageLabel: "stuck", stageTone: "red" }]) {
+    const before = card({ task: task(fields) });
+    const ui = render.newUIState();
+    ui.confirmingMerge = "c1";
+    render.retainTaskCards({ items: [before] }, { items: [card({ task: task(fields), thread: [reply] })] }, ui);
+    assert.equal(ui.confirmingMerge, "c1", `confirmation lost on an unchanged ${JSON.stringify(fields)} card`);
+  }
+});
+
 test("Merge confirmation survives task resumption while merge safety is unchanged", () => {
   for (const stageLabel of ["working", "needs input"]) {
     const ui = render.newUIState();
