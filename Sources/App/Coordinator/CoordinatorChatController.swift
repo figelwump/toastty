@@ -415,6 +415,19 @@ final class CoordinatorChatController {
                                 entry = CoordinatorEvent(id: id, at: event.timestamp, kind: .reply, taskID: taskID,
                                     text: ask.text, sessionID: sessionID, threadRole: .userTask,
                                     questionID: ask.questionID, sourceID: "reply:\(id.uuidString)")
+                            } else if raw == message.text, CoordinatorTaskAsk(message: raw) == nil,
+                                      message.text.hasPrefix(TaskCoordinator.watchMessagePrefix) == false,
+                                      let questionID = Self.openQuestionID(taskID: taskID, before: event.timestamp, in: events) {
+                                // Later input to the task answers its question: the user
+                                // typing in its terminal, the coordinator relaying the
+                                // user's words, or a Merge or start-work prompt the user
+                                // asked for. Chat sends carry a prefix and are saved when
+                                // sent; watch notices come without the user.
+                                let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                entry = text.isEmpty ? nil : CoordinatorEvent(at: event.timestamp, kind: .reply, taskID: taskID,
+                                    text: String(text.prefix(CoordinatorEvent.maximumTextLength)), sessionID: sessionID,
+                                    threadRole: .userTask, questionID: questionID,
+                                    sourceID: "task:\(taskID.uuidString):\(event.eventID)")
                             } else { entry = nil }
                         default: entry = nil
                         }
@@ -510,7 +523,11 @@ final class CoordinatorChatController {
             }
             chatItems.append(.card(CoordinatorChatCardView(card: card, task: task, packet: packetView)))
         }
-        chatItems.sort { $0.at < $1.at }
+        // `sort` is not stable; equal times keep transcript, then timeline order,
+        // so a refresh cannot swap them.
+        chatItems = chatItems.enumerated().sorted {
+            $0.element.at == $1.element.at ? $0.offset < $1.offset : $0.element.at < $1.element.at
+        }.map(\.element)
         let board = taskCoordinator.board
         let isTriageConfigured = taskCoordinator.isTriageConfigured
         let cardsByTaskID = CoordinatorChatCardIndex.tasks(from: chatItems)
@@ -578,6 +595,23 @@ final class CoordinatorChatController {
                 token: URL(filePath: $0.root).lastPathComponent.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0.name,
                 title: $0.name, version: nil)
         }
+    }
+
+    /// The task's newest question posted before `date`, when no reply
+    /// answers it yet. The log keeps whole seconds, so a question counts as
+    /// asked by the end of its second; equal times go to the later line.
+    static func openQuestionID(taskID: UUID, before date: Date, in events: [CoordinatorEvent]) -> UUID? {
+        var newest: CoordinatorEvent?
+        for event in events where event.kind == .question && event.taskID == taskID
+            && event.at.addingTimeInterval(1) <= date && event.at >= (newest?.at ?? .distantPast) {
+            newest = event
+        }
+        guard let question = newest else { return nil }
+        let answered = events.contains {
+            $0.kind == .reply && $0.questionID == question.id && $0.taskID == taskID
+                && ($0.threadRole == .userTask || $0.threadRole == .userCoordinator)
+        }
+        return answered ? nil : question.id
     }
 
     /// The task's newest card, when it is a question.

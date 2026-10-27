@@ -5,7 +5,9 @@ import Foundation
 /// published. A card holds only what names it; the chat reads everything
 /// else from the task's live state.
 ///
-/// Each task has one card at its newest activity. Its latest question or
+/// Each task has one card at its newest activity: a post, packet, or user
+/// message. The task agent's own messages join the thread without moving
+/// the card. Its latest question or
 /// task event supplies the content until a newer packet is published.
 /// An unanswered question stays visible until the user answers it. Earlier questions and replies stay in the task's bounded thread.
 public enum CoordinatorChatTimeline {
@@ -163,7 +165,9 @@ public enum CoordinatorChatTimeline {
                         contentAt: .distantPast, firstAt: event.at, order: order
                     )
                 }
-                if tasks[taskID] != nil {
+                // The task agent's own messages only grow the thread: they
+                // arrive throughout its work and would keep moving the card.
+                if tasks[taskID] != nil, role != .agent {
                     tasks[taskID]?.card.at = event.at
                     tasks[taskID]?.order = order
                 }

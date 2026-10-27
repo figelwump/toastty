@@ -135,6 +135,28 @@ struct TaskCoordinatorTests {
         }
     }
 
+    @Test func aWorkspaceSavesOnlyAGitRootAsItsProjectRoot() async throws {
+        let fixture = try Fixture()
+        let panelID = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+        let plain = fixture.root.appendingPathComponent("plain", isDirectory: true)
+        try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
+        _ = fixture.store.send(.updateTerminalPanelMetadata(panelID: panelID, title: nil, cwd: plain.path))
+
+        // A terminal outside any repository, like a new one in the home
+        // folder, places this task there but is not saved.
+        let first = try await fixture.coordinator.create(TaskCreateRequest(text: "outside", workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(first.id)
+        #expect(fixture.record(first.id)?.projectRoot == plain.path)
+        #expect(fixture.store.state.workspacesByID[fixture.workspaceID]?.rootDirectory == nil)
+
+        // After `cd` into the project, the next task finds and saves its root.
+        _ = fixture.store.send(.updateTerminalPanelMetadata(panelID: panelID, title: nil, cwd: fixture.projectRoot + "/Sources"))
+        let second = try await fixture.coordinator.create(TaskCreateRequest(text: "inside", workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(second.id)
+        #expect(fixture.record(second.id)?.projectRoot == fixture.projectRoot)
+        #expect(fixture.store.state.workspacesByID[fixture.workspaceID]?.rootDirectory == fixture.projectRoot)
+    }
+
     @Test func createStartsTheAgentInANewTaskSpace() async throws {
         let fixture = try Fixture()
         fixture.config.defaults.startSkill = "task-start"

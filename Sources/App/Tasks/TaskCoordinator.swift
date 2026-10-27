@@ -1586,8 +1586,12 @@ final class TaskCoordinator {
             throw TaskError("Toastty could not find the directory of workspace \(workspace.title). Open a terminal there, then try again.")
         }
         let resolution = RepositoryRootLocator.inferRepoRootBestEffort(from: directory, timeout: 0.5)
-        // A timed-out lookup is not saved, so the next task tries again.
-        return (resolution.repoRoot ?? directory, resolution.timedOut == false)
+        // Only a git root is saved. A plain directory, such as the home
+        // folder a new terminal starts in, would outlive a later `cd` into
+        // the project. A timed-out lookup is not saved either, so the next
+        // task tries again.
+        guard let repoRoot = resolution.repoRoot else { return (directory, false) }
+        return (repoRoot, resolution.timedOut == false)
     }
 
     /// The pinned fields, completed from `[defaults]`. A pinned value that

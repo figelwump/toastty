@@ -86,6 +86,10 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .b-violet { color: var(--violet); border-color: var(--violet-line); background: var(--violet-bg); }
 .b-red { color: var(--red); border-color: var(--red-line); background: var(--red-bg); }
 .b-plain { color: var(--dim); border-color: var(--line); background: var(--raised); }
+/* Working is neutral, so amber stays for what needs the user. */
+.b-working { color: var(--fg); border-color: var(--line); background: var(--raised); display: inline-flex; align-items: center; gap: 5px; }
+.b-working::before { content: ""; width: 7px; height: 7px; border: 1.5px solid var(--dim); border-right-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .b-working::before { animation: none; } }
 
 .compact { width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; transition: box-shadow .3s; }
 .compact:hover { border-color: var(--dim); }

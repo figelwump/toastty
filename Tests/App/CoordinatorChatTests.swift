@@ -648,6 +648,79 @@ struct CoordinatorChatTests {
         #expect(fixture.session.files.events().filter { $0.kind == .reply } == saved)
     }
 
+    @Test func anAnswerTypedInTheTaskTerminalClosesItsQuestion() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let agent = try #require(fixture.tasks.coordinator.liveAgentSession(of: task))
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let asked = "2026-10-26T10:00:00.000Z", answered = "2026-10-26T10:00:05.000Z"
+        let question = CoordinatorEvent(at: try #require(formatter.date(from: asked)), kind: .question, taskID: task.id,
+                                        text: "Also change the hint?", sessionID: nil)
+        try fixture.session.files.append(question)
+        let nativeID = UUID().uuidString
+        let transcriptURL = fixture.tasks.root.appendingPathComponent("terminal-answer.jsonl")
+        // The first message predates the question and the watch notice comes
+        // without the user, so only the last message answers it.
+        let records: [[String: Any]] = [
+            ["timestamp": "2026-10-26T09:59:00.000Z", "type": "session_meta", "payload": [
+                "id": nativeID, "session_id": nativeID, "timestamp": "2026-10-26T09:59:00.000Z",
+                "cwd": fixture.tasks.projectRoot, "originator": "codex_cli", "source": "cli"
+            ]],
+            ["timestamp": "2026-10-26T09:59:00.000Z", "type": "event_msg", "payload": [
+                "type": "user_message", "message": "Fix the trust prompt"
+            ]],
+            ["timestamp": "2026-10-26T10:00:03.000Z", "type": "event_msg", "payload": [
+                "type": "user_message", "message": "\(TaskCoordinator.watchMessagePrefix)\(UUID().uuidString)] Task \"Other\" is idle."
+            ]],
+            ["timestamp": answered, "type": "event_msg", "payload": [
+                "type": "user_message", "message": "Yes, change the hint too"
+            ]],
+        ]
+        var transcript = Data()
+        for record in records {
+            transcript.append(try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]))
+            transcript.append(10)
+        }
+        try transcript.write(to: transcriptURL)
+        let resume = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: nativeID,
+                                             sessionFilePath: transcriptURL.path, cwd: fixture.tasks.projectRoot, capturedAt: Date())
+        #expect(fixture.tasks.sessionRuntimeStore.confirmNativeSessionBinding(
+            managedSessionID: agent.sessionID, panelID: agent.panelID, record: resume
+        ))
+        #expect(fixture.tasks.store.send(.updateTerminalPanelResumeRecord(panelID: agent.panelID, resumeRecord: resume)))
+        let paths = ToasttyRuntimePaths.resolve(homeDirectoryPath: fixture.tasks.root.path, environment: [
+            ToasttyRuntimePaths.environmentKey: fixture.tasks.root.appendingPathComponent("answer-runtime").path
+        ])
+        let service = ConversationService(store: fixture.tasks.store, sessionRuntimeStore: fixture.tasks.sessionRuntimeStore,
+                                          terminalRuntimeRegistry: TerminalRuntimeRegistry(), runtimePaths: paths)
+        defer { service.setTaskPanelIDs([]) }
+        let chat = CoordinatorChatController(store: fixture.tasks.store, taskCoordinator: fixture.tasks.coordinator,
+                                             session: fixture.session, conversations: service,
+                                             sessionRuntimeStore: fixture.tasks.sessionRuntimeStore)
+        await chat.refresh()
+        await fixture.tasks.waitUntil("the task tailer reads the terminal answer") {
+            guard let id = service.conversationID(for: agent.panelID),
+                  case .page(let page) = service.events(for: id, after: nil, limit: 500) else { return false }
+            return page.events.contains { event in
+                guard case .userMessage(let message) = event.payload else { return false }
+                return message.text == "Yes, change the hint too"
+            }
+        }
+        await chat.refresh()
+        let card = try #require(chat.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+            guard case .card(let card) = item, card.id == question.id.uuidString else { return nil }
+            return card
+        }.first)
+        #expect(card.answer == "Yes, change the hint too")
+        #expect(card.thread.map(\.role) == [.userTask])
+        let replies = fixture.session.files.events().filter { $0.kind == .reply }
+        #expect(replies.map(\.questionID) == [question.id])
+        // The answer is recorded once, and a card reply can no longer answer it.
+        await chat.refresh()
+        #expect(fixture.session.files.events().filter { $0.kind == .reply }.count == 1)
+    }
+
     @Test func aDraftFromAnAddressedThreadStillSendsAfterItsFirstPacketArrives() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithoutPacket()
@@ -1033,7 +1106,7 @@ struct CoordinatorChatTests {
 
     @Test func cardsDescribeTheStageAndTheProjectsMergePolicy() {
         #expect(CoordinatorChatTaskView.label(.needsYou(.readyForReview)) == ("review", "blue"))
-        #expect(CoordinatorChatTaskView.label(.running) == ("working", "amber"))
+        #expect(CoordinatorChatTaskView.label(.running) == ("working", "working"))
         #expect(CoordinatorChatTaskView.label(.toShip) == ("merged · to ship", "violet"))
         var record = TaskRecord(createdAt: Date(), text: "t", title: "t", slug: "t", source: .cli)
         record.projectRoot = "/Users/tester/repos/lumen"

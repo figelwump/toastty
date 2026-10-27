@@ -328,11 +328,15 @@ extension TaskCoordinator {
 
     /// The message a fired watch sends: one line, so no agent reads part of
     /// it as a separate message.
+    /// How every watch notice starts, so readers of the task's transcript
+    /// can tell it from the user's input.
+    static let watchMessagePrefix = "[Toastty watch "
+
     static func watchMessage(_ watch: TaskWatch, targetTitle: String?) -> String {
         guard case .fired(_, let reason, let impossible, _) = watch.state else { return "" }
         let target = watch.targetTaskID.uuidString
         let name = targetTitle.map { "\"\($0.replacingOccurrences(of: "\n", with: " "))\" (\(target))" } ?? target
-        let prefix = "[Toastty watch \(watch.id.uuidString)] Task \(name) \(reason)"
+        let prefix = "\(watchMessagePrefix)\(watch.id.uuidString)] Task \(name) \(reason)"
         if impossible {
             return "\(prefix), so your watch until \(watch.condition.rawValue) can never fire."
         }
