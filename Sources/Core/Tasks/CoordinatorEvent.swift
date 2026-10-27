@@ -1,8 +1,6 @@
 import Foundation
 
-/// A card the coordinator posts to its chat with `toastty coordinator post`.
-/// Toastty appends each one to `coordinator/events.jsonl`; the chat renders
-/// a card from the live task, so an event holds only what names the card.
+/// A card or thread reply saved in `coordinator/events.jsonl`.
 public struct CoordinatorEvent: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         /// A task published a review packet.
@@ -12,6 +10,10 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         /// A task, or the coordinator itself, needs an answer from the user.
         case question
         case note
+        /// An internal record of a reply delivered through the chat.
+        case reply
+
+        public static var postingKinds: [Kind] { allCases.filter { $0 != .reply } }
 
         /// Every kind except a note is about one task.
         public var requiresTask: Bool { self != .note }
@@ -20,7 +22,16 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         public var requiresText: Bool { self == .question || self == .note }
     }
 
+    public enum ThreadRole: String, Codable, Sendable {
+        case userTask = "user-task"
+        case userCoordinator = "user-coordinator"
+        case coordinator
+        case agent
+    }
+
     public static let maximumTextLength = 4000
+    public static let maximumOptionCount = 6
+    public static let maximumOptionLength = 120
 
     public var id: UUID
     public var at: Date
@@ -29,14 +40,55 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
     public var text: String?
     /// The managed session that posted it.
     public var sessionID: String?
+    public var options: [String]
+    public var threadRole: ThreadRole?
+    /// The question answered by this reply, when the user replied to one.
+    public var questionID: UUID?
+    /// The source message's stable identity, used when importing a reply again.
+    public var sourceID: String?
 
-    public init(id: UUID = UUID(), at: Date, kind: Kind, taskID: UUID?, text: String?, sessionID: String?) {
+    public init(
+        id: UUID = UUID(), at: Date, kind: Kind, taskID: UUID?, text: String?, sessionID: String?,
+        options: [String] = [], threadRole: ThreadRole? = nil, questionID: UUID? = nil, sourceID: String? = nil
+    ) {
         self.id = id
         self.at = at
         self.kind = kind
         self.taskID = taskID
         self.text = text
         self.sessionID = sessionID
+        self.options = options
+        self.threadRole = threadRole
+        self.questionID = questionID
+        self.sourceID = sourceID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, at, kind, taskID, text, sessionID, options, threadRole, questionID, sourceID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        at = try container.decode(Date.self, forKey: .at)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        taskID = try container.decodeIfPresent(UUID.self, forKey: .taskID)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
+        // Old or hand-edited logs must not lose a whole question because its
+        // choices are malformed. New posts use the strict validation below.
+        let storedOptions = (try? container.decode([String].self, forKey: .options)) ?? []
+        var seen = Set<String>()
+        options = []
+        for rawOption in storedOptions {
+            let option = rawOption.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard option.isEmpty == false, option.count <= Self.maximumOptionLength, seen.insert(option).inserted else { continue }
+            options.append(option)
+            if options.count == Self.maximumOptionCount { break }
+        }
+        threadRole = try container.decodeIfPresent(ThreadRole.self, forKey: .threadRole)
+        questionID = try container.decodeIfPresent(UUID.self, forKey: .questionID)
+        sourceID = try container.decodeIfPresent(String.self, forKey: .sourceID)
     }
 
     /// Checks what the kind requires and trims the text.
@@ -45,10 +97,12 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         taskID: UUID?,
         text rawText: String?,
         sessionID: String?,
-        at: Date
+        at: Date,
+        options rawOptions: [String] = []
     ) throws -> CoordinatorEvent {
-        guard let kind = Kind(rawValue: rawKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
-            let kinds = Kind.allCases.map(\.rawValue).joined(separator: ", ")
+        guard let kind = Kind(rawValue: rawKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
+              Kind.postingKinds.contains(kind) else {
+            let kinds = Kind.postingKinds.map(\.rawValue).joined(separator: ", ")
             throw CoordinatorEventError("Unknown kind \"\(rawKind)\". Use one of: \(kinds).")
         }
         if kind.requiresTask, taskID == nil {
@@ -62,7 +116,23 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         if let nonEmptyText, nonEmptyText.count > maximumTextLength {
             throw CoordinatorEventError("A card's text is at most \(maximumTextLength) characters.")
         }
-        return CoordinatorEvent(at: at, kind: kind, taskID: taskID, text: nonEmptyText, sessionID: sessionID)
+        if kind != .question, rawOptions.isEmpty == false {
+            throw CoordinatorEventError("Only a question card accepts options.")
+        }
+        if rawOptions.count > maximumOptionCount {
+            throw CoordinatorEventError("A question has at most \(maximumOptionCount) options.")
+        }
+        let options = rawOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if options.contains(where: \.isEmpty) {
+            throw CoordinatorEventError("A question's options cannot be empty.")
+        }
+        if options.contains(where: { $0.count > maximumOptionLength }) {
+            throw CoordinatorEventError("A question's option is at most \(maximumOptionLength) characters.")
+        }
+        if Set(options).count != options.count {
+            throw CoordinatorEventError("A question's options must be different.")
+        }
+        return CoordinatorEvent(at: at, kind: kind, taskID: taskID, text: nonEmptyText, sessionID: sessionID, options: options)
     }
 
     /// One line of `events.jsonl`, without its line break.

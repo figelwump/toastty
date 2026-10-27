@@ -682,7 +682,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Post a card to the coordinator's chat: kind packet (a task published a review packet), task-started, question or note. Every kind but note names its task; question and note need text. Toastty appends it to coordinator/events.jsonl, and the chat shows the card from the task's live state. Only the coordinator's own session, or a caller outside any agent session, may post.",
+                summary: "Post to the coordinator's chat: kind packet (a task published a review packet), task-started, question or note. Every kind but note names its task; question and note need text. A note with a task goes into that task's card thread. Toastty saves each event in coordinator/events.jsonl. Only the coordinator's own session, or a caller outside any agent session, may post.",
                 selectors: [],
                 parameters: [
                     .init(
@@ -690,10 +690,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                         summary: "packet, task-started, question or note.",
                         valueType: .string,
                         required: true,
-                        allowedValues: CoordinatorEvent.Kind.allCases.map(\.rawValue)
+                        allowedValues: CoordinatorEvent.Kind.postingKinds.map(\.rawValue)
                     ),
                     .taskID(required: false),
                     .init(name: "text", summary: "What the card says, up to \(CoordinatorEvent.maximumTextLength) characters.", valueType: .string, required: false),
+                    .init(name: "options", summary: "A question's answer choice. At most \(CoordinatorEvent.maximumOptionCount) different, nonempty choices, each up to \(CoordinatorEvent.maximumOptionLength) characters after trimming. Repeat for more.", valueType: .string, required: false, repeatable: true),
                 ]
             )
         case .coordinatorShowTerminal:

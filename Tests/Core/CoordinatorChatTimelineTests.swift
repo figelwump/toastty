@@ -110,6 +110,118 @@ struct CoordinatorChatTimelineTests {
     }
 
     @Test
+    func taskNotesAndRepliesFormOneSharedThreadInsteadOfMoreCards() throws {
+        let question = CoordinatorEvent(
+            at: start, kind: .question, taskID: taskID, text: "Which base?", sessionID: nil, options: ["Main", "Feature"]
+        )
+        let note = event(.note, at: 10, task: taskID, text: "I checked both branches.")
+        let reply = CoordinatorEvent(
+            at: start.addingTimeInterval(20), kind: .reply, taskID: taskID, text: "Feature", sessionID: nil,
+            threadRole: .userCoordinator, questionID: question.id, sourceID: "user-turn"
+        )
+        let packet = event(.packet, at: 30, task: taskID)
+        let agent = CoordinatorEvent(
+            at: start.addingTimeInterval(40), kind: .reply, taskID: taskID, text: "The branch is ready.", sessionID: nil,
+            threadRole: .agent, sourceID: "agent-turn"
+        )
+        let standalone = event(.note, at: 50, text: "Checking other tasks.")
+        var data = Data()
+        for event in [question, note, reply, packet, agent, standalone] {
+            data.append(try event.jsonLine())
+            data.append(UInt8(ascii: "\n"))
+        }
+        let cards = CoordinatorChatTimeline.cards(events: CoordinatorEvent.decodeLog(data), packets: [:])
+        #expect(cards.map(\.id) == [question.id.uuidString, packet.id.uuidString, standalone.id.uuidString])
+        #expect(cards[0].options == ["Main", "Feature"])
+        #expect(cards[0].answer == "Feature")
+        #expect(cards[0].thread.map(\.role) == [.coordinator, .userCoordinator, .agent])
+        #expect(cards[0].thread.map(\.text) == ["I checked both branches.", "Feature", "The branch is ready."])
+        #expect(cards[1].thread == cards[0].thread)
+        #expect(cards.map(\.isCurrent) == [false, true, false])
+        #expect(cards[2].thread.isEmpty)
+    }
+
+    @Test
+    func onlyTheFirstMatchingUserReplyAnswersAnEarlierQuestion() {
+        let question = event(.question, at: 10, task: taskID, text: "Which base?")
+        func reply(_ role: CoordinatorEvent.ThreadRole, text: String = "Main", task: UUID? = nil, questionID: UUID? = nil) -> CoordinatorEvent {
+            CoordinatorEvent(
+                at: start.addingTimeInterval(20), kind: .reply, taskID: task ?? taskID, text: text, sessionID: nil,
+                threadRole: role, questionID: questionID ?? question.id
+            )
+        }
+        let cards = CoordinatorChatTimeline.cards(events: [
+            reply(.userTask, text: "Too early"), question,
+            reply(.coordinator), reply(.agent), reply(.userCoordinator, task: UUID()),
+            reply(.userTask, text: "  "), reply(.userTask, questionID: UUID()),
+            reply(.userTask, text: "Feature"), reply(.userCoordinator, text: "Main"),
+        ], packets: [:])
+        #expect(cards.count == 1)
+        #expect(cards[0].answer == "Feature")
+        let unanswered = CoordinatorChatTimeline.cards(events: [question, reply(.agent)], packets: [:])
+        #expect(unanswered[0].answer == nil)
+    }
+
+    @Test
+    func aReplyBeforeAnyPostedCardKeepsAThreadAndReusesTheNextCard() {
+        for role in [CoordinatorEvent.ThreadRole.userCoordinator, .userTask] {
+            let reply = CoordinatorEvent(at: start, kind: .reply, taskID: taskID,
+                                         text: "What changed?", sessionID: nil, threadRole: role)
+            let first = CoordinatorChatTimeline.cards(events: [reply], packets: [:])
+            #expect(first.count == 1)
+            #expect(first.first?.taskID == taskID)
+            #expect(first.first?.thread.map(\.text) == ["What changed?"])
+            let question = event(.question, at: 10, task: taskID, text: "Continue?")
+            let next = CoordinatorChatTimeline.cards(events: [reply, question], packets: [:])
+            #expect(next.count == 1)
+            #expect(next.first?.id == question.id.uuidString)
+            #expect(next.first?.thread == first.first?.thread)
+        }
+    }
+
+    @Test
+    func sourceMessagesDeduplicatePerTaskAndThreadsKeepTheLastHundredInStableTimeOrder() {
+        let note = event(.note, at: 0, task: taskID, text: "The task's first note.")
+        let otherTaskID = UUID()
+        let other = event(.question, at: 0, task: otherTaskID, text: "Continue?")
+        var events = [note, other]
+        for number in 1...101 {
+            events.append(CoordinatorEvent(
+                at: start.addingTimeInterval(TimeInterval(number / 2)), kind: .reply, taskID: taskID,
+                text: "Reply \(number)", sessionID: nil, threadRole: .userTask, sourceID: "reply-\(number)"
+            ))
+        }
+        events.append(CoordinatorEvent(
+            at: start.addingTimeInterval(200), kind: .reply, taskID: taskID,
+            text: "Duplicate", sessionID: nil, threadRole: .userTask, sourceID: "reply-101"
+        ))
+        events.append(CoordinatorEvent(
+            at: start.addingTimeInterval(200), kind: .reply, taskID: otherTaskID,
+            text: "Another task", sessionID: nil, threadRole: .userTask, sourceID: "reply-101"
+        ))
+        let cards = CoordinatorChatTimeline.cards(events: events, packets: [:])
+        #expect(cards.count == 2)
+        #expect(cards[0].id == note.id.uuidString && cards[0].kind == .taskStarted && cards[0].text == nil)
+        #expect(cards[0].thread.count == 100)
+        #expect(cards[0].thread.first?.text == "Reply 2")
+        #expect(cards[0].thread.last?.text == "Reply 101")
+        #expect(cards[1].thread.map(\.text) == ["Another task"])
+        #expect(cards.allSatisfy { $0.isCurrent })
+    }
+
+    @Test
+    func theCurrentCardIsTheNewestCardThatANewerPacketDidNotReplace() {
+        let question = event(.question, at: 200, task: taskID, text: "Ship it?")
+        let cards = CoordinatorChatTimeline.cards(
+            events: [question, event(.packet, at: 100, task: taskID)],
+            packets: [taskID: [stamp(1, at: 90), stamp(2, at: 150)]]
+        )
+        #expect(cards.map(\.kind) == [.packet, .packet, .question])
+        #expect(cards.map(\.superseded) == [true, false, false])
+        #expect(cards.map(\.isCurrent) == [false, false, true])
+    }
+
+    @Test
     func theChatCoversOnlyTheSelectedCoordinatorWorkspaceUntilItsTerminalShows() throws {
         var state = AppState.bootstrap()
         let windowID = try #require(state.windows.first?.id)

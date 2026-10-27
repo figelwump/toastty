@@ -96,6 +96,10 @@ struct CoordinatorChatCardView: Encodable, Equatable {
     var text: String?
     var superseded: Bool
     var isNew: Bool
+    var options: [String]
+    var answer: String?
+    var thread: [CoordinatorChatTimeline.ThreadEntry]
+    var isCurrent: Bool
     var task: CoordinatorChatTaskView?
     var packet: CoordinatorChatPacketView?
 
@@ -106,9 +110,40 @@ struct CoordinatorChatCardView: Encodable, Equatable {
         text = card.text
         superseded = card.superseded
         isNew = card.isNew
+        options = card.options
+        answer = card.answer
+        thread = card.thread
+        isCurrent = card.isCurrent
         self.task = task
         self.packet = packet
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, id, at, kind, text, superseded, isNew, options, answer, thread, isCurrent, task, packet
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(type, forKey: .type)
+        try values.encode(id, forKey: .id)
+        try values.encode(at, forKey: .at)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(text, forKey: .text)
+        try values.encode(superseded, forKey: .superseded)
+        try values.encode(isNew, forKey: .isNew)
+        try values.encode(options, forKey: .options)
+        // The page distinguishes unanswered (null) from an answer's text.
+        try values.encode(answer, forKey: .answer)
+        try values.encode(thread, forKey: .thread)
+        try values.encode(isCurrent, forKey: .isCurrent)
+        try values.encode(task, forKey: .task)
+        try values.encode(packet, forKey: .packet)
+    }
+
+}
+
+enum CoordinatorChatReplyTarget: String, Encodable {
+    case task, coordinator
 }
 
 struct CoordinatorChatTaskView: Encodable, Equatable {
@@ -127,6 +162,7 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
     var mergePolicy: String
     var canMerge: Bool
     var canReply: Bool
+    var defaultReplyTarget: CoordinatorChatReplyTarget = .coordinator
 
     static func make(
         taskID: UUID,
@@ -369,27 +405,33 @@ struct CoordinatorTaskAsk: Equatable {
     var title: String
     var packetVersion: Int?
     var text: String
+    var replyID: UUID?
+    var questionID: UUID?
 
     /// The title is quoted with `\"` and `\\` escaped, so nothing in it can
     /// look like the end of the line that names the task.
     var message: String {
         let packet = packetVersion.map { ", packet v\($0)" } ?? ""
+        let references = replyID.map { ", reply ID \($0.uuidString)" } ?? ""
+        let question = questionID.map { ", question ID \($0.uuidString)" } ?? ""
         let quoted = title.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        return "About task \"\(quoted)\" (task ID \(taskID.uuidString)\(packet)): \(text)"
+        return "About task \"\(quoted)\" (task ID \(taskID.uuidString)\(packet)\(references)\(question)): \(text)"
     }
 
-    init(taskID: UUID, title: String, packetVersion: Int?, text: String) {
+    init(taskID: UUID, title: String, packetVersion: Int?, text: String, replyID: UUID? = nil, questionID: UUID? = nil) {
         self.taskID = taskID
         self.title = title
         self.packetVersion = packetVersion
         self.text = text
+        self.replyID = replyID
+        self.questionID = questionID
     }
 
     /// The ask a message carries, or `nil` for anything else the user typed.
     /// An older message whose title has an unescaped quote stays as typed.
     init?(message: String) {
         // A regex is not Sendable, so it is built here rather than kept.
-        let pattern = /About task "(?<title>(?:[^"\\]|\\.)*)" \(task ID (?<id>[0-9A-Fa-f-]{36})(?:, packet v(?<version>[0-9]+))?\): (?<text>.*)/
+        let pattern = /About task "(?<title>(?:[^"\\]|\\.)*)" \(task ID (?<id>[0-9A-Fa-f-]{36})(?:, packet v(?<version>[0-9]+))?(?:, reply ID (?<reply>[0-9A-Fa-f-]{36}))?(?:, question ID (?<question>[0-9A-Fa-f-]{36}))?\): (?<text>.*)/
             .dotMatchesNewlines()
         guard let match = message.wholeMatch(of: pattern),
               let taskID = UUID(uuidString: String(match.output.id)) else { return nil }
@@ -399,7 +441,9 @@ struct CoordinatorTaskAsk: Equatable {
             taskID: taskID,
             title: String(match.output.title).replacing(/\\(.)/.dotMatchesNewlines()) { String($0.output.1) },
             packetVersion: match.output.version.flatMap { Int($0) },
-            text: text
+            text: text,
+            replyID: match.output.reply.flatMap { UUID(uuidString: String($0)) },
+            questionID: match.output.question.flatMap { UUID(uuidString: String($0)) }
         )
     }
 }
@@ -427,6 +471,9 @@ struct CoordinatorChatTranscript {
         /// chat names beside the message.
         var aboutTaskID: String?
         var aboutTitle: String?
+        var replyID: UUID?
+        var questionID: UUID?
+        var sourceID: String?
     }
 
     private(set) var items: [Item] = []
@@ -489,7 +536,8 @@ struct CoordinatorChatTranscript {
             if let ask = CoordinatorTaskAsk(message: text) {
                 append(Item(
                     type: .message, id: id, at: event.timestamp, role: "user", text: ask.text,
-                    aboutTaskID: ask.taskID.uuidString, aboutTitle: ask.title
+                    aboutTaskID: ask.taskID.uuidString, aboutTitle: ask.title,
+                    replyID: ask.replyID, questionID: ask.questionID, sourceID: event.eventID
                 ))
             } else if let request = CoordinatorProjectRequest(message: text) {
                 append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "@\(request.projectName) \(request.text)"))
@@ -546,9 +594,10 @@ enum CoordinatorChatPageEvent: Equatable {
     case taskAction(rowID: String, actionID: String)
     case send(String)
     case project(id: String, text: String)
-    case reply(taskID: UUID, version: Int, text: String)
-    case ask(taskID: UUID, version: Int?, text: String)
+    case reply(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
+    case ask(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
     case merge(UUID)
+    case taskMenu(taskID: UUID, rect: CGRect)
     case openTaskSpace(UUID)
     case openURL(String)
     case openReport(taskID: UUID, version: Int, screenshot: String?)
@@ -571,6 +620,11 @@ enum CoordinatorChatPageEvent: Equatable {
             guard let number = body["version"] as? NSNumber, let value = Int(exactly: number.doubleValue), value > 0 else { return nil }
             return value
         }
+        let cardID = (body["cardID"] as? String).flatMap { $0.count <= 100 ? $0 : nil }
+        let questionID = (body["questionID"] as? String).flatMap(UUID.init(uuidString:))
+        if let value = body["cardID"], !(value is NSNull), cardID == nil { return nil }
+        if let value = body["questionID"], !(value is NSNull), questionID == nil { return nil }
+        if type == "reply" || type == "ask", let value = body["version"], !(value is NSNull), version() == nil { return nil }
         switch type {
         case "ready": self = .ready
         case "rendered":
@@ -591,11 +645,21 @@ enum CoordinatorChatPageEvent: Equatable {
                   let text = text() else { return nil }
             self = .project(id: id, text: text)
         case "reply":
-            guard let taskID = taskID(), let version = version(), let text = text() else { return nil }
-            self = .reply(taskID: taskID, version: version, text: text)
+            guard let taskID = taskID(), let text = text() else { return nil }
+            self = .reply(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)
         case "ask":
             guard let taskID = taskID(), let text = text() else { return nil }
-            self = .ask(taskID: taskID, version: version(), text: text)
+            self = .ask(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)
+        case "taskMenu":
+            guard let taskID = taskID() else { return nil }
+            func coordinate(_ key: String) -> Double? {
+                guard let value = body[key] as? Double, value.isFinite, abs(value) <= 100_000 else { return nil }
+                return value
+            }
+            guard let x = coordinate("x"), let y = coordinate("y"),
+                  let width = coordinate("width"), let height = coordinate("height"),
+                  width > 0, height > 0 else { return nil }
+            self = .taskMenu(taskID: taskID, rect: CGRect(x: x, y: y, width: width, height: height))
         case "merge":
             guard let taskID = taskID() else { return nil }
             self = .merge(taskID)

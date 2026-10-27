@@ -35,11 +35,10 @@ what to look at, the checks with pass or fail and their logs, what was not
 verified, and screenshot thumbnails. Its actions are:
 
 - **Reply**, to the task: Toastty sends `Review note on packet vN: <your
-  text>` to the task's agent with `task send`, and the task leaves Needs you
-  until its next packet. Switch the reply to **to coordinator** to ask the
-  coordinator about the task instead. The coordinator receives your text after
-  a line that names the task and its ID; the chat shows only your text, with
-  an **About <task>** link that opens the task's card.
+  text>` to the task's agent with `task send`. Switch the reply to
+  **to coordinator** to ask the coordinator about the task instead. The coordinator receives your text after
+  a line that names the task and its ID. Your reply appears in the task's card
+  thread.
 - **Merge**: asks first, naming what Merge does in the task's project from
   `tasks.toml`, then runs the same merge as the task's Merge button. The
   coordinator never merges on its own.
@@ -50,12 +49,31 @@ verified, and screenshot thumbnails. Its actions are:
   numbered mark. Marks stay with their screenshot when you change the view
   or width. **Send N marks to <task>** sends one `Review note on packet vN:`
   message to the task, with each note's screenshot name, then opens its card.
+  The notes also appear once in that task's thread.
   Marks clear only after Toastty confirms delivery. If delivery fails, check
   the task terminal before sending again. The browser toolbar's annotation
   tool still sends viewport captures to an agent; use the report's controls
   for notes about a packet.
 - **Open task space**, and the pull request link, which opens in the right
   panel.
+
+Each task's cards show the same thread. It includes your replies to the task
+or coordinator, notes the coordinator posts with `--task`, and replies from
+that task's own agent conversation. Replies from a card appear only in its
+thread, so the main conversation does not repeat them. Ordinary coordinator
+messages stay in the main conversation; the coordinator uses a task note for
+a reply that belongs in a thread. Earlier user replies with an **About <task>**
+link also move into that task's thread.
+
+Question cards can show answer choices. Click one, or type a reply, and choose
+**to task** or **to coordinator**. The default is **to task** while the task's
+agent waits for input, and **to coordinator** otherwise. Your chosen target
+stays fixed while you compose the reply. After a successful send, the card
+shows **Answered** with your answer. The chat no longer counts that question as
+unanswered. The task keeps its live agent status and any other reason it needs you.
+
+Threads and answers survive a relaunch. Each card shows the latest 100 thread
+entries; the full event log stays on disk.
 
 When a task publishes a newer packet, the chat adds a card for it at the end,
 marked **new**, and the task's older packet cards collapse to one line.
@@ -76,9 +94,10 @@ pick a task or project. The list matches task slugs, task titles, and project
 names. Use the arrow keys and Return to pick, or click an option.
 
 A leading `@<task-slug>` sends the remaining text to the coordinator through
-the same task envelope as a card's **to coordinator** reply. The chat shows
-an **About <task>** link. Known done and archived tasks remain available for
-these questions. A leading project pick gives the coordinator an
+the same task envelope as a card's **to coordinator** reply. The question
+appears in that task's card thread. Toastty keeps a card for the thread even
+if the coordinator has not posted one yet. Known done and archived tasks remain
+available for these questions. A leading project pick gives the coordinator an
 explicit routing hint; it uses that project without asking again and records
 your pick in `routing.md`. Only the first token is an address. Later `@`
 tokens stay in the message. A complete, unique known token also works when
@@ -138,16 +157,22 @@ The coordinator tells you about a task by posting a card:
 ```bash
 toastty coordinator post task-started --task <task-id>
 toastty coordinator post packet --task <task-id>
-toastty coordinator post question --task <task-id> "Which base branch?"
+toastty coordinator post question --task <task-id> "Which base branch?" --option "Remote main" --option "Feature branch"
+toastty coordinator post note --task <task-id> "The task now uses the feature branch."
 toastty coordinator post note "Starting a fresh coordinator session."
 ```
 
 Every kind except `note` names its task, and `question` and `note` need text, at
-most 4000 characters. Toastty appends each card to `events.jsonl` as one JSON
-line with its ID, time, kind, task, text and the session that posted it. The
-chat shows each card from the task's live state, so a card holds only what
-names it. Only the coordinator's own session, or a command outside any agent
-session, may post; a task's agent reports through its task instead.
+most 4000 characters. A question can have up to six different choices, each at
+most 120 characters after spaces at each end are removed. Add each choice with
+`--option`; empty choices are rejected. The user can click a choice or type an
+answer. A note with `--task` appears in that task's card thread. A note without
+it appears in the main chat.
+
+Toastty appends each event to `events.jsonl` as one JSON line. It records the
+card, choices, or reply and the session that posted it. Cards read the task's
+current state when shown. Only the coordinator's own session, or a command
+outside any agent session, may post; a task's agent reports through its task instead.
 
 `toastty coordinator status` reports the coordinator's state (`off`,
 `waitingForWindow`, `waitingForRestore`, `starting`, `running` or `failed` with
@@ -155,7 +180,7 @@ a reason), its workspace, terminal and session, and the paths of its files.
 
 ## Files
 
-- `~/.toastty/coordinator/events.jsonl`: the cards, oldest first.
+- `~/.toastty/coordinator/events.jsonl`: cards and thread replies, oldest first.
 - `~/.toastty/coordinator/routing.md`: the coordinator's routing notes, with
   sections for projects, your picks and past tasks. Toastty creates it from a
   template the first time and never changes it after that; the coordinator adds

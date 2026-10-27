@@ -2,11 +2,11 @@
 // `window.toasttyCoordinatorChat.receive(state)`; the page sends actions back
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
-import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline } from "./render";
+import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, replyTarget } from "./render";
 import { addressFor, addressMatches, pickedAddress } from "./composer";
 import type { AddressPick, ComposerAddress } from "./composer";
 import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
-import type { ChatEvent, ChatState, PageView } from "./types";
+import type { ChatEvent, ChatItem, ChatState, PageView } from "./types";
 
 interface WebKitMessageHandler {
   postMessage: (event: ChatEvent) => void;
@@ -32,7 +32,7 @@ let lastViewToken: number | null = null;
 let lastNoticeToken: number | null = null;
 let nextToken = 1;
 /// Sends waiting for the app's answer: what to clear once it is taken.
-const pendingSends = new Map<number, { draftKey: string; text: string }>();
+const pendingSends = new Map<number, { draftKey: string | null; text: string; cardID?: string }>();
 const composerDraftKey = "composer";
 
 const header = document.getElementById("header")!;
@@ -114,6 +114,13 @@ function render() {
   const focusedForm = (document.activeElement as HTMLElement | null)?.closest<HTMLFormElement>("form.replybox")?.dataset.id;
   const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
 
+  // Keep the target the user first saw. A later task update must not send a
+  // retained draft to a different recipient.
+  for (const item of state.items) {
+    if (item.type === "card" && item.task && ui.expanded.has(item.id) && !ui.replyTarget.has(item.id)) {
+      ui.replyTarget.set(item.id, replyTarget(item, ui));
+    }
+  }
   scroll.innerHTML = renderTimeline(state, ui);
 
   if (focusedForm) {
@@ -135,7 +142,8 @@ function receive(next: ChatState) {
   if (next.ack && pendingSends.has(next.ack.token)) {
     const sent = pendingSends.get(next.ack.token)!;
     pendingSends.delete(next.ack.token);
-    if (next.ack.ok) {
+    if (sent.cardID) ui.pendingCards.delete(sent.cardID);
+    if (next.ack.ok && sent.draftKey !== null) {
       if (sent.draftKey === composerDraftKey && composerInput.value === sent.text) {
         composerInput.value = "";
         addressPick = null;
@@ -212,6 +220,27 @@ function taskRow(id: string | undefined) {
   return state?.tasks?.find((row) => row.id === id) ?? null;
 }
 
+function card(id: string | undefined): Extract<ChatItem, { type: "card" }> | null {
+  return state?.items.find((item): item is Extract<ChatItem, { type: "card" }> => item.type === "card" && item.id === id) ?? null;
+}
+
+function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clearDraft: boolean) {
+  if (!state || !item.task || !text || ui.pendingCards.has(item.id) || !checkLength(text)) return;
+  const target = replyTarget(item, ui);
+  if (target === "task" ? !item.task.canReply : !state.coordinator.canSend) {
+    notice.textContent = target === "task" ? "The task cannot receive replies now. Your draft is kept." : "The coordinator cannot receive messages now. Your draft is kept.";
+    notice.className = "notice error";
+    return;
+  }
+  const token = track(clearDraft ? item.id : null, item.id);
+  const fields = {
+    taskID: item.task.id, version: item.packet?.version ?? null, text, token, cardID: item.id,
+    questionID: item.kind === "question" && item.answer === null ? item.id : null,
+  };
+  post({ type: target === "task" ? "reply" : "ask", ...fields });
+  render();
+}
+
 function runTaskAction(rowID: string, actionID: string) {
   tasksUI.menuOpen = null;
   tasksUI.confirming = null;
@@ -279,10 +308,28 @@ document.addEventListener("click", (event) => {
       render();
       break;
     }
-    case "reply-to":
-      ui.replyTarget.set(data.id!, data.to === "coordinator" ? "coordinator" : "task");
+    case "reply-to": {
+      const item = card(data.id);
+      const to = data.to === "coordinator" ? "coordinator" : "task";
+      if (!item?.task || ui.pendingCards.has(item.id) || (to === "task" ? !item.task.canReply : !state?.coordinator.canSend)) break;
+      ui.replyTarget.set(item.id, to);
       render();
+      document.getElementById(`reply-${item.id}`)?.focus();
       break;
+    }
+    case "answer": {
+      const item = card(data.id);
+      const index = Number(data.index);
+      if (!item || item.kind !== "question" || item.answer !== null || !Number.isInteger(index) || index < 0) break;
+      const answer = item.options[index];
+      if (answer) sendCard(item, answer, false);
+      break;
+    }
+    case "card-menu": {
+      const bounds = target.getBoundingClientRect();
+      post({ type: "taskMenu", taskID: data.task!, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+      break;
+    }
     case "merge":
       ui.confirmingMerge = data.id!;
       render();
@@ -327,14 +374,8 @@ document.addEventListener("submit", (event) => {
   if (!form.classList.contains("replybox")) return;
   const input = form.querySelector("input")!;
   const text = input.value.trim();
-  if (!text || !checkLength(text)) return;
-  const version = form.dataset.version ? Number(form.dataset.version) : null;
-  const token = track(form.dataset.id!);
-  if (form.dataset.to === "task" && version !== null) {
-    post({ type: "reply", taskID: form.dataset.task!, version, text, token });
-  } else {
-    post({ type: "ask", taskID: form.dataset.task!, version, text, token });
-  }
+  const item = card(form.dataset.id);
+  if (item) sendCard(item, text, true);
 });
 
 // Drafts survive re-renders and closing the card.
@@ -344,9 +385,13 @@ document.addEventListener("input", (event) => {
   if (form) ui.drafts.set(form.dataset.id!, input.value);
 });
 
-function track(draftKey: string): number {
+function track(draftKey: string | null, cardID?: string): number {
   const token = nextToken++;
-  pendingSends.set(token, { draftKey, text: draftKey === composerDraftKey ? composerInput.value : ui.drafts.get(draftKey) ?? "" });
+  pendingSends.set(token, {
+    draftKey, cardID,
+    text: draftKey === composerDraftKey ? composerInput.value : draftKey === null ? "" : ui.drafts.get(draftKey) ?? "",
+  });
+  if (cardID) ui.pendingCards.add(cardID);
   return token;
 }
 

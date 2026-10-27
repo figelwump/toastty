@@ -19,7 +19,7 @@ captures the window with automation.capture_screenshot at each step:
    and Full report opens in the right panel;
 3. a question asked from the card's **to coordinator** reply reaches the
    coordinator with the task named, and the chat shows only the typed text,
-   tied to the task; then a reply to the task reaches its agent as
+   in the task card's thread; then a reply to the task reaches its agent as
    `Review note on packet v1: …`, and the task leaves Needs you;
 4. packet v2 adds a new card, and the v1 card collapses;
 5. with a pull request link on the task, Open PR opens it in the right panel;
@@ -241,6 +241,11 @@ def main():
     def cards(kind=None):
         return [i for i in chat_state()['items'] if i['type'] == 'card' and (kind is None or i['kind'] == kind)]
 
+    def thread_entry(task_id, role, text):
+        current = next((c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent')), None)
+        return next((entry for entry in (current or {}).get('thread', [])
+                     if entry['role'] == role and entry['text'] == text), None)
+
     def open_card(task_id, version):
         """The task's card for a packet version, opened. A card the
         coordinator posts replaces one the chat added, with a new ID, so the
@@ -314,23 +319,25 @@ def main():
         question = 'In one short sentence, what does this task change? Do not act on it.'
         require(page('click', f"reply-to-coordinator-{open_card(task_id, 1)['id']}"), 'Could not switch the reply to the coordinator')
         require(page('type', f"reply-{open_card(task_id, 1)['id']}", question), 'Could not type the question')
-        asked = wait_for('the question in the chat', waiting(lambda: next(
-            (i for i in chat_state()['items'] if i['type'] == 'message' and i.get('role') == 'user'
-             and i.get('aboutTaskID') == task_id), None)), timeout=600, interval=3)
-        require(asked['text'] == question, f'The chat shows more than the question: {asked}')
+        asked = wait_for('the coordinator question in the task thread',
+                         waiting(lambda: thread_entry(task_id, 'user-coordinator', question)), timeout=600, interval=3)
+        require(not any(i.get('aboutTaskID') == task_id and i.get('text') == question for i in chat_state()['items']),
+                'The scoped question was duplicated outside its card thread')
         capture('e2e-3-asked')
-        step('3a question to the coordinator shows only its text', item=asked)
+        step('3a question to the coordinator appears in the task thread', item=asked)
 
-        # An exact known slug in the composer uses the same strict ask envelope.
+        # An exact known slug in the composer uses the same strict ask envelope
+        # and durable task thread as a card reply.
         addressed_question = 'What is left to verify? Answer briefly and do not change the task.'
         record = cli_result('task', 'get', task_id)
         wait_for('the composer to accept @task', waiting(lambda: chat_state()['canSend']), timeout=300, interval=2)
         require(page('type', 'composer-input', f"@{record['slug']} {addressed_question}"), 'Could not send @task')
-        addressed = wait_for('the @task message with its About link', waiting(lambda: next(
-            (i for i in chat_state()['items'] if i.get('aboutTaskID') == task_id and i.get('text') == addressed_question), None)),
-            timeout=300, interval=2)
+        addressed = wait_for('the @task message in the task thread',
+                             waiting(lambda: thread_entry(task_id, 'user-coordinator', addressed_question)), timeout=300, interval=2)
+        require(not any(i.get('aboutTaskID') == task_id and i.get('text') == addressed_question for i in chat_state()['items']),
+                'The @task message was duplicated outside its card thread')
         capture('e2e-3-addressed')
-        step('3b @task uses the strict task envelope', item=addressed, slug=record['slug'])
+        step('3b @task uses the strict task envelope and thread', item=addressed, slug=record['slug'])
 
         reply = 'Please change it to "Hello coordinator!" with an exclamation mark, then publish packet v2 with the same screenshots.'
         # Drive report controls and their WebKit bridge, not task.send.
@@ -342,6 +349,13 @@ def main():
         capture('e2e-3-report-mark')
         require(report_action(report_id, 'click', 'report-send'), 'Could not send the marks')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
+        mark_text = f'1 marks on the screenshots:\n1. {reply} [after-390]'
+        marked = wait_for('the report marks in the task thread',
+                          lambda: thread_entry(task_id, 'user-task', mark_text), timeout=30, interval=1)
+        current_thread = next(c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent'))['thread']
+        require(sum(e['text'] == mark_text and e['role'] == 'user-task' for e in current_thread) == 1,
+                'The report marks were duplicated in the task thread')
+        step('3c report marks entered the task thread once', item=marked)
         after = cli_result('task', 'get', task_id)
         require(after['readyForReviewAt'] is None, f'The task is still ready for review: {after}')
         task_space = after['setup']['taskSpaceWorkspaceID']
@@ -358,6 +372,8 @@ def main():
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
+        require(thread_entry(task_id, 'user-task', mark_text), 'The marks disappeared from the newer packet card thread')
+        require(thread_entry(task_id, 'user-coordinator', addressed_question), 'The @task question disappeared from the newer packet card thread')
         # A card the coordinator posts for v1 replaces one the chat added, so
         # the v1 card is found by its version.
         olds = [c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1]

@@ -226,6 +226,9 @@ struct CoordinatorAllTasksTests {
         func receive(_: Data) {}
         func run(_: String) async -> Bool { false }
         func takeKeyboardFocus() {}
+        func showTaskMenu(sections: [[TaskBoardPresentation.MenuItem]], rect: CGRect, run: @escaping (TaskBoardPresentation.MenuItem) -> Void) -> Bool {
+            false
+        }
         func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool {
             opened.append(taskID)
             return true

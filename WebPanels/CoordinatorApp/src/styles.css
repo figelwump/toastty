@@ -124,6 +124,19 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .btn:hover { border-color: var(--dim); }
 .btn.primary { background: var(--green); color: #10241a; border-color: transparent; font-weight: 600; }
 .confirm { background: var(--raised2); border-radius: 8px; padding: 9px 11px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.thread { border-top: 1px solid var(--line); padding-top: 9px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+.tmsg { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; }
+.tmsg .who { font-family: var(--mono); font-size: 10.5px; color: var(--dim); padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmsg .who.agent { color: var(--blue); }
+.tmsg .who.co { color: var(--amber); }
+.tmsg .txt { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.tmsg .txt.md { white-space: normal; }
+.opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.answer { display: flex; align-items: baseline; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.answer .txt { min-width: 0; white-space: pre-wrap; }
+.card button:disabled { cursor: default; opacity: .5; }
+.card button:disabled:hover { border-color: var(--line); }
+@media (max-width: 640px) { .tmsg { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .replybox { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 5px 6px; }
 .replybox:focus-within { border-color: var(--dim); }
 .replybox input { flex: 1; min-width: 0; padding: 3px 2px; }
