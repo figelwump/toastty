@@ -63,7 +63,7 @@ verified, and screenshot thumbnails. Its actions are:
 - **Open task space**, and the pull request link, which opens in the right
   panel.
 
-Each task's cards show the same thread. It includes your replies to the task
+Each task has one current card. Its thread includes your replies to the task
 or coordinator, notes the coordinator posts with `--task`, and replies from
 that task's own agent conversation. Replies from a card appear only in its
 thread, so the main conversation does not repeat them. Ordinary coordinator
@@ -81,11 +81,31 @@ unanswered. The task keeps its live agent status and any other reason it needs y
 Threads and answers survive a relaunch. Each card shows the latest 100 thread
 entries; the full event log stays on disk.
 
-When a task publishes a newer packet, the chat adds a card for it at the end,
-marked **new**, and the task's older packet cards collapse to one line.
+When a task gets a new event or packet, its card moves to that time in the
+chat. Transcript messages stay in place. A newer packet is marked **new**;
+**Earlier reports** inside the card opens older reports. An unanswered
+question stays visible when a packet arrives. A saved reply keeps the question
+and packet version it was written for.
+
+Before a task exists, the coordinator can post a project question without
+`--task`. It shows the request, the reason for asking, and project choices.
+Known projects show their titles. If two titles are the same, a tooltip shows
+the path. Unknown choices stay literal. The answer keeps the posted ID or path.
+A pick reaches the coordinator in a `Coordinator route answer: ` JSON envelope
+with `questionID`, `replyID`, `question`, and `answer`. The coordinator resolves
+the project, starts the task, and adds the pick to `routing.md`. The app saves
+delivery state before sending. If receipt is uncertain, choices stay disabled
+across relaunches until the provider echo confirms delivery; inspect the
+coordinator terminal before starting the request another way.
+
+A **stuck** card shows the agent's failure detail, **Open the task space**, and
+**Archive it**. Archive uses the usual native confirmation and checks for work
+that would be lost. Moving a started task between projects and handing it to
+another agent are not offered; both need a safe change to its saved session
+and worktree state.
 **routing.md** in the chat's header opens the routing notes in the right panel.
 `toastty coordinator show --task <task-id>` opens the chat and scrolls to that
-task's newest packet card, or to its newest card when that is a question.
+task's current card.
 
 The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
 one opens its card in the chat; see
@@ -194,15 +214,18 @@ The coordinator tells you about a task by posting a card:
 toastty coordinator post task-started --task <task-id>
 toastty coordinator post packet --task <task-id>
 toastty coordinator post question --task <task-id> "Which base branch?" --option "Remote main" --option "Feature branch"
+toastty coordinator post question "Which project is dark mode for? Both projects have settings." --option "/repos/app" --option "/repos/site"
 toastty coordinator post note --task <task-id> "The task now uses the feature branch."
 toastty coordinator post note "Starting a fresh coordinator session."
 ```
 
-Every kind except `note` names its task, and `question` and `note` need text, at
+`packet` and `task-started` name a task. `question` and `note` need text, at
 most 4000 characters. A question can have up to six different choices, each at
 most 120 characters after spaces at each end are removed. Add each choice with
 `--option`; empty choices are rejected. The user can click a choice or type an
-answer. A note with `--task` appears in that task's card thread. A note without
+answer to a task question. A question without `--task` requires project choices;
+it accepts only those choices and sends the pick to the coordinator. Use
+unambiguous project paths or IDs as choices. A note with `--task` appears in that task's card thread. A note without
 it appears in the main chat.
 
 Toastty appends each event to `events.jsonl` as one JSON line. It records the

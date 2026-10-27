@@ -5,6 +5,20 @@ import Testing
 struct CoordinatorEventTests {
     private let at = Date(timeIntervalSince1970: 1_792_800_000)
 
+    @Test func aProjectQuestionNeedsChoicesButNoTask() throws {
+        let question = try CoordinatorEvent.validated(kind: "question", taskID: nil,
+            text: "Which project is dark mode for?\nTwo projects have settings.", sessionID: nil, at: at,
+            options: [" /repos/app ", "/repos/site"])
+        #expect(question.taskID == nil && question.options == ["/repos/app", "/repos/site"])
+        #expect(CoordinatorEvent.decodeLog(try question.jsonLine()) == [question])
+        #expect(throws: CoordinatorEventError.self) {
+            try CoordinatorEvent.validated(kind: "question", taskID: nil, text: "Which project?", sessionID: nil, at: at)
+        }
+        let pending = CoordinatorEvent(at: at, kind: .reply, taskID: nil, text: "/repos/app", sessionID: nil,
+                                       threadRole: .userCoordinator, questionID: question.id, delivery: .pending)
+        #expect(CoordinatorEvent.decodeLog(try pending.jsonLine()) == [pending])
+    }
+
     @Test
     func checksWhatEachKindNeeds() throws {
         let taskID = UUID()

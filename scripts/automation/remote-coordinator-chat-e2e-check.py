@@ -21,7 +21,7 @@ captures the window with automation.capture_screenshot at each step:
    coordinator with the task named, and the chat shows only the typed text,
    in the task card's thread; then a reply to the task reaches its agent as
    `Review note on packet v1: …`, and the task leaves Needs you;
-4. packet v2 adds a new card, and the v1 card collapses;
+4. packet v2 updates the only task card and retains v1 in report history;
 5. with a pull request link on the task, Open PR opens it in the right panel;
    Merge asks first, naming the direct merge policy, and Merge in the
    question merges at once: the task is done.
@@ -349,7 +349,7 @@ def main():
         capture('e2e-3-report-mark')
         require(report_action(report_id, 'click', 'report-send'), 'Could not send the marks')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
-        mark_text = f'1 marks on the screenshots:\n1. {reply} [after-390]'
+        mark_text = f'1 mark on the screenshots:\n1. {reply} [after-390]'
         marked = wait_for('the report marks in the task thread',
                           lambda: thread_entry(task_id, 'user-task', mark_text), timeout=30, interval=1)
         current_thread = next(c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent'))['thread']
@@ -361,29 +361,27 @@ def main():
         task_space = after['setup']['taskSpaceWorkspaceID']
         wait_for('the review note in the task terminal', lambda: terminal_shows(task_space, 'Review note on packet v1'),
                  timeout=60, interval=2)
-        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 marks on the screenshots:')
+        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 mark on the screenshots:')
                  and terminal_shows(task_space, '[after-390]'), timeout=60, interval=2)
         # The agent's turn starts a moment after the note arrives.
         working = wait_for('the task to leave Needs you', lambda: (lambda r: r if not r['stage'].get('needsUser') else None)(
             cli_result('task', 'get', task_id)), timeout=120, interval=2)
         capture('e2e-3-replied')
         step('3c report marks sent to the task', stage=working.get('stage'),
-             expectedMessage=f'Review note on packet v1: 1 marks on the screenshots:\n1. {reply} [after-390]')
+             expectedMessage=f'Review note on packet v1: 1 mark on the screenshots:\n1. {reply} [after-390]')
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
+        task_cards = [c for c in cards() if c['taskID'] == task_id]
+        require(len(task_cards) == 1 and task_cards[0]['id'] == new_card['id'],
+                f'Packet v2 duplicated the task card: {task_cards}')
+        require(new_card.get('packetVersions') == [1, 2] and not new_card['superseded'],
+                f'Packet v2 lost its report history: {new_card}')
         require(thread_entry(task_id, 'user-task', mark_text), 'The marks disappeared from the newer packet card thread')
         require(thread_entry(task_id, 'user-coordinator', addressed_question), 'The @task question disappeared from the newer packet card thread')
-        # A card the coordinator posts for v1 replaces one the chat added, so
-        # the v1 card is found by its version.
-        olds = [c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1]
-        require(olds and all(c['superseded'] for c in olds), f'No collapsed v1 card: {cards("packet")}')
-        require(new_card['isNew'], f'v2 is not new: {new_card}')
-        expanded = chat_state()['expandedCardIDs']
-        require(not any(c['id'] in expanded for c in olds), 'The superseded v1 card stayed open')
         open_card(task_id, 2)
         capture('e2e-4-packet-v2')
-        step('4 packet v2 card is new and v1 collapsed', newCard=new_card['id'])
+        step('4 packet v2 updated one task card with both reports', cardID=new_card['id'], packetVersions=[1, 2])
 
         record = cli_result('task', 'get', task_id)
         checkout = (record.get('worktree') or {}).get('path') or str(repository)

@@ -9,6 +9,100 @@ import Testing
 /// coordinator launcher, and typed text in place of terminals.
 @MainActor
 struct CoordinatorChatTests {
+    @Test func routeEnvelopesAreStrictAndKeepQuotedMultilineQuestions() throws {
+        let answer = CoordinatorRouteAnswer(questionID: UUID(), replyID: UUID(),
+            question: "Which project is \"dark mode\" for?\nBoth have settings.", answer: "/repos/app")
+        #expect(CoordinatorRouteAnswer(message: answer.message) == answer)
+        #expect(CoordinatorTaskAsk(message: answer.message) == nil)
+        let task = CoordinatorTaskAsk(taskID: UUID(), title: "t", packetVersion: nil, text: "yes")
+        #expect(CoordinatorRouteAnswer(message: task.message) == nil)
+        for invalid in ["prefix " + answer.message, String(answer.message.dropLast()),
+                        answer.message.replacingOccurrences(of: "\"answer\":", with: "\"extra\":1,\"answer\":"),
+                        "Coordinator route answer: {}"] {
+            #expect(CoordinatorRouteAnswer(message: invalid) == nil)
+        }
+        let oversized = CoordinatorRouteAnswer(questionID: UUID(), replyID: UUID(),
+            question: String(repeating: "🧭", count: CoordinatorEvent.maximumTextLength),
+            answer: String(repeating: "🧭", count: CoordinatorEvent.maximumOptionLength))
+        #expect(oversized.message.utf8.count > CoordinatorChatPageEvent.maximumTextLength)
+        #expect(CoordinatorRouteAnswer(message: oversized.message) == nil)
+        #expect(CoordinatorChatPageEvent(body: ["type": "answerRoute", "questionID": answer.questionID.uuidString, "optionIndex": 1])
+                == .answerRoute(questionID: answer.questionID, optionIndex: 1))
+        for index in [-1, 6, 0.5, true, "0"] as [Any] {
+            #expect(CoordinatorChatPageEvent(body: ["type": "answerRoute", "questionID": answer.questionID.uuidString, "optionIndex": index]) == nil)
+        }
+    }
+
+    @Test func routeDeliverySurvivesRelaunchAndAcceptedEchoWins() throws {
+        let question = CoordinatorEvent(at: Date(), kind: .question, taskID: nil, text: "Which project?", sessionID: nil,
+                                        options: ["/repos/app", "/repos/site"])
+        let answer = CoordinatorRouteAnswer(questionID: question.id, replyID: UUID(), question: question.text!, answer: "/repos/app")
+        let pending = CoordinatorChatController.routeReply(answer, at: Date(), delivery: .pending)
+        let rejected = CoordinatorChatController.routeReply(answer, at: Date(), delivery: .rejected)
+        let accepted = CoordinatorChatController.routeReply(answer, at: Date(), delivery: .accepted)
+        var events = [question, pending]
+        #expect(!CoordinatorChatController.canAnswerRoute(questionID: question.id, in: events))
+        // Re-read the actual on-disk format used by a new controller.
+        let log = try events.reduce(into: Data()) { data, event in data.append(try event.jsonLine()); data.append(10) }
+        #expect(!CoordinatorChatController.canAnswerRoute(questionID: question.id, in: CoordinatorEvent.decodeLog(log)))
+        events.append(rejected)
+        #expect(CoordinatorChatController.canAnswerRoute(questionID: question.id, in: events))
+        #expect(CoordinatorChatController.canAnswerRoute(questionID: question.id, in: [question, rejected, pending]))
+        events += [accepted, rejected, pending]
+        #expect(!CoordinatorChatController.canAnswerRoute(questionID: question.id, in: events))
+        let card = try #require(CoordinatorChatTimeline.cards(events: events, packets: [:]).first)
+        #expect(card.answer == answer.answer && !card.answerPending)
+    }
+
+    @Test func routeChoicesRejectTaskQuestionsAndInvalidIndexesAndAllowRetryAfterRefusal() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let scoped = CoordinatorEvent(at: Date(), kind: .question, taskID: task.id, text: "Which base?", sessionID: nil, options: ["main"])
+        let route = CoordinatorEvent(at: Date(), kind: .question, taskID: nil, text: "Which project?", sessionID: nil,
+                                     options: ["/repos/app", "/repos/site"])
+        try fixture.session.files.append(scoped)
+        try fixture.session.files.append(route)
+        await fixture.chat.handle(.answerRoute(questionID: scoped.id, optionIndex: 0), from: nil)
+        await fixture.chat.handle(.answerRoute(questionID: route.id, optionIndex: 8), from: nil)
+        #expect(fixture.session.files.events().filter { $0.kind == .reply }.isEmpty)
+        // This fixture has no coordinator input surface, so delivery fails.
+        await fixture.chat.handle(.answerRoute(questionID: route.id, optionIndex: 0), token: 8, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 8, ok: false))
+        #expect(CoordinatorChatController.canAnswerRoute(questionID: route.id, in: fixture.session.files.events()))
+        #expect(fixture.typed.entries.isEmpty)
+    }
+
+    @Test func aFailedAgentGetsACardWithoutACoordinatorPost() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let sessionID = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.tasks.sessionRuntimeStore.updateStatus(sessionID: sessionID,
+            status: SessionStatus(kind: .error, summary: "Error", detail: "The command failed with exit code 1."), at: Date())
+        await fixture.chat.refresh()
+        let card = try #require(fixture.card(forTask: task.id))
+        #expect(card.task?.stageLabel == "stuck")
+        #expect(card.task?.failureText == "The command failed with exit code 1.")
+        #expect(card.task?.canArchive == true && card.task?.hasTaskSpace == true)
+        #expect(card.isCurrent)
+        #expect(fixture.chat.hasCards(taskID: task.id))
+        await fixture.chat.handle(.taskAction(rowID: task.id.uuidString, actionID: "open"), from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.focus?.taskID == task.id.uuidString)
+        // A retained draft still belongs to the task after recovery replaces
+        // the card that was introduced by its error status.
+        try fixture.session.files.append(CoordinatorEvent(at: Date(), kind: .taskStarted,
+            taskID: task.id, text: nil, sessionID: nil))
+        fixture.tasks.sessionRuntimeStore.updateStatus(sessionID: sessionID,
+            status: SessionStatus(kind: .ready, summary: "Recovered"), at: Date())
+        await fixture.chat.refresh()
+        #expect(fixture.card(forTask: task.id)?.id != card.id)
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep the error-card draft",
+                                        cardID: card.id), token: 75, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 75, ok: true))
+        #expect(fixture.typed.entries.last?.text.contains("Keep the error-card draft") == true)
+    }
     private struct OfflineGitHub: WorkspaceMergeCommandRunning {
         func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
             WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
@@ -413,12 +507,13 @@ struct CoordinatorChatTests {
         #expect(fixture.chat.lastPayload?.focus?.cardID == question.id.uuidString)
         #expect(fixture.chat.cardIndex.tasks[task.id]?.hasUnansweredQuestion == false)
         #expect(fixture.card(forTask: task.id)?.answer == "Staging only")
-        // The older packet remains in the timeline, but Open names the
-        // current question so its thread and task actions stay reachable.
-        #expect(fixture.chat.lastPayload?.items.contains { item in
+        #expect(fixture.card(forTask: task.id)?.answeredQuestionIDs == [question.id])
+        // There is one current card; its report history stays reachable.
+        #expect(fixture.chat.lastPayload?.items.filter { item in
             guard case .card(let card) = item else { return false }
-            return card.kind == "packet" && card.task?.id == task.id.uuidString
-        } == true)
+            return card.task?.id == task.id.uuidString
+        }.count == 1)
+        #expect(fixture.card(forTask: task.id)?.packetVersions == [1])
     }
 
     @Test func taskTranscriptRepliesAreCapturedOnceAcrossProjectionRebuildAndSessionExit() async throws {
@@ -553,6 +648,66 @@ struct CoordinatorChatTests {
         #expect(fixture.session.files.events().filter { $0.kind == .reply } == saved)
     }
 
+    @Test func aDraftFromAnAddressedThreadStillSendsAfterItsFirstPacketArrives() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let ask = CoordinatorEvent(at: Date(), kind: .reply, taskID: task.id,
+            text: "Inspect this task", sessionID: nil, threadRole: .userCoordinator)
+        try fixture.session.files.append(ask)
+        await fixture.chat.refresh()
+        let anchorID = try #require(fixture.card(forTask: task.id)?.id)
+        #expect(anchorID == ask.id.uuidString)
+        let preparation = try fixture.tasks.coordinator.preparePacketPublish(taskID: task.id,
+            packetJSON: Data(#"{"summary":"Adds the totals bar","look_at":"The bar at 390px","not_verified":[]}"#.utf8), screenshotPaths: [])
+        _ = try await fixture.tasks.coordinator.finishPacketPublish(preparation)
+        await fixture.chat.refresh()
+        #expect(fixture.card(forTask: task.id)?.id != anchorID)
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep this original draft",
+                                        cardID: anchorID), token: 73, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 73, ok: true))
+        #expect(fixture.typed.entries.last?.text.contains("Keep this original draft") == true)
+    }
+
+    @Test func anUnavailableComposerProjectReturnsItsFailedAcknowledgement() async throws {
+        let fixture = try await Fixture()
+        await fixture.chat.handle(.project(id: "/no-longer-a-project", text: "Fix totals"), token: 74, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 74, ok: false))
+        #expect(fixture.typed.entries.isEmpty)
+    }
+
+    @Test func reportHistoryNavigatesTheExistingBrowserAndReportsARefusal() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        var loads: [(UUID, String)] = []
+        var canLoad = true
+        let chat = CoordinatorChatController(store: fixture.tasks.store, taskCoordinator: fixture.tasks.coordinator,
+            session: fixture.session, conversations: nil, sessionRuntimeStore: fixture.tasks.sessionRuntimeStore,
+            loadURLInPanel: { panelID, url in
+                loads.append((panelID, url))
+                guard canLoad else { return false }
+                _ = fixture.tasks.store.send(.updateWebPanelMetadata(panelID: panelID, title: nil, url: url))
+                return true
+            })
+        await chat.handle(.openReport(taskID: task.id, version: 1, screenshot: nil), from: nil)
+        #expect(loads.isEmpty) // Creation uses the new panel's initial URL.
+        await chat.handle(.openReport(taskID: task.id, version: 2, screenshot: nil), from: nil)
+        let panelID = try #require(loads.first?.0)
+        #expect(loads.map(\.1) == [CoordinatorChatController.reportURL(taskID: task.id, version: 2, screenshot: nil)])
+        await chat.handle(.openReport(taskID: task.id, version: 2, screenshot: nil), from: nil)
+        #expect(loads.count == 1) // Selecting the current report keeps its scroll.
+        canLoad = false
+        await chat.handle(.openReport(taskID: task.id, version: 1, screenshot: nil), from: nil)
+        await chat.refresh()
+        #expect(loads.last?.0 == panelID)
+        #expect(chat.lastPayload?.notice?.isError == true)
+        #expect(chat.lastPayload?.notice?.text == "The report could not open in its browser tab.")
+        for url in ["toastty://coordinator/report/\(task.id.uuidString)/1", "http://localhost:1234/report/1"] {
+            #expect(BrowserPanelRuntime.normalizedUserEnteredURLString(url) == url)
+        }
+    }
+
     @Test func reportsAndRoutingOpenInTheCoordinatorsRightPanel() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()
@@ -616,6 +771,10 @@ struct CoordinatorChatTests {
         #expect(CoordinatorSummaryPageBridge.accepts(.send("hello"), isSummary: true) == false)
         #expect(CoordinatorSummaryPageBridge.accepts(.project(id: "/project", text: "hello"), isSummary: true) == false)
         #expect(CoordinatorSummaryPageBridge.accepts(.taskMenu(taskID: UUID(), rect: .zero), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.answerRoute(questionID: UUID(), optionIndex: 0), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.archiveTask(UUID()), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.answerRoute(questionID: UUID(), optionIndex: 0), isSummary: false))
+        #expect(CoordinatorSummaryPageBridge.accepts(.archiveTask(UUID()), isSummary: false))
         #expect(CoordinatorSummaryPageBridge.accepts(.taskAction(rowID: "row", actionID: "open"), isSummary: true))
         #expect(CoordinatorSummaryPageBridge.accepts(.taskAction(rowID: "row", actionID: "open"), isSummary: false) == false)
         #expect(CoordinatorSummaryPageBridge.accepts(.activate(view: .tasks, selectedRowID: nil), isSummary: false) == false)
@@ -645,11 +804,13 @@ struct CoordinatorChatTests {
         let task = try await fixture.taskWithPacket()
         let marks = [CoordinatorReportMark(shot: "after-390", note: "Move the bar up", x: 0.4, y: 0.5)]
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .sent)
-        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 marks on the screenshots:\n1. Move the bar up [after-390]")
+        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 mark on the screenshots:\n1. Move the bar up [after-390]")
         await fixture.chat.refresh()
         let card = try #require(fixture.card(forTask: task.id))
-        #expect(card.thread.map(\.text) == ["1 marks on the screenshots:\n1. Move the bar up [after-390]"])
+        #expect(card.thread.map(\.text) == ["1 mark on the screenshots:\n1. Move the bar up [after-390]"])
         #expect(card.thread.map(\.role) == [.userTask])
+        #expect(CoordinatorReportMark.message(marks + marks, screenshotNames: ["after-390"])
+            == "2 marks on the screenshots:\n1. Move the bar up [after-390]\n2. Move the bar up [after-390]")
         let count = fixture.typed.entries.count
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 2, marks: marks) == .rejected)
         #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "missing", note: "Fix", x: 0, y: 0)]) == .rejected)

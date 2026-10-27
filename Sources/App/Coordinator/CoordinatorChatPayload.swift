@@ -51,6 +51,26 @@ struct CoordinatorChatPayload: Encodable, Equatable {
         var token: Int
     }
 
+    struct RouteProject: Encodable, Equatable {
+        var value: String
+        var project: CoordinatorAllTasks.Project
+
+        static func make(value: String, projects: [CoordinatorAllTasks.Project],
+                         fallbackProjects: [CoordinatorAllTasks.Project] = [], homeDirectoryPath: String) -> Self? {
+            if let project = projects.first(where: { $0.id == value }) {
+                return Self(value: value, project: project)
+            }
+            let isPath = value.hasPrefix("/") || value == "~" || value.hasPrefix("~/")
+            let root = isPath ? TasksConfigFile.normalizedPath(value, homeDirectoryPath: homeDirectoryPath) : nil
+            if let project = projects.first(where: { root != nil && $0.rootPath == root })
+                ?? fallbackProjects.first(where: { $0.id == value })
+                ?? fallbackProjects.first(where: { root != nil && $0.rootPath == root }) {
+                return Self(value: value, project: project)
+            }
+            return nil
+        }
+    }
+
     var coordinator: Coordinator
     var items: [CoordinatorChatItem]
     var focus: Focus?
@@ -60,6 +80,7 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     var taskGroups: [CoordinatorAllTasks.Group] = []
     var tasks: [CoordinatorAllTasks.Row] = []
     var projects: [CoordinatorAllTasks.Project] = []
+    var routeProjects: [RouteProject] = []
     var projectFilter: String?
     var today = CoordinatorAllTasks.Today()
     var addresses: [CoordinatorComposerAddress] = []
@@ -105,6 +126,9 @@ struct CoordinatorChatCardView: Encodable, Equatable {
     var isCurrent: Bool
     var task: CoordinatorChatTaskView?
     var packet: CoordinatorChatPacketView?
+    var packetVersions: [Int]
+    var answerPending = false
+    var answeredQuestionIDs: [UUID]
 
     init(card: CoordinatorChatTimeline.Card, task: CoordinatorChatTaskView?, packet: CoordinatorChatPacketView?) {
         id = card.id
@@ -119,10 +143,13 @@ struct CoordinatorChatCardView: Encodable, Equatable {
         isCurrent = card.isCurrent
         self.task = task
         self.packet = packet
+        packetVersions = card.packetVersions
+        answerPending = card.answerPending
+        answeredQuestionIDs = card.answeredQuestionIDs
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, at, kind, text, superseded, isNew, options, answer, thread, isCurrent, task, packet
+        case type, id, at, kind, text, superseded, isNew, options, answer, thread, isCurrent, task, packet, packetVersions, answerPending, answeredQuestionIDs
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -141,6 +168,9 @@ struct CoordinatorChatCardView: Encodable, Equatable {
         try values.encode(isCurrent, forKey: .isCurrent)
         try values.encode(task, forKey: .task)
         try values.encode(packet, forKey: .packet)
+        try values.encode(packetVersions, forKey: .packetVersions)
+        try values.encode(answerPending, forKey: .answerPending)
+        try values.encode(answeredQuestionIDs, forKey: .answeredQuestionIDs)
     }
 
 }
@@ -167,6 +197,8 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
     var canReply: Bool
     var projectID: String? = nil
     var defaultReplyTarget: CoordinatorChatReplyTarget = .coordinator
+    var failureText: String? = nil
+    var canArchive = false
 
     static func make(
         taskID: UUID,
@@ -197,7 +229,8 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
             mergePolicy: Self.mergePolicy(record: record, config: config, homeDirectoryPath: homeDirectoryPath),
             canMerge: item.map { TaskBoardPresentation.detailActions($0).contains(.merge) } ?? false,
             canReply: record != nil && finished == false && item?.taskSpaceWorkspaceID != nil,
-            projectID: item.flatMap(CoordinatorAllTasks.projectID) ?? record?.projectRoot
+            projectID: item.flatMap(CoordinatorAllTasks.projectID) ?? record?.projectRoot,
+            canArchive: item.map { TaskBoardPresentation.detailActions($0).contains(.archive) } ?? false
         )
     }
 
@@ -220,7 +253,7 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
             case .review, .readyForReview: ("review", "blue")
             case .agentNeedsInput: ("needs input", "amber")
             case .agentFinished: ("finished", "blue")
-            case .agentError: ("error", "red")
+            case .agentError: ("stuck", "red")
             case .setupFailed, .moveFailed: ("failed", "red")
             case .taskSpaceClosed: ("task space closed", "plain")
             case .pickWorkspace: ("pick a project", "amber")
@@ -392,7 +425,8 @@ struct CoordinatorReportMark: Codable, Equatable {
                   mark.x.isFinite, mark.y.isFinite, (0...1).contains(mark.x), (0...1).contains(mark.y) else { return nil }
             lines.append("\(index + 1). \(note) [\(mark.shot)]")
         }
-        let text = "\(marks.count) marks on the screenshots:\n" + lines.joined(separator: "\n")
+        let noun = marks.count == 1 ? "mark" : "marks"
+        let text = "\(marks.count) \(noun) on the screenshots:\n" + lines.joined(separator: "\n")
         return text.utf8.count <= CoordinatorChatPageEvent.maximumTextLength ? text : nil
     }
 }
@@ -405,6 +439,44 @@ enum CoordinatorReportSendResult: Equatable {
 /// user's text, after a line that names the task. The agent needs the task
 /// ID; the chat shows only what the user typed, so the transcript reads the
 /// same format back with `init?(message:)`.
+/// A project pick has no task yet. Use a complete JSON envelope so the
+/// coordinator receives the original question and the exact selected choice.
+struct CoordinatorRouteAnswer: Codable, Equatable {
+    var questionID: UUID
+    var replyID: UUID
+    var question: String
+    var answer: String
+
+    private static let prefix = "Coordinator route answer: "
+
+    var message: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        // All fields have an infallible JSON representation.
+        return Self.prefix + String(decoding: try! encoder.encode(self), as: UTF8.self)
+    }
+
+    init(questionID: UUID, replyID: UUID, question: String, answer: String) {
+        self.questionID = questionID
+        self.replyID = replyID
+        self.question = question
+        self.answer = answer
+    }
+
+    init?(message: String) {
+        guard message.hasPrefix(Self.prefix), message.utf8.count <= CoordinatorChatPageEvent.maximumTextLength else { return nil }
+        let data = Data(message.dropFirst(Self.prefix.count).utf8)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["questionID", "replyID", "question", "answer"],
+              let value = try? JSONDecoder().decode(Self.self, from: data),
+              !value.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.question.count <= CoordinatorEvent.maximumTextLength,
+              !value.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.answer.count <= CoordinatorEvent.maximumOptionLength else { return nil }
+        self = value
+    }
+}
+
 struct CoordinatorTaskAsk: Equatable {
     var taskID: UUID
     var title: String
@@ -479,6 +551,7 @@ struct CoordinatorChatTranscript {
         var replyID: UUID?
         var questionID: UUID?
         var sourceID: String?
+        var routeAnswer: CoordinatorRouteAnswer?
     }
 
     private(set) var items: [Item] = []
@@ -544,6 +617,9 @@ struct CoordinatorChatTranscript {
                     aboutTaskID: ask.taskID.uuidString, aboutTitle: ask.title,
                     replyID: ask.replyID, questionID: ask.questionID, sourceID: event.eventID
                 ))
+            } else if let answer = CoordinatorRouteAnswer(message: text) {
+                append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "Project: \(answer.answer)",
+                            sourceID: event.eventID, routeAnswer: answer))
             } else if let request = CoordinatorProjectRequest(message: text) {
                 append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "@\(request.projectName) \(request.text)"))
             } else {
@@ -605,6 +681,8 @@ enum CoordinatorChatPageEvent: Equatable {
     case project(id: String, text: String)
     case reply(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
     case ask(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
+    case answerRoute(questionID: UUID, optionIndex: Int)
+    case archiveTask(UUID)
     case merge(UUID)
     case taskMenu(taskID: UUID, rect: CGRect)
     case openTaskSpace(UUID)
@@ -670,6 +748,14 @@ enum CoordinatorChatPageEvent: Equatable {
         case "ask":
             guard let taskID = taskID(), let text = text() else { return nil }
             self = .ask(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)
+        case "answerRoute":
+            guard let questionID,
+                  let number = body["optionIndex"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  let index = Int(exactly: number.doubleValue), (0..<CoordinatorEvent.maximumOptionCount).contains(index) else { return nil }
+            self = .answerRoute(questionID: questionID, optionIndex: index)
+        case "archiveTask":
+            guard let taskID = taskID() else { return nil }
+            self = .archiveTask(taskID)
         case "taskMenu":
             guard let taskID = taskID() else { return nil }
             func coordinate(_ key: String) -> Double? {

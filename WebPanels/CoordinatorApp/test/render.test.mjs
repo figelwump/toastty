@@ -114,7 +114,7 @@ test("question cards use the app's default reply target and keep the target swit
   const waiting = render.renderItem({ ...questionCard, task: task({ defaultReplyTarget: "task" }) }, ui);
   assert.match(waiting, /<form[^>]*data-to="task"/);
   assert.ok(waiting.includes("Reply to fix-totals…"));
-  ui.replyTarget.set("q1", "task");
+  ui.replyTarget.set("task:T1", "task");
   assert.match(render.renderItem(questionCard, ui), /<form[^>]*data-to="task"/);
 });
 
@@ -174,8 +174,8 @@ test("question options are escaped buttons, and the saved answer replaces them",
 test("a pending card disables its answers and reply without changing its draft", () => {
   const ui = render.newUIState();
   ui.expanded.add("q1");
-  ui.pendingCards.add("q1");
-  ui.drafts.set("q1", "another thought");
+  ui.pendingCards.add("task:T1");
+  ui.drafts.set("task:T1", "another thought");
   const question = card({ id: "q1", kind: "question", packet: null, options: ["Staging"] });
   const pending = render.renderItem(question, ui);
   assert.match(pending, /<button[^>]*id="option-q1-0"[^>]*disabled/);
@@ -251,14 +251,14 @@ test("a question asked from a card shows only what the user typed, with its task
   assert.ok(!plain.includes("focus-task"));
 });
 
-test("focus opens the task's newest packet card, else its last card", () => {
+test("focus opens the task's current card, else its newest packet or last card", () => {
   const state = { items: [
     card({ id: "a", superseded: true }),
-    card({ id: "b" }),
+    card({ id: "b", isCurrent: false }),
     card({ id: "c", kind: "task-started", packet: null }),
     card({ id: "d", task: task({ id: "T2" }), kind: "task-started", packet: null }),
   ] };
-  assert.equal(render.focusCardID(state, "T1"), "b");
+  assert.equal(render.focusCardID(state, "T1"), "c");
   assert.equal(render.focusCardID(state, "T2"), "d");
   assert.equal(render.focusCardID(state, "T3"), null);
 });
@@ -277,10 +277,19 @@ test("the report pairs before and after by width, and keeps unpaired shots", () 
   }
 });
 
+test("report annotation send buttons use singular and plural mark labels", () => {
+  const report = { ...packet(), taskID: "T1", title: "Fix", slug: "fix-totals", canAnnotate: true, headCommit: null, createdAt: null };
+  const mark = { shot: "after-390", note: "Move this up", x: 0.5, y: 0.5 };
+  const single = render.renderReport(report, { mode: "after", width: 390, marks: [mark] });
+  assert.match(single, /id="report-send"[^>]*>Send 1 mark to fix-totals<\/button>/);
+  const multiple = render.renderReport(report, { mode: "after", width: 390, marks: [mark, { ...mark, note: "Keep this label" }] });
+  assert.match(multiple, /id="report-send"[^>]*>Send 2 marks to fix-totals<\/button>/);
+});
+
 test("a reply draft is kept while its card is closed, and a newly superseded card folds once", () => {
   const ui = render.newUIState();
   ui.expanded.add("c1");
-  ui.drafts.set("c1", 'half a "note"');
+  ui.drafts.set("task:T1", 'half a "note"');
   assert.ok(render.renderItem(card(), ui).includes('value="half a &quot;note&quot;"'));
   ui.expanded.delete("c1");
   ui.expanded.add("c1");
@@ -292,6 +301,184 @@ test("a reply draft is kept while its card is closed, and a newly superseded car
   ui.expanded.add("c1");
   render.collapseNewlySuperseded(state, ui);
   assert.ok(ui.expanded.has("c1"), "the user can open it again");
+});
+
+test("taskless route questions stay expanded and offer only the saved choices", () => {
+  const ui = render.newUIState();
+  const route = card({ id: "route-1", task: null, kind: "question", packet: null,
+    text: "Which project?\nNo project was named.\nChoose where this task belongs.", options: ["Lumen", "<Infra>"] });
+  assert.equal(render.isExpanded(route, ui), true);
+  const html = render.renderItem(route, ui);
+  assert.ok(html.includes('class="grow ctitle">Which project?</span>'));
+  assert.ok(html.includes("No project was named.\nChoose where this task belongs."));
+  assert.ok(html.includes('data-act="answer-route" data-id="route-1" data-index="1"'));
+  assert.ok(html.includes("&lt;Infra&gt;"));
+  assert.ok(!html.includes("replybox") && !html.includes('data-act="expand"'));
+  const unavailable = render.renderItem(route, ui, false);
+  assert.match(unavailable, /<button[^>]*id="option-route-1-0"[^>]*disabled/);
+  const unresolved = render.renderItem({ ...route, answerPending: true }, ui);
+  assert.match(unresolved, /<button[^>]*id="option-route-1-0"[^>]*disabled/);
+  assert.ok(unresolved.includes("Waiting for the coordinator"));
+  const answered = render.renderItem({ ...route, answer: "Lumen" }, ui);
+  assert.ok(answered.includes(">answered<") && answered.includes(">Lumen</span>"));
+  assert.ok(!answered.includes('data-act="answer-route"'));
+});
+
+test("route project choices disambiguate duplicate titles with exact path tooltips and leave unknown choices literal", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, text: "Which project?", options: ["project-one", "/repos/two", "/unknown/<three>"] });
+  const state = { coordinator: { canSend: true }, items: [route], projects: [
+    { id: "project-one", rootPath: "/repos/one", title: "Same <name>" },
+    { id: "project-two", rootPath: "/repos/two", title: "Same <name>" },
+  ] };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*title="\/repos\/one"[^>]*>Same &lt;name&gt;<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*title="\/repos\/two"[^>]*>Same &lt;name&gt;<\/button>/);
+  assert.match(html, /id="option-c1-2"[^>]*>\/unknown\/&lt;three&gt;<\/button>/);
+  const answered = render.renderTimeline({ ...state, items: [{ ...route, answer: "/repos/two" }] }, ui);
+  assert.match(answered, /class="txt" title="\/repos\/two">Same &lt;name&gt;<\/span>/);
+});
+
+test("an unknown literal matching a project title stays literal and makes the known project's path available", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, options: ["billing-project", "Billing app"] });
+  const state = { coordinator: { canSend: true }, items: [route], projects: [{ id: "billing-project", rootPath: "/repos/billing", title: "Billing app" }] };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*title="\/repos\/billing"[^>]*>Billing app<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*>Billing app<\/button>/);
+  assert.ok(!/id="option-c1-1"[^>]*title=/.test(html), "the literal choice does not gain a project identity");
+  assert.deepEqual(route.options, ["billing-project", "Billing app"]);
+});
+
+test("a project's raw ID and canonical-root choices share its title without a false collision", () => {
+  const ui = render.newUIState();
+  const route = card({ task: null, kind: "question", packet: null, options: ["/stored/project", "/canonical/project"] });
+  const state = { coordinator: { canSend: true }, items: [route],
+    projects: [
+      { id: "/stored/project", rootPath: "/canonical/project", title: "One project" },
+      { id: "/canonical/project", rootPath: "/canonical/project", title: "One project" },
+    ],
+    addresses: [{ kind: "project", id: "/canonical/project", title: "Address alias", token: "project", version: null }],
+  };
+  const html = render.renderTimeline(state, ui);
+  assert.match(html, /id="option-c1-0"[^>]*>One project<\/button>/);
+  assert.match(html, /id="option-c1-1"[^>]*>One project<\/button>/);
+  assert.ok(!/id="option-c1-[01]"[^>]*title=/.test(html), "one project's aliases are not two projects with colliding titles");
+  assert.ok(!html.includes("Address alias"));
+});
+
+test("a legacy taskless question without options renders as a safe markdown note", () => {
+  const ui = render.newUIState();
+  const item = card({ task: null, kind: "question", options: [], text: "**Earlier update**\n<img src=x onerror=alert(1)>" });
+  assert.equal(render.isExpanded(item, ui), false);
+  const html = render.renderItem(item, ui);
+  assert.ok(html.includes('class="note-card md"'));
+  assert.ok(html.includes("<strong>Earlier update</strong>"));
+  assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
+  assert.ok(!html.includes('data-act="answer-route"') && !html.includes(">question<") && !html.includes("<img"));
+});
+
+test("replacement cards keep expansion order and discard an old merge confirmation", () => {
+  const ui = render.newUIState();
+  const first = card({ id: "first" });
+  const second = card({ id: "second", task: task({ id: "T2" }) });
+  ui.expanded = new Set(["first", "second"]);
+  ui.confirmingMerge = "first";
+  render.retainTaskCards({ items: [first, second] }, { items: [{ ...first, id: "replacement" }, second] }, ui);
+  assert.deepEqual([...ui.expanded], ["replacement", "second"], "updating a card does not make it the last card the user opened");
+  assert.equal(ui.confirmingMerge, null);
+});
+
+test("Merge confirmation resets on an in-place packet or eligibility change", () => {
+  const before = card();
+  for (const after of [
+    card({ packet: packet({ version: 3, latestVersion: 3 }) }),
+    card({ task: task({ packetVersion: 3 }) }),
+    card({ isCurrent: false }),
+    card({ superseded: true }),
+    card({ task: task({ canMerge: false }) }),
+    card({ task: task({ stageLabel: "stuck" }) }),
+  ]) {
+    const ui = render.newUIState();
+    ui.confirmingMerge = "c1";
+    render.retainTaskCards({ items: [before] }, { items: [after] }, ui);
+    assert.equal(ui.confirmingMerge, null);
+  }
+  const unchanged = render.newUIState();
+  unchanged.confirmingMerge = "c1";
+  render.retainTaskCards({ items: [before] }, { items: [card()] }, unchanged);
+  assert.equal(unchanged.confirmingMerge, "c1");
+});
+
+test("vanished cards are removed from the expanded IDs sent to native", () => {
+  const ui = render.newUIState();
+  ui.expanded = new Set(["route-1", "c1", "already-gone"]);
+  render.retainTaskCards({ items: [card(), card({ id: "route-1", task: null, kind: "question" })] }, { items: [] }, ui);
+  assert.deepEqual([...ui.expanded], []);
+});
+
+test("current question and start cards retain the latest report and earlier version links", () => {
+  const ui = render.newUIState();
+  ui.expanded.add("c1");
+  for (const kind of ["packet", "question", "task-started"]) {
+    const item = card({ kind, packetVersions: [2, 1, 3, 2], packet: packet({ version: 3, latestVersion: 3 }), task: task({ packetVersion: 3 }) });
+    const html = render.renderItem(item, ui);
+    assert.ok(html.includes('data-version="3">Full report</button>'), `latest report missing on ${kind}`);
+    assert.ok(html.includes("Earlier reports"));
+    assert.ok(html.includes('data-version="1">v1</button>') && html.includes('data-version="2">v2</button>'));
+    assert.ok(!html.includes('data-version="3">v3</button>'));
+  }
+  const legacy = render.renderItem(card({ kind: "question", packet: null }), ui);
+  assert.ok(legacy.includes('data-version="2">Full report</button>'));
+  assert.ok(!legacy.includes("Earlier reports"), "missing history does not invent versions");
+});
+
+test("stuck cards show the failure and supported native actions with tolerant defaults", () => {
+  const ui = render.newUIState();
+  ui.expanded.add("c1");
+  const item = card({ kind: "note", text: "The task stopped.", task: task({ stageLabel: "stuck", stageTone: "red", canMerge: false,
+    failureText: "The API returned <503> after three attempts.", canArchive: true }) });
+  const html = render.renderItem(item, ui);
+  for (const part of [">stuck<", "The API returned &lt;503&gt; after three attempts.", "Open the task space", "Archive it", 'data-act="archive-task"']) assert.ok(html.includes(part), `missing ${part}`);
+  assert.ok(!html.includes("Move to") && !html.includes("Hand to Claude"));
+  const legacy = render.renderItem({ ...item, task: task({ stageLabel: "stuck", canMerge: false }) }, ui);
+  assert.ok(!legacy.includes('data-act="archive-task"'));
+});
+
+test("collapsed stuck cards show the failure ahead of an earlier answer or started label", () => {
+  const ui = render.newUIState();
+  for (const kind of ["question", "task-started"]) {
+    const item = card({ kind, packet: null, answer: kind === "question" ? "Staging only" : null,
+      task: task({ stageLabel: "stuck", failureText: "The API returned <503>.", canMerge: false }) });
+    const html = render.renderItem(item, ui);
+    assert.ok(html.includes("The API returned &lt;503&gt;."), `missing failure for ${kind}`);
+    assert.ok(!html.includes("Answered: Staging only") && !html.includes('class="sub">· started'));
+  }
+  const fallback = render.renderItem(card({ kind: "task-started", packet: null, task: task({ stageLabel: "stuck", failureText: null }) }), ui);
+  assert.ok(fallback.includes("The task&#39;s agent reported an error."));
+});
+
+test("stuck recovery actions precede earlier question context and the reply thread", () => {
+  const ui = render.newUIState();
+  ui.expanded.add("c1");
+  const item = card({ kind: "question", text: "Use staging first?", answer: "Staging only", packetVersions: [1, 2],
+    thread: [{ id: "answered-q1", at: "", role: "user-task", text: "Staging only" }],
+    task: task({ stageLabel: "stuck", stageTone: "red", canMerge: false, failureText: "The deployment check failed.", canArchive: true }) });
+  const html = render.renderItem(item, ui);
+  const failure = html.indexOf("The deployment check failed.");
+  const open = html.indexOf('id="open-stuck-c1"');
+  const archive = html.indexOf('id="archive-c1"');
+  const context = html.indexOf("Use staging first?");
+  const thread = html.indexOf('class="thread"');
+  assert.ok(failure > html.indexOf('class="crow"') && failure < open && open < archive && archive < context && context < thread);
+  assert.equal((html.match(/id="open-stuck-c1"/g) ?? []).length, 1);
+  assert.equal((html.match(/id="archive-c1"/g) ?? []).length, 1);
+  assert.ok(!html.includes('class="answer"'), "the earlier answer already appears in the thread");
+  assert.equal((html.match(/Staging only/g) ?? []).length, 1);
+  assert.ok(html.includes("Earlier question") && html.includes('id="menu-c1"') && html.includes('id="report-c1-1"'));
+
+  const unanswered = render.renderItem({ ...item, answer: null, options: ["Staging", "Production"] }, ui);
+  assert.ok(unanswered.includes("Use staging first?") && unanswered.includes('id="option-c1-0"'), "an unanswered question and its choices remain visible");
 });
 
 test("screenshots with pair and width left out still show, and long messages are refused", () => {
@@ -332,14 +519,14 @@ test("fallback project buttons keep distinct IDs with the same title and dedupli
 test("project filtering hides thread-bearing cards and preserves hidden card drafts", () => {
   const ui = render.newUIState();
   ui.expanded.add("other");
-  ui.drafts.set("other", "Unsent reply");
+  ui.drafts.set("task:T2", "Unsent reply");
   const state = {
     coordinator: { canSend: true },
     projects: [{ id: "one", title: "same" }, { id: "two", title: "same" }, { id: "empty", title: "Empty" }],
     projectFilter: "one",
     items: [
       card({ id: "ours", task: task({ project: "same", projectID: "one" }) }),
-      card({ id: "other", task: task({ project: "same", projectID: "two" }), thread: [{ id: "thread-other", role: "agent", text: "Only project two sees this thread", at: "" }] }),
+      card({ id: "other", task: task({ id: "T2", project: "same", projectID: "two" }), thread: [{ id: "thread-other", role: "agent", text: "Only project two sees this thread", at: "" }] }),
       card({ id: "note", task: null, packet: null, kind: "note", text: "A general note" }),
       { type: "message", id: "message", role: "assistant", text: "A general message" },
       { type: "tool", id: "tool", name: "Read", detail: null, outcome: "succeeded" },
@@ -351,14 +538,14 @@ test("project filtering hides thread-bearing cards and preserves hidden card dra
   assert.ok(!html.includes('data-item="other"'));
   assert.deepEqual(render.visibleExpandedIDs(state, ui), []);
   assert.ok(ui.expanded.has("other"));
-  assert.equal(ui.drafts.get("other"), "Unsent reply");
+  assert.equal(ui.drafts.get("task:T2"), "Unsent reply");
   html = render.renderTimeline({ ...state, projectFilter: "empty" }, ui);
   assert.ok(!html.includes('data-item="ours"') && !html.includes('data-item="other"'));
   html = render.renderTimeline({ ...state, projectFilter: "two" }, ui);
   assert.deepEqual(render.visibleExpandedIDs({ ...state, projectFilter: "two" }, ui), ["other"]);
   assert.match(html, /Unsent reply/);
   assert.match(html, /Only project two sees this thread/);
-  assert.equal(ui.drafts.get("other"), "Unsent reply");
+  assert.equal(ui.drafts.get("task:T2"), "Unsent reply");
 });
 
 test("a taskless card with the task property omitted stays visible under a project filter", () => {

@@ -138,6 +138,8 @@ enum CoordinatorAllTasks {
     struct Project: Encodable, Equatable {
         var id: String
         var title: String
+        /// The normalized root for display matching; the filter ID stays stable.
+        var rootPath: String? = nil
     }
 
     static func projects(_ items: [TaskBoardItem]) -> [Project] {
@@ -145,7 +147,10 @@ enum CoordinatorAllTasks {
         for item in items {
             if let id = projectID(item), let title = projectTitle(item) { titles[id] = title }
         }
-        return titles.map { Project(id: $0.key, title: $0.value) }.sorted {
+        return titles.map {
+            Project(id: $0.key, title: $0.value,
+                    rootPath: $0.key.hasPrefix("/") ? TasksConfigFile.normalizedPath($0.key) : nil)
+        }.sorted {
             $0.title == $1.title ? $0.id < $1.id : $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
     }

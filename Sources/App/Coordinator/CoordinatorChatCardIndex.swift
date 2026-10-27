@@ -42,7 +42,7 @@ final class CoordinatorChatCardIndex: ObservableObject {
             var cards = result[taskID] ?? TaskCards(latestKind: kind, isNew: false)
             cards.latestKind = kind
             cards.questionAnswered = card.answer != nil
-            if kind == .packet, card.superseded == false { cards.isNew = card.isNew }
+            if card.superseded == false, card.isCurrent || kind == .packet { cards.isNew = card.isNew }
             result[taskID] = cards
         }
         return result

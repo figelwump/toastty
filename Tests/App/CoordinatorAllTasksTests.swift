@@ -202,6 +202,80 @@ struct CoordinatorAllTasksTests {
         #expect(chat.states.last?["projectFilter"] == .string(project.id))
     }
 
+    @Test func summaryNavigationOpensTheSingleCurrentCardWithItsProjectAndHistory() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        let question = CoordinatorEvent(at: Date().addingTimeInterval(1), kind: .question,
+            taskID: task.id, text: "Keep this project?", sessionID: nil)
+        try fixture.session.files.append(question)
+        let preparation = try fixture.tasks.coordinator.preparePacketPublish(taskID: task.id,
+            packetJSON: Data(#"{"summary":"Keeps the totals visible","look_at":"The bar at 390px","not_verified":[]}"#.utf8), screenshotPaths: [])
+        _ = try await fixture.tasks.coordinator.finishPacketPublish(preparation)
+        try fixture.session.files.append(CoordinatorEvent(at: Date().addingTimeInterval(2), kind: .packet,
+            taskID: task.id, text: nil, sessionID: nil))
+        await fixture.chat.refresh()
+        let project = try #require(row(fixture, task.id)?.projectID)
+        let window = try #require(fixture.tasks.store.state.windows.first?.id)
+        let chat = WindowPage(windowID: window)
+        let summary = WindowPage(windowID: window, isSummary: true)
+        fixture.chat.attach(chat)
+        fixture.chat.attach(summary)
+        await fixture.chat.handle(.projectFilter(project), from: chat)
+
+        for view in [CoordinatorChatPageView.today, .tasks] {
+            await fixture.chat.handle(.showView(view), from: summary)
+            await fixture.chat.handle(.taskAction(rowID: task.id.uuidString, actionID: "open"), from: summary)
+            await fixture.chat.refresh()
+            let cards = fixture.chat.lastPayload?.items.compactMap { item -> CoordinatorChatCardView? in
+                guard case .card(let card) = item, card.task?.id == task.id.uuidString else { return nil }
+                return card
+            } ?? []
+            #expect(cards.count == 1)
+            #expect(cards.first?.id == question.id.uuidString)
+            #expect(cards.first?.task?.projectID == project)
+            #expect(cards.first?.packetVersions == [1, 2])
+            #expect(fixture.chat.lastPayload?.focus?.cardID == question.id.uuidString)
+            #expect(chat.states.last?["projectFilter"] == .string(project))
+            #expect(fixture.chat.lastPayload?.view?.view == .chat)
+        }
+    }
+
+    @Test func projectChoicesExposeTheirCanonicalRootWithoutChangingTheStoredID() throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("coordinator-project-choice-\(UUID().uuidString)", isDirectory: true)
+        let checkout = root.appendingPathComponent("checkout", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try files.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: root) }
+        try files.createSymbolicLink(at: alias, withDestinationURL: checkout)
+        let item = TaskBoardItem(id: .task(UUID()), title: "Task", projectTitle: "Workspace 1",
+            projectID: alias.path, stage: .running, agent: .none, activityAt: Date())
+        let project = try #require(CoordinatorAllTasks.projects([item]).first)
+        #expect(project.id == alias.path)
+        #expect(project.title == "Workspace 1")
+        #expect(project.rootPath == checkout.path)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(project)) as? [String: String])
+        #expect(encoded["rootPath"] == checkout.path)
+    }
+
+    @Test func routeChoiceMatchesTheActualPrivateTmpOptionAndKeepsItsValue() throws {
+        let path = "/private/tmp/coordinator-route-choice-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let storedID = String(path.dropFirst("/private".count))
+        let project = CoordinatorAllTasks.Project(id: storedID, title: "Workspace 1", rootPath: storedID)
+        let recent = CoordinatorAllTasks.Project(id: storedID, title: "Old title", rootPath: storedID)
+        let choice = try #require(CoordinatorChatPayload.RouteProject.make(
+            value: path, projects: [project], fallbackProjects: [recent], homeDirectoryPath: "/"))
+        #expect(choice.value == path)
+        #expect(choice.project == project)
+        #expect(CoordinatorChatPayload.RouteProject.make(value: storedID, projects: [project], homeDirectoryPath: "/")?.project == project)
+        #expect(CoordinatorChatPayload.RouteProject.make(value: "Workspace 1", projects: [project], homeDirectoryPath: "/") == nil)
+        let opaque = CoordinatorAllTasks.Project(id: "workspace:example", title: "No folder")
+        #expect(CoordinatorChatPayload.RouteProject.make(value: opaque.id, projects: [opaque], homeDirectoryPath: "/")?.project == opaque)
+    }
+
     @Test func todayUsesMergeAndReleaseDatesInTheLocalDayAndKeepsProjectIdentity() throws {
         let iso = ISO8601DateFormatter()
         let now = try #require(iso.date(from: "2026-10-26T06:30:00Z")) // October 25 in Los Angeles.
