@@ -17,8 +17,8 @@ struct QuickEntryAgentProfile: Equatable {
     /// The efforts the provider accepts, lowest first; empty when it takes
     /// none.
     let efforts: [String]
-    /// Models to offer, most recently used first.
-    let models: [String]
+    /// Recent/default choices first, then any provider catalog choices.
+    var models: [String]
 }
 
 enum QuickEntryPickerKind: Equatable {
@@ -75,7 +75,7 @@ final class QuickEntryPicker: ObservableObject {
     var onClose: () -> Void = {}
 
     private let workspaces: [QuickEntryModel.Option]
-    let profiles: [QuickEntryAgentProfile]
+    private(set) var profiles: [QuickEntryAgentProfile]
     private let frequent: [QuickEntryPreset]
     /// The preset rows: the pinned preset under "Current" when it is not a
     /// Frequent one, so the picker opens on it, then the Frequent presets.
@@ -115,6 +115,22 @@ final class QuickEntryPicker: ObservableObject {
 
     var highlightedRow: Row? {
         rows.first { $0.id == highlightedID }
+    }
+
+    /// Catalog results add choices without changing what the user has typed
+    /// or selected. IDs and model tokens stay stable even when rows move.
+    func updateProfiles(_ profiles: [QuickEntryAgentProfile]) {
+        guard kind == .agent else { return }
+        self.profiles = profiles
+        if columns != nil {
+            columns?.profiles = profiles
+        } else {
+            let previous = highlightedID
+            rebuildRows(highlightingCurrent: false)
+            if let previous, rows.contains(where: { $0.id == previous }) {
+                highlightedID = previous
+            }
+        }
     }
 
     // MARK: - Keys
@@ -434,7 +450,7 @@ struct QuickEntryPresetColumns: Equatable {
         var isSelectable: Bool { value != .note }
     }
 
-    let profiles: [QuickEntryAgentProfile]
+    var profiles: [QuickEntryAgentProfile]
     private(set) var agentID: String
     private(set) var model: String?
     private(set) var effort: String?

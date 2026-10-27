@@ -18,7 +18,8 @@ struct QuickEntryTests {
 
         init(
             create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
-            recordsPresetUsage: Bool = false
+            recordsPresetUsage: Bool = false,
+            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil
         ) throws {
             let fixture = try TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
@@ -27,7 +28,7 @@ struct QuickEntryTests {
             self.stagingRoot = stagingRoot
             controller = QuickEntryController(
                 store: fixture.store,
-                agentProfiles: { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
+                agentProfiles: agentProfiles ?? { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
                 presetUsage: recordsPresetUsage
                     ? QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:]))
                     : nil,
@@ -548,6 +549,14 @@ struct QuickEntryTests {
     @Test func theColumnsPickAnAgentModelAndEffortSeparately() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
+        let catalog = try CodexModelCatalogFixture()
+        defer { catalog.remove() }
+        try catalog.writeCatalog(#"{"models":[{"slug":"gpt-6.1-sol","visibility":"list"},{"slug":"gpt-6-astra","visibility":"list"}]}"#)
+        harness.controller.loadCodexModels = {
+            try await Task.detached {
+                try CodexModelCatalog().load(runtime: catalog.runtime, deadline: Date().addingTimeInterval(2))
+            }.value
+        }
         harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
         let panel = try #require(harness.controller.panel)
         let model = try #require(harness.controller.model)
@@ -563,7 +572,11 @@ struct QuickEntryTests {
         #expect(try await harness.pickerEditor().string.isEmpty)
         try await harness.typeInPicker("codex")
         try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
-        try await harness.typeInPicker("gpt-6.1-sol")
+        await harness.controller.modelLoadTask?.value
+        #expect(picker.columns?.cells(in: .model).map(\.title) == ["gpt-6.1-sol", "gpt-6-astra", "Default", "Type a model…"])
+        // A partial name must choose the catalog model, not a typed value.
+        // No remote access or recent-model callback exists in this harness.
+        try await harness.typeInPicker("sol")
         try await harness.pickerCommand(#selector(NSResponder.insertTab(_:)))
         try await harness.typeInPicker("hi")
         #expect(picker.columns?.preset == QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high"))

@@ -211,6 +211,33 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         try renderWithPicker("quick-entry-agent-picker-columns")
     }
 
+    func testCodexCatalogPopulatesAnAlreadyOpenPicker() async throws {
+        let lookup = QuickEntryCatalogRefreshTests.Lookup()
+        controller.loadCodexModels = { try await lookup.load() }
+        controller.present(prefill: .empty)
+        controller.togglePicker(.agent)
+        let picker = try XCTUnwrap(controller.picker)
+        picker.openColumns(agent: "codex")
+        try renderWithPicker("quick-entry-codex-catalog-before")
+        XCTAssertEqual(picker.columns?.cells(in: .model).map(\.title), ["Default", "Type a model…"])
+
+        let deadline = Date().addingTimeInterval(2)
+        while lookup.calls == 0, Date() < deadline { await Task.yield() }
+        XCTAssertEqual(lookup.calls, 1, "The asynchronous catalog request started")
+        try lookup.finish(.success([
+            "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-sol",
+            "gpt-6-luna",
+        ] + (6...30).map { "catalog-model-\($0)" }))
+        await controller.modelLoadTask?.value
+        XCTAssertEqual(picker.columns?.cells(in: .model).count, 32)
+        XCTAssertEqual(picker.columns?.preset.model, nil, "Loading choices must not pick one")
+        try renderWithPicker("quick-entry-codex-catalog-after")
+        XCTAssertLessThan(try XCTUnwrap(controller.pickerPanel).frame.height, 450, "A full catalog keeps the search and Choose button in a bounded panel")
+        picker.move(-1)
+        XCTAssertEqual(picker.columns?.preset.model, "catalog-model-30")
+        try renderWithPicker("quick-entry-codex-catalog-scroll-selection")
+    }
+
     private static let keyboardDesignText = "Sidebar drops the Inbox group after a restart even though one task is still in it"
 
     /// Renders the panel and its open picker together, placed as on screen,

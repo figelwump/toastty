@@ -37,6 +37,10 @@ final class QuickEntryController: ObservableObject {
     /// recent first: the list the iPhone's start-session screen offers. It
     /// comes from remote access, which is set up after this controller.
     var recentModels: @MainActor (AgentKind) -> [String] = { _ in [] }
+    /// Optional CLI catalog lookup. The composition root supplies background
+    /// I/O; tests and other providers need no installed Codex or remote access.
+    var loadCodexModels: (@MainActor () async throws -> [String])?
+    private(set) var modelLoadTask: Task<Void, Never>?
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
     // Removed in deinit, which is not main-actor isolated.
@@ -251,6 +255,7 @@ final class QuickEntryController: ObservableObject {
         panel.orderFrontRegardless()
         panel.makeKey()
         model.requestFocus()
+        refreshCodexModels()
         ToasttyLog.info("Opened the quick entry panel", category: .tasks, metadata: [
             "from_app": previousApplication?.bundleIdentifier ?? "toastty",
         ])
@@ -539,6 +544,40 @@ final class QuickEntryController: ObservableObject {
     }
 
     // MARK: - Options
+
+    private func refreshCodexModels() {
+        guard modelLoadTask == nil, let loadCodexModels,
+              model?.agentProfiles.contains(where: { $0.id == AgentKind.codex.rawValue && $0.supportsModel }) == true else { return }
+        // Coalesce close/reopen while the CLI is running. Completion updates
+        // the current draft, never a captured draft that has been dismissed.
+        modelLoadTask = Task { [weak self] in
+            let models: [String]
+            do {
+                models = try await loadCodexModels()
+            } catch {
+                // CLI stderr can contain private configuration. Keep the
+                // diagnostic generic and the existing choices usable.
+                ToasttyLog.debug("Codex model catalog unavailable", category: .tasks, metadata: [
+                    "error_type": String(reflecting: type(of: error)),
+                ])
+                self?.modelLoadTask = nil
+                return
+            }
+            guard let self else { return }
+            self.modelLoadTask = nil
+            guard let model = self.model else { return }
+            let profiles = model.agentProfiles.map { profile in
+                guard profile.id == AgentKind.codex.rawValue, profile.supportsModel else { return profile }
+                var profile = profile
+                var seen = Set(profile.models)
+                profile.models += models.filter { seen.insert($0).inserted }
+                return profile
+            }
+            guard profiles != model.agentProfiles else { return }
+            model.agentProfiles = profiles
+            self.picker?.updateProfiles(model.agentProfiles)
+        }
+    }
 
     /// Top-level workspaces in sidebar order, window by window. A task
     /// belongs to a top-level workspace, so subspaces are not offered.

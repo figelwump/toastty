@@ -192,6 +192,7 @@ enum CodexIntegrationRuntimeLocator {
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         preferredProcessPath: String? = nil,
+        executableURL: URL? = nil,
         homeDirectoryURL: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
         fileManager: FileManager = .default
     ) throws -> CodexIntegrationRuntime {
@@ -205,13 +206,13 @@ enum CodexIntegrationRuntimeLocator {
             .map { component in
                 URL(fileURLWithPath: String(component), isDirectory: true)
             }
-        let executable = ["codex", "cdx"].lazy.compactMap { commandName in
+        let executable = executableURL ?? ["codex", "cdx"].lazy.compactMap { commandName in
             searchDirectories
                 .map { $0.appendingPathComponent(commandName, isDirectory: false) }
                 .first(where: { fileManager.isExecutableFile(atPath: $0.path) })
         }.first
-        guard let executable else {
-            throw CodexPluginCLIError.executableUnavailable("codex or cdx (PATH)")
+        guard let executable, fileManager.isExecutableFile(atPath: executable.path) else {
+            throw CodexPluginCLIError.executableUnavailable(executableURL?.path ?? "codex or cdx (PATH)")
         }
         let configuredHome = environment["CODEX_HOME"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
