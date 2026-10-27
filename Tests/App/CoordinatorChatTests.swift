@@ -326,10 +326,12 @@ struct CoordinatorChatTests {
     }
 
     @Test func theComposerQueuesOnlyBehindARunningTurn() {
-        func state(_ control: RemoteConversationInputControl?, reason: RemoteInputUnavailableReason = .working) -> (canSend: Bool, hint: String?) {
+        func state(
+            _ control: RemoteConversationInputControl?, reason: RemoteInputUnavailableReason = .working, summaryState: RemoteSessionState? = nil
+        ) -> (canSend: Bool, hint: String?) {
             let summary = RemoteConversationSummary(
                 conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
-                state: reason == .starting ? .starting : .working, inputAvailability: .unavailable(reason: reason), inputControl: control,
+                state: summaryState ?? (reason == .starting ? .starting : .working), inputAvailability: .unavailable(reason: reason), inputControl: control,
                 latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
             )
             return CoordinatorChatController.sendState(
@@ -343,7 +345,11 @@ struct CoordinatorChatTests {
         #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true)) == (false, "Waiting for the coordinator's prompt"))
         // A live process can still be at a setup prompt before its first turn.
         #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .starting)
-            == (false, "The coordinator is starting. Check its terminal for setup."))
+            == (false, CoordinatorChatController.startingHint))
+        // A newly bound session the provider has reported nothing for, as
+        // while it waits at folder trust.
+        #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .unknownProviderState, summaryState: .starting)
+            == (false, CoordinatorChatController.startingHint))
         #expect(state(nil, reason: .starting).canSend == false)
         #expect(state(RemoteConversationInputControl(turnEpoch: nil, canQueue: true), reason: .unknownProviderState)
             == (false, "Waiting for the coordinator's prompt"))

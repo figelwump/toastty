@@ -643,6 +643,11 @@ final class CoordinatorChatController {
         return conversations.localSnapshot(for: conversationID, at: now())
     }
 
+    /// What the composer says before the agent can take its first message.
+    /// The agent may be at a setup prompt in its hidden terminal, most often
+    /// folder trust on a first start, and nothing else shows that.
+    static let startingHint = "The coordinator is starting. If its terminal asks whether to trust the folder, answer there."
+
     /// Whether the composer can send now, and what it says when it cannot,
     /// or when a message waits for the agent's turn to end.
     static func sendState(
@@ -659,7 +664,11 @@ final class CoordinatorChatController {
         case .localDraft:
             return (false, "Text is typed in the coordinator's terminal")
         case .unavailable(reason: .starting):
-            return (false, "The coordinator is starting. Check its terminal for setup.")
+            return (false, startingHint)
+        case .unavailable where snapshot.summary.state == .starting:
+            // Bound to a session, but the provider has reported nothing yet,
+            // as while it waits at folder trust.
+            return (false, startingHint)
         case .unavailable:
             // A message queues behind a running turn. Just after a turn ends
             // there is none to queue behind, and the prompt is not open yet.
@@ -851,6 +860,7 @@ final class CoordinatorChatController {
         return [
             "pages": .int(pages.values.filter { $0.page != nil }.count),
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
+            "sendHint": optional(lastPayload?.coordinator.sendHint),
             "inputState": .string(inputState),
             "hasUserRequests": .bool(lastPayload?.hasUserRequests ?? false),
             "items": .array(items),
