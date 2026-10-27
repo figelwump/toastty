@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 struct ToasttyMenuActionError: LocalizedError, Equatable, Sendable {
@@ -1104,6 +1105,27 @@ struct ToasttyApp: App {
             registersGlobalHotKey: automationConfig == nil
                 && Self.isRunningUnderXCTest(processInfo.environment) == false
         )
+        quickEntryController.loadCodexModels = { [weak agentLaunchService] in
+            guard let executable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue),
+                  // As with launch argument support, only a direct provider
+                  // command is known to accept provider subcommands.
+                  ["codex", "cdx"].contains(URL(fileURLWithPath: executable.command).lastPathComponent),
+                  let executablePath = executable.executablePath else {
+                return []
+            }
+            let processPath = codexProcessPathStore.currentPath()
+            let models = try await Task.detached(priority: .userInitiated) {
+                let runtime = try CodexIntegrationRuntimeLocator.resolve(
+                    preferredProcessPath: processPath,
+                    executableURL: URL(fileURLWithPath: executablePath)
+                )
+                return try CodexModelCatalog().load(runtime: runtime, deadline: Date().addingTimeInterval(5))
+            }.value
+            // A configuration reload can replace the CLI while it runs.
+            guard let currentExecutable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue).executablePath,
+                  currentExecutable == executablePath, codexProcessPathStore.currentPath() == processPath else { return [] }
+            return models
+        }
         quickEntryController.reloadShortcut()
         self.quickEntryController = quickEntryController
         taskBoard.newTask = { [weak quickEntryController] in

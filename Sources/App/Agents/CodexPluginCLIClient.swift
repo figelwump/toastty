@@ -253,6 +253,7 @@ struct CodexPluginCLIProcessExecutor: CodexPluginCLIExecuting, @unchecked Sendab
         process.arguments = arguments
         process.currentDirectoryURL = runtime.workingDirectoryURL
         process.environment = runtime.processEnvironment.applying(to: baseEnvironment())
+        process.standardInput = FileHandle.nullDevice
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         let output = CodexPluginCLIProcessOutput()

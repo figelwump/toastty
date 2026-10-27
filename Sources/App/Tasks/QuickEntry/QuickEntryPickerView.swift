@@ -104,6 +104,11 @@ struct QuickEntryPickerView: View {
                     scroller.scrollTo(id)
                 }
             }
+            .onChange(of: picker.rows) {
+                // New catalog rows can move the highlighted row without
+                // changing its ID.
+                if let id = picker.highlightedID { scroller.scrollTo(id) }
+            }
         }
     }
 
@@ -254,21 +259,7 @@ private struct ColumnsView: View {
         let total = visible.reduce(0) { $0 + (Self.weights[$1] ?? 1) }
         HStack(alignment: .top, spacing: 0) {
             ForEach(visible, id: \.self) { column in
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: column.title, isFocused: column == columns.focused)
-                    ForEach(columns.cells(in: column)) { cell in
-                        ColumnCell(
-                            title: column == columns.focused
-                                ? highlighted(cell.title, query: columns.query)
-                                : AttributedString(cell.title),
-                            isMuted: cell.isMuted,
-                            isSelected: columns.isSelected(cell)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture { picker.select(cell, in: column) }
-                        .accessibilityAction { picker.select(cell, in: column) }
-                    }
-                }
+                PickerColumn(picker: picker, columns: columns, column: column)
                 .padding(.bottom, 6)
                 .frame(width: 520 * (Self.weights[column] ?? 1) / total, alignment: .topLeading)
                 .overlay(alignment: .trailing) {
@@ -279,6 +270,56 @@ private struct ColumnsView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(column.title)
                 .accessibilityIdentifier("quick-entry.picker.column")
+            }
+        }
+    }
+}
+
+/// Each column scrolls on its own so a full provider catalog does not push
+/// the search and Choose button outside the screen.
+private struct PickerColumn: View {
+    @ObservedObject var picker: QuickEntryPicker
+    let columns: QuickEntryPresetColumns
+    let column: QuickEntryPresetColumns.Column
+    @State private var listHeight: CGFloat = 0
+
+    private var selectedID: String? {
+        columns.cells(in: column).first(where: columns.isSelected)?.id
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: column.title, isFocused: column == columns.focused)
+            ScrollViewReader { scroller in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(columns.cells(in: column)) { cell in
+                            ColumnCell(
+                                title: column == columns.focused
+                                    ? highlighted(cell.title, query: columns.query)
+                                    : AttributedString(cell.title),
+                                isMuted: cell.isMuted,
+                                isSelected: columns.isSelected(cell)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { picker.select(cell, in: column) }
+                            .accessibilityAction { picker.select(cell, in: column) }
+                            .id(cell.id)
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+                }
+                .scrollIndicators(.automatic)
+                .frame(height: min(listHeight, QuickEntryPickerView.maximumListHeight))
+                .onChange(of: selectedID) {
+                    if column == columns.focused, let selectedID { scroller.scrollTo(selectedID) }
+                }
+                .onChange(of: columns.cells(in: column)) {
+                    if column == columns.focused, let selectedID { scroller.scrollTo(selectedID) }
+                }
+                .onChange(of: columns.focused) {
+                    if column == columns.focused, let selectedID { scroller.scrollTo(selectedID) }
+                }
             }
         }
     }

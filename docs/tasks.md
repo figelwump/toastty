@@ -55,6 +55,14 @@ Focus goes back to the app you were in.
   typing filters the one in focus. The Model column lists the models that
   live sessions reported recently (while remote access is on), the
   `[defaults]` model, and **Default**; type any other model name to use it.
+  Codex also loads its model catalog in the background when you open a new
+  draft. These choices do not need remote access or a recent session. Toastty
+  runs the configured Codex executable's `debug models` command with its
+  normal configuration and `CODEX_HOME`; extra arguments in the Toastty
+  profile are not applied to this lookup. Custom wrapper commands are not
+  queried. Catalog choices are suggestions,
+  not a check of account access. If an older CLI does not support the command
+  or the lookup fails, the existing choices and manual entry remain available.
   A column is hidden when the agent takes no model or no effort. The pill
   then shows `model · effort`, or the agent's name when no model is chosen.
 - The panel floats over other apps and full-screen windows and stays open
