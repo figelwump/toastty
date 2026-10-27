@@ -146,6 +146,9 @@ def main():
         '[defaults]\nagent = "claude"\n\n[coordinator]\nagent = "claude"\n\n'
         f'[workspace.{json.dumps(str(repository))}]\nmerge = "direct"\n')
     queue_check.set_directory_trust(repository, True)
+    # The coordinator starts in its own folder in the runtime home.
+    coordinator_dir = runtime_home / 'coordinator'
+    queue_check.set_directory_trust(coordinator_dir, True)
 
     socket_path = str(root / 'socket.sock')
     environment.update(
@@ -212,8 +215,11 @@ def main():
 
     def answer_dialogs():
         """Answers a first-run prompt in any agent terminal once, as a person would."""
-        for workspace in instance.query('workspace.list')['workspaces']:
-            for panel in panel_ids(instance.query('workspace.snapshot', workspaceID=workspace['workspaceID'])):
+        # The coordinator's hidden workspace is not in workspace.list.
+        coordinator_workspace = instance.query('coordinator.status').get('workspaceID')
+        workspace_ids = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces']]
+        for workspace_id in workspace_ids + ([coordinator_workspace] if coordinator_workspace and coordinator_workspace not in workspace_ids else []):
+            for panel in panel_ids(instance.query('workspace.snapshot', workspaceID=workspace_id)):
                 try:
                     text = instance.query('terminal.visible-text', panelID=panel, tail=30).get('text', '')
                 except AssertionError:
@@ -440,6 +446,7 @@ def main():
         except Exception:
             pass
         queue_check.set_directory_trust(repository, False)
+        queue_check.set_directory_trust(coordinator_dir, False)
         shutil.rmtree(parent, ignore_errors=True)
         (artifacts / f'{PREFIX}-check.json').write_text(json.dumps(evidence, indent=2, default=str))
     print('[chat-e2e] passed', flush=True)
