@@ -11,6 +11,10 @@ struct CoordinatorChatPayload: Encodable, Equatable {
         var canSend: Bool
         var sendHint: String?
         var hasTerminal: Bool
+        /// The coordinator's turn is running, as its sidebar row shows.
+        var working = false
+        /// When the running turn began, when the provider reports it.
+        var turnStartedAt: Date?
     }
 
     struct Focus: Encodable, Equatable {
@@ -542,6 +546,12 @@ struct CoordinatorChatTranscript {
         var at: Date
         var role: String?
         var text: String?
+        /// An assistant message's `commentary` or `final`, when the provider
+        /// tells them apart: the chat folds commentary with the tool calls.
+        var phase: String?
+        /// The automatic first message of a coordinator session, which the
+        /// chat does not show.
+        var launch: Bool?
         var name: String?
         var detail: String?
         var outcome: String?
@@ -624,12 +634,13 @@ struct CoordinatorChatTranscript {
             } else if let request = CoordinatorProjectRequest(message: text) {
                 append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "@\(request.projectName) \(request.text)"))
             } else {
-                append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: text))
+                append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: text, launch: isBootstrap ? true : nil))
             }
         case .assistantMessage(let message):
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.isEmpty == false else { return }
-            append(Item(type: .message, id: id, at: event.timestamp, role: "assistant", text: text))
+            let phase = message.phase == .unknown ? nil : message.phase.rawValue
+            append(Item(type: .message, id: id, at: event.timestamp, role: "assistant", text: text, phase: phase))
         case .toolStarted(let tool):
             append(Item(type: .tool, id: id, at: event.timestamp, name: tool.toolName, detail: tool.detail, outcome: "running"))
             toolIndexByCallID[tool.callID] = items.count - 1

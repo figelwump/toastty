@@ -173,6 +173,12 @@ enum CoordinatorPageInspection {
             headerText: document.getElementById('header')?.textContent || '',
             visibleItemIDs: ids('[data-item]'),
             visibleThreadItemIDs: [...document.querySelectorAll('[data-thread-item]')].filter(shown).map(e => e.dataset.threadItem),
+            workStrips: [...document.querySelectorAll('[data-act="toggle-work"]')].filter(shown).map(e => ({
+              elementID:e.id,id:e.dataset.work,label:e.textContent.trim(),expanded:e.getAttribute('aria-expanded') === 'true',live:e.classList.contains('live')
+            })),
+            activityText: shown(document.getElementById('coordinator-activity')) ? document.getElementById('coordinator-activity').textContent.trim() : null,
+            visibleToolCount: [...document.querySelectorAll('#scroll .tool')].filter(shown).length,
+            visibleMessageTexts: [...document.querySelectorAll('#scroll .msg-user, #scroll .msg-co:not(.card-row) > .bubble')].filter(shown).map(e => e.textContent.trim()),
             suggestionsVisible: shown(document.getElementById('suggestions')),
             suggestionLabels: [...document.querySelectorAll('[data-suggest]')].filter(shown).map(e => e.textContent),
             routeChoices: [...document.querySelectorAll('[data-act="answer-route"]')].filter(shown).map(e => ({

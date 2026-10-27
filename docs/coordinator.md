@@ -23,7 +23,15 @@ the chat is too narrow.
 
 The chat shows the coordinator's conversation and the cards it posts, in time
 order. The conversation comes from the coordinator's transcript, as the iPhone
-app shows it; tool calls fold to one line each. The coordinator's messages
+app shows it. The automatic first message is not shown. The coordinator's tool
+calls, and the messages it writes between them, fold into one line per run of
+work, such as `worked 48s · 3 tool calls · 1 note`; click the line to see each
+step. Your messages, its final replies and its cards stay visible. While its
+turn runs, the last line is a working row with the turn's time and its latest
+step. The row appears as soon as you send a message, before the coordinator
+starts. A run that stopped without a final reply shows its last message.
+Providers that do not mark which messages are in-between show every message.
+The coordinator's messages
 show as Markdown: emphasis, code, lists, tables and links, which open in the
 right panel. Raw HTML in a message shows as text, and images show as links.
 Type in the box at the bottom

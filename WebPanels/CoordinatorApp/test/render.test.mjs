@@ -596,7 +596,8 @@ test("project filtering hides thread-bearing cards and preserves hidden card dra
     ],
   };
   let html = render.renderTimeline(state, ui);
-  for (const id of ["ours", "note", "message", "tool", "status"]) assert.ok(html.includes(`data-item="${id}"`));
+  // The tool line folds into its run of work, which stays visible.
+  for (const id of ["ours", "note", "message", "work-tool", "status"]) assert.ok(html.includes(`data-item="${id}"`));
   assert.ok(!html.includes('data-item="other"'));
   assert.deepEqual(render.visibleExpandedIDs(state, ui), []);
   assert.ok(ui.expanded.has("other"));

@@ -53,7 +53,7 @@ function page() {
   const getElement = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   const document = { body: { dataset: {} }, focused: true, hasFocus() { return this.focused; }, activeElement: null, getElementById: getElement,
     addEventListener: (name, handler) => events.set(name, handler) };
-  vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0 });
+  vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0, setInterval: () => 0 });
   return {
     posted, nodes, events: posted, document, element: getElement,
     focusEvent() { events.get("focusin")?.({}); },
@@ -710,4 +710,47 @@ test("dashboard navigation and background updates do not restore a retained repl
   app.receive({ ...current, view: { view: "tasks", token: 2 } });
   assert.equal(input.focusCount, 0, "a background refresh does not reclaim keyboard focus");
   assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Keep this note"'));
+});
+
+test("a sent message shows the coordinator working until the app reports the turn or a reply", () => {
+  const working = () => app.nodes.get("scroll").innerHTML.includes('id="coordinator-activity"');
+  const reply = { type: "message", id: "r1", at: "2026-10-27T17:00:05.000Z", role: "assistant", text: "Done.", phase: "final" };
+  let app = page();
+  app.receive(state());
+  app.submitComposer("cleanup worktrees");
+  assert.ok(working(), "the working row shows at once, before any acknowledgement");
+  app.receive({ ...state(), ack: { token: 1, ok: true } });
+  assert.ok(working(), "an accepted send keeps the row until the turn starts");
+  app.receive(state({}, {}, { working: true }));
+  assert.ok(working());
+  app.receive(state());
+  assert.ok(!working(), "the row goes once the reported turn ends");
+
+  // A fast reply can arrive before the app ever reports the turn.
+  app = page();
+  app.receive(state());
+  app.submitComposer("status");
+  const withReply = state();
+  withReply.items = [...withReply.items, reply];
+  app.receive(withReply);
+  assert.ok(!working(), "a new reply ends the wait");
+
+  // A message sent during a turn waits for it; that turn's end and reply
+  // do not end the wait for the queued message.
+  app = page();
+  app.receive(state({}, {}, { working: true }));
+  app.submitComposer("and the release notes");
+  app.receive({ ...withReply, coordinator: { ...withReply.coordinator, working: true }, ack: { token: 1, ok: true } });
+  app.receive(withReply);
+  assert.ok(working(), "the queued message still shows the coordinator working");
+  app.receive({ ...withReply, coordinator: { ...withReply.coordinator, working: true } });
+  app.receive(withReply);
+  assert.ok(!working(), "the queued message's own turn ends the wait");
+
+  // A refused send never started a turn.
+  app = page();
+  app.receive(state());
+  app.submitComposer("status");
+  app.receive({ ...state(), ack: { token: 1, ok: false } });
+  assert.ok(!working());
 });
