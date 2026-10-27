@@ -11,6 +11,28 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabCount: 2))
     }
 
+    func testShippedSummaryUsesItsOwnHeaderAndOtherPagesKeepBrowserControls() {
+        let summary = WebPanelState(definition: .browser, initialURL: "toastty://coordinator/today")
+        let report = WebPanelState(definition: .browser, initialURL: "toastty://coordinator/report/\(UUID().uuidString)/1")
+        let normal = WebPanelState(definition: .browser, initialURL: "https://example.com")
+        XCTAssertTrue(summary.isCoordinatorSummary)
+        XCTAssertTrue(summary.usesCoordinatorSummaryChrome)
+        XCTAssertTrue(WebPanelState(definition: .browser, initialURL: "toastty://coordinator/tasks").usesCoordinatorSummaryChrome)
+        XCTAssertFalse(report.isCoordinatorSummary)
+        XCTAssertFalse(normal.isCoordinatorSummary)
+        var navigated = normal
+        navigated.currentURL = "toastty://coordinator/today"
+        XCTAssertTrue(navigated.isCoordinatorSummary)
+        XCTAssertFalse(navigated.usesCoordinatorSummaryChrome)
+        let today = RightAuxPanelTabState(id: UUID(), identity: .browserSession(UUID()), panelID: UUID(), panelState: .web(summary))
+        let other = RightAuxPanelTabState(id: UUID(), identity: .browserSession(UUID()), panelID: UUID(), panelState: .web(normal))
+        XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabs: [today]))
+        XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabs: [other]))
+        XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabs: [today, other]))
+        let ordinarySummary = RightAuxPanelTabState(id: UUID(), identity: .browserSession(UUID()), panelID: UUID(), panelState: .web(navigated))
+        XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabs: [ordinarySummary]))
+    }
+
     func testTabListReservesSpaceForAddMenu() {
         XCTAssertEqual(
             RightAuxPanelTabStrip.tabListAvailableWidth(totalWidth: 360),

@@ -14,6 +14,8 @@ const expectedFiles = [
   "index.html",
   "coordinator-panel.css",
   "coordinator-panel.js",
+  "dashboard.html",
+  "coordinator-dashboard.js",
   "report.html",
   "coordinator-report.js"
 ];

@@ -987,7 +987,8 @@ are. `coordinator show` shows the coordinator chat over its hidden workspace;
 with `--task`, the chat opens and scrolls to that task's newest packet card,
 or to its newest card when that is a question.
 `coordinator show-terminal` shows the same workspace with its raw terminal.
-`coordinator tasks` shows [All tasks](tasks.md#all-tasks) there instead of the chat.
+`coordinator tasks` shows [All tasks](tasks.md#all-tasks) in the coordinator's
+right panel beside the chat. The same panel has a live Today tab.
 These are short forms of
 `action run coordinator.post|coordinator.chat.show|coordinator.show-terminal|coordinator.tasks.show`
 and `query run coordinator.status`. `query run coordinator.chat.state` lists

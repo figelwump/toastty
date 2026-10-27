@@ -3,7 +3,8 @@
 // markup is ours.
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
-import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, PageView, ReportPacket, Tone } from "./types";
+import { currentProject, projectID, projectsFor } from "./projects";
+import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, ReportPacket, Tone } from "./types";
 
 export function esc(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -72,7 +73,7 @@ export function collapseNewlySuperseded(state: ChatState, ui: ChatUIState) {
 }
 
 export function isExpanded(item: ChatItem, ui: ChatUIState): boolean {
-  return item.type === "card" && item.task !== null && ui.expanded.has(item.id);
+  return item.type === "card" && item.task != null && ui.expanded.has(item.id);
 }
 
 /// The card to open for `coordinator.chat.show --task`: the task's newest
@@ -83,20 +84,34 @@ export function focusCardID(state: ChatState, taskID: string): string | null {
   return (packet ?? cards[cards.length - 1])?.id ?? null;
 }
 
-export function renderViewSwitch(view: PageView): string {
-  return `<span class="seg view-switch" role="group" aria-label="View">`
-    + `<button type="button" id="view-chat" class="${view === "chat" ? "on" : ""}" data-act="view" data-view="chat" aria-pressed="${view === "chat"}">Chat</button>`
-    + `<button type="button" id="view-tasks" class="${view === "tasks" ? "on" : ""}" data-act="view" data-view="tasks" aria-pressed="${view === "tasks"}">All tasks</button></span>`;
+export function renderProjectFilter(state: ChatState): string {
+  const selected = currentProject(state);
+  return `<div class="pfilter" role="group" aria-label="Project filter">`
+    + `<button type="button" id="project-filter-all" class="${selected === null ? "on" : ""}" data-act="project-filter" aria-pressed="${selected === null}">All projects</button>`
+    + projectsFor(state).map((project, index) => `<button type="button" id="project-filter-${index}" class="${selected === project.id ? "on" : ""}" data-act="project-filter" data-project="${esc(project.id)}" title="${esc(project.id)}" aria-pressed="${selected === project.id}">${esc(project.title)}</button>`).join("")
+    + `</div>`;
 }
 
-export function renderHeader(state: ChatState, view: PageView = "chat"): string {
+export function renderHeader(state: ChatState): string {
   const c = state.coordinator;
   return `<div class="chead"><span class="cmark">C</span><div class="who"><div class="name">${esc(c.title)}</div>`
     + `<div class="mono dim small">${esc(c.detail)}</div></div>`
-    + renderViewSwitch(view)
+    + renderProjectFilter(state)
     + `<button class="tb-btn" id="open-routing" data-act="open-routing" title="Open routing.md in the right panel">routing.md</button>`
     + (c.hasTerminal ? `<button class="tb-btn" data-act="open-terminal" title="Show the coordinator's terminal">Open terminal</button>` : "")
     + `</div>`;
+}
+
+function visibleItems(state: ChatState): ChatItem[] {
+  const project = currentProject(state);
+  return state.items.filter((item) => project === null || item.type !== "card" || item.task == null || projectID(item.task) === project);
+}
+
+/// The native command palette acts only on cards the user can see. Keep
+/// the complete UI set so hidden cards reopen with their drafts intact.
+export function visibleExpandedIDs(state: ChatState, ui: ChatUIState): string[] {
+  const visible = new Set(visibleItems(state).filter((item) => item.type === "card" && item.task != null).map((item) => item.id));
+  return [...ui.expanded].filter((id) => visible.has(id));
 }
 
 export function renderTimeline(state: ChatState, ui: ChatUIState): string {
@@ -104,7 +119,7 @@ export function renderTimeline(state: ChatState, ui: ChatUIState): string {
     return `<div class="empty-chat"><div class="cmark big">C</div><p>Tell the coordinator what you want done.</p>`
       + `<p class="dim">It routes each request to a task in the right project and posts here when one needs you.</p></div>`;
   }
-  return state.items.map((item) => renderItem(item, ui, state.coordinator.canSend)).join("");
+  return visibleItems(state).map((item) => renderItem(item, ui, state.coordinator.canSend)).join("");
 }
 
 export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend = true): string {

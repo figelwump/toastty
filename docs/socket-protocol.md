@@ -539,12 +539,13 @@ Notable action-specific behavior:
   - aliases of `coordinator.chat.show`, kept for scripts from before the
     coordinator chat replaced the Tasks view. Both open the chat.
 - `coordinator.tasks.show`
-  - as `coordinator.chat.show` without `taskID`, but the page shows All tasks
-    instead of the chat; returns the `coordinator.status` object.
+  - opens All tasks in the coordinator workspace's right panel beside the
+    chat; returns the `coordinator.status` object.
   - optional `group` (`needsYou`, `running`, `toShip`, `done` or `archived`)
     opens that group and selects its first row. Optional `project`, which
-    needs `group`, filters the list to one project as its rows name it, as
-    the sidebar's To ship and Done counts do.
+    needs `group`, selects the window's shared project filter by project root
+    or unique display title, as the sidebar's To ship and Done counts do.
+    Ambiguous titles return `INVALID_PAYLOAD`.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -1554,7 +1555,7 @@ Behavior:
 
 Request payload:
 
-- `action: "click" | "type" | "visible"`
+- `action: "click" | "type" | "visible" | "focus"`
 - `elementID: String`, an element ID in the chat page, such as
   `composer-input`, `expand-<cardID>`, `reply-<cardID>`, `report-<cardID>`,
   `merge-<cardID>`, `merge-go-<cardID>` or `open-pr-<cardID>`
@@ -1570,10 +1571,21 @@ Behavior:
 - Works only in automation mode.
 - `click` clicks the element. `type` sets the field's text and submits it,
   as Return does.
+- `focus` takes the page keyboard focus and focuses the element without
+  scrolling.
 - `visible` checks that the element has layout and is visible; it does not
   click or change the page. A hidden element returns `INVALID_PAYLOAD`.
 - Acts only when exactly one open chat page has the element; otherwise
   returns `INVALID_PAYLOAD`.
+
+### `automation.coordinator_page_state`
+
+An empty payload returns `pages`, with fixed DOM observations for each loaded
+chat or summary page. These include the URL, document token, active element,
+project filter, visible card and thread IDs, composer suggestion labels, task
+rows, Today counts and sections, and the current confirmation. It reads the
+page without changing focus and accepts no caller-supplied JavaScript. It is
+available only in automation mode.
 
 ### `automation.coordinator_report_action`
 

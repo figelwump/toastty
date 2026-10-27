@@ -178,6 +178,8 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var currentPageZoom: Double = WebPanelState.defaultBrowserPageZoom
     private var popupCaptureControllers: [UUID: BrowserPopupCaptureController] = [:]
     private var annotationObservation: AnyCancellable?
+    private var coordinatorSummaryBridge: CoordinatorSummaryPageBridge?
+    private var didRecoverCoordinatorSummaryProcess = false
     private var hasReportBridge = false
 
     init(
@@ -198,6 +200,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         webView.showsHistoryContextMenuItems = true
         self.webView = webView
         super.init()
+        coordinatorSummaryBridge = CoordinatorSummaryPageBridge(webView: webView)
         annotationObservation = annotationSession.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -223,7 +226,10 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         loadingObservation?.invalidate()
         popupCaptureControllers.removeAll()
         let webView = webView
+        let coordinatorSummaryBridge = coordinatorSummaryBridge
         Task { @MainActor in
+            coordinatorSummaryBridge?.detach()
+            webView.configuration.userContentController.removeScriptMessageHandler(forName: CoordinatorChatWebView.messageHandlerName)
             webView.interactionDidRequestFocus = nil
             webView.responderDidRequestFocus = nil
             webView.navigationDelegate = nil
@@ -1408,6 +1414,13 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard webView === self.webView else { return }
         finishNavigation(currentNavigation, error: WKError(.webContentProcessTerminated))
+        if CoordinatorSummaryPageBridge.isSummaryURL(webView.url) {
+            coordinatorSummaryBridge?.detach()
+            if !didRecoverCoordinatorSummaryProcess {
+                didRecoverCoordinatorSummaryProcess = true
+                webView.reload()
+            }
+        }
         publishNavigationState()
     }
 
@@ -1422,17 +1435,19 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         } else if knownNavigations.contains(navigation) {
             return
         }
+        coordinatorSummaryBridge?.navigationStarted()
         trackNavigation(navigation, awaitingStart: false)
     }
 
     func webView(
         _ webView: WKWebView,
-        didCommit _: WKNavigation!
+        didCommit navigation: WKNavigation!
     ) {
         guard webView === self.webView else {
             return
         }
         clearAnnotationsForPageChange()
+        coordinatorSummaryBridge?.navigationCommitted(webView.url, isCurrent: navigation != nil && navigation === currentNavigation)
         rememberObservedURLForPageChange()
         clearFavicon()
         publishNavigationState()
@@ -1464,6 +1479,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         guard webView === self.webView else { return }
         finishNavigation(navigation, error: error)
+        if navigation === currentNavigation { coordinatorSummaryBridge?.navigationFailed() }
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
@@ -1476,6 +1492,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         guard webView === self.webView else { return }
         finishNavigation(navigation, error: error)
+        if navigation === currentNavigation { coordinatorSummaryBridge?.navigationFailed() }
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()

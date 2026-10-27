@@ -8,12 +8,18 @@ happens in the tasks, each with its own agent. See [Tasks](tasks.md).
 You talk to the coordinator in its chat: click **Coordinator** at the top of
 the sidebar, run `toastty coordinator show`, or choose **Show Coordinator
 Chat** in the command palette. The chat covers the
-coordinator's terminal in the main area, and the right panel stays beside it.
+coordinator's terminal in the main area and opens **Today** in the right panel.
 While it does, the top bar shows only the Coordinator title, not the terminal's
 tab. `toastty coordinator show-terminal`, or **Open terminal** in the chat's
 header, shows the raw terminal instead.
 
 ## The chat
+
+The header names the agent and model and shows the live task and project
+counts. Its project buttons filter task cards, Today, and All tasks together.
+The coordinator's messages and notes with no task stay visible. The selection
+stays with this native window while its pages are open. The buttons hide when
+the chat is too narrow.
 
 The chat shows the coordinator's conversation and the cards it posts, in time
 order. The conversation comes from the coordinator's transcript, as the iPhone
@@ -84,8 +90,38 @@ task's newest packet card, or to its newest card when that is a question.
 The sidebar's **Needs you** list shows the tasks waiting for you, and clicking
 one opens its card in the chat; see
 [The sidebar](tasks.md#the-sidebar). `Cmd+Shift+T` and **View > Show
-Coordinator Chat** open the chat too. **All tasks**, beside the chat, lists
-every task with its actions; see [All tasks](tasks.md#all-tasks).
+Coordinator Chat** open the chat too.
+
+## Today and All tasks
+
+The right panel has **Today** and **All tasks** tabs. Switching tabs keeps the
+chat in the center. Both tabs receive live task changes through the same
+coordinator state as the chat.
+
+Today shows counts for **Needs you**, **Running**, and **To ship**, followed by
+tasks that need you, running tasks, and tasks merged or released today. These
+counts and lists follow the project filter. A completed task appears because
+of its merge or release time, not because it was marked done today. Intake
+stays hidden while there are no intake sources. Click a task row to open its
+card in the center chat when it has one; otherwise it opens the task space.
+
+All tasks lists tasks in stage groups with their current actions. **Done** and
+**Archived** start closed. Merge asks for confirmation and names the project's
+merge policy. Release, the row menus, and setup controls use the same actions
+as the sidebar. See [All tasks](tasks.md#all-tasks).
+
+`toastty coordinator tasks`, `Cmd+Option+T`, and **Show All Tasks** in the
+command palette open All tasks in the right panel. The sidebar project's
+**To ship** and **Done** counts open it with that project's filter and the
+selected group open. The `coordinator.tasks.show` action also accepts `group`
+and `project`. A project value can be its stable ID or a unique display title;
+an ambiguous title fails instead of choosing a project. Projects keep separate
+identities even when their titles match.
+
+Toastty ships these pages at `toastty://coordinator/today` and
+`toastty://coordinator/tasks`. The tabs share one panel, so changing the tab
+does not need to change its initial URL. Reports and other links can still
+open beside the chat in the right panel.
 
 Before your first message, the composer shows **Try:** suggestions. They fill
 the composer so you can edit them before sending. Toastty's automatic launch

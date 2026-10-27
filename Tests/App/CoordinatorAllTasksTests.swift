@@ -109,7 +109,8 @@ struct CoordinatorAllTasksTests {
         )
         await fixture.chat.refresh()
         #expect(fixture.chat.lastPayload?.view?.view == .tasks)
-        #expect(fixture.chat.lastPayload?.view?.filter == .init(project: "toastty", group: "done"))
+        let projectID = fixture.chat.lastPayload?.projects.first { $0.title == "toastty" }?.id ?? "toastty"
+        #expect(fixture.chat.lastPayload?.view?.filter == .init(project: projectID, group: "done"))
         // A plain request shows All tasks as the user left it.
         _ = try await fixture.executor().runActionAsync(id: "coordinator.tasks.show", args: [:], context: context)
         await fixture.chat.refresh()
@@ -136,6 +137,93 @@ struct CoordinatorAllTasksTests {
         }.first)
         #expect(fixture.chat.lastPayload?.focus?.cardID == question.id)
         #expect(fixture.chat.cardIndex.tasks[reviewed.id]?.latestKind == .question)
+    }
+
+    @Test func summaryOpensBesideChatAndReusesItsTabWithoutReplacingReports() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        #expect(fixture.chat.show(taskID: nil))
+        let workspaceID = try #require(fixture.session.workspaceID)
+        let tabs = try #require(fixture.tasks.store.state.workspacesByID[workspaceID]).rightAuxPanel.orderedTabs
+        let summary = try #require(tabs.first)
+        guard case .web(let page) = summary.panelState else { Issue.record("Summary is not a browser"); return }
+        #expect(page.restorableURL == "toastty://coordinator/today")
+        await fixture.chat.handle(.openReport(taskID: task.id, version: 1, screenshot: nil), from: nil)
+        let reportSelection = fixture.tasks.store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID
+        #expect(fixture.chat.show(taskID: nil))
+        #expect(fixture.tasks.store.state.workspacesByID[workspaceID]?.rightAuxPanel.orderedTabs.count == 2)
+        #expect(fixture.tasks.store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID == reportSelection)
+        #expect(fixture.chat.showTasks())
+        #expect(fixture.tasks.store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID == summary.id)
+    }
+
+    @MainActor private final class WindowPage: CoordinatorChatController.Page {
+        let windowID: UUID?
+        let isSummary: Bool
+        var states: [[String: AutomationJSONValue]] = []
+        init(windowID: UUID, isSummary: Bool = false) { self.windowID = windowID; self.isSummary = isSummary }
+        func receive(_ data: Data) { if let state = try? JSONDecoder().decode([String: AutomationJSONValue].self, from: data) { states.append(state) } }
+        func run(_ script: String) async -> Bool { false }
+        func takeKeyboardFocus() {}
+        func showSetup(taskID: UUID, coordinator: TaskCoordinator) -> Bool { false }
+    }
+
+    @Test func projectSelectionIsSharedWithinOneWindowAndBackgroundRendersDoNotChangeTheActiveSurface() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        await fixture.chat.refresh()
+        let project = try #require(fixture.chat.lastPayload?.projects.first)
+        let window = try #require(fixture.tasks.store.state.windows.first?.id)
+        let chat = WindowPage(windowID: window)
+        let summary = WindowPage(windowID: window, isSummary: true)
+        let other = WindowPage(windowID: UUID())
+        fixture.chat.attach(chat)
+        fixture.chat.attach(summary)
+        fixture.chat.attach(other)
+        #expect(fixture.chat.show(taskID: task.id))
+        await fixture.chat.refresh()
+        #expect(chat.states.last?["projectFilter"] == nil)
+        await fixture.chat.handle(.projectFilter(project.id), from: chat)
+        await fixture.chat.refresh()
+        #expect(chat.states.last?["projectFilter"] == .string(project.id))
+        #expect(fixture.chat.lastPayload?.focus == nil)
+        #expect(fixture.chat.lastPayload?.view?.filter == nil)
+        #expect(summary.states.last?["projectFilter"] == .string(project.id))
+        #expect(other.states.last?["projectFilter"] == nil)
+        await fixture.chat.handle(.activate(view: .tasks, selectedRowID: task.id.uuidString), from: summary)
+        await fixture.chat.handle(.rendered(expanded: [], view: .chat), from: chat)
+        #expect(fixture.chat.pageView == .tasks)
+        #expect(fixture.chat.currentTaskID == task.id)
+        await fixture.chat.handle(.activate(view: .chat, selectedRowID: nil), from: chat)
+        await fixture.chat.handle(.rendered(expanded: [], view: .tasks, selectedRowID: task.id.uuidString), from: summary)
+        #expect(fixture.chat.pageView == .chat)
+        await fixture.chat.handle(.projectFilter("unknown"), from: chat)
+        await fixture.chat.refresh()
+        #expect(chat.states.last?["projectFilter"] == .string(project.id))
+    }
+
+    @Test func todayUsesMergeAndReleaseDatesInTheLocalDayAndKeepsProjectIdentity() throws {
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: "2026-10-26T06:30:00Z")) // October 25 in Los Angeles.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        func item(_ title: String, root: String, merged: String?, shipped: String?, done: String? = nil) throws -> TaskBoardItem {
+            var record = TaskRecord(createdAt: now, text: title, title: title, slug: title, source: .cli, setup: .started)
+            record.projectRoot = root
+            record.mergedAt = merged.flatMap(iso.date(from:))
+            record.shippedAt = shipped.flatMap(iso.date(from:))
+            record.doneAt = done.flatMap(iso.date(from:))
+            return TaskBoardItem(id: .task(record.id), record: record, title: title, projectTitle: "app", projectID: root, stage: .done, agent: .none, activityAt: now)
+        }
+        let merged = try item("merged", root: "/a/app", merged: "2026-10-26T06:00:00Z", shipped: nil)
+        let released = try item("released", root: "/b/app", merged: "2026-10-25T20:00:00Z", shipped: "2026-10-26T06:10:00Z")
+        let old = try item("old", root: "/a/app", merged: "2026-10-25T06:59:00Z", shipped: nil, done: "2026-10-26T06:15:00Z")
+        let items = [old, merged, released]
+        let today = CoordinatorAllTasks.today(items, now: now, calendar: calendar)
+        #expect(today.completed.map(\.rowID) == [CoordinatorAllTasks.rowID(released), CoordinatorAllTasks.rowID(merged)])
+        #expect(today.completed.map(\.kind) == ["released", "merged"])
+        #expect(CoordinatorAllTasks.projects(items).map(\.id) == ["/a/app", "/b/app"])
+        #expect(CoordinatorAllTasks.today(items, now: now.addingTimeInterval(3600), calendar: calendar).completed.isEmpty)
     }
 
     @Test func aNeedsYouTaskWithACardOpensItFromAllTasks() {

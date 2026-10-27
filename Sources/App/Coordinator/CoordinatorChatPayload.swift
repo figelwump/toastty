@@ -38,7 +38,7 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     /// What All tasks shows when a view request asks: one project's tasks,
     /// with one stage group open and its first row selected.
     struct TasksFilter: Encodable, Equatable {
-        /// The project as All tasks rows name it; `nil` for every project.
+        /// The stable project ID; `nil` for every project.
         var project: String?
         /// A group ID from `CoordinatorAllTasks.groupID`.
         var group: String
@@ -59,6 +59,9 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     var view: ViewRequest?
     var taskGroups: [CoordinatorAllTasks.Group] = []
     var tasks: [CoordinatorAllTasks.Row] = []
+    var projects: [CoordinatorAllTasks.Project] = []
+    var projectFilter: String?
+    var today = CoordinatorAllTasks.Today()
     var addresses: [CoordinatorComposerAddress] = []
     var hasUserRequests = false
 
@@ -162,6 +165,7 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
     var mergePolicy: String
     var canMerge: Bool
     var canReply: Bool
+    var projectID: String? = nil
     var defaultReplyTarget: CoordinatorChatReplyTarget = .coordinator
 
     static func make(
@@ -192,7 +196,8 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
             stale: stale,
             mergePolicy: Self.mergePolicy(record: record, config: config, homeDirectoryPath: homeDirectoryPath),
             canMerge: item.map { TaskBoardPresentation.detailActions($0).contains(.merge) } ?? false,
-            canReply: record != nil && finished == false && item?.taskSpaceWorkspaceID != nil
+            canReply: record != nil && finished == false && item?.taskSpaceWorkspaceID != nil,
+            projectID: item.flatMap(CoordinatorAllTasks.projectID) ?? record?.projectRoot
         )
     }
 
@@ -582,6 +587,7 @@ struct CoordinatorChatTranscript {
 enum CoordinatorChatPageView: String, Encodable, Equatable {
     case chat
     case tasks
+    case today
 }
 
 /// What the chat page asks for; see `ChatEvent` in the page's types.
@@ -592,6 +598,9 @@ enum CoordinatorChatPageEvent: Equatable {
     case rendered(expanded: [String], view: CoordinatorChatPageView = .chat, selectedRowID: String? = nil)
     /// An All tasks row's action, by the IDs the row was drawn with.
     case taskAction(rowID: String, actionID: String)
+    case projectFilter(String?)
+    case showView(CoordinatorChatPageView)
+    case activate(view: CoordinatorChatPageView, selectedRowID: String?)
     case send(String)
     case project(id: String, text: String)
     case reply(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
@@ -627,6 +636,17 @@ enum CoordinatorChatPageEvent: Equatable {
         if type == "reply" || type == "ask", let value = body["version"], !(value is NSNull), version() == nil { return nil }
         switch type {
         case "ready": self = .ready
+        case "projectFilter":
+            if body["project"] == nil || body["project"] is NSNull { self = .projectFilter(nil) }
+            else if let project = body["project"] as? String, project.isEmpty == false, project.utf8.count <= 4096 {
+                self = .projectFilter(project)
+            } else { return nil }
+        case "showView":
+            guard let raw = body["view"] as? String, let view = CoordinatorChatPageView(rawValue: raw), view != .chat else { return nil }
+            self = .showView(view)
+        case "activate":
+            guard let raw = body["view"] as? String, let view = CoordinatorChatPageView(rawValue: raw) else { return nil }
+            self = .activate(view: view, selectedRowID: (body["selected"] as? String).flatMap { $0.count <= 64 ? $0 : nil })
         case "rendered":
             self = .rendered(
                 expanded: ((body["expanded"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(200).map { $0 },

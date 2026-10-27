@@ -71,10 +71,9 @@ test("the selection moves within bounds, and starts at the first row", () => {
 test("the project filter narrows the rows, and a project that has no tasks now shows all", () => {
   const ui = tasks.newTasksUIState();
   const s = state([row("A", "running"), row("B", "running", { project: "infra" }), row("C", "running", { project: null })]);
-  assert.deepEqual(tasks.projectsOf(s.tasks), ["infra", "lumen"]);
   ui.project = "infra";
   assert.deepEqual(tasks.navigableRows(s, ui).map((r) => r.id), ["B"]);
-  assert.match(tasks.renderTasks(s, ui, new Date()), /id="task-filter-0" class="on"/);
+  assert.match(tasks.renderTasks(s, ui, new Date()), />infra<\/span>/);
   ui.project = "gone";
   assert.deepEqual(tasks.navigableRows(s, ui).map((r) => r.id), ["A", "B", "C"]);
 });
@@ -142,12 +141,48 @@ test("the selection stays on a row the user can see", () => {
   assert.equal(ui.selected, null);
 });
 
-test("a task with no project makes no filter button", () => {
+test("tasks without projects remain visible when all projects are selected", () => {
   const unassigned = row("B", "running");
   delete unassigned.project;
   const s = state([row("A", "running"), unassigned]);
-  assert.deepEqual(tasks.projectsOf(s.tasks), ["lumen"]);
+  assert.deepEqual(tasks.navigableRows(s, tasks.newTasksUIState()).map((row) => row.id), ["A", "B"]);
   assert.ok(!tasks.renderTasks(s, tasks.newTasksUIState(), new Date()).includes("task-filter"));
+});
+
+test("stable project IDs keep projects with the same title apart and keep an empty filter empty", () => {
+  const ui = tasks.newTasksUIState();
+  const s = state([
+    row("A", "running", { project: "same", projectID: "/projects/a" }),
+    row("B", "running", { project: "same", projectID: "/projects/b" }),
+  ]);
+  s.projects = [
+    { id: "/projects/a", title: "same" }, { id: "/projects/b", title: "same" },
+    { id: "/projects/empty", title: "Empty" },
+  ];
+  tasks.applyFilter(s, ui, { project: "/projects/b", group: "running" });
+  assert.deepEqual(tasks.navigableRows(s, ui).map((row) => row.id), ["B"]);
+  assert.equal(ui.selected, "B");
+  tasks.applyFilter(s, ui, { project: "/projects/empty", group: "running" });
+  tasks.normalize(s, ui);
+  assert.deepEqual(tasks.navigableRows(s, ui), []);
+  assert.equal(ui.selected, null);
+  const html = tasks.renderTasks(s, ui, new Date());
+  assert.match(html, /No tasks in this project/);
+  assert.ok(!html.includes("task-row-A") && !html.includes("task-row-B"));
+});
+
+test("rows with IDs still filter by identity when the projects list is omitted", () => {
+  const ui = tasks.newTasksUIState();
+  const s = state([
+    row("A", "running", { project: "same", projectID: "one" }),
+    row("B", "running", { project: "same", projectID: "two" }),
+    row("C", "running", { project: "same", projectID: "two" }),
+  ]);
+  ui.project = "two";
+  assert.deepEqual(tasks.navigableRows(s, ui).map((row) => row.id), ["B", "C"]);
+  const html = tasks.renderTasks(s, ui, new Date());
+  assert.ok(!html.includes("task-row-A"));
+  assert.match(html, />same<\/span>/);
 });
 
 test("a group the app cut short says how many there are", () => {

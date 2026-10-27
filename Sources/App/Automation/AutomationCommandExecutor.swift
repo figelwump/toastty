@@ -551,13 +551,20 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             let workspaceID = try resolveWorkspaceID(args: payload)
             return try workspaceRenderSnapshot(workspaceID: workspaceID)
 
+        case "automation.coordinator_page_state":
+            try requireAutomationMode(for: command)
+            guard let chat = CoordinatorChatController.shared else {
+                throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
+            }
+            return ["pages": .array(await chat.inspectPages().map(AutomationJSONValue.object))]
+
         case "automation.coordinator_chat_action":
             // Drives the chat page through its own handlers, for checks on
             // hosts where Accessibility cannot reach web content.
             try requireAutomationMode(for: command)
             guard let elementID = payload.string("elementID"), elementID.isEmpty == false,
-                  let action = payload.string("action"), ["click", "type", "visible"].contains(action) else {
-                throw AutomationSocketError.invalidPayload("action (click, type or visible) and elementID are required")
+                  let action = payload.string("action"), ["click", "type", "visible", "focus"].contains(action) else {
+                throw AutomationSocketError.invalidPayload("action (click, type, visible or focus) and elementID are required")
             }
             guard let chat = CoordinatorChatController.shared else {
                 throw AutomationSocketError.invalidPayload("the coordinator chat is not available")
@@ -565,6 +572,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             let pageAction: CoordinatorChatController.PageAction
             switch action {
             case "visible": pageAction = .visible(elementID: elementID)
+            case "focus": pageAction = .focus(elementID: elementID)
             case "click": pageAction = .click(elementID: elementID)
             default: pageAction = .type(elementID: elementID, text: payload.string("text") ?? "")
             }

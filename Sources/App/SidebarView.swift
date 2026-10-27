@@ -1179,7 +1179,7 @@ struct SidebarView: View {
             let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
             let toShip = recent.shown.isEmpty ? items.filter { $0.stage == .toShip }.count : 0
             let done = items.filter { $0.stage == .done }.count
-            let projectTitle = items.lazy.compactMap(CoordinatorAllTasks.projectTitle).first
+            let projectID = items.lazy.compactMap(CoordinatorAllTasks.projectID).first
             let canRelease = taskCoordinator != nil && items.contains { $0.stage == .toShip && taskBoard.canRelease($0) }
             if recent.shown.isEmpty == false || toShip > 0 || done > 0 {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1201,13 +1201,13 @@ struct SidebarView: View {
                                 .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
                             }
                             if toShip > 0 {
-                                finishedTasksCount(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID, projectTitle: projectTitle) {
+                                finishedTasksCount(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID, projectID: projectID) {
                                     Label("To ship \(toShip)", systemImage: "arrow.up.square")
                                         .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                                 }
                             }
                             if done > 0 {
-                                finishedTasksCount(.done, count: done, projectWorkspaceID: projectWorkspaceID, projectTitle: projectTitle) {
+                                finishedTasksCount(.done, count: done, projectWorkspaceID: projectWorkspaceID, projectID: projectID) {
                                     Label("Done \(done)", systemImage: "checkmark.square")
                                         .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
                                 }
@@ -1237,7 +1237,7 @@ struct SidebarView: View {
         _ group: TaskStage.Group,
         count: Int,
         projectWorkspaceID: UUID,
-        projectTitle: String?,
+        projectID: String?,
         @ViewBuilder label: () -> some View
     ) -> some View {
         let opens = openCoordinatorTasks != nil
@@ -1246,7 +1246,7 @@ struct SidebarView: View {
         if let openCoordinatorTasks {
             Button {
                 cancelWorkspaceRename()
-                _ = openCoordinatorTasks(.init(project: projectTitle, group: CoordinatorAllTasks.groupID(group)))
+                _ = openCoordinatorTasks(.init(project: projectID, group: CoordinatorAllTasks.groupID(group)))
             } label: {
                 label()
                     .contentShape(Rectangle())

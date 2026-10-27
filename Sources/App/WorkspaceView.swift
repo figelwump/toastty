@@ -3928,9 +3928,14 @@ struct PanelCardView: View {
         return state.coversWorkspaceContent(windowID: windowID)
     }
 
+    private var usesCoordinatorSummaryChrome: Bool {
+        guard chromeContext == .rightAuxPanel, case .web(let web) = panelState else { return false }
+        return web.usesCoordinatorSummaryChrome
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader
+            if !usesCoordinatorSummaryChrome { panelHeader }
 
             switch panelState {
             case .terminal(let terminalState):
@@ -4293,6 +4298,7 @@ struct PanelCardView: View {
             BrowserPanelView(
                 panelID: panelID,
                 webState: state,
+                usesSummaryChrome: usesCoordinatorSummaryChrome,
                 runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,

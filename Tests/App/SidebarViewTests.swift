@@ -2257,7 +2257,7 @@ final class SidebarViewTests: XCTestCase {
         harness.window.makeKeyAndOrderFront(nil)
         try clickSemanticText(prefix: "Finished tasks: 1 done. Opens All tasks.", in: harness.hostingView)
         pumpMainRunLoop(duration: 0.3)
-        XCTAssertEqual(requested, [.init(project: "emptyos-computer", group: "done")])
+        XCTAssertEqual(requested, [.init(project: "workspace:\(ids.parentID.uuidString)", group: "done")])
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-done-count")
     }
 

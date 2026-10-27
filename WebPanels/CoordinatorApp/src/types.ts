@@ -32,6 +32,7 @@ export interface ChatTask {
   title: string;
   slug: string;
   project: string | null;
+  projectID?: string | null;
   stageLabel: string;
   stageTone: Tone;
   needsUser: boolean;
@@ -79,7 +80,8 @@ export type ChatItem =
       text: string | null;
       superseded: boolean;
       isNew: boolean;
-      task: ChatTask | null;
+      /// Swift omits the key for a card with no task.
+      task?: ChatTask | null;
       packet: ChatPacket | null;
       options: string[];
       /// Saved by the app after it accepts a question's answer.
@@ -89,10 +91,15 @@ export type ChatItem =
       isCurrent: boolean;
     };
 
-export type PageView = "chat" | "tasks";
+export type PageView = "chat" | "today" | "tasks";
+
+export interface ChatProject {
+  id: string;
+  title: string;
+}
 
 export interface TasksFilter {
-  /// The project as rows name it; null for every project.
+  /// The project's stable ID; null for every project.
   project: string | null;
   /// A stage group ID, such as "toShip" or "done".
   group: string;
@@ -117,6 +124,7 @@ export interface TaskRow {
   taskID: string | null;
   title: string;
   project: string | null;
+  projectID?: string | null;
   group: string;
   stageLabel: string;
   stageTone: Tone;
@@ -142,6 +150,11 @@ export interface ChatState {
     hasTerminal: boolean;
   };
   items: ChatItem[];
+  projects: ChatProject[];
+  /// The window's shared project filter, using a stable project ID.
+  projectFilter?: string | null;
+  /// Native selects today's actual merge or release timestamps.
+  today?: { completed: { rowID: string; kind: "merged" | "released"; at: string }[] };
   /// Set by `coordinator.chat.show --task`: the card to open and scroll to.
   /// A new token asks again for the same task.
   /// `cardID`, when set, is the task's newest card, a question, to open
@@ -151,7 +164,7 @@ export interface ChatState {
   notice: { text: string; isError: boolean; token: number } | null;
   /// Whether the send, reply or ask with `token` was taken.
   ack?: { token: number; ok: boolean } | null;
-  /// Asks the page to show the chat or All tasks; a new token asks again.
+  /// Asks for chat, Today or All tasks; a new token asks again.
   /// A filter, from the sidebar's To ship and Done counts, shows one
   /// project's tasks with one group open.
   view?: { view: PageView; filter?: TasksFilter | null; token: number } | null;
@@ -162,6 +175,9 @@ export interface ChatState {
 
 export type ChatEvent =
   | { type: "ready" }
+  | { type: "projectFilter"; project: string | null }
+  | { type: "showView"; view: "today" | "tasks" }
+  | { type: "activate"; view: PageView; selected: string | null }
   | { type: "rendered"; expanded: string[]; view: PageView; selected: string | null }
   | { type: "taskAction"; rowID: string; actionID: string }
   | { type: "send"; text: string; token: number }
@@ -191,7 +207,7 @@ export interface ChatUIState {
 
 /// What the user is doing on All tasks.
 export interface TasksUIState {
-  /// The project shown, or null for all.
+  /// The project ID shown, or null for all.
   project: string | null;
   selected: string | null;
   /// Groups the user opened or closed; Done and Archived start closed.

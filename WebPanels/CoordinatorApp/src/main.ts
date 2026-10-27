@@ -2,30 +2,14 @@
 // `window.toasttyCoordinatorChat.receive(state)`; the page sends actions back
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
-import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, replyTarget } from "./render";
+import { collapseNewlySuperseded, esc, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, visibleExpandedIDs, replyTarget } from "./render";
+import { currentProject, projectID } from "./projects";
+import { post } from "./bridge";
 import { addressFor, addressMatches, pickedAddress } from "./composer";
 import type { AddressPick, ComposerAddress } from "./composer";
-import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
-import type { ChatEvent, ChatItem, ChatState, PageView } from "./types";
-
-interface WebKitMessageHandler {
-  postMessage: (event: ChatEvent) => void;
-}
-
-declare global {
-  interface Window {
-    webkit?: { messageHandlers?: Record<string, WebKitMessageHandler | undefined> };
-    toasttyCoordinatorChat?: { receive: (state: ChatState) => void };
-  }
-}
-
-function post(event: ChatEvent) {
-  window.webkit?.messageHandlers?.toasttyCoordinatorChat?.postMessage(event);
-}
+import type { ChatItem, ChatState } from "./types";
 
 const ui = newUIState();
-const tasksUI = newTasksUIState();
-let view: PageView = "chat";
 let state: ChatState | null = null;
 let lastFocusToken: number | null = null;
 let lastViewToken: number | null = null;
@@ -37,7 +21,6 @@ const composerDraftKey = "composer";
 
 const header = document.getElementById("header")!;
 const scroll = document.getElementById("scroll")!;
-const tasksView = document.getElementById("tasks")!;
 const composer = document.getElementById("composer") as HTMLFormElement;
 const composerInput = composer.querySelector("textarea") as HTMLTextAreaElement;
 const composerHint = document.getElementById("composer-hint-text")!;
@@ -59,7 +42,7 @@ function renderComposerOptions() {
   if (matches.length) composerInput.setAttribute("aria-activedescendant", `address-option-${matchIndex}`);
   else composerInput.removeAttribute("aria-activedescendant");
   const firstTask = choices.find((c) => c.kind === "task");
-  suggestions.classList.toggle("hidden", view !== "chat" || !state || state.hasUserRequests);
+  suggestions.classList.toggle("hidden", !state || state.hasUserRequests);
   suggestions.innerHTML = `<span class="faint small">Try:</span>` + [
     ["a request it can route", "Fix the coupon field losing focus on mobile"],
     ["one it has to ask about", "Add a dark mode toggle"],
@@ -95,19 +78,18 @@ composerInput.addEventListener("input", () => {
   renderComposerOptions();
 });
 
-function render() {
+function render(preserveHeaderFocus = true) {
   if (!state) return;
-  header.innerHTML = renderHeader(state, view);
-  scroll.classList.toggle("hidden", view !== "chat");
-  composer.classList.toggle("hidden", view !== "chat");
-  suggestions.classList.toggle("hidden", view !== "chat" || state.hasUserRequests);
-  tasksView.classList.toggle("hidden", view !== "tasks");
-  normalize(state, tasksUI);
-  if (view === "tasks") {
-    tasksView.innerHTML = renderTasks(state, tasksUI, new Date());
-    post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
-    return;
+  const active = document.activeElement as HTMLElement | null;
+  const focusedProject = preserveHeaderFocus && document.hasFocus() && active?.dataset.act === "project-filter" && header.contains(active)
+    ? { project: active.dataset.project ?? null } : null;
+  header.innerHTML = renderHeader(state);
+  if (focusedProject) {
+    [...header.querySelectorAll<HTMLButtonElement>('[data-act="project-filter"]')]
+      .find((button) => (button.dataset.project ?? null) === focusedProject.project)?.focus({ preventScroll: true });
   }
+  document.body.dataset.view = "chat";
+  document.body.dataset.projectFilter = currentProject(state) ?? "";
 
   // Re-rendering replaces the reply boxes; drafts live in `ui.drafts`, so
   // only focus needs carrying over.
@@ -128,7 +110,7 @@ function render() {
   }
   if (nearBottom) scroll.scrollTop = scroll.scrollHeight;
 
-  post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
+  post({ type: "rendered", expanded: visibleExpandedIDs(state, ui), view: "chat", selected: null });
   composerInput.disabled = !state.coordinator.canSend;
   composerHint.textContent = state.coordinator.sendHint ?? "";
   composerTerminal.classList.toggle("hidden", state.coordinator.canSend || !state.coordinator.hasTerminal);
@@ -150,55 +132,45 @@ function receive(next: ChatState) {
       } else if (ui.drafts.get(sent.draftKey) === sent.text) ui.drafts.delete(sent.draftKey);
     }
   }
-  // The newer of a view request and a card focus decides the view: a page
-  // that opens later gets both, with the older still set.
   const newView = next.view && next.view.token !== lastViewToken ? next.view : null;
   const newFocus = next.focus && next.focus.token !== lastFocusToken ? next.focus : null;
-  let focusComposer = false;
-  let revealSelected = false;
-  if (newView) {
-    lastViewToken = newView.token;
-    if (!newFocus || newView.token > newFocus.token) {
-      if (newView.view === "tasks" && newView.filter) {
-        applyFilter(next, tasksUI, newView.filter);
-        revealSelected = true;
-      }
-      setView(newView.view);
-      // Asked for the chat, as its shortcut does: typing goes to it.
-      focusComposer = view === "chat";
-    }
-  }
-  if (newFocus) {
-    lastFocusToken = newFocus.token;
-  }
-  // A focus older than a view request is spent: the view request wins.
-  if (newFocus && (!newView || newFocus.token > newView.token)) {
-    view = "chat";
-    if (openCard(newFocus.taskID, newFocus.cardID)) return;
-  }
+  if (newView) lastViewToken = newView.token;
+  if (newFocus) lastFocusToken = newFocus.token;
+  // Today and All tasks live in the right panel. Only a chat request
+  // returns typing to this page's composer.
+  const focusComposer = newView?.view === "chat" && (!newFocus || newView.token > newFocus.token);
   if (next.notice && next.notice.token !== lastNoticeToken) {
     lastNoticeToken = next.notice.token;
     notice.textContent = next.notice.text;
     notice.className = next.notice.isError ? "notice error" : "notice";
     setTimeout(() => { if (lastNoticeToken === next.notice?.token) notice.className = "notice hidden"; }, 6000);
   }
-  render();
+  // A retained old focus must not override a newer request for a page.
+  if (newFocus && (!newView || newFocus.token > newView.token) && openCard(newFocus.taskID, newFocus.cardID, false)) return;
+  // A native request can hand the keyboard to the right panel before
+  // WebKit updates document.hasFocus(). Do not restore the old header then.
+  render(!newView);
   if (focusComposer && !composerInput.disabled) composerInput.focus();
-  if (revealSelected && tasksUI.selected) document.getElementById(`task-row-${tasksUI.selected}`)?.scrollIntoView({ block: "nearest" });
 }
 
-/// Opens the task's card, scrolls to it and flashes it. False when the chat
-/// has no card for the task.
 /// Opens a task's card: `cardID` when the chat has it, as the app names the
 /// task's newest question, else the task's newest packet card or its last.
-function openCard(taskID: string, cardID?: string | null): boolean {
+/// False when the chat has no visible card for the task. Only an explicit
+/// local About click can reveal a card hidden by the shared filter.
+function openCard(taskID: string, cardID?: string | null, revealHidden = false): boolean {
   if (!state) return false;
   const id = cardID && state.items.some((item) => item.id === cardID) ? cardID : focusCardID(state, taskID);
   if (!id) return false;
+  const card = state.items.find((item) => item.id === id);
+  if (card?.type === "card" && card.task && currentProject(state) !== null && projectID(card.task) !== currentProject(state)) {
+    if (!revealHidden) return false;
+    state = { ...state, projectFilter: projectID(card.task) };
+    post({ type: "projectFilter", project: projectID(card.task) });
+  }
   // Last in the set, so the app reads it as the card opened last.
   ui.expanded.delete(id);
   ui.expanded.add(id);
-  render();
+  render(false);
   const element = document.getElementById(`card-${id}`);
   element?.scrollIntoView({ block: "center" });
   element?.classList.add("flash");
@@ -206,18 +178,11 @@ function openCard(taskID: string, cardID?: string | null): boolean {
   return true;
 }
 
-function setView(next: PageView) {
-  view = next;
-  // The composer hides on All tasks; it must not keep the keyboard, or the
-  // arrow keys would go to it.
-  if (view === "tasks" && document.activeElement === composerInput) composerInput.blur();
-  if (view === "tasks" && state && tasksUI.selected === null) {
-    tasksUI.selected = navigableRows(state, tasksUI)[0]?.id ?? null;
-  }
-}
-
-function taskRow(id: string | undefined) {
-  return state?.tasks?.find((row) => row.id === id) ?? null;
+// The app uses the active surface for command-palette actions. A state
+// refresh must not make a background right-panel page the active surface.
+function activate() {
+  if (!document.hasFocus()) return;
+  post({ type: "activate", view: "chat", selected: null });
 }
 
 function card(id: string | undefined): Extract<ChatItem, { type: "card" }> | null {
@@ -241,65 +206,21 @@ function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clear
   render();
 }
 
-function runTaskAction(rowID: string, actionID: string) {
-  tasksUI.menuOpen = null;
-  tasksUI.confirming = null;
-  post({ type: "taskAction", rowID, actionID });
-  render();
-}
+document.addEventListener("pointerdown", activate);
+document.addEventListener("focusin", activate);
 
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target || target.tagName === "FORM") return;
   const data = target.dataset;
   switch (data.act) {
-    case "view":
-      setView(data.view === "tasks" ? "tasks" : "chat");
-      render();
-      if (view === "chat") composerInput.focus();
-      break;
-    case "task-select":
-      tasksUI.selected = data.id!;
-      tasksUI.menuOpen = null;
-      render();
-      break;
-    case "task-primary": {
-      const row = taskRow(data.id);
-      if (!row?.primary) break;
-      tasksUI.selected = row.id;
-      if (row.confirm) {
-        tasksUI.menuOpen = null;
-        tasksUI.confirming = { rowID: row.id, actionID: row.primary.id };
+    case "project-filter":
+      if (state) {
+        state = { ...state, projectFilter: data.project ?? null };
+        post({ type: "projectFilter", project: data.project ?? null });
         render();
-      } else {
-        runTaskAction(row.id, row.primary.id);
       }
       break;
-    }
-    case "task-menu":
-      tasksUI.selected = data.id!;
-      tasksUI.menuOpen = tasksUI.menuOpen === data.id ? null : data.id!;
-      tasksUI.confirming = null;
-      render();
-      break;
-    case "task-action":
-      runTaskAction(data.id!, data.action!);
-      break;
-    case "task-cancel":
-      tasksUI.confirming = null;
-      render();
-      break;
-    case "task-filter":
-      tasksUI.project = data.project ?? null;
-      render();
-      break;
-    case "task-group": {
-      const group = data.group!;
-      if (tasksUI.toggledGroups.has(group)) tasksUI.toggledGroups.delete(group);
-      else tasksUI.toggledGroups.add(group);
-      render();
-      break;
-    }
     case "expand": {
       const id = data.id!;
       if (ui.expanded.has(id)) ui.expanded.delete(id);
@@ -347,7 +268,7 @@ document.addEventListener("click", (event) => {
       post({ type: "openTaskSpace", taskID: data.task! });
       break;
     case "focus-task":
-      openCard(data.task!);
+      openCard(data.task!, undefined, true);
       break;
     case "open-url":
       post({ type: "openURL", url: data.url! });
@@ -434,28 +355,6 @@ composerInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     sendComposer();
-  }
-});
-
-// All tasks: the arrow keys move the selection, Return opens the task, and
-// Esc closes an open menu or question.
-document.addEventListener("keydown", (event) => {
-  if (view !== "tasks" || !state || event.isComposing) return;
-  if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if ((event.target as HTMLElement).closest("input, textarea")) return;
-  if (event.key === "Escape" && (tasksUI.menuOpen || tasksUI.confirming)) {
-    tasksUI.menuOpen = null;
-    tasksUI.confirming = null;
-    render();
-  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    event.preventDefault();
-    tasksUI.selected = moveSelection(state, tasksUI, event.key === "ArrowDown" ? 1 : -1);
-    tasksUI.menuOpen = null;
-    render();
-    if (tasksUI.selected) document.getElementById(`task-row-${tasksUI.selected}`)?.scrollIntoView({ block: "nearest" });
-  } else if (event.key === "Enter" && tasksUI.selected && !(event.target as HTMLElement).closest("button")) {
-    event.preventDefault();
-    runTaskAction(tasksUI.selected, "open");
   }
 });
 
