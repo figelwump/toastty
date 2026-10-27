@@ -34,8 +34,8 @@ stays in that task's card thread.
 
 1. Read the tasks: `"$TOASTTY_CLI_PATH" --json task list`. Note the tasks in
    Needs you and Running, and the cursor it returns. Watches made with `--wait`
-   end with the session that ran them, so follow each Running task again, as in
-   [Follow tasks](#follow-tasks).
+   end with the session that ran them, so follow each Running task and each
+   task in review again, as in [Follow tasks](#follow-tasks).
 2. Find the routing notes: `"$TOASTTY_CLI_PATH" --json coordinator status`
    names `routingFile` and `eventsFile`. Read `routingFile`.
 3. Give the user a short summary: what needs them, then what is running. Do not
@@ -117,12 +117,31 @@ read the task with `"$TOASTTY_CLI_PATH" --json task get <task-id>`. To see what
 changed across all tasks, with each agent's last reply, run
 `"$TOASTTY_CLI_PATH" --json task list --changed-since <cursor> --include-reply`.
 
+Each watch takes one condition, so keep two running for every task you follow:
+one `--until idle` and one `--until ready-for-review`. Watch for `idle` even
+when you expect a packet. A task can end its turn without publishing one: it
+says it is finished, it says it is blocked, or it asks a question in its reply.
+Only the `idle` watch reports that.
+
+An `idle` watch counts only a turn that ends after you start it, and it fires
+once. So after you start the watches, read the task once: if its `lastReply`
+is from a turn you have not reported, handle it now. When the `idle` watch
+returns, read the task and its `lastReply`, decide whether the user needs a
+card, and then start a new `idle` watch. Keep the `idle` watch going until the
+task is merged, done or archived, because a task in review can still take more
+turns. A `ready-for-review` watch returns at once for a task in review or any
+later stage, so start that watch again only when the task is Running again.
+When a turn publishes a packet, both watches can return; post one card for that
+turn.
+
 When a task needs the user, post one card:
 
 - The task published a review packet:
   `"$TOASTTY_CLI_PATH" coordinator post packet --task <task-id>`.
 - The task asks something only the user can answer:
   `"$TOASTTY_CLI_PATH" coordinator post question --task <task-id> "<the question in one or two sentences>" --option "<answer>" --option "<another answer>"`.
+- The task went idle without a packet, and its reply says it is finished or
+  blocked: post a note that says so, with `--task`.
 - Anything else the user should know:
   `"$TOASTTY_CLI_PATH" coordinator post note [--task <task-id>] "<one or two sentences>"`.
 
@@ -153,8 +172,9 @@ it; change or remove a line only when the user corrects it. Keep each line short
 ## End a session
 
 Your context fills over a long day. At a natural break, when no command of yours
-is running other than the wait for new tasks, and the user is not waiting for an
-answer, end the session so Toastty starts a fresh one:
+is running other than the wait for new tasks and the task watches, and the user
+is not waiting for an answer, end the session so Toastty starts a fresh one. The
+next session starts those waits again:
 
 1. Add anything worth keeping to the routing notes.
 2. Post `"$TOASTTY_CLI_PATH" coordinator post note "Starting a fresh coordinator session."`.
