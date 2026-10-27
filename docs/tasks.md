@@ -450,18 +450,19 @@ chat's header shows a tasks.toml error.
 
 ### All tasks
 
-**All tasks** lists every task, in the coordinator workspace where the chat
-shows. Open it with `Option+Cmd+T`, **View > Show All Tasks**, **Show All
-Tasks** in the command palette, `toastty coordinator tasks`, or the **Chat |
-All tasks** switch in the chat's header.
+**All tasks** lists every task in the coordinator workspace's right panel,
+beside the chat. Open it with `Option+Cmd+T`, **View > Show All Tasks**,
+**Show All Tasks** in the command palette, `toastty coordinator tasks`, or
+the right panel's **All tasks** tab beside **Today**.
 
 - Tasks are grouped by stage: Needs you, Running, To ship, Done and
   Archived. Done and Archived start closed; click a group's name to open or
   close it. Setup tasks offer **Set Up** to open the workspace picker or retry
   controls. The newest change comes first in each group. Done and Archived
-  list their newest 200 tasks; `toastty task list` lists them all.
-- With tasks in more than one project, buttons above the list show one
-  project at a time.
+  list their newest 200 tasks plus any tasks merged or released today;
+  `toastty task list` lists them all.
+- The project buttons in the chat's header filter the chat cards, Today,
+  and All tasks together. The selection stays with the window.
 - A row shows the task's stage, title, status, project and how long ago it
   last changed.
 - Each row has the action and the ▾ menu that its Needs you row in the

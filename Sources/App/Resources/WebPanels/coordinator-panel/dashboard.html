@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Today</title>
+    <link rel="stylesheet" href="/coordinator-panel.css">
+  </head>
+  <body>
+    <main class="dashboard">
+      <nav id="dashboard-tabs" class="dashboard-tabs" aria-label="Coordinator pages"></nav>
+      <div id="dashboard" class="scroll dashboard-body" tabindex="-1" aria-live="polite"></div>
+      <div id="notice" class="notice hidden" role="status"></div>
+    </main>
+    <script src="/coordinator-dashboard.js"></script>
+  </body>
+</html>

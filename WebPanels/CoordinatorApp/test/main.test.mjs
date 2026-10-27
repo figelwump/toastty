@@ -15,6 +15,7 @@ function element(overrides = {}) {
   const classes = new Set();
   const listeners = new Map();
   return {
+    focusCount: 0, scrollCount: 0,
     innerHTML: "", textContent: "", className: "", value: "", disabled: false,
     scrollHeight: 500, scrollTop: 0, clientHeight: 500,
     dataset: {}, tagName: "BUTTON",
@@ -28,7 +29,7 @@ function element(overrides = {}) {
     setAttribute() {}, removeAttribute() {},
     addEventListener(name, handler) { listeners.set(name, handler); },
     emit(name, event) { listeners.get(name)?.(event); },
-    focus() {}, blur() {}, scrollIntoView() {},
+    focus() { this.focusCount++; }, blur() {}, scrollIntoView() { this.scrollCount++; },
     getBoundingClientRect: () => ({ x: 30, y: 40, width: 24, height: 28 }),
     ...overrides,
   };
@@ -48,11 +49,21 @@ function page() {
   const window = { webkit: { messageHandlers: { toasttyCoordinatorChat: {
     postMessage: (event) => posted.push(JSON.parse(JSON.stringify(event))),
   } } } };
-  const document = { activeElement: null, getElementById: (id) => nodes.get(id) ?? null,
+  nodes.set("composer-input", input);
+  const getElement = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  const document = { body: { dataset: {} }, focused: true, hasFocus() { return this.focused; }, activeElement: null, getElementById: getElement,
     addEventListener: (name, handler) => events.set(name, handler) };
   vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0 });
   return {
-    posted, nodes, document,
+    posted, nodes, events: posted, document, element: getElement,
+    focusEvent() { events.get("focusin")?.({}); },
+    focusProject(project) {
+      const button = element({ dataset: { act: "project-filter", project } });
+      document.activeElement = button;
+      nodes.get("header").contains = (node) => node === button;
+      nodes.get("header").querySelectorAll = () => [button];
+      return button;
+    },
     compose(text) {
       input.value = text;
       events.get("submit")({ target: composer, preventDefault() {} });
@@ -538,4 +549,136 @@ test("composer and task-card acknowledgements clear only their own pending draft
   app.receive({ ...state({ id: "q2" }), ack: { token: 1, ok: true } });
   assert.ok(app.nodes.get("scroll").innerHTML.includes('value=""'));
   assert.ok(!/<input[^>]*disabled/.test(app.nodes.get("scroll").innerHTML));
+});
+
+function filteredState() {
+  return {
+    coordinator: { title: "Coordinator", detail: "Codex", canSend: true, sendHint: null, hasTerminal: true },
+    projects: [{ id: "one", title: "same" }, { id: "two", title: "same" }], projectFilter: "one",
+    items: [{ type: "card", id: "other", kind: "task-started", thread: [], answer: null, options: [], isCurrent: true, task: { id: "T2", title: "Task 2", projectID: "two", project: "same", stageLabel: "running", stageTone: "blue", canReply: false }, packet: null }],
+    notice: null, focus: null, view: null,
+  };
+}
+
+test("a retained old focus cannot override a newer dashboard request or change the shared filter", () => {
+  const p = page();
+  p.receive({ ...filteredState(), focus: { taskID: "T2", token: 1 }, view: { view: "tasks", token: 2 } });
+  assert.equal(p.document.body.dataset.view, "chat");
+  assert.equal(p.document.body.dataset.projectFilter, "one");
+  assert.equal(p.element("card-other").scrollCount, 0);
+  assert.equal(p.events.filter((event) => event.type === "projectFilter").length, 0);
+  assert.deepEqual(p.events.filter((event) => event.type === "rendered").at(-1).expanded, []);
+  p.receive({ ...filteredState(), focus: { taskID: "T2", token: 3 }, view: { view: "tasks", token: 2 } });
+  assert.equal(p.document.body.dataset.projectFilter, "one");
+  assert.equal(p.element("card-other").scrollCount, 0);
+  assert.equal(p.events.filter((event) => event.type === "projectFilter").length, 0);
+  p.receive({ ...filteredState(), projectFilter: "two", focus: { taskID: "T2", token: 4 }, view: { view: "tasks", token: 2 } });
+  assert.equal(p.document.body.dataset.projectFilter, "two");
+  assert.equal(p.element("card-other").scrollCount, 1);
+  assert.deepEqual(p.events.filter((event) => event.type === "rendered").at(-1).expanded, ["other"]);
+});
+
+test("an explicit local About click reveals a hidden task card", () => {
+  const p = page();
+  p.receive(filteredState());
+  p.click({ act: "focus-task", task: "T2" });
+  assert.equal(p.document.body.dataset.projectFilter, "two");
+  assert.equal(p.element("card-other").scrollCount, 1);
+  assert.deepEqual(p.events.filter((event) => event.type === "projectFilter").at(-1), { type: "projectFilter", project: "two" });
+  assert.deepEqual(p.events.filter((event) => event.type === "rendered").at(-1).expanded, ["other"]);
+});
+
+test("only a chat request focuses the composer and background focus restoration does not activate chat", () => {
+  const p = page();
+  p.receive({ ...filteredState(), view: { view: "today", token: 1 } });
+  assert.equal(p.element("composer-input").focusCount, 0);
+  p.receive({ ...filteredState(), view: { view: "chat", token: 2 } });
+  assert.equal(p.element("composer-input").focusCount, 1);
+  p.document.focused = false;
+  p.focusEvent();
+  assert.equal(p.events.filter((event) => event.type === "activate").length, 0);
+  p.document.focused = true;
+  p.focusEvent();
+  assert.deepEqual(p.events.at(-1), { type: "activate", view: "chat", selected: null });
+});
+
+
+test("a live header push preserves project focus but a new dashboard request does not take it back", () => {
+  const app = page();
+  const current = { ...filteredState(), focus: null };
+  app.receive(current);
+  const button = app.focusProject("one");
+  app.receive(current);
+  assert.equal(button.focusCount, 1);
+  // The native handoff can precede WebKit's hasFocus update.
+  app.receive({ ...current, view: { view: "tasks", token: 10 } });
+  assert.equal(button.focusCount, 1);
+  app.document.focused = false;
+  app.receive({ ...current, view: { view: "tasks", token: 10 } });
+  assert.equal(button.focusCount, 1);
+});
+
+test("a project filter preserves a hidden replacement card's pending draft, recipient and original question context", () => {
+  const app = page();
+  const projects = [{ id: "one", title: "same" }, { id: "two", title: "same" }];
+  const packet = (version) => ({ version, latestVersion: version, summary: "Updated", lookAt: "Review", checks: [], notVerified: [], screenshots: [] });
+  const original = { ...state({ packet: packet(1) }, { projectID: "one" }), projects, projectFilter: "one" };
+  app.receive(original);
+  app.click({ act: "reply-to", id: "q1", to: "coordinator" });
+  app.draft("Keep the first report note");
+  app.submit("Keep the first report note");
+  app.click({ act: "project-filter", project: "two" });
+  assert.ok(!app.nodes.get("scroll").innerHTML.includes('data-item="q1"'));
+  assert.deepEqual(app.posted.filter((event) => event.type === "rendered").at(-1).expanded, []);
+
+  const replacement = { ...state({ id: "q2", packet: packet(2), answeredQuestionIDs: ["q1"] }, { projectID: "one" }), projects, projectFilter: "two" };
+  app.receive(replacement);
+  app.receive({ ...replacement, view: { view: "tasks", token: 2 } });
+  assert.ok(!app.nodes.get("scroll").innerHTML.includes('data-item="q2"'));
+  app.click({ act: "project-filter", project: "one" });
+  const html = app.nodes.get("scroll").innerHTML;
+  assert.ok(html.includes('id="collapse-q2"'));
+  assert.match(html, /<form[^>]*data-to="coordinator"/);
+  assert.match(html, /<input[^>]*value="Keep the first report note"[^>]*disabled/);
+  assert.deepEqual(app.posted.filter((event) => event.type === "rendered").at(-1).expanded, ["q2"]);
+  app.submit("Duplicate", "q2");
+  assert.equal(app.sends().length, 1);
+  app.receive({ ...replacement, projectFilter: "one", ack: { token: 1, ok: false } });
+  app.submit("Keep the first report note", "q2");
+  assert.deepEqual(app.sends()[1], { type: "ask", taskID: "T1", version: 1, text: "Keep the first report note", token: 2, cardID: "q1", questionID: null });
+});
+
+test("a task opened from the dashboard reveals its current replacement card under the shared filter", () => {
+  const app = page();
+  const projects = [{ id: "one", title: "same" }, { id: "two", title: "same" }];
+  const original = { ...state({}, { projectID: "one" }), projects, projectFilter: "one" };
+  app.receive(original);
+  app.draft("Retain this draft");
+  app.receive({ ...original, projectFilter: "two", view: { view: "tasks", token: 2 } });
+  const replacement = { ...state({ id: "q2", packetVersions: [1, 2] }, { projectID: "one", packetVersion: 2 }), projects, projectFilter: "one",
+    focus: { taskID: "T1", token: 4 }, view: { view: "chat", token: 3 } };
+  app.receive(replacement);
+  assert.equal(app.element("card-q2").scrollCount, 1);
+  assert.equal(app.element("card-q1").scrollCount, 1, "only the initial request scrolled the old card");
+  assert.deepEqual(app.posted.filter((event) => event.type === "rendered").at(-1).expanded, ["q2"]);
+  const html = app.nodes.get("scroll").innerHTML;
+  assert.ok(html.includes('value="Retain this draft"') && html.includes('id="report-q2-1"'));
+  assert.ok(!html.includes('data-item="q1"'));
+});
+
+test("dashboard navigation and background updates do not restore a retained reply field's keyboard focus", () => {
+  const app = page();
+  const current = state();
+  app.receive(current);
+  app.draft("Keep this note");
+  const form = element({ dataset: { id: "q1", task: "T1" } });
+  app.document.activeElement = element({ closest: () => form });
+  const input = element();
+  app.nodes.get("scroll").querySelector = () => element({ querySelector: () => input });
+  app.receive({ ...current, view: { view: "tasks", token: 2 } });
+  assert.equal(input.focusCount, 0, "the native handoff wins even before document.hasFocus updates");
+  app.document.focused = false;
+  app.receive({ ...current, view: { view: "tasks", token: 2 } });
+  assert.equal(input.focusCount, 0, "a background refresh does not reclaim keyboard focus");
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('value="Keep this note"'));
 });

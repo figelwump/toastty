@@ -176,6 +176,10 @@ final class ToasttyPageSchemeHandler: NSObject, WKURLSchemeHandler {
         // WebKit calls scheme handlers on the main thread.
         let found: (data: Data, mimeType: String)? = MainActor.assumeIsolated {
             switch route {
+            case .summary:
+                guard let url = pageDirectories["coordinator"]?.appending(path: "dashboard.html", directoryHint: .notDirectory),
+                      let data = try? Data(contentsOf: url) else { return nil }
+                return (data, "text/html")
             case .report:
                 guard let url = pageDirectories["coordinator"]?.appending(path: "report.html", directoryHint: .notDirectory),
                       let data = try? Data(contentsOf: url) else { return nil }
@@ -239,6 +243,7 @@ final class ToasttyPageSchemeHandler: NSObject, WKURLSchemeHandler {
 /// The coordinator page's dynamic paths. Everything else under
 /// `toastty://coordinator/` is a bundled file.
 enum ToasttyCoordinatorPageRoute: Equatable {
+    case summary
     /// `report/<task-id>/<version>`: the report page, which reads its packet.
     case report(taskID: UUID, version: Int)
     /// `packet-data/<task-id>/<version>`.
@@ -247,6 +252,7 @@ enum ToasttyCoordinatorPageRoute: Equatable {
     case packetFile(taskID: UUID, version: Int, fileName: String)
 
     init?(url: URL) {
+        if CoordinatorSummaryPageBridge.isSummaryURL(url) { self = .summary; return }
         guard let components = ToasttyPageSchemeRouter.pathComponents(for: url), components.count >= 3,
               let taskID = UUID(uuidString: components[1]),
               let version = Int(components[2].hasPrefix("v") ? String(components[2].dropFirst()) : components[2]),

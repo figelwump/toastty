@@ -6,6 +6,7 @@
 // Usage: task-stages-ui-helper <command> [arguments]
 //   capture <pid> <output.png>   captures the app's largest window, unfocused
 //   activate <pid>               makes the app frontmost
+//   resize <pid> <width> <height> sets the app window's size in points
 //   frontmost-pid                prints the frontmost app's process ID
 //   press <pid> <identifier>     presses the element with that
 //                                Accessibility identifier, or clicks it;
@@ -57,6 +58,31 @@ case "activate":
 
 case "frontmost-pid":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+
+case "resize":
+    guard arguments.count == 4, let pid = Int32(arguments[1]),
+          let width = Double(arguments[2]), let height = Double(arguments[3]),
+          width > 0, height > 0 else { fail("resize <pid> <width> <height>") }
+    var result: AnyObject?
+    let app = AXUIElementCreateApplication(pid)
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &result) == .success,
+          let window = (result as? [AXUIElement])?.first else { fail("no window for pid \(pid)") }
+    var size = CGSize(width: width, height: height)
+    guard let value = AXValueCreate(.cgSize, &size),
+          AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success else {
+        fail("window did not resize")
+    }
+    var actual: AnyObject?
+    guard AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &actual) == .success,
+          let actual, CFGetTypeID(actual) == AXValueGetTypeID(),
+          AXValueGetValue(actual as! AXValue, .cgSize, &size) else { fail("could not read resized window") }
+    let screens = NSScreen.screens.map { screen in
+        ["x": screen.frame.minX, "y": screen.frame.minY, "width": screen.frame.width, "height": screen.frame.height]
+    }
+    let evidence: [String: Any] = ["width": size.width, "height": size.height, "screenFrames": screens]
+    guard let data = try? JSONSerialization.data(withJSONObject: evidence),
+          let json = String(data: data, encoding: .utf8) else { fail("could not encode resized window") }
+    print(json)
 
 case "press", "exists", "focus":
     guard arguments.count == 3, let pid = Int32(arguments[1]) else { fail("\(arguments[0]) <pid> <identifier>") }

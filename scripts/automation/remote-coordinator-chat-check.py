@@ -19,6 +19,10 @@ real agent runs. Through the real CLI and the page itself it checks that:
 - a reply typed into the open card reaches the task's agent as
   `Review note on packet v1: …`, and the task leaves Needs you;
 - Full report opens toastty://coordinator/report/<task>/1 in the right panel;
+- report marks and an addressed composer message remain in the task thread;
+- the project filter keeps one current task card, and Today and All tasks
+  open that same card beside the chat;
+- Try chips fill the composer without sending, then hide after a user request;
 - the blocked composer's Open terminal button shows the raw terminal again.
 - a question with two options changes a finished task's sidebar badge to
   question; a page button answers it and restores the finished badge;
@@ -45,6 +49,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -209,6 +214,46 @@ def main():
             return items[0]
         return None
 
+    def thread_entry(task_id, role, text):
+        items = task_cards(task_id)
+        return next((entry for item in items for entry in item.get('thread', [])
+                     if entry['role'] == role and entry['text'] == text), None)
+
+    def rendered(view):
+        response = instance.request('automation.coordinator_page_state', {})
+        require(response.get('ok'), f'Could not inspect coordinator pages: {response}')
+        return next((page for page in response['result']['pages'] if page['view'] == view), None)
+
+    def prepare_wide_chat(label):
+        # Match the incoming dashboard scenario's wide layout. The window
+        # also contains the sidebar and right panel, so its width alone does
+        # not prove the center exceeds the filter's 720 px breakpoint.
+        actual_size = json.loads(run_tool(helper, 'resize', pid, 1600, 1000).stdout)
+        step('wide window requested', scenario=label, requestedPoints=dict(width=1600, height=1000),
+             actualWindowPoints=actual_size)
+        center = wait_for('a chat viewport wider than 720 px', lambda: (page := rendered('chat'))
+                          and page['viewportWidth'] > 720 and page, timeout=15, interval=0.3)
+        step('wide chat layout established', scenario=label, requestedPoints=dict(width=1600, height=1000),
+             actualWindowPoints=actual_size, viewportWidth=center['viewportWidth'])
+        return center
+
+    def dashboard(view):
+        state, center = rendered(view), rendered('chat')
+        if not state or not center:
+            return None
+        right = instance.query('workspace.snapshot', workspaceID=coordinator['workspaceID'])['rightPanel']
+        summary_tabs = [tab for tab in right['tabs'] if (tab.get('url') or '').rstrip('/') in
+                        ('toastty://coordinator/today', 'toastty://coordinator/tasks')]
+        if right['isVisible'] and len(summary_tabs) == 1 and summary_tabs[0]['panelID'] == right['activePanelID']:
+            return state
+        return None
+
+    def report_action(panel_id, action, element_id, text=None):
+        payload = dict(panelID=panel_id, action=action, elementID=element_id)
+        if text is not None:
+            payload['text'] = text
+        return instance.request('automation.coordinator_report_action', payload).get('ok', False)
+
     def page_action(action, element_id, text=None):
         payload = dict(action=action, elementID=element_id)
         if text is not None:
@@ -338,7 +383,8 @@ def main():
 
         # 1. The chat covers the coordinator's terminal and shows the cards.
         cli_result('coordinator', 'show')
-        state = wait_for('the chat page to show the cards', lambda: (lambda s: s if s['pages'] >= 1 and
+        wait_for('the rendered center chat', lambda: rendered('chat'))
+        state = wait_for('the chat page to show the cards', lambda: (lambda s: s if
                          [i['kind'] for i in s['items'] if i['type'] == 'card'] == ['packet', 'note'] else None)(
                          chat_state()), timeout=30, interval=0.5)
         packet_card = next(i for i in state['items'] if i['type'] == 'card' and i['kind'] == 'packet')
@@ -347,6 +393,9 @@ def main():
         listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
         require(listed[coordinator['workspaceID']]['isSelected'], 'The coordinator workspace is not selected')
         bring_to_front()
+        startup = wait_for('the Try chips before a user request', lambda: (page := rendered('chat'))
+                           and page['suggestionsVisible'] and 'status' in page['suggestionLabels'] and page)
+        step('Try chips shown before a user request', labels=startup['suggestionLabels'])
         capture('coordinator-chat-collapsed')
 
         # 2. show --task opens the task's packet card.
@@ -437,10 +486,28 @@ def main():
             evidence.setdefault('reportNavigations', []).append(dict(label=label, browserState=browser))
             return browser
 
-        wait_for_report(1, 'initial-v1')
+        report_state = wait_for_report(1, 'initial-v1')
         time.sleep(1.5)
         capture('coordinator-report')
         step('report opened', url=report_url)
+
+        # Report marks use their own real WebKit controls and native send
+        # route. They must survive the later packet and question updates.
+        report_id = report_state['panelID']
+        wait_for('the report annotation controls', lambda: report_action(report_id, 'click', 'report-annotate'))
+        require(report_action(report_id, 'click', 'shot-after-390'), 'Could not place a report mark')
+        mark_note = 'Keep the coupon row above the pinned totals bar.'
+        require(report_action(report_id, 'type', 'report-note-0', mark_note), 'Could not enter the report mark note')
+        capture('coordinator-report-mark')
+        require(report_action(report_id, 'click', 'report-send'), 'Could not send the report mark')
+        mark_text = f'1 marks on the screenshots:\n1. {mark_note} [after-390]'
+        mark_entry = wait_for('the report mark in the task thread', lambda: thread_entry(task_id, 'user-task', mark_text))
+        mark_input = wait_for('the report mark in fake task input', lambda: received(task_session['sessionID'], mark_note))
+        require(sum(entry['role'] == 'user-task' and entry['text'] == mark_text
+                    for item in task_cards(task_id) for entry in item.get('thread', [])) == 1,
+                'The report mark was duplicated in the task thread')
+        step('report mark reached the task and its thread once', taskID=task_id, entry=mark_entry,
+             fakeAgentReceived=mark_input[-400:])
 
         # 5. This fake agent emits no ready/turn events, as at first-load
         # setup. The blocked composer must offer a way to its terminal.
@@ -448,16 +515,16 @@ def main():
         opened = instance.request('automation.coordinator_chat_action',
                                   dict(action='click', elementID='composer-open-terminal'))
         require(opened.get('ok'), f'The blocked composer did not offer Open terminal: {opened}')
-        wait_for('the chat to uncover the terminal', lambda: chat_state()['pages'] == 0, timeout=15, interval=0.3)
+        wait_for('the chat to uncover the terminal', lambda: rendered('chat') is None, timeout=15, interval=0.3)
         listed = {w['workspaceID']: w for w in instance.query('workspace.list')['workspaces']}
         require(listed[coordinator['workspaceID']]['isSelected'], 'Open terminal did not keep the coordinator workspace')
         step('blocked composer opened the raw terminal without sending a message')
 
         # Keep the CLI route covered as well.
         cli_result('coordinator', 'show')
-        wait_for('the chat to reopen', lambda: chat_state()['pages'] >= 1, timeout=15, interval=0.3)
+        wait_for('the chat to reopen', lambda: rendered('chat'), timeout=15, interval=0.3)
         cli_result('coordinator', 'show-terminal')
-        wait_for('the CLI to uncover the terminal', lambda: chat_state()['pages'] == 0, timeout=15, interval=0.3)
+        wait_for('the CLI to uncover the terminal', lambda: rendered('chat') is None, timeout=15, interval=0.3)
         step('CLI showed the raw terminal')
 
         # 6. A posted question takes precedence over the task's finished
@@ -493,6 +560,7 @@ def main():
             and item.get('options') == OPTIONS and item.get('isCurrent') is True), None))
         option_id = option_card['id']
         require(single_task_card(task_id, 'question', [1, 2]), 'The question duplicated the packet card or lost its reports')
+        require(thread_entry(task_id, 'user-task', mark_text), 'Packet v2 or the question lost the report mark')
         require(chat_state()['items'][-1]['id'] == option_id, 'The question did not place the task card at newest activity')
         wait_for('the question card to open', lambda: option_id in chat_state()['expandedCardIDs'])
         page_action('click', f'report-{option_id}')
@@ -529,6 +597,86 @@ def main():
         capture('coordinator-question-answered')
         step('option answered and restored the finished stage', cardID=option_id, answer=option_answer['answer'],
              thread=option_answer['thread'], sidebar=restored_row, fakeAgentReceived=input_text[-300:])
+
+        # One unrelated project makes filtering observable. Use the existing
+        # shell-readiness gate before changing that disposable terminal's cwd.
+        other_root = root / 'other-project'
+        other_root.mkdir()
+        subprocess.run(['git', 'init', '-q', str(other_root)], check=True)
+        window_id = next(item['windowID'] for item in instance.query('workspace.list')['workspaces']
+                         if item['workspaceID'] == workspace_id)
+        other_workspace = cli_result('action', 'run', 'workspace.create', '--window', window_id,
+                                     'title=Other project', 'parent=none', 'activate=true')['workspaceID']
+        other_panel = instance.query('workspace.snapshot', workspaceID=other_workspace)['slotPanelIDs'][0]
+        wait_for('the other project shell to accept input', lambda: cli_result(
+            'action', 'run', 'terminal.send-text', '--panel', other_panel,
+            'text=', 'submit=false', 'allowUnavailable=true').get('available') is True,
+            timeout=30, interval=0.5)
+        cli_result('action', 'run', 'terminal.send-text', '--panel', other_panel,
+                   f'text=cd {shlex.quote(str(other_root))}', 'submit=true')
+        wait_for('the other project terminal cwd', lambda: os.path.realpath(
+            instance.query('terminal.state', panelID=other_panel)['cwd']) == str(other_root))
+        other_task = cli_result('task', 'create', 'Keep the other project separate', '--title', 'Other project task',
+                                '--workspace', other_workspace, '--wait', '--timeout', '90')
+        cli_result('coordinator', 'post', 'task-started', '--task', other_task['taskID'])
+        cli_result('coordinator', 'tasks')
+        wait_for('All tasks beside the center chat', lambda: dashboard('tasks'))
+        bring_to_front()
+        prepare_wide_chat('project filter and dashboards')
+        rows = {row['taskID']: row for row in chat_state()['tasks']}
+        project_id, other_project_id = rows[task_id]['projectID'], rows[other_task['taskID']]['projectID']
+        require(project_id != other_project_id, 'The project fixtures did not create distinct project IDs')
+        project_index = next(index for index, project in enumerate(chat_state()['projects']) if project['id'] == project_id)
+        wait_for('the wide chat project filter', lambda: (page := rendered('chat')) and page['projectFilterVisible'])
+        page_action('click', f'project-filter-{project_index}')
+        wait_for('the native project filter', lambda: chat_state()['projectFilter'] == project_id)
+        other_card = wait_for('the other project card', lambda: next(iter(task_cards(other_task['taskID'])), None))
+        global_note = next(item['id'] for item in chat_state()['items']
+                           if item['type'] == 'card' and item['kind'] == 'note' and item['taskID'] is None)
+
+        def filtered_center():
+            page = rendered('chat')
+            return page if page and page['viewportWidth'] > 720 and page['projectFilterVisible'] \
+                and page['projectFilter'] == project_id and page['visibleItemIDs'].count(option_id) == 1 \
+                and other_card['id'] not in page['visibleItemIDs'] and global_note in page['visibleItemIDs'] else None
+
+        wait_for('the project filter to retain one current card and the global note', filtered_center)
+        require(single_task_card(task_id, 'question', [1, 2]), 'Filtering changed the single current task card')
+        filtered_tasks = wait_for('All tasks to use the same project filter', lambda: (page := dashboard('tasks'))
+                                 and page['projectFilter'] == project_id and task_id in page['visibleTaskRowIDs']
+                                 and other_task['taskID'] not in page['visibleTaskRowIDs'] and page)
+        cli_result('coordinator', 'show', '--task', task_id)
+        wait_for_page_element(f'collapse-{option_id}')
+        page_action('click', f'collapse-{option_id}')
+        wait_for('the current card to close before Today opens it', lambda: option_id not in chat_state()['expandedCardIDs'])
+        page_action('click', 'dashboard-tab-today')
+        today = wait_for('Today to retain the shared project filter', lambda: (page := dashboard('today'))
+                         and page['projectFilter'] == project_id and task_id in page['todaySections']['needsYou']
+                         and other_task['taskID'] not in page['visibleTaskRowIDs'] and page)
+        page_action('click', f"today-row-{rows[task_id]['id']}")
+        wait_for('Today to open the same task card', lambda: chat_state()['currentTaskID'] == task_id
+                 and option_id in chat_state()['expandedCardIDs'])
+        require(dashboard('today'), 'Opening the task card removed Today or the center chat')
+        capture('coordinator-filtered-today-card')
+        wait_for_page_element(f'collapse-{option_id}')
+        page_action('click', f'collapse-{option_id}')
+        page_action('click', 'dashboard-tab-tasks')
+        wait_for('All tasks to reopen beside the center chat', lambda: dashboard('tasks'))
+        page_action('click', f"task-row-{rows[task_id]['id']}")
+        page_action('focus', 'dashboard')
+        wait_for('All tasks to own keyboard focus', lambda: (page := dashboard('tasks'))
+                 and page['documentHasFocus'] and page['focusedElementID'] == 'dashboard')
+        run_tool(driver, 'key', KEY_RETURN)
+        wait_for('All tasks Return to open the same task card', lambda: chat_state()['currentTaskID'] == task_id
+                 and option_id in chat_state()['expandedCardIDs'])
+        require(dashboard('tasks') and filtered_center(), 'Opening the task lost the shared project filter or dashboard')
+        capture('coordinator-filtered-all-tasks-card')
+        step('project filter and both dashboards retain one task card', taskID=task_id, cardID=option_id,
+             projectID=project_id, hiddenTaskID=other_task['taskID'], today=today,
+             allTasks=filtered_tasks, packetVersions=[1, 2])
+        page_action('click', 'project-filter-all')
+        wait_for('all project cards to return', lambda: chat_state()['projectFilter'] is None
+                 and other_card['id'] in (rendered('chat') or {}).get('visibleItemIDs', []))
 
         # A native menu can hold the page action's callback until it closes.
         # One bounded future opens it while the main thread picks a safe item.
@@ -576,7 +724,7 @@ def main():
         step('question native menu opened the task space', taskID=task_id, workspaceID=task_workspace,
              menu=menu, menuFile=f'{PREFIX}-question-menu.json')
         cli_result('coordinator', 'show', '--task', task_id)
-        wait_for('the coordinator chat after the native menu', lambda: chat_state()['pages'] >= 1 and any(
+        wait_for('the coordinator chat after the native menu', lambda: rendered('chat') and any(
             item['workspaceID'] == coordinator['workspaceID'] and item['isSelected']
             for item in instance.query('workspace.list')['workspaces']))
 
@@ -761,7 +909,7 @@ def main():
 
         transcript.touch()
         hook('SessionStart')
-        transcript_message('user', 'Synthetic coordinator ready check', 'fixture-initial-user')
+        transcript_message('user', session_check.FIRST_MESSAGE, 'fixture-initial-user')
         transcript_message('assistant', 'Ready for the project choice.', 'fixture-initial-answer')
         wait_for('the synthetic transcript to bind', lambda: any(
             item.get('text') == 'Ready for the project choice.' for item in chat_state()['items']))
@@ -775,6 +923,63 @@ def main():
             return state if state.get('inputState') == 'openPrompt' and state['canSend'] else None
 
         wait_for('the coordinator input prompt after Stop', route_input_ready, timeout=30, interval=0.3)
+
+        # A Try chip fills a draft. It must not send until the user submits.
+        prepare_wide_chat('Try chips and addressed composer')
+        suggestions = wait_for('Try chips after the launch prompt', lambda: (page := rendered('chat'))
+                               and page['suggestionsVisible'] and 'one it has to ask about' in page['suggestionLabels'] and page)
+        coordinator_input = fake_bin / 'sessions' / f"{coordinator['sessionID']}.input"
+        input_before_suggestion = coordinator_input.read_text() if coordinator_input.exists() else ''
+        bring_to_front()
+        wait_for('the Try chip to press', lambda: run_tool(helper, 'press', pid,
+                 'title:one it has to ask about', check=False).returncode == 0, timeout=15, interval=0.3)
+        suggestion_draft = wait_for('the Try chip draft in the focused composer', lambda: (focused := json.loads(
+            run_tool(driver, 'focused', pid).stdout)) and focused.get('value') == 'Add a dark mode toggle' and focused)
+        require((coordinator_input.read_text() if coordinator_input.exists() else '') == input_before_suggestion,
+                'The Try chip sent a request instead of preparing a draft')
+        capture('coordinator-try-chip-draft')
+        step('Try chip prepared a composer draft without sending', labels=suggestions['suggestionLabels'],
+             focusedInput=suggestion_draft)
+
+        addressed_text = 'Keep the report marks and the question together in this task.'
+        require(route_input_ready(), 'The coordinator cannot receive the addressed composer request')
+        page_action('type', 'composer-input', f"@{task['slug']} {addressed_text}")
+        addressed_entry = wait_for('the addressed composer request in the task thread',
+                                  lambda: thread_entry(task_id, 'user-coordinator', addressed_text))
+        addressed_input = wait_for('the addressed request in fake coordinator input',
+                                   lambda: received(coordinator['sessionID'], addressed_text))
+        addressed_line = next((line for line in addressed_input.splitlines()
+                               if addressed_text in line and task_id in line and line.startswith('About task ')), None)
+        require(addressed_line, f'The addressed request did not carry its task identity: {addressed_input}')
+        transcript_message('user', addressed_line, 'fixture-addressed-echo')
+        addressed_marker = 'The synthetic coordinator recorded the addressed task request.'
+        transcript_message('assistant', addressed_marker, 'fixture-addressed-echo-read')
+        wait_for('the addressed transcript receipt', lambda: any(
+            item.get('text') == addressed_marker for item in chat_state()['items']))
+        wait_for('Try chips to hide after the real user request', lambda: chat_state()['hasUserRequests']
+                 and (page := rendered('chat')) and not page['suggestionsVisible'])
+        require(single_task_card(task_id, 'question', [1, 2]), 'The addressed request duplicated or replaced the task card')
+        require(thread_entry(task_id, 'user-task', mark_text), 'The addressed request lost the report mark')
+        require(sum(entry['role'] == 'user-coordinator' and entry['text'] == addressed_text
+                    for item in task_cards(task_id) for entry in item.get('thread', [])) == 1,
+                'The addressed request transcript echo duplicated its thread entry')
+        require(not any(item['type'] == 'message' and item.get('text') == addressed_text
+                        for item in chat_state()['items']), 'The addressed request leaked into the main transcript')
+        cli_result('coordinator', 'show', '--task', task_id)
+        wait_for('the addressed thread to render in the current card', lambda: (page := rendered('chat'))
+                 and addressed_entry['id'] in page['visibleThreadItemIDs'] and mark_entry['id'] in page['visibleThreadItemIDs'])
+        capture('coordinator-addressed-current-card')
+        step('addressed composer request and report mark retained in one card', taskID=task_id,
+             cardID=option_id, addressedEntry=addressed_entry, markEntry=mark_entry,
+             fakeAgentReceived=addressed_line)
+
+        # Reopen the synthetic provider prompt in order before testing the
+        # independent project-route answer. Do not infer readiness from text.
+        hook('UserPromptSubmit', turn_id='fixture-addressed-turn', prompt=addressed_line)
+        wait_for('the addressed coordinator turn to become working',
+                 lambda: chat_state().get('inputState') == 'working', timeout=30, interval=0.3)
+        hook('Stop', turn_id='fixture-addressed-turn', last_assistant_message=addressed_marker)
+        wait_for('the coordinator prompt after the addressed request', route_input_ready, timeout=30, interval=0.3)
         route_question = """Which project is “Add a dark mode toggle” for?
 Both projects have settings."""
         route_options = [str(user_home), str(work)]
@@ -849,7 +1054,7 @@ Both projects have settings."""
         # 11. The event store, rather than page memory, owns answers and
         # threads. Restart this isolated app with exactly the same homes.
         persisted = {item['id']: dict(answer=item['answer'], thread=item['thread'])
-                     for item in (option_answer, typed_answer)}
+                     for item in (card(option_id), card(typed_id))}
         instance.kill()
         instance = Instance(binary, environment, socket_path, runtime_home, artifacts / f'{PREFIX}-app.log')
         pid = instance.process.pid

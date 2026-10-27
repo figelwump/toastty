@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct BrowserPanelView: View {
     let panelID: UUID
     let webState: WebPanelState
+    let usesSummaryChrome: Bool
     @ObservedObject var runtime: BrowserPanelRuntime
     let isEffectivelyVisible: Bool
     let isActivePanel: Bool
@@ -21,7 +22,7 @@ struct BrowserPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
+            if !usesSummaryChrome { toolbar }
 
             WebPanelAnnotationSurface(
                 panelID: panelID,

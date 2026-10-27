@@ -18,7 +18,10 @@ task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - a To ship row opens the coordinator chat to its task;
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count and the Release pill;
-- the Done count opens All tasks at the project, with Done open and one of
+- the To ship group API and the Done footer open All tasks in the
+  coordinator's right panel, keep its chat in the center, and share the
+  project's ID filter;
+- the Done count leaves Done open and one of
   the project's done tasks selected;
 - the Release pill makes the project's release task. The home folder is no
   git repository, so its setup then fails; only the task's creation counts.
@@ -26,6 +29,10 @@ The coordinator runs the fake agent too; opening its chat asks GitHub about
 every open pull request. Captures of each step and
 remote-sidebar-to-ship-check.json go to the artifacts directory; a missing
 capture is recorded, not failed.
+
+Coverage gap: this fixture shows recent To ship rows, so the sidebar hides
+its To ship count. That count uses the same finishedTasksCount handler as
+the Done count, but its visible count variant is not exercised here.
 """
 
 import importlib.util
@@ -161,6 +168,30 @@ def main():
     def chat_state():
         return instance.query('coordinator.chat.state')
 
+    def filtered_tasks(project_id, group, task_ids):
+        """Check actual rows and the right-panel route, not only selection."""
+        state = chat_state()
+        response = instance.request('automation.coordinator_page_state', {})
+        require(response.get('ok'), f'Could not inspect coordinator pages: {response}')
+        pages = response['result']['pages']
+        summary = next((page for page in pages if page['view'] == 'tasks'), None)
+        center = next((page for page in pages if page['view'] == 'chat'), None)
+        if not summary or not center or state['projectFilter'] != project_id:
+            return None
+        if summary['projectFilter'] != project_id or center['projectFilter'] != project_id:
+            return None
+        if group not in summary['openGroupIDs'] or state.get('selectedRowID') not in task_ids:
+            return None
+        right = instance.query('workspace.snapshot', workspaceID=coordinator['workspaceID'])['rightPanel']
+        tabs = [tab for tab in right['tabs'] if (tab.get('url') or '').rstrip('/') in
+                ('toastty://coordinator/today', 'toastty://coordinator/tasks')]
+        if not right['isVisible'] or len(tabs) != 1 or tabs[0]['panelID'] != right['activePanelID']:
+            return None
+        row_projects = {row['id']: row['projectID'] for row in state['tasks']}
+        if not all(row_projects[row] == project_id for row in summary['visibleTaskRowIDs']):
+            return None
+        return summary
+
     def sidebar_rows():
         """The task rows' and "Show N more" labels, top to bottom. A row's
         label starts with its task's title, which only rows carry, or with
@@ -235,6 +266,17 @@ def main():
         wait_for('all five rows', lambda: sidebar_rows() == newest)
         capture('projects-show-more')
 
+        # Recent rows suppress the To ship footer count. Exercise the same
+        # group's API directly; the visible Done footer is clicked below.
+        shipping_ids = set(tasks.values())
+        project_id = next(row['projectID'] for row in chat_state()['tasks'] if row['taskID'] in shipping_ids)
+        cli_json('action', 'run', 'coordinator.tasks.show', 'group=toShip', f'project={project_id}')
+        wait_for('To ship group API to filter the right panel', lambda: filtered_tasks(project_id, 'toShip', shipping_ids))
+        capture('projects-to-ship-api-opens-all-tasks')
+        step('To ship group API opened right-panel All tasks', projectID=project_id,
+             coverageGap='Visible To ship count is hidden by recent rows; only Done footer click is exercised.')
+        cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
+
         press_label(f'{newest[1]}, ')
         # The page opens the task's card, which the palette then acts on.
         wait_for(f'the chat to open the card of {newest[1]}', lambda: chat_state()['currentTaskID'] == tasks[newest[1]])
@@ -258,11 +300,11 @@ def main():
         # 3. The Done count opens All tasks at the project's Done group.
         done_ids = {tasks[title] for title in TITLES[:3]}
         press_label(done_label)
-        state = wait_for('All tasks at a done task', lambda: (lambda s: s if s['view'] == 'tasks'
-                         and s.get('selectedRowID') in done_ids else None)(chat_state()))
+        wait_for('All tasks at a done task in the right panel', lambda: filtered_tasks(project_id, 'done', done_ids))
+        state = chat_state()
         selected = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces'] if w['isSelected']]
         require(selected == [coordinator['workspaceID']], f'The count did not open the coordinator: {selected}')
-        step('done count opened All tasks', selectedRowID=state['selectedRowID'])
+        step('done count opened right-panel All tasks', selectedRowID=state['selectedRowID'], projectID=project_id)
         capture('projects-done-count-opens-all-tasks')
 
         # 4. Release makes the project's release task.

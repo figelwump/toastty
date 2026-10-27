@@ -11,9 +11,10 @@ mkdirSync(outputDir, { recursive: true });
 
 copyFileSync(join(packageRoot, "index.html"), join(outputDir, "index.html"));
 copyFileSync(join(packageRoot, "report.html"), join(outputDir, "report.html"));
+copyFileSync(join(packageRoot, "dashboard.html"), join(outputDir, "dashboard.html"));
 copyFileSync(join(packageRoot, "src", "styles.css"), join(outputDir, "coordinator-panel.css"));
 
-for (const [entry, output] of [["main.ts", "coordinator-panel.js"], ["report.ts", "coordinator-report.js"]]) {
+for (const [entry, output] of [["main.ts", "coordinator-panel.js"], ["dashboard.ts", "coordinator-dashboard.js"], ["report.ts", "coordinator-report.js"]]) {
   await build({
     entryPoints: [join(packageRoot, "src", entry)],
     bundle: true,

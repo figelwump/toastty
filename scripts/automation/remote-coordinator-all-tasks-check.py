@@ -14,7 +14,10 @@ The project's origin is a local bare repository, and tasks.toml gives it a
 release_prompt. Four tasks are set up: one waiting for review with a packet
 card, one running with no card, one To ship, and one archived. Through the
 UI, the page's own handlers and the CLI it checks that:
-- `toastty coordinator tasks` shows All tasks, with each task in its group,
+- Today stays live in the right panel, with filtered counts and task lists;
+- the shared project filter hides other projects' cards and keeps notes;
+- `toastty coordinator tasks` shows All tasks in the right panel, with the
+  chat still in the center and each task in its group,
   and Done and Archived closed;
 - the review row's Merge asks first, naming the merge policy;
 - Down Arrow moves the selection, and Return opens the selected task's card
@@ -107,7 +110,10 @@ def main():
         'screenshots': [{'name': 'after-390', 'width': 390}],
     }))
     agent = fake_bin / 'claude'
-    agent.write_text(session_check.FAKE_AGENT)
+    agent.write_text(session_check.FAKE_AGENT.replace(
+        '  [ "$line" = quit ] && exit 0\n',
+        '  printf \'%s\\n\' "$line" >> "$dir/$TOASTTY_SESSION_ID.input"\n'
+        '  [ "$line" = quit ] && exit 0\n'))
     agent.chmod(0o755)
     gh_state = root / 'gh-state.json'
     gh_state.write_text(json.dumps({'2': 'MERGED'}))
@@ -172,14 +178,73 @@ def main():
         path = artifacts / f'{name}.png'
         if Path(response['result']['path']).resolve() != path.resolve():
             shutil.copyfile(response['result']['path'], path)
+        with path.open('rb') as capture_file:
+            header = capture_file.read(24)
+        require(header[:8] == b'\x89PNG\r\n\x1a\n', f'Capture is not a PNG: {path}')
+        width, height = int.from_bytes(header[16:20], 'big'), int.from_bytes(header[20:24], 'big')
         evidence['captures'].append(path.name)
-        step('captured', file=path.name)
+        step('captured', file=path.name, width=width, height=height)
 
     def chat_state():
         return instance.query('coordinator.chat.state')
 
+    def coordinator_prompt():
+        # A hook may authorize input only after its provider identity is
+        # bound by SessionStart. This stays inside the disposable fixture.
+        native_id = f"fixture-{coordinator['sessionID']}"
+        transcript_path = root / 'fixture-coordinator.jsonl'
+        events = []
+        if not transcript_path.exists():
+            transcript_path.touch()
+            events.append(dict(hook_event_name='SessionStart', session_id=native_id,
+                               transcript_path=str(transcript_path), cwd=str(user_home)))
+        events.append(dict(hook_event_name='Stop', session_id=native_id,
+                           turn_id=str(time.time_ns()), last_assistant_message='Fixture prompt ready'))
+        for payload in events:
+            result = subprocess.run([str(cli), '--json', '--socket-path', socket_path,
+                                     'session', 'ingest-agent-event', '--source', 'claude-hooks',
+                                     '--session', coordinator['sessionID'], '--panel', coordinator['panelID']],
+                                    input=json.dumps(payload), env=cli_environment, capture_output=True, text=True, timeout=30)
+            require(result.returncode == 0, f'Could not prepare the fake coordinator prompt: {result.stderr}')
+        wait_for('the bound fixture coordinator prompt to open', lambda: chat_state()['canSend'])
+
+    def coordinator_received(text):
+        path = fake_bin / 'sessions' / f"{coordinator['sessionID']}.input"
+        return path.is_file() and text in path.read_text()
+
     def rows():
         return {row['taskID']: row for row in chat_state()['tasks']}
+
+    def resize_window(width, height, name):
+        actual_size = json.loads(run_tool(helper, 'resize', pid, width, height).stdout)
+        time.sleep(0.3)
+        step('window resized', size=name, requestedPoints=dict(width=width, height=height),
+             actualWindowPoints=actual_size)
+
+    def rendered(view):
+        response = instance.request('automation.coordinator_page_state', {})
+        require(response.get('ok'), f'Could not inspect coordinator pages: {response}')
+        return next((page for page in response['result']['pages']
+                     if page['view'] == view), None)
+
+    def dashboard(view):
+        """Require a live summary beside the center chat, not merely a URL."""
+        state = rendered(view)
+        center = rendered('chat')
+        if not state or not center:
+            return None
+        snapshot = instance.query('workspace.snapshot', workspaceID=coordinator['workspaceID'])
+        right = snapshot['rightPanel']
+        routes = {'toastty://coordinator/today', 'toastty://coordinator/tasks'}
+        tabs = [tab for tab in right['tabs'] if (tab.get('url') or '').rstrip('/') in routes]
+        if not right['isVisible'] or len(tabs) != 1 or tabs[0]['panelID'] != right['activePanelID']:
+            return None
+        return state
+
+    def today_matches(counts, sections):
+        state = dashboard('today')
+        return state if state and state['todayCounts'] == counts and all(
+            set(state['todaySections'][group]) == set(ids) for group, ids in sections.items()) else None
 
     def page(action, element, text=None):
         args = dict(action=action, elementID=element)
@@ -203,7 +268,9 @@ def main():
     try:
         workspaces = instance.wait_until_ready()
         workspace_id = workspaces[0]['workspaceID']
-        wait_for('the coordinator to run', lambda: instance.query('coordinator.status')['state'] == 'running', timeout=90, interval=1)
+        resize_window(1600, 1000, 'wide')
+        coordinator = wait_for('the coordinator to run', lambda: (lambda s: s if s['state'] == 'running' else None)(
+            instance.query('coordinator.status')), timeout=90, interval=1)
         wait_for('the first terminal in the user home', lambda: str(user_home) in [
             os.path.realpath(cwd) for w in instance.query('workspace.list')['workspaces']
             if w['workspaceID'] == workspace_id for cwd in w['terminalCwds']], interval=1)
@@ -222,9 +289,158 @@ def main():
         ids = dict(review=review['taskID'], running=running['taskID'], shipping=shipping['taskID'], archived=archived['taskID'])
         step('tasks set up', **ids)
 
-        # 1. All tasks, with each task in its group.
+        # A distinct project catches accidental global counts and filtering.
+        other_root = root / 'other-project'
+        other_root.mkdir()
+        git('init', '-q', cwd=other_root)
+        created = cli_json('action', 'run', 'workspace.create', '--window', workspaces[0]['windowID'],
+                           'title=Other project', 'parent=none', 'activate=true')
+        other_workspace = created['workspaceID']
+        other_panel = instance.query('workspace.snapshot', workspaceID=other_workspace)['slotPanelIDs'][0]
+
+        # Empty input with no Return uses the real input readiness gate.
+        # Surface text alone can exist before viewport attachment is stable.
+        wait_for('the mounted other project shell to accept input', lambda: cli_json(
+            'action', 'run', 'terminal.send-text', '--panel', other_panel,
+            'text=', 'submit=false', 'allowUnavailable=true').get('available') is True,
+            timeout=30, interval=0.5)
+        cli_json('action', 'run', 'terminal.send-text', '--panel', other_panel,
+                 f'text=cd {shlex.quote(str(other_root))}', 'submit=true')
+        wait_for('the other project terminal', lambda: os.path.realpath(
+            instance.query('terminal.state', panelID=other_panel)['cwd']) == str(other_root), interval=0.5)
+        other = cli_json('task', 'create', 'Other project task', '--title', 'Other project task',
+                         '--workspace', other_workspace, '--wait', '--timeout', '90')
+        cli_json('coordinator', 'post', 'task-started', '--task', other['taskID'])
+        cli_json('coordinator', 'post', 'note', 'This note belongs to every project.')
+
+        # 1. Today is a live right panel. Chat remains visible in the center.
+        cli_json('coordinator', 'show')
+        wait_for('Today beside the chat', lambda: dashboard('today'), timeout=20, interval=0.5)
+        startup = wait_for('Try chips in the integrated chat', lambda: (lambda s: s if s and
+                           s['suggestionsVisible'] and 'status' in s['suggestionLabels'] else None)(rendered('chat')))
+        step('composer Try chips remain visible', labels=startup['suggestionLabels'])
+        coordinator_prompt()
+        addressed_text = 'Keep this other-project thread attached to its card.'
+        page('type', 'composer-input', f"@{other['slug']} {addressed_text}")
+        addressed_card = wait_for('the addressed message in its task thread', lambda: next(
+            (item for item in chat_state()['items'] if item.get('taskID') == other['taskID'] and
+             any(entry['role'] == 'user-coordinator' and entry['text'] == addressed_text
+                 for entry in item.get('thread', []))), None))
+        wait_for('the addressed message received by the fake coordinator', lambda: coordinator_received(addressed_text))
+        thread_id = next(entry['id'] for entry in addressed_card['thread'] if entry['text'] == addressed_text)
+        page('click', f"expand-{addressed_card['id']}")
+        wait_for('the addressed thread rendered in its open card', lambda: thread_id in rendered('chat')['visibleThreadItemIDs'])
+        step('composer task address reaches its card thread', taskID=other['taskID'], threadID=thread_id)
+        capture('coordinator-integrated-thread')
+
+        wait_for('the merged task in To ship', lambda: rows().get(ids['shipping'], {}).get('group') == 'toShip', timeout=60)
+        current = rows()
+        project_id = current[ids['review']]['projectID']
+        other_project_id = current[other['taskID']]['projectID']
+        require(project_id != other_project_id, 'The fixtures did not create distinct projects')
+        wait_for('unfiltered Today counts and lists', lambda: today_matches(
+            dict(needsYou=1, running=2, toShip=1),
+            dict(needsYou=[ids['review']], running=[ids['running'], other['taskID']], completed=[ids['shipping']])))
+        projects = chat_state()['projects']
+        project_index = next(i for i, project in enumerate(projects) if project['id'] == project_id)
+        page('click', f'project-filter-{project_index}')
+        wait_for('the native shared filter', lambda: chat_state()['projectFilter'] == project_id)
+        today = wait_for('filtered Today counts and lists', lambda: today_matches(
+            dict(needsYou=1, running=1, toShip=1),
+            dict(needsYou=[ids['review']], running=[ids['running']], completed=[ids['shipping']])))
+        require(not today['intakeVisible'], 'Empty Intake must stay hidden')
+        items = chat_state()['items']
+        other_card = next(item['id'] for item in items if item.get('taskID') == other['taskID'])
+        note = next(item['id'] for item in reversed(items) if item['type'] == 'card' and not item.get('taskID'))
+        center = wait_for('the chat to filter cards and retain its note', lambda: (lambda s: s if s
+                          and s['projectFilter'] == project_id and other_card not in s['visibleItemIDs']
+                          and note in s['visibleItemIDs'] else None)(rendered('chat')))
+        require(thread_id not in center['visibleThreadItemIDs'], 'The project filter leaked a hidden task thread')
+        step('shared filter hides the addressed task thread', threadID=thread_id)
+        hidden_ask = 'Keep this addressed message scoped while the project card is hidden.'
+        coordinator_prompt()
+        page('type', 'composer-input', f"@{other['slug']} {hidden_ask}")
+        wait_for('the hidden-project addressed reply in its native thread', lambda: any(
+            entry['text'] == hidden_ask and entry['role'] == 'user-coordinator'
+            for item in chat_state()['items'] if item.get('taskID') == other['taskID']
+            for entry in item.get('thread', [])))
+        wait_for('the hidden-project address received by the fake coordinator', lambda: coordinator_received(hidden_ask))
+        require(rendered('chat')['projectFilter'] == project_id and other_card not in rendered('chat')['visibleItemIDs'],
+                'Addressing a hidden task changed the shared project filter')
+        step('composer address works while its thread card is filtered out', taskID=other['taskID'])
+        require(center['projectFilter'] == today['projectFilter'] == project_id, 'The pages disagree on the filter')
+        require(chat_state()['detail'] in center['headerText'] and 'Claude Code' in center['headerText']
+                and '4 tasks in 2 projects' in center['headerText'],
+                f'The header lacks live agent/task/project detail: {center["headerText"]}')
+        center = wait_for('the project filter visible in the wide chat', lambda: (lambda s: s if s
+                          and s['projectFilterVisible'] else None)(rendered('chat')), timeout=15, interval=0.3)
+        step('wide project filter visible', viewportWidth=center['viewportWidth'], projectID=center['projectFilter'])
+        capture('coordinator-today-filtered')
+
+        resize_window(1280, 760, 'narrow')
+        narrow = wait_for('the project filter hidden in the narrow chat', lambda: (lambda s: s if s
+                         and not s['projectFilterVisible'] else None)(rendered('chat')), timeout=15, interval=0.3)
+        narrow_today = wait_for('narrow Today to keep filtered counts and lists', lambda: today_matches(
+            dict(needsYou=1, running=1, toShip=1),
+            dict(needsYou=[ids['review']], running=[ids['running']], completed=[ids['shipping']])))
+        require(narrow['projectFilter'] == narrow_today['projectFilter'] == chat_state()['projectFilter'] == project_id,
+                'Resizing lost the shared project filter')
+        step('narrow project filter hidden', viewportWidth=narrow['viewportWidth'], projectID=project_id)
+        # The narrow window keeps this native control on the physical screen.
+        # SwiftUI gives these controls their container's identifier, so use
+        # their observed unique titles within this isolated summary window.
+        wait_for('native summary Add and Refresh controls after resize', lambda: all(
+            run_tool(helper, 'exists', pid, title, check=False).returncode == 0
+            for title in ('title:Add to Right Panel', 'title:Refresh')), timeout=10, interval=0.3)
+        before_reload = rendered('today')['documentToken']
+        run_tool(helper, 'press', pid, 'title:Refresh')
+        reloaded = wait_for('Today to restore its filtered counts and lists after Reload', lambda: (lambda s: s if s
+                            and s['documentToken'] != before_reload and s['projectFilter'] == project_id else None)(today_matches(
+                                dict(needsYou=1, running=1, toShip=1),
+                                dict(needsYou=[ids['review']], running=[ids['running']], completed=[ids['shipping']]))),
+                            timeout=20, interval=0.3)
+        require(chat_state()['projectFilter'] == rendered('chat')['projectFilter'] == reloaded['projectFilter'],
+                'Reload lost the shared project filter')
+        step('summary native controls and Reload work', addControl=True, projectID=reloaded['projectFilter'],
+             counts=reloaded['todayCounts'], sections=reloaded['todaySections'],
+             documentBefore=before_reload, documentAfter=reloaded['documentToken'])
+        capture('coordinator-today-narrow')
+        resize_window(1600, 1000, 'wide-restored')
+        wait_for('the project filter visible after restoring the wide chat', lambda: (lambda s: s
+                 and s['projectFilterVisible'])(rendered('chat')), timeout=15, interval=0.3)
+        page('click', f'today-row-{ids["review"]}')
+        wait_for('Today to open the review card in the center', lambda: chat_state()['currentTaskID'] == ids['review'])
+        require(dashboard('today'), 'Opening a Today card removed the summary or center chat')
+        review_card = next(item['id'] for item in chat_state()['items']
+                           if item.get('taskID') == ids['review'] and item.get('isCurrent'))
+        wait_for('the review card rendered before the focus assertion', lambda: instance.request(
+            'automation.coordinator_chat_action', dict(action='visible', elementID=f'reply-{review_card}')).get('ok'))
+        page('focus', f'project-filter-{project_index}')
+        wait_for('the project button to hold native and DOM focus before the update', lambda: (lambda s: s and
+                 s['documentHasFocus'] and s['focusedElementID'] == f'project-filter-{project_index}')(rendered('chat')))
+        before_focus_note = {item['id'] for item in chat_state()['items']}
+        cli_json('coordinator', 'post', 'note', 'Keep the project filter focused during this update.')
+        focus_note = wait_for('the focus-check note in native state', lambda: next(
+            (item for item in chat_state()['items'] if item['id'] not in before_focus_note and item.get('kind') == 'note'), None))
+        wait_for('the focus-check note rendered in chat', lambda: focus_note['id'] in rendered('chat')['visibleItemIDs'])
+        require(rendered('chat')['focusedElementID'] == f'project-filter-{project_index}',
+                'A live header push lost focus from the selected project button')
+        step('project button keeps keyboard focus through a live state push')
+        transient, _ = started('Today live update')
+        wait_for('Today to add a running task without reopening', lambda: today_matches(
+            dict(needsYou=1, running=2, toShip=1),
+            dict(needsYou=[ids['review']], running=[ids['running'], transient['taskID']], completed=[ids['shipping']])))
+        wait_for('the header to add the live task', lambda: '5 tasks in 2 projects' in rendered('chat')['headerText'])
+        cli_json('task', 'mark-done', transient['taskID'])
+        wait_for('Today to update without reopening', lambda: today_matches(
+            dict(needsYou=1, running=1, toShip=1),
+            dict(needsYou=[ids['review']], running=[ids['running']], completed=[ids['shipping']])))
+        step('Today live state and shared filter', projectID=project_id, hiddenCard=other_card, retainedNote=note)
+
+        # 2. All tasks opens beside the chat, with each task in its group.
+        page('click', 'project-filter-all')
         cli_json('coordinator', 'tasks')
-        wait_for('All tasks', lambda: chat_state()['pages'] >= 1 and chat_state()['view'] == 'tasks', timeout=20, interval=0.5)
+        wait_for('All tasks beside the chat', lambda: dashboard('tasks'), timeout=20, interval=0.5)
         expected = dict(review='needsYou', running='running', shipping='toShip', archived='archived')
 
         def grouped():
@@ -234,6 +450,13 @@ def main():
         # Opening All tasks asks GitHub, which reports pull request 2 merged.
         wait_for('each task in its group', grouped, timeout=60, interval=1)
         current = rows()
+        require(set(dashboard('tasks')['openGroupIDs']).isdisjoint({'done', 'archived'}),
+                'Done and Archived must start closed')
+        page('click', f'project-filter-{project_index}')
+        filtered = wait_for('All tasks to share the project filter', lambda: (lambda s: s if s and
+                            s['projectFilter'] == project_id and other['taskID'] not in s['visibleTaskRowIDs'] else None)(dashboard('tasks')))
+        require(ids['review'] in filtered['visibleTaskRowIDs'], 'The project filter hid its own review task')
+        page('click', 'project-filter-all')
         require(current[ids['review']]['hasCard'] and not current[ids['running']]['hasCard'], f'Unexpected cards: {current}')
         require(current[ids['review']]['primary'] == 'action:merge', f'The review row offers no Merge: {current[ids["review"]]}')
         require('release' in current[ids['shipping']]['menu'], f'The To ship row offers no Release: {current[ids["shipping"]]}')
@@ -244,29 +467,61 @@ def main():
         # 2. Merge asks first.
         review_row = current[ids['review']]['id']
         page('click', f'task-primary-{review_row}')
+        confirmation = wait_for('the project merge confirmation', lambda: (lambda s: s['confirming'] if s
+                                and s.get('confirming') and s['confirming']['rowID'] == review_row else None)(dashboard('tasks')))
+        require(current[ids['review']]['confirm'] in confirmation['text'],
+                f'The confirmation does not name the merge policy: {confirmation}')
         capture('all-tasks-merge-question')
         key(KEY_ESCAPE)
         require(not cli_json('task', 'get', ids['review']).get('mergeRequestedAt'), 'Merge did not ask first')
         step('merge asks first')
 
+        # A passive state push must preserve a focused descendant when the
+        # dashboard replaces its rendered rows. Focusing does not open the menu.
+        menu_id = f'task-menu-{review_row}'
+        page('focus', menu_id)
+        focused = wait_for('the review menu to hold native and DOM focus', lambda: (lambda s: s if s
+                           and s['documentHasFocus'] and s['focusedElementID'] == menu_id else None)(dashboard('tasks')),
+                           timeout=10, interval=0.3)
+        known_items = {item['id'] for item in chat_state()['items']}
+        cli_json('coordinator', 'post', 'note', 'Keep the All tasks menu focused during this update.')
+        pushed_note = wait_for('the new note in the pushed coordinator state', lambda: next(
+            (item for item in chat_state()['items'] if item['id'] not in known_items and item.get('kind') == 'note'), None),
+            timeout=10, interval=0.3)
+        wait_for('the passive note rendered before checking menu focus',
+                 lambda: pushed_note['id'] in rendered('chat')['visibleItemIDs'], timeout=10, interval=0.1)
+        after_push = wait_for('the live state push to restore the same native and DOM menu focus',
+                             lambda: (lambda s: s if s and s['documentHasFocus'] and
+                                      s['focusedElementID'] == menu_id else None)(dashboard('tasks')),
+                             timeout=5, interval=0.1)
+        step('live push preserves descendant focus', noteID=pushed_note['id'],
+             before=focused['focusedElementID'], after=after_push['focusedElementID'])
+
         # 3. Down Arrow moves the selection; Return opens the card in the chat.
+        page('click', 'project-filter-all')
+        wait_for('all projects before keyboard navigation', lambda: dashboard('tasks')['projectFilter'] is None)
+        page('focus', 'dashboard')
+        wait_for('the stable dashboard root to hold keyboard focus', lambda: (lambda s: s and s['documentHasFocus']
+                 and s['focusedElementID'] == 'dashboard')(dashboard('tasks')), timeout=10, interval=0.3)
         page('click', f'task-row-{review_row}')
         wait_for('the review row selected', lambda: chat_state()['selectedRowID'] == review_row, timeout=10, interval=0.3)
+        running_row = next(row['id'] for row in chat_state()['tasks'] if row['group'] == 'running')
         key(KEY_DOWN)
-        running_row = current[ids['running']]['id']
-        wait_for('Down Arrow to select the next row', lambda: chat_state()['selectedRowID'] == running_row, timeout=10, interval=0.3)
+        wait_for('Down Arrow to select the first running row', lambda: chat_state()['selectedRowID'] == running_row, timeout=10, interval=0.3)
         capture('all-tasks-selection')
         page('click', f'task-row-{review_row}')
         key(KEY_RETURN)
-        wait_for('Return to open the card in the chat', lambda: chat_state()['view'] == 'chat'
-                 and chat_state()['currentTaskID'] == ids['review'], timeout=15, interval=0.3)
+        wait_for('Return to open the card in the center chat', lambda: (lambda s: s['view'] == 'chat'
+                 and s['currentTaskID'] == ids['review'])(chat_state()), timeout=15, interval=0.3)
+        require(dashboard('tasks'), 'Opening the card removed the All tasks right panel')
         step('return opened the card')
         capture('all-tasks-opens-card')
 
         # 4. Option+Cmd+T shows All tasks again.
         key(KEY_T, 'cmd,opt')
-        wait_for('Option+Cmd+T to show All tasks', lambda: chat_state()['view'] == 'tasks', timeout=15, interval=0.3)
+        wait_for('Option+Cmd+T to show All tasks beside the chat', lambda: dashboard('tasks'), timeout=15, interval=0.3)
         step('shortcut shows all tasks')
+        page('click', 'project-filter-all')
 
         # 5. Release from the To ship row's menu.
         shipping_row = current[ids['shipping']]['id']
@@ -336,10 +591,27 @@ def main():
         wait_for('the recovered task in Running', lambda: rows().get(broken_id, {}).get('group') == 'running')
         step('failed worktree setup retried from All tasks', taskID=broken_id, group=rows()[broken_id]['group'])
 
+        input_path = fake_bin / 'sessions' / f"{coordinator['sessionID']}.input"
+        shutil.copyfile(input_path, artifacts / 'coordinator-addressed-input.txt')
+        evidence['addressedThreadState'] = [item for item in chat_state()['items']
+                                            if item.get('taskID') == other['taskID']]
+        evidence['addressedInputArtifact'] = 'coordinator-addressed-input.txt'
         evidence['status'] = 'passed'
     except Exception:
         try:
+            dump_path = artifacts / f'{PREFIX}-ax.txt'
+            dump = run_tool(helper, 'dump', pid, check=False)
+            dump_path.write_text(dump.stdout)
+            evidence['nativeAXDump'] = dict(file=dump_path.name, exitCode=dump.returncode)
+            native_path = artifacts / f'{PREFIX}-native.png'
+            native_capture = run_tool(helper, 'capture', pid, native_path, check=False)
+            evidence['nativeCapture'] = dict(file=native_path.name, exitCode=native_capture.returncode,
+                                             error=native_capture.stderr.strip())
+        except Exception as error:
+            evidence['nativeDiagnosticsError'] = repr(error)
+        try:
             evidence['chatState'] = chat_state()
+            evidence['pageState'] = instance.request('automation.coordinator_page_state', {})
             capture('all-tasks-failure')
         except Exception as error:
             evidence['diagnosticsError'] = repr(error)

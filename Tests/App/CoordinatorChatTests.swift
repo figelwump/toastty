@@ -85,6 +85,10 @@ struct CoordinatorChatTests {
         #expect(card.task?.failureText == "The command failed with exit code 1.")
         #expect(card.task?.canArchive == true && card.task?.hasTaskSpace == true)
         #expect(card.isCurrent)
+        #expect(fixture.chat.hasCards(taskID: task.id))
+        await fixture.chat.handle(.taskAction(rowID: task.id.uuidString, actionID: "open"), from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.focus?.taskID == task.id.uuidString)
         // A retained draft still belongs to the task after recovery replaces
         // the card that was introduced by its error status.
         try fixture.session.files.append(CoordinatorEvent(at: Date(), kind: .taskStarted,
@@ -760,9 +764,31 @@ struct CoordinatorChatTests {
         #expect(CoordinatorChatPageEvent(body: ["type": "openURL", "url": "https://example.com"]) == .openURL("https://example.com"))
         #expect(CoordinatorChatPageEvent(body: ["type": "merge"]) == nil)
         #expect(CoordinatorChatPageEvent(body: "ready") == nil)
+        #expect(CoordinatorChatPageEvent(body: ["type": "projectFilter", "project": "/work/app"]) == .projectFilter("/work/app"))
+        #expect(CoordinatorChatPageEvent(body: ["type": "projectFilter", "project": 12]) == nil)
+        #expect(CoordinatorChatPageEvent(body: ["type": "showView", "view": "today"]) == .showView(.today))
+        #expect(CoordinatorChatPageEvent(body: ["type": "showView", "view": "chat"]) == nil)
+        #expect(CoordinatorSummaryPageBridge.accepts(.send("hello"), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.project(id: "/project", text: "hello"), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.taskMenu(taskID: UUID(), rect: .zero), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.answerRoute(questionID: UUID(), optionIndex: 0), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.archiveTask(UUID()), isSummary: true) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.answerRoute(questionID: UUID(), optionIndex: 0), isSummary: false))
+        #expect(CoordinatorSummaryPageBridge.accepts(.archiveTask(UUID()), isSummary: false))
+        #expect(CoordinatorSummaryPageBridge.accepts(.taskAction(rowID: "row", actionID: "open"), isSummary: true))
+        #expect(CoordinatorSummaryPageBridge.accepts(.taskAction(rowID: "row", actionID: "open"), isSummary: false) == false)
+        #expect(CoordinatorSummaryPageBridge.accepts(.activate(view: .tasks, selectedRowID: nil), isSummary: false) == false)
 
         func route(_ string: String) -> ToasttyCoordinatorPageRoute? { URL(string: string).flatMap(ToasttyCoordinatorPageRoute.init(url:)) }
         let id = taskID.uuidString
+        #expect(route("toastty://coordinator/today") == .summary)
+        #expect(route("toastty://coordinator/tasks") == .summary)
+        #expect(route("toastty://coordinator/today?other=1") == nil)
+        #expect(route("toastty://coordinator/today/extra") == nil)
+        #expect(route("toastty://coordinator/%74oday") == nil)
+        #expect(route("toastty://user@coordinator/today") == nil)
+        #expect(route("toastty://coordinator:123/today") == nil)
+        #expect(route("https://coordinator/today") == nil)
         #expect(route("toastty://coordinator/report/\(id)/3?shot=a") == .report(taskID: taskID, version: 3))
         #expect(route("toastty://coordinator/packet-data/\(id)/3") == .packetData(taskID: taskID, version: 3))
         #expect(route("toastty://coordinator/packet-files/\(id)/v3/after-390.png") == .packetFile(taskID: taskID, version: 3, fileName: "after-390.png"))

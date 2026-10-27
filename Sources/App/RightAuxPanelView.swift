@@ -40,6 +40,7 @@ struct RightAuxPanelView: View {
     }
 
     var body: some View {
+        let tabs = workspaceTab.rightAuxPanel.orderedTabs
         let isRightAuxPanelFocused = Self.isRightAuxPanelFocused(
             isWorkspaceSelected: isWorkspaceSelected,
             isWorkspaceTabSelected: isWorkspaceTabSelected,
@@ -48,28 +49,54 @@ struct RightAuxPanelView: View {
         )
 
         VStack(alignment: .leading, spacing: 0) {
-            if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
-                RightAuxPanelTabStrip(
-                    workspaceID: workspace.id,
-                    tabs: workspaceTab.rightAuxPanel.orderedTabs,
-                    activeTabID: workspaceTab.rightAuxPanel.activeTabID,
-                    unreadPanelIDs: workspaceTab.unreadPanelIDs,
-                    isRightAuxPanelFocused: isRightAuxPanelFocused,
-                    appIsActive: appIsActive,
-                    store: store,
-                    focusedPanelCommandController: focusedPanelCommandController,
-                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                    openLocalFileSearch: { openLocalFileSearch(windowID) },
-                    createBlankScratchpad: { createBlankScratchpad(workspace.id) },
-                    openBrowser: { openBrowser(windowID) }
-                )
+            if RightAuxPanelTabStrip.showsTabStrip(tabs: tabs) {
+                tabStrip(tabs: tabs, isFocused: isRightAuxPanelFocused)
             }
 
             panelStack
+                .overlay(alignment: .topTrailing) {
+                    if !tabs.isEmpty, !RightAuxPanelTabStrip.showsTabStrip(tabs: tabs), let tab = tabs.first {
+                        // Keep the existing Add menu and reload available,
+                        // alongside the summary's own Today / All tasks tabs.
+                        HStack(spacing: 0) {
+                            Button {
+                                _ = store.sendNavigation(.focusPanel(workspaceID: workspace.id, panelID: tab.panelID))
+                                _ = webPanelRuntimeRegistry.browserRuntime(for: tab.panelID).reloadOrStop()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11))
+                                    .frame(width: 26, height: RightAuxPanelTabStrip.height)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Reload summary")
+                            .accessibilityIdentifier("coordinator.summary.reload")
+                            tabStrip(tabs: [], isFocused: isRightAuxPanelFocused)
+                                .frame(width: RightAuxPanelTabStrip.addButtonContainerWidth)
+                        }
+                        .background(ToastyTheme.surfaceBackground)
+                    }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ToastyTheme.surfaceBackground)
         .accessibilityIdentifier("right-panel.\(workspace.id.uuidString).\(workspaceTab.id.uuidString)")
+    }
+
+    private func tabStrip(tabs: [RightAuxPanelTabState], isFocused: Bool) -> some View {
+        RightAuxPanelTabStrip(
+            workspaceID: workspace.id,
+            tabs: tabs,
+            activeTabID: tabs.isEmpty ? nil : workspaceTab.rightAuxPanel.activeTabID,
+            unreadPanelIDs: workspaceTab.unreadPanelIDs,
+            isRightAuxPanelFocused: isFocused,
+            appIsActive: appIsActive,
+            store: store,
+            focusedPanelCommandController: focusedPanelCommandController,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            openLocalFileSearch: { openLocalFileSearch(windowID) },
+            createBlankScratchpad: { createBlankScratchpad(workspace.id) },
+            openBrowser: { openBrowser(windowID) }
+        )
     }
 
     private var panelStack: some View {
@@ -369,15 +396,20 @@ struct RightAuxPanelTabStrip: View {
     @State private var hoveredTabID: UUID?
     @State private var hoveredCloseTabID: UUID?
 
-    nonisolated private static let height: CGFloat = 30
+    nonisolated static let height: CGFloat = 30
     nonisolated private static let idealTabWidth: CGFloat = 142
     nonisolated private static let minimumTabWidth: CGFloat = 82
     nonisolated private static let spacing: CGFloat = -1
-    nonisolated private static let addButtonContainerWidth: CGFloat = 38
+    nonisolated static let addButtonContainerWidth: CGFloat = 38
     nonisolated private static let addButtonSize: CGFloat = 22
 
     nonisolated static func showsTabStrip(tabCount: Int) -> Bool {
         tabCount > 0
+    }
+
+    nonisolated static func showsTabStrip(tabs: [RightAuxPanelTabState]) -> Bool {
+        if tabs.count == 1, case .web(let web) = tabs[0].panelState, web.usesCoordinatorSummaryChrome { return false }
+        return showsTabStrip(tabCount: tabs.count)
     }
 
     nonisolated static func resolvedTabWidth(availableWidth: CGFloat, tabCount: Int) -> CGFloat {

@@ -1,4 +1,4 @@
-/* The coordinator chat and the packet report. Colors follow the
+/* The coordinator chat, dashboard and packet report. Colors follow the
    coordinator prototype's dark look; light mode swaps the surfaces. */
 :root {
   color-scheme: dark light;
@@ -165,9 +165,37 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .rsec h2 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: 0 0 4px; font-weight: 500; }
 .rsec p, .rsec ul { margin: 0; overflow-wrap: anywhere; }
 
-/* All tasks */
-.view-switch { font-size: 11.5px; }
-.view-switch button { padding: 3px 9px; }
+/* Shared project filter. The chat keeps the complete filter in a single
+   row and hides it when the chat panel is narrow. This viewport is the
+   chat pane alone; the prototype's 900px also includes sidebar and panel. */
+.chead .pfilter { flex: none; flex-wrap: nowrap; max-width: 52%; overflow-x: auto; }
+.chead .pfilter button { white-space: nowrap; }
+@media (max-width: 720px) { .chead .pfilter { display: none; } }
+.dashboard-body:focus { outline: none; }
+
+/* Today and All tasks in the right panel. */
+.dashboard { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+.dashboard-tabs { display: flex; gap: 4px; padding: 5px 8px 0; border-bottom: 1px solid var(--line); flex: none; }
+.dashboard-tabs button { padding: 7px 9px; border-radius: 6px 6px 0 0; color: var(--dim); font-size: 11.5px; }
+.dashboard-tabs button.on { background: var(--raised); color: var(--fg); }
+.dashboard-body { gap: 14px; padding: 14px; }
+.gen { display: flex; gap: 12px; justify-content: space-between; color: var(--faint); font: 10.5px/1.45 var(--mono); }
+.gen > :last-child { text-align: right; overflow-wrap: anywhere; }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.kpi { display: flex; flex-direction: column; align-items: flex-start; padding: 9px 10px; background: var(--raised); border-radius: 8px; text-align: left; }
+.kpi:hover { background: var(--raised2); }
+.kpi .n { font: 700 25px/1.1 var(--mono); }
+.kpi .l { font-size: 11.5px; color: var(--dim); margin-top: 3px; }
+.kpi.needsYou .n { color: var(--amber); }
+.kpi.toShip .n { color: var(--violet); }
+.sec-h { font: 10.5px/1.45 var(--mono); color: var(--dim); display: flex; justify-content: space-between; gap: 8px; margin: 0; padding: 0 0 5px; }
+.sec-h > :last-child { color: var(--faint); }
+.minirow { display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%; padding: 7px 3px; border-top: 1px solid var(--line); text-align: left; }
+.minirow:hover { background: var(--raised); }
+.minirow .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.minirow .grow b { font-weight: 500; }
+.minirow .age { min-width: 2em; text-align: right; }
+.today-empty { border-top: 1px solid var(--line); padding: 8px 3px; font-size: 12px; }
 .tasks { gap: 2px; padding-top: 10px; }
 .tasks-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding-bottom: 6px; flex-wrap: wrap; }
 .pfilter { display: flex; gap: 2px; background: var(--raised); border-radius: 7px; padding: 2px; flex-wrap: wrap; }
@@ -191,6 +219,11 @@ input, textarea { font: inherit; color: var(--fg); background: transparent; bord
 .task-row .menu button:hover, .task-row .menu button:focus-visible { background: var(--line); outline: none; }
 .task-row .menu button.destructive { color: var(--red); }
 .task-row .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+.dashboard .task-line { flex-wrap: wrap; gap: 6px; }
+.dashboard .task-line .grow { flex-basis: calc(100% - 100px); }
+.dashboard .task-line .sub { white-space: normal; }
+.dashboard .task-line .age { margin-left: auto; }
+.dashboard .task-row .menu { right: 0; max-width: 100%; }
 
 /* Composer suggestions and explicit targets. */
 .composer { position: relative; }
