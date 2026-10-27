@@ -974,6 +974,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
       toastty [--json] [--socket-path <path>] coordinator post packet|task-started|question|note [<text> | --text <text>] [--task <task-id>] [--option <answer>]...
+        packet and task-started require --task; a question without --task requires --option project choices.
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator show-terminal
       toastty [--json] [--socket-path <path>] coordinator show [--task <task-id>]

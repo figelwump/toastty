@@ -11,6 +11,21 @@ struct SidebarNeedsYouRowTests {
     private let link = WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/7")!
     private let taskSpace = UUID()
 
+    @Test func aCurrentQuestionKeepsItsNewPacketBadgeInTheSidebar() throws {
+        let record = record(packetVersion: 2)
+        let item = item(.needsYou(.agentNeedsInput), record: record, pullRequest: false)
+        let task = CoordinatorChatTaskView.make(taskID: record.id, record: record, item: item,
+                                               stale: false, config: nil, homeDirectoryPath: "/Users/tester")
+        let card = CoordinatorChatTimeline.Card(id: UUID().uuidString, at: at, kind: .question,
+            taskID: record.id, text: "Which base?", packetVersion: 2, packetVersions: [1, 2], isNew: true, isCurrent: true)
+        let cards = CoordinatorChatCardIndex.tasks(from: [.card(.init(card: card, task: task, packet: nil))])
+        #expect(cards[record.id]?.hasUnansweredQuestion == true)
+        #expect(cards[record.id]?.isNew == true)
+        let row = SidebarNeedsYouRow.make(item, cards: cards[record.id], lookAt: { _ in nil })
+        #expect(row.isNew)
+        #expect(row.primary == .openInChat(taskID: record.id, isAnswer: true))
+    }
+
     private func record(pullRequest: Bool = true, packetVersion: Int? = nil) -> TaskRecord {
         var record = TaskRecord(createdAt: at, text: "fix", title: "fix", slug: "fix", source: .cli, setup: .started)
         record.pullRequestURL = pullRequest ? link.url : nil

@@ -2,7 +2,7 @@
 // `window.toasttyCoordinatorChat.receive(state)`; the page sends actions back
 // through the `toasttyCoordinatorChat` message handler. The page keeps only
 // what the user is doing here: open cards, typed replies, the merge confirm.
-import { collapseNewlySuperseded, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, replyTarget } from "./render";
+import { cardStateKey, collapseNewlySuperseded, fitsMessage, focusCardID, newUIState, renderHeader, renderTimeline, replyTarget, retainTaskCards } from "./render";
 import { applyFilter, moveSelection, navigableRows, newTasksUIState, normalize, renderTasks } from "./tasks";
 import type { ChatEvent, ChatItem, ChatState, PageView } from "./types";
 
@@ -30,7 +30,7 @@ let lastViewToken: number | null = null;
 let lastNoticeToken: number | null = null;
 let nextToken = 1;
 /// Sends waiting for the app's answer: what to clear once it is taken.
-const pendingSends = new Map<number, { draftKey: string | null; cardID?: string }>();
+const pendingSends = new Map<number, { draftKey: string | null; draftText: string | null; pendingKey?: string; questionID: string | null }>();
 const composerDraftKey = "composer";
 
 const header = document.getElementById("header")!;
@@ -55,24 +55,37 @@ function render() {
     return;
   }
 
-  // Re-rendering replaces the reply boxes; drafts live in `ui.drafts`, so
-  // only focus needs carrying over.
-  const focusedForm = (document.activeElement as HTMLElement | null)?.closest<HTMLFormElement>("form.replybox")?.dataset.id;
+  // Re-rendering replaces reply boxes. Keep input selection and the visible
+  // card's offset along with its stored draft.
+  const focused = document.activeElement as HTMLInputElement | null;
+  const focusedForm = focused?.closest<HTMLFormElement>("form.replybox");
+  const focusedCard = focusedForm?.dataset.task ? focusCardID(state, focusedForm.dataset.task) : focusedForm?.dataset.id;
+  const selection = focusedForm && focused ? { start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
   const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
-
-  // Keep the target the user first saw. A later task update must not send a
-  // retained draft to a different recipient.
-  for (const item of state.items) {
-    if (item.type === "card" && item.task && ui.expanded.has(item.id) && !ui.replyTarget.has(item.id)) {
-      ui.replyTarget.set(item.id, replyTarget(item, ui));
-    }
-  }
+  const previousTop = scroll.scrollTop;
+  const viewport = scroll.getBoundingClientRect();
+  const anchors = [...scroll.querySelectorAll<HTMLElement>("[data-item]")]
+    .filter((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.bottom > viewport.top && bounds.top < viewport.top + scroll.clientHeight;
+    })
+    .map((element) => ({ id: element.dataset.item, top: element.getBoundingClientRect().top }));
+  const focusedAnchor = focusedForm?.dataset.id
+    ? anchors.find((anchor) => anchor.id === focusedForm.dataset.id) : null;
   scroll.innerHTML = renderTimeline(state, ui);
 
-  if (focusedForm) {
-    scroll.querySelector<HTMLFormElement>(`form.replybox[data-id="${CSS.escape(focusedForm)}"]`)?.querySelector("input")?.focus();
+  if (focusedCard) {
+    const input = scroll.querySelector<HTMLFormElement>(`form.replybox[data-id="${CSS.escape(focusedCard)}"]`)?.querySelector("input");
+    input?.focus({ preventScroll: true });
+    if (input && selection?.start != null && selection.end != null) input.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
   }
   if (nearBottom) scroll.scrollTop = scroll.scrollHeight;
+  else {
+    const candidates = focusedCard && focusedAnchor ? [{ id: focusedCard, top: focusedAnchor.top }, ...anchors] : anchors;
+    const anchor = candidates.map((anchor) => ({ ...anchor, element: anchor.id ? scroll.querySelector<HTMLElement>(`[data-item="${CSS.escape(anchor.id)}"]`) : null }))
+      .find((anchor) => anchor.element !== null);
+    scroll.scrollTop = previousTop + (anchor?.element ? anchor.element.getBoundingClientRect().top - anchor.top : 0);
+  }
 
   post({ type: "rendered", expanded: [...ui.expanded], view, selected: tasksUI.selected });
   composerInput.disabled = !state.coordinator.canSend;
@@ -82,16 +95,27 @@ function render() {
 }
 
 function receive(next: ChatState) {
+  retainTaskCards(state, next, ui);
   state = next;
   collapseNewlySuperseded(next, ui);
   if (next.ack && pendingSends.has(next.ack.token)) {
     const sent = pendingSends.get(next.ack.token)!;
     pendingSends.delete(next.ack.token);
-    if (sent.cardID) ui.pendingCards.delete(sent.cardID);
+    if (sent.pendingKey) ui.pendingCards.delete(sent.pendingKey);
+    if (next.ack.ok && sent.pendingKey && sent.questionID) markDraftAsFollowup(sent.pendingKey, sent.questionID);
     if (next.ack.ok && sent.draftKey !== null) {
-      ui.drafts.delete(sent.draftKey);
-      if (sent.draftKey === composerDraftKey) composerInput.value = "";
+      if (sent.draftKey === composerDraftKey) {
+        if (composerInput.value === sent.draftText) composerInput.value = "";
+      } else if (ui.drafts.get(sent.draftKey) === sent.draftText) {
+        ui.drafts.delete(sent.draftKey);
+        ui.draftContext.delete(sent.draftKey);
+      }
     }
+  }
+  for (const item of next.items) {
+    if (item.type !== "card" || !item.task) continue;
+    if (item.kind === "question" && item.answer !== null) markDraftAsFollowup(cardStateKey(item), item.id);
+    for (const questionID of item.answeredQuestionIDs ?? []) markDraftAsFollowup(cardStateKey(item), questionID);
   }
   // The newer of a view request and a card focus decides the view: a page
   // that opens later gets both, with the older still set.
@@ -132,8 +156,7 @@ function receive(next: ChatState) {
 
 /// Opens the task's card, scrolls to it and flashes it. False when the chat
 /// has no card for the task.
-/// Opens a task's card: `cardID` when the chat has it, as the app names the
-/// task's newest question, else the task's newest packet card or its last.
+/// Uses the card the app names, else the task's current card.
 function openCard(taskID: string, cardID?: string | null): boolean {
   if (!state) return false;
   const id = cardID && state.items.some((item) => item.id === cardID) ? cardID : focusCardID(state, taskID);
@@ -168,17 +191,20 @@ function card(id: string | undefined): Extract<ChatItem, { type: "card" }> | nul
 }
 
 function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clearDraft: boolean) {
-  if (!state || !item.task || !text || ui.pendingCards.has(item.id) || !checkLength(text)) return;
+  const key = cardStateKey(item);
+  if (!state || !item.task || !text || ui.pendingCards.has(key) || !checkLength(text)) return;
   const target = replyTarget(item, ui);
   if (target === "task" ? !item.task.canReply : !state.coordinator.canSend) {
     notice.textContent = target === "task" ? "The task cannot receive replies now. Your draft is kept." : "The coordinator cannot receive messages now. Your draft is kept.";
     notice.className = "notice error";
     return;
   }
-  const token = track(clearDraft ? item.id : null, item.id);
+  const context = clearDraft ? ui.draftContext.get(key) : null;
+  const questionID = context ? context.questionID : item.kind === "question" && item.answer === null ? item.id : null;
+  const token = track(clearDraft ? key : null, clearDraft ? ui.drafts.get(key) ?? text : null, key, questionID);
   const fields = {
-    taskID: item.task.id, version: item.packet?.version ?? null, text, token, cardID: item.id,
-    questionID: item.kind === "question" && item.answer === null ? item.id : null,
+    taskID: item.task.id, version: context ? context.version : item.packet?.version ?? null, text, token, cardID: context?.cardID ?? item.id,
+    questionID,
   };
   post({ type: target === "task" ? "reply" : "ask", ...fields });
   render();
@@ -254,8 +280,8 @@ document.addEventListener("click", (event) => {
     case "reply-to": {
       const item = card(data.id);
       const to = data.to === "coordinator" ? "coordinator" : "task";
-      if (!item?.task || ui.pendingCards.has(item.id) || (to === "task" ? !item.task.canReply : !state?.coordinator.canSend)) break;
-      ui.replyTarget.set(item.id, to);
+      if (!item?.task || ui.pendingCards.has(cardStateKey(item)) || (to === "task" ? !item.task.canReply : !state?.coordinator.canSend)) break;
+      ui.replyTarget.set(cardStateKey(item), to);
       render();
       document.getElementById(`reply-${item.id}`)?.focus();
       break;
@@ -266,6 +292,15 @@ document.addEventListener("click", (event) => {
       if (!item || item.kind !== "question" || item.answer !== null || !Number.isInteger(index) || index < 0) break;
       const answer = item.options[index];
       if (answer) sendCard(item, answer, false);
+      break;
+    }
+    case "answer-route": {
+      const item = card(data.id);
+      const index = Number(data.index);
+      if (!item || item.task || item.kind !== "question" || item.answer !== null || item.answerPending || !state?.coordinator.canSend
+        || data.index == null || !/^\d+$/.test(data.index) || !Number.isInteger(index) || index < 0 || index >= item.options.length || ui.pendingCards.has(cardStateKey(item))) break;
+      post({ type: "answerRoute", questionID: item.id, optionIndex: index, token: track(null, null, cardStateKey(item)) });
+      render();
       break;
     }
     case "card-menu": {
@@ -289,6 +324,11 @@ document.addEventListener("click", (event) => {
     case "open-task":
       post({ type: "openTaskSpace", taskID: data.task! });
       break;
+    case "archive-task": {
+      const item = state?.items.find((item): item is Extract<ChatItem, { type: "card" }> => item.type === "card" && item.task?.id === data.task && item.isCurrent && !item.superseded);
+      if (item?.task?.stageLabel === "stuck" && item.task.canArchive) post({ type: "archiveTask", taskID: item.task.id });
+      break;
+    }
     case "focus-task":
       openCard(data.task!);
       break;
@@ -318,20 +358,50 @@ document.addEventListener("submit", (event) => {
   const input = form.querySelector("input")!;
   const text = input.value.trim();
   const item = card(form.dataset.id);
-  if (item) sendCard(item, text, true);
+  if (item?.task) {
+    if (ui.pendingCards.has(cardStateKey(item))) return;
+    rememberDraft(item, input.value);
+    sendCard(item, text, true);
+  }
 });
 
 // Drafts survive re-renders and closing the card.
 document.addEventListener("input", (event) => {
   const input = event.target as HTMLInputElement;
   const form = input.closest<HTMLFormElement>("form.replybox");
-  if (form) ui.drafts.set(form.dataset.id!, input.value);
+  const item = form ? card(form.dataset.id) : null;
+  if (item?.task) {
+    rememberDraft(item, input.value);
+    if (!input.value) render();
+  }
 });
 
-function track(draftKey: string | null, cardID?: string): number {
+function rememberDraft(item: Extract<ChatItem, { type: "card" }>, text: string) {
+  const key = cardStateKey(item);
+  if (!text) {
+    ui.drafts.delete(key);
+    ui.draftContext.delete(key);
+    return;
+  }
+  ui.drafts.set(key, text);
+  if (!ui.draftContext.has(key)) ui.draftContext.set(key, {
+    cardID: item.id,
+    questionID: item.kind === "question" && item.answer === null ? item.id : null,
+    version: item.packet?.version ?? null,
+    questionText: item.kind === "question" ? item.text : null,
+    target: replyTarget(item, ui),
+  });
+}
+
+function markDraftAsFollowup(key: string, questionID: string) {
+  const context = ui.draftContext.get(key);
+  if (context?.questionID === questionID) ui.draftContext.set(key, { ...context, questionID: null });
+}
+
+function track(draftKey: string | null, draftText: string | null, pendingKey?: string, questionID: string | null = null): number {
   const token = nextToken++;
-  pendingSends.set(token, { draftKey, cardID });
-  if (cardID) ui.pendingCards.add(cardID);
+  pendingSends.set(token, { draftKey, draftText, pendingKey, questionID });
+  if (pendingKey) ui.pendingCards.add(pendingKey);
   return token;
 }
 
@@ -345,7 +415,7 @@ function checkLength(text: string): boolean {
 function sendComposer() {
   const text = composerInput.value.trim();
   if (!text || composerInput.disabled || !checkLength(text)) return;
-  post({ type: "send", text, token: track(composerDraftKey) });
+  post({ type: "send", text, token: track(composerDraftKey, composerInput.value) });
   scroll.scrollTop = scroll.scrollHeight;
 }
 

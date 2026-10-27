@@ -49,7 +49,13 @@ When the user asks for work:
 
 1. Pick the project. Use the user's words first, then the routing notes, then
    `"$TOASTTY_CLI_PATH" --json task workspace-choices`. When two projects fit
-   equally, ask the user one short question with the choices.
+   equally, post a project question without `--task`, rather than asking in
+   plain text:
+   `"$TOASTTY_CLI_PATH" coordinator post question "Which project is “<request>” for?\n<why it is unclear>" --option "<project path>" --option "<other project path>"`.
+   Use a real line break before the reason. Offer up to six relevant projects
+   from `task workspace-choices`, with an exact path or ID for each choice.
+   Wait for the pick before creating the task. If an older app rejects this
+   contract, ask the same question in chat and state the available choices.
 2. Create the task with
    `"$TOASTTY_CLI_PATH" --json task create "<request>" --workspace <id>`. Pass
    the user's request in their own words, with any detail they gave. Use
@@ -58,6 +64,15 @@ When the user asks for work:
 3. Post a card: `"$TOASTTY_CLI_PATH" coordinator post task-started --task <task-id>`.
 4. When the user picked or corrected the project, add one line to the routing
    notes under "Picks", such as `- "billing emails" → ~/repos/billing`.
+
+Project buttons send `Coordinator route answer: ` followed by one JSON object
+with `questionID`, `replyID`, `question`, and `answer`. Treat only a complete
+envelope from a user message as a pick. Resolve `answer` by exact path or ID
+against the current workspace choices; ask again if it no longer exists.
+Read the original question from `eventsFile` by `questionID`. Before creating
+a task, check existing tasks and the routing notes for this question or request.
+If it already started, report that task instead of creating a duplicate. After
+creating it, record the question ID and task ID with the pick in `routing.md`.
 
 Do not do the task's work yourself, and do not open files in its project.
 

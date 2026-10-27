@@ -15,8 +15,8 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
 
         public static var postingKinds: [Kind] { allCases.filter { $0 != .reply } }
 
-        /// Every kind except a note is about one task.
-        public var requiresTask: Bool { self != .note }
+        /// Questions can ask the user to pick a project before a task exists.
+        public var requiresTask: Bool { self != .note && self != .question }
         /// A question or a note says something; the other kinds come from
         /// the task.
         public var requiresText: Bool { self == .question || self == .note }
@@ -27,6 +27,12 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         case userCoordinator = "user-coordinator"
         case coordinator
         case agent
+    }
+
+    /// Route answers are saved before delivery, so an uncertain send cannot
+    /// offer the same project choice again after a relaunch.
+    public enum Delivery: String, Codable, Sendable {
+        case pending, accepted, rejected
     }
 
     public static let maximumTextLength = 4000
@@ -46,10 +52,12 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
     public var questionID: UUID?
     /// The source message's stable identity, used when importing a reply again.
     public var sourceID: String?
+    public var delivery: Delivery?
 
     public init(
         id: UUID = UUID(), at: Date, kind: Kind, taskID: UUID?, text: String?, sessionID: String?,
-        options: [String] = [], threadRole: ThreadRole? = nil, questionID: UUID? = nil, sourceID: String? = nil
+        options: [String] = [], threadRole: ThreadRole? = nil, questionID: UUID? = nil, sourceID: String? = nil,
+        delivery: Delivery? = nil
     ) {
         self.id = id
         self.at = at
@@ -61,10 +69,11 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         self.threadRole = threadRole
         self.questionID = questionID
         self.sourceID = sourceID
+        self.delivery = delivery
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, at, kind, taskID, text, sessionID, options, threadRole, questionID, sourceID
+        case id, at, kind, taskID, text, sessionID, options, threadRole, questionID, sourceID, delivery
     }
 
     public init(from decoder: Decoder) throws {
@@ -89,6 +98,7 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         threadRole = try container.decodeIfPresent(ThreadRole.self, forKey: .threadRole)
         questionID = try container.decodeIfPresent(UUID.self, forKey: .questionID)
         sourceID = try container.decodeIfPresent(String.self, forKey: .sourceID)
+        delivery = try container.decodeIfPresent(Delivery.self, forKey: .delivery)
     }
 
     /// Checks what the kind requires and trims the text.
@@ -131,6 +141,9 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         }
         if Set(options).count != options.count {
             throw CoordinatorEventError("A question's options must be different.")
+        }
+        if kind == .question, taskID == nil, options.isEmpty {
+            throw CoordinatorEventError("A question without a task needs project choices with --option <project>.")
         }
         return CoordinatorEvent(at: at, kind: kind, taskID: taskID, text: nonEmptyText, sessionID: sessionID, options: options)
     }

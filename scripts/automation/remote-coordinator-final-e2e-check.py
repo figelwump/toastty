@@ -22,7 +22,7 @@ covers:
 3. A's packet puts it in the sidebar's Needs you list with its action and ▾
    menu, and the row opens the packet card in the chat;
 4. Full report opens in the right panel; a reply to A takes it out of Needs
-   you; packet v2 adds a card and v1 collapses;
+   you; packet v2 updates the only task card and keeps v1 in report history;
 5. with a pull request link, Open PR opens it in the right panel, and Merge
    from A's sidebar row, after its question, merges it: A is Done;
 6. a second task, B, merges from its card in the chat;
@@ -493,8 +493,9 @@ def main():
         capture('04-reply-leaves-needs-you')
         wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == a_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
-        olds = [c for c in cards('packet') if c['taskID'] == a_id and c['packetVersion'] == 1]
-        require(olds and all(c['superseded'] for c in olds), f'No collapsed v1 card: {cards("packet")}')
+        task_cards = [c for c in cards() if c['taskID'] == a_id]
+        require(len(task_cards) == 1 and task_cards[0].get('packetVersions') == [1, 2]
+                and not task_cards[0]['superseded'], f'Packet v2 duplicated the card or lost history: {task_cards}')
         open_card(a_id, 2)
         capture('04-packet-v2')
         step('4 report, reply and v2')

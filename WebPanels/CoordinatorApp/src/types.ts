@@ -44,6 +44,8 @@ export interface ChatTask {
   mergePolicy: string;
   canMerge: boolean;
   canReply: boolean;
+  failureText?: string | null;
+  canArchive?: boolean;
   /// A question's default: the task when its agent waits for input,
   /// and the coordinator otherwise.
   defaultReplyTarget: "task" | "coordinator";
@@ -81,9 +83,14 @@ export type ChatItem =
       isNew: boolean;
       task: ChatTask | null;
       packet: ChatPacket | null;
+      packetVersions?: number[];
       options: string[];
       /// Saved by the app after it accepts a question's answer.
       answer: string | null;
+      /// Questions already answered for this task, including older cards.
+      answeredQuestionIDs?: string[];
+      /// A route answer whose delivery has not been resolved by the app.
+      answerPending?: boolean;
       thread: ChatThreadMessage[];
       /// The app marks one current card per task, regardless of card kind.
       isCurrent: boolean;
@@ -164,6 +171,8 @@ export type ChatEvent =
   | { type: "send"; text: string; token: number }
   | { type: "reply"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "ask"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
+  | { type: "answerRoute"; questionID: string; optionIndex: number; token: number }
+  | { type: "archiveTask"; taskID: string }
   | { type: "merge"; taskID: string }
   | { type: "taskMenu"; taskID: string; x: number; y: number; width: number; height: number }
   | { type: "openTaskSpace"; taskID: string }
@@ -177,10 +186,13 @@ export interface ChatUIState {
   expanded: Set<string>;
   /// Cards seen superseded, so each folds only once.
   superseded: Set<string>;
-  /// What is typed in each card's reply box, kept while the card is closed.
+  /// Drafts and recipients use task identity, so new cards retain them.
   drafts: Map<string, string>;
+  /// The content the user was replying to when this draft began.
+  draftContext: Map<string, { cardID: string; questionID: string | null; version: number | null; questionText: string | null; target: "task" | "coordinator" }>;
+  /// A recipient the user chose explicitly, independent of a draft default.
   replyTarget: Map<string, "task" | "coordinator">;
-  /// Sends waiting for an acknowledgement, to prevent duplicate answers.
+  /// Task or route identities waiting for acknowledgement.
   pendingCards: Set<string>;
   confirmingMerge: string | null;
 }

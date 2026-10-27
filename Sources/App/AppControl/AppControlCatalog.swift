@@ -682,7 +682,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Post to the coordinator's chat: kind packet (a task published a review packet), task-started, question or note. Every kind but note names its task; question and note need text. A note with a task goes into that task's card thread. Toastty saves each event in coordinator/events.jsonl. Only the coordinator's own session, or a caller outside any agent session, may post.",
+                summary: "Post to the coordinator's chat: packet, task-started, question or note. Packet and task-started name a task. Question and note need text. A question without a task needs project choices in options; the pick goes to the coordinator. A note with a task goes into its thread. Toastty saves events in coordinator/events.jsonl. Only the coordinator's session, or a caller outside any agent session, may post.",
                 selectors: [],
                 parameters: [
                     .init(

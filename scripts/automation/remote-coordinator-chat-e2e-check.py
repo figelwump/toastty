@@ -21,7 +21,7 @@ captures the window with automation.capture_screenshot at each step:
    coordinator with the task named, and the chat shows only the typed text,
    tied to the task; then a reply to the task reaches its agent as
    `Review note on packet v1: …`, and the task leaves Needs you;
-4. packet v2 adds a new card, and the v1 card collapses;
+4. packet v2 updates the only task card and retains v1 in report history;
 5. with a pull request link on the task, Open PR opens it in the right panel;
    Merge asks first, naming the direct merge policy, and Merge in the
    question merges at once: the task is done.
@@ -308,16 +308,14 @@ def main():
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
-        # A card the coordinator posts for v1 replaces one the chat added, so
-        # the v1 card is found by its version.
-        olds = [c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1]
-        require(olds and all(c['superseded'] for c in olds), f'No collapsed v1 card: {cards("packet")}')
-        require(new_card['isNew'], f'v2 is not new: {new_card}')
-        expanded = chat_state()['expandedCardIDs']
-        require(not any(c['id'] in expanded for c in olds), 'The superseded v1 card stayed open')
+        task_cards = [c for c in cards() if c['taskID'] == task_id]
+        require(len(task_cards) == 1 and task_cards[0]['id'] == new_card['id'],
+                f'Packet v2 duplicated the task card: {task_cards}')
+        require(new_card.get('packetVersions') == [1, 2] and not new_card['superseded'],
+                f'Packet v2 lost its report history: {new_card}')
         open_card(task_id, 2)
         capture('e2e-4-packet-v2')
-        step('4 packet v2 card is new and v1 collapsed', newCard=new_card['id'])
+        step('4 packet v2 updated one task card with both reports', cardID=new_card['id'], packetVersions=[1, 2])
 
         record = cli_result('task', 'get', task_id)
         checkout = (record.get('worktree') or {}).get('path') or str(repository)

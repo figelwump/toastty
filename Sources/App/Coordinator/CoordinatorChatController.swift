@@ -90,6 +90,7 @@ final class CoordinatorChatController {
     let session: CoordinatorSessionController
     let conversations: ConversationService?
     let sessionRuntimeStore: SessionRuntimeStore?
+    private let loadURLInPanel: (@MainActor (UUID, String) -> Bool)?
     /// Each task's cards, for the sidebar.
     let cardIndex = CoordinatorChatCardIndex()
     private let now: () -> Date
@@ -130,6 +131,7 @@ final class CoordinatorChatController {
         session: CoordinatorSessionController,
         conversations: ConversationService?,
         sessionRuntimeStore: SessionRuntimeStore?,
+        loadURLInPanel: (@MainActor (UUID, String) -> Bool)? = nil,
         now: @escaping () -> Date = Date.init
     ) {
         self.store = store
@@ -137,6 +139,7 @@ final class CoordinatorChatController {
         self.session = session
         self.conversations = conversations
         self.sessionRuntimeStore = sessionRuntimeStore
+        self.loadURLInPanel = loadURLInPanel
         self.now = now
         if let conversations {
             let changes = conversations.changes()
@@ -290,6 +293,11 @@ final class CoordinatorChatController {
             events.append(entry)
         }
         for line in transcript.items {
+            if line.role == "user", let answer = line.routeAnswer,
+               Self.routeQuestion(id: answer.questionID, in: events).map({ $0.text == answer.question && $0.options.contains(answer.answer) }) == true {
+                _ = save(Self.routeReply(answer, at: line.at, delivery: .accepted))
+                continue
+            }
             guard line.role == "user", let taskID = line.aboutTaskID.flatMap(UUID.init(uuidString:)), taskIDs.contains(taskID),
                   let text = line.text, let providerID = line.sourceID else { continue }
             let source = line.replyID.map { "reply:\($0.uuidString)" } ?? "coordinator:\(providerID)"
@@ -370,7 +378,8 @@ final class CoordinatorChatController {
         let items = taskCoordinator.board?.items() ?? []
         var itemsByTaskID: [UUID: TaskBoardItem] = [:]
         for item in items { if let id = item.taskID { itemsByTaskID[id] = item } }
-        let taskIDs = Set(events.compactMap(\.taskID))
+        let stuckItems = items.filter { $0.stage == .needsYou(.agentError) }
+        let taskIDs = Set(events.compactMap(\.taskID)).union(stuckItems.compactMap(\.taskID))
         var stamps: [UUID: [CoordinatorChatTimeline.PacketStamp]] = [:]
         for taskID in taskIDs {
             stamps[taskID] = taskCoordinator.packets.versions(taskID: taskID).compactMap { version in
@@ -381,7 +390,19 @@ final class CoordinatorChatController {
         }
         await refreshStaleness(taskIDs: taskIDs)
         let config = taskCoordinator.board?.config
-        let cards = CoordinatorChatTimeline.cards(events: events, packets: stamps)
+        var cards = CoordinatorChatTimeline.cards(events: events, packets: stamps)
+        // A failed agent needs a card even if the coordinator never posted
+        // one. Its live status time also brings an existing card forward.
+        for item in stuckItems {
+            guard let taskID = item.taskID else { continue }
+            if let index = cards.firstIndex(where: { $0.taskID == taskID }) {
+                cards[index].at = max(cards[index].at, item.activityAt)
+            } else {
+                cards.append(.init(id: "stuck-\(taskID.uuidString)", at: item.activityAt, kind: .taskStarted,
+                                   taskID: taskID, text: nil, packetVersion: stamps[taskID]?.last?.version,
+                                   packetVersions: (stamps[taskID] ?? []).map(\.version), isCurrent: true))
+            }
+        }
         // Explicit task replies are shown once in their task thread. Unscoped
         // messages stay in the coordinator transcript.
         var chatItems = transcript.items.filter { line in
@@ -402,6 +423,13 @@ final class CoordinatorChatController {
             }
             if card.taskID != nil, let record {
                 task?.defaultReplyTarget = taskCoordinator.agentStatus(of: record).activity == .waiting ? .task : .coordinator
+                if itemsByTaskID[record.id]?.stage == .needsYou(.agentError) {
+                    let status = taskCoordinator.liveAgentSession(of: record)?.status
+                    let failure = status?.kind == .error
+                        ? status?.detail ?? status?.summary
+                        : "The agent stopped with an error. Open the task space to inspect its output."
+                    task?.failureText = failure.map { String($0.prefix(CoordinatorEvent.maximumTextLength)) }
+                }
             }
             let packetView = card.taskID.flatMap { taskID in
                 card.packetVersion.flatMap { version in
@@ -541,6 +569,15 @@ final class CoordinatorChatController {
             acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: true))
         case .ask(let taskID, let version, let text, let cardID, let questionID):
             acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: false))
+        case .answerRoute(let questionID, let optionIndex):
+            acknowledge(token, ok: await answerRoute(questionID: questionID, optionIndex: optionIndex))
+        case .archiveTask(let taskID):
+            guard let item = taskCoordinator.board?.items().first(where: { $0.taskID == taskID }),
+                  item.stage == .needsYou(.agentError), TaskBoardPresentation.detailActions(item).contains(.archive) else {
+                setNotice("That task is no longer stuck or cannot be archived.", isError: true)
+                break
+            }
+            TaskActions.archive(taskID: taskID, coordinator: taskCoordinator)
         case .taskMenu(let taskID, let rect):
             guard let item = taskCoordinator.board?.items().first(where: { $0.taskID == taskID }) else {
                 setNotice("That task no longer has a menu.", isError: true)
@@ -610,6 +647,14 @@ final class CoordinatorChatController {
     /// `coordinator.chat.state`, for automation and checks.
     func stateSnapshot() -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        let inputState: String
+        switch conversationSnapshot()?.summary.inputAvailability {
+        case .openPrompt?: inputState = "openPrompt"
+        case .unavailable(reason: .working)?: inputState = "working"
+        case .pendingInteraction?: inputState = "interaction"
+        case .localDraft?: inputState = "draft"
+        default: inputState = "unavailable"
+        }
         let items: [AutomationJSONValue] = (lastPayload?.items ?? []).map { item in
             switch item {
             case .transcript(let line):
@@ -632,6 +677,11 @@ final class CoordinatorChatController {
                     "isCurrent": .bool(card.isCurrent),
                     "options": .array(card.options.map(AutomationJSONValue.string)),
                     "answer": optional(card.answer),
+                    "answerPending": .bool(card.answerPending),
+                    "answeredQuestionIDs": .array(card.answeredQuestionIDs.map { .string($0.uuidString) }),
+                    "packetVersions": .array(card.packetVersions.map(AutomationJSONValue.int)),
+                    "failureText": optional(card.task?.failureText),
+                    "canArchive": .bool(card.task?.canArchive ?? false),
                     "defaultReplyTarget": optional(card.task?.defaultReplyTarget.rawValue),
                     "thread": .array(card.thread.map { entry in .object([
                         "id": .string(entry.id), "at": .string(entry.at.ISO8601Format()),
@@ -647,6 +697,7 @@ final class CoordinatorChatController {
         return [
             "pages": .int(pages.values.filter { $0.page != nil }.count),
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
+            "inputState": .string(inputState),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
             "currentTaskID": optional(currentTaskID?.uuidString),
@@ -727,6 +778,64 @@ final class CoordinatorChatController {
         }
     }
 
+    static func routeQuestion(id: UUID, in events: [CoordinatorEvent]) -> CoordinatorEvent? {
+        events.first { $0.id == id && $0.kind == .question && $0.taskID == nil && !$0.options.isEmpty }
+    }
+
+    /// A rejected attempt can be tried again. An accepted or uncertain one
+    /// must not start the same task twice, including after an app relaunch.
+    static func canAnswerRoute(questionID: UUID, in events: [CoordinatorEvent]) -> Bool {
+        guard let question = routeQuestion(id: questionID, in: events) else { return false }
+        var attempts: [UUID: CoordinatorEvent.Delivery] = [:]
+        let rank: [CoordinatorEvent.Delivery: Int] = [.pending: 0, .rejected: 1, .accepted: 2]
+        for event in events where event.kind == .reply && event.taskID == nil && event.questionID == questionID
+            && event.threadRole == .userCoordinator && event.text.map(question.options.contains) == true {
+            let delivery = event.delivery ?? .accepted
+            if (rank[delivery] ?? 0) > (attempts[event.id].flatMap { rank[$0] } ?? -1) { attempts[event.id] = delivery }
+        }
+        return !attempts.values.contains { $0 == .accepted || $0 == .pending }
+    }
+
+    static func routeReply(_ answer: CoordinatorRouteAnswer, at: Date, delivery: CoordinatorEvent.Delivery) -> CoordinatorEvent {
+        CoordinatorEvent(id: answer.replyID, at: at, kind: .reply, taskID: nil, text: answer.answer, sessionID: nil,
+                         threadRole: .userCoordinator, questionID: answer.questionID,
+                         sourceID: "route-\(delivery.rawValue):\(answer.replyID.uuidString)", delivery: delivery)
+    }
+
+    private func answerRoute(questionID: UUID, optionIndex: Int) async -> Bool {
+        let events = session.files.events() + unsavedThreadReplies
+        guard let question = Self.routeQuestion(id: questionID, in: events), let questionText = question.text,
+              question.options.indices.contains(optionIndex),
+              Self.canAnswerRoute(questionID: questionID, in: events),
+              inFlightQuestions.insert(questionID).inserted else {
+            setNotice("That project question was answered or is waiting for delivery confirmation.", isError: true)
+            return false
+        }
+        defer { inFlightQuestions.remove(questionID) }
+        let answer = CoordinatorRouteAnswer(questionID: questionID, replyID: UUID(), question: questionText,
+                                            answer: question.options[optionIndex])
+        guard CoordinatorRouteAnswer(message: answer.message) == answer else {
+            setNotice("This project question is too long to answer. Ask the coordinator to shorten it.", isError: true)
+            return false
+        }
+        // Save before sending. If this fails, no message leaves the app.
+        do { try session.files.append(Self.routeReply(answer, at: now(), delivery: .pending)) }
+        catch {
+            setNotice("The project choice could not be saved: \(error.localizedDescription)", isError: true)
+            return false
+        }
+        let outcome = await sendToCoordinator(answer.message)
+        if outcome == .uncertain { return true }
+        let reply = Self.routeReply(answer, at: now(), delivery: outcome == .failed ? .rejected : .accepted)
+        if session.files.events().contains(where: { $0.sourceID == reply.sourceID }) { return outcome != .failed }
+        do { try session.files.append(reply) }
+        catch {
+            unsavedThreadReplies.append(reply)
+            setNotice("The project choice's delivery state could not be saved: \(error.localizedDescription)", isError: true)
+        }
+        return outcome != .failed
+    }
+
     /// Validates the exact card and question again before delivery. A task's
     /// live attention is independent of the answer stored in the chat.
     private func sendCardReply(taskID: UUID, version: Int?, text: String, cardID: String?, questionID: UUID?, toTask: Bool) async -> Bool {
@@ -743,7 +852,10 @@ final class CoordinatorChatController {
                 guard case .card(let card) = item else { return false }
                 return card.id == cardID && card.task?.id == taskID.uuidString
             } ?? false
-            guard isStoredCard || isPacketCard else {
+            let isEarlierPacket = version.map { version in
+                cardID == "packet-\(taskID.uuidString)-v\(version)" && taskCoordinator.packets.versions(taskID: taskID).contains(version)
+            } ?? false
+            guard isStoredCard || isPacketCard || isEarlierPacket else {
                 setNotice("That card no longer belongs to this task.", isError: true)
                 return false
             }
@@ -869,10 +981,23 @@ final class CoordinatorChatController {
         guard isAllowed else { return }
         if let reusingPrefix,
            let tab = workspace.rightAuxPanel.orderedTabs.first(where: {
-               if case .web(let web) = $0.panelState { return web.restorableURL?.hasPrefix(reusingPrefix) == true }
+               if case .web(let web) = $0.panelState { return web.definition == .browser && web.restorableURL?.hasPrefix(reusingPrefix) == true }
                return false
            }) {
-            _ = store.send(.updateWebPanelMetadata(panelID: tab.panelID, title: nil, url: url))
+            // A mounted browser can still report its old URL while SwiftUI
+            // applies metadata. Navigate the existing runtime directly, as
+            // the address field does, before selecting the report tab.
+            if case .web(let web) = tab.panelState, web.restorableURL != url {
+                if let loadURLInPanel {
+                    guard loadURLInPanel(tab.panelID, url) else {
+                        setNotice("The report could not open in its browser tab.", isError: true)
+                        return
+                    }
+                } else {
+                    // Model-only controllers used by tests have no browser.
+                    _ = store.send(.updateWebPanelMetadata(panelID: tab.panelID, title: nil, url: url))
+                }
+            }
             _ = store.send(.selectRightAuxPanelTab(workspaceID: workspaceID, tabID: tab.id, focus: true))
             return
         }

@@ -1401,7 +1401,10 @@ struct ToasttyApp: App {
             taskCoordinator: taskCoordinator,
             session: coordinatorSession,
             conversations: remoteAccessService.conversationService,
-            sessionRuntimeStore: sessionRuntimeStore
+            sessionRuntimeStore: sessionRuntimeStore,
+            loadURLInPanel: { [weak webPanelRuntimeRegistry] panelID, url in
+                webPanelRuntimeRegistry?.browserRuntime(for: panelID).loadUserEnteredURL(url) ?? false
+            }
         )
         self.coordinatorChat = coordinatorChat
         CoordinatorChatController.shared = coordinatorChat
