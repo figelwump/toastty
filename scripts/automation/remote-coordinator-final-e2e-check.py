@@ -563,12 +563,13 @@ def main():
         capture('08-all-tasks')
         page('click', 'group-done')
         capture('08-all-tasks-done-open')
+        # The chat header's project filter also filters the right panel.
         # Projects sort by name: docs-site comes before Workspace 1. The
         # selection moves to the only row the filter leaves.
-        page('click', 'task-filter-0')
+        page('click', 'project-filter-0')
         wait_for('the docs-site filter', lambda: chat_state()['selectedRowID'] == rows[c['taskID']]['id'], timeout=10, interval=0.3)
         capture('08-all-tasks-filtered')
-        page('click', 'task-filter-all')
+        page('click', 'project-filter-all')
         # C comes first, in Needs you or Running; Down moves past it.
         page('click', f"task-row-{rows[c['taskID']]['id']}")
         wait_for('C selected', lambda: chat_state()['selectedRowID'] == rows[c['taskID']]['id'], timeout=10, interval=0.3)
