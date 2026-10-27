@@ -97,9 +97,12 @@ export function retainTaskCards(previous: ChatState | null, next: ChatState, ui:
   if (ui.confirmingMerge) {
     const before = previous?.items.find((item) => item.type === "card" && item.id === ui.confirmingMerge);
     const after = next.items.find((item) => item.type === "card" && item.id === ui.confirmingMerge);
+    // Keep confirmation across turn updates when merge safety is unchanged.
+    // task.stale reports new commits; CoordinatorChatTaskView.label marks errors red.
     if (before?.type !== "card" || after?.type !== "card" || !after.isCurrent || after.superseded || !after.task?.canMerge
       || before.packet?.version !== after.packet?.version || before.task?.packetVersion !== after.task.packetVersion
-      || before.task?.id !== after.task.id || before.task?.stageLabel !== after.task.stageLabel) ui.confirmingMerge = null;
+      || before.task?.id !== after.task.id || after.task.stale || after.task.stageLabel === "stuck"
+      || after.task.stageTone === "red") ui.confirmingMerge = null;
   }
 }
 

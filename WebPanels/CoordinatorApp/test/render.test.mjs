@@ -397,17 +397,53 @@ test("Merge confirmation resets on an in-place packet or eligibility change", ()
     card({ isCurrent: false }),
     card({ superseded: true }),
     card({ task: task({ canMerge: false }) }),
-    card({ task: task({ stageLabel: "stuck" }) }),
+    card({ task: task({ stale: true }) }),
+    card({ task: task({ stageLabel: "stuck", stageTone: "red" }) }),
+    card({ task: task({ stageLabel: "failed", stageTone: "red" }) }),
+    card({ task: task({ stageLabel: "cleanup stopped", stageTone: "red" }) }),
   ]) {
-    const ui = render.newUIState();
-    ui.confirmingMerge = "c1";
-    render.retainTaskCards({ items: [before] }, { items: [after] }, ui);
-    assert.equal(ui.confirmingMerge, null);
+    for (const previous of [before, card({ task: task({ stageLabel: "working", stageTone: "amber" }) })]) {
+      const ui = render.newUIState();
+      ui.confirmingMerge = "c1";
+      render.retainTaskCards({ items: [previous] }, { items: [after] }, ui);
+      assert.equal(ui.confirmingMerge, null, `confirmation kept after ${previous.task.stageLabel} -> ${after.task.stageLabel}`);
+    }
   }
   const unchanged = render.newUIState();
   unchanged.confirmingMerge = "c1";
   render.retainTaskCards({ items: [before] }, { items: [card()] }, unchanged);
   assert.equal(unchanged.confirmingMerge, "c1");
+});
+
+test("Merge confirmation survives safe stage and thread updates", () => {
+  const before = card({ task: task({ stageLabel: "working", stageTone: "amber" }) });
+  const reply = { id: "agent-ready", at: "2026-10-24T10:01:00Z", role: "agent", text: "READY-B" };
+  for (const after of [
+    card({ task: task({ stageLabel: "review", stageTone: "blue" }) }),
+    card({ task: task({ stageLabel: "finished", stageTone: "blue" }) }),
+    card({ task: before.task, thread: [reply] }),
+    card({ task: task({ stageLabel: "review", stageTone: "blue" }), thread: [reply] }),
+  ]) {
+    const ui = render.newUIState();
+    ui.expanded.add("c1");
+    ui.confirmingMerge = "c1";
+    render.retainTaskCards({ items: [before] }, { items: [after] }, ui);
+    assert.equal(ui.confirmingMerge, "c1", `confirmation lost at ${after.task.stageLabel}`);
+    const html = render.renderItem(after, ui);
+    assert.ok(html.includes('id="merge-go-c1"'), "the confirmation still offers Merge");
+    assert.ok(!html.includes('data-act="merge"'), "the card does not ask for confirmation again");
+    assert.ok(render.renderItem(after, { ...ui, confirmingMerge: null }).includes('data-act="merge"'), "the ordinary Merge action is available without confirmation");
+    if (after.thread.length) assert.ok(html.includes("READY-B"), "the reply joins the thread");
+  }
+});
+
+test("Merge confirmation survives task resumption while merge safety is unchanged", () => {
+  for (const stageLabel of ["working", "needs input"]) {
+    const ui = render.newUIState();
+    ui.confirmingMerge = "c1";
+    render.retainTaskCards({ items: [card()] }, { items: [card({ task: task({ stageLabel, stageTone: "amber" }) })] }, ui);
+    assert.equal(ui.confirmingMerge, "c1");
+  }
 });
 
 test("vanished cards are removed from the expanded IDs sent to native", () => {
