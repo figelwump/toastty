@@ -118,8 +118,40 @@ struct CoordinatorChatTimelineTests {
         #expect(cards[0].thread.map(\.role) == [.coordinator, .userCoordinator])
     }
 
+    /// Older builds saved each task agent's messages into the log. They
+    /// still decode, but no longer show, move, anchor or crowd a card.
     @Test
-    func notesAndUserRepliesMoveTheTaskButAgentRepliesOnlyJoinItsThread() throws {
+    func legacyAgentMessagesStayOutOfCards() throws {
+        let question = event(.question, at: 0, task: taskID, text: "Which base?")
+        let answer = CoordinatorEvent(
+            at: start.addingTimeInterval(10), kind: .reply, taskID: taskID, text: "Main", sessionID: nil,
+            threadRole: .userTask, questionID: question.id, sourceID: "reply-1"
+        )
+        let note = event(.note, at: 20, task: taskID, text: "Sent to the task.")
+        func agent(_ seconds: TimeInterval, task: UUID? = nil) -> CoordinatorEvent {
+            CoordinatorEvent(at: start.addingTimeInterval(seconds), kind: .reply, taskID: task ?? taskID,
+                             text: "Agent message \(Int(seconds))", sessionID: nil, threadRole: .agent,
+                             sourceID: "task:\(Int(seconds))")
+        }
+        let agentOnlyTask = UUID()
+        let agents = (0...CoordinatorChatTimeline.maximumThreadEntries).map { agent(30 + TimeInterval($0)) }
+        var data = Data()
+        for event in [question, answer, note, agent(500, task: agentOnlyTask)] + agents {
+            data.append(try event.jsonLine())
+            data.append(UInt8(ascii: "\n"))
+        }
+        let events = CoordinatorEvent.decodeLog(data)
+        #expect(events.filter { $0.threadRole == .agent }.count == agents.count + 1)
+        #expect(!agent(1).canAnchorTaskCard)
+        let cards = CoordinatorChatTimeline.cards(events: events, packets: [:])
+        #expect(cards.map(\.taskID) == [taskID], "a task with only agent messages has no card")
+        #expect(cards[0].answer == "Main")
+        #expect(cards[0].at == note.at)
+        #expect(cards[0].thread.map(\.role) == [.userTask, .coordinator])
+    }
+
+    @Test
+    func notesAndRepliesMoveTheTaskButPreserveItsQuestionAndAnswer() throws {
         let question = CoordinatorEvent(
             at: start, kind: .question, taskID: taskID, text: "Which base?", sessionID: nil,
             options: ["Main", "Feature"]
@@ -130,26 +162,21 @@ struct CoordinatorChatTimelineTests {
             threadRole: .userCoordinator, questionID: question.id, sourceID: "user-turn"
         )
         let standalone = event(.note, at: 30, text: "Checking other tasks.")
-        let agent = CoordinatorEvent(
-            at: start.addingTimeInterval(40), kind: .reply, taskID: taskID, text: "The branch is ready.", sessionID: nil,
-            threadRole: .agent, sourceID: "agent-turn"
-        )
+        let later = event(.note, at: 40, task: taskID, text: "The branch is ready.")
         var data = Data()
-        for event in [question, note, reply, standalone, agent] {
+        for event in [question, note, reply, standalone, later] {
             data.append(try event.jsonLine())
             data.append(UInt8(ascii: "\n"))
         }
         let cards = CoordinatorChatTimeline.cards(events: CoordinatorEvent.decodeLog(data), packets: [:])
-        // The agent's later message stays in the thread; the card keeps the
-        // user's reply time, before the standalone note.
-        #expect(cards.map(\.id) == [question.id.uuidString, standalone.id.uuidString])
-        #expect(cards[0].kind == .question && cards[0].text == "Which base?")
-        #expect(cards[0].options == ["Main", "Feature"] && cards[0].answer == "Feature")
-        #expect(cards[0].at == reply.at)
-        #expect(cards[0].thread.map(\.text) == ["I checked both branches.", "Feature", "The branch is ready."])
-        #expect(cards[0].thread.map(\.role) == [.coordinator, .userCoordinator, .agent])
-        #expect(cards.map(\.isCurrent) == [true, false])
-        #expect(cards[1].thread.isEmpty)
+        #expect(cards.map(\.id) == [standalone.id.uuidString, question.id.uuidString])
+        #expect(cards[1].kind == .question && cards[1].text == "Which base?")
+        #expect(cards[1].options == ["Main", "Feature"] && cards[1].answer == "Feature")
+        #expect(cards[1].at == later.at)
+        #expect(cards[1].thread.map(\.text) == ["I checked both branches.", "Feature", "The branch is ready."])
+        #expect(cards[1].thread.map(\.role) == [.coordinator, .userCoordinator, .coordinator])
+        #expect(cards.map(\.isCurrent) == [false, true])
+        #expect(cards[0].thread.isEmpty)
     }
 
     @Test

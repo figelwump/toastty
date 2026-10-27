@@ -21,8 +21,9 @@ covers:
    task, A;
 3. A's packet puts it in the sidebar's Needs you list with its action and ▾
    menu, and the row opens the packet card in the chat;
-4. Full report opens in the right panel; a reply to A takes it out of Needs
-   you; packet v2 updates the only task card and keeps v1 in report history;
+4. Full report opens in the right panel; a reply typed on A's card goes to
+   the coordinator, which passes it on to A, and A leaves Needs you; packet
+   v2 updates the only task card and keeps v1 in report history;
 5. with a pull request link, Open PR opens it in the right panel, and Merge
    from A's sidebar row, after its question, merges it: A is Done;
 6. a second task, B, merges from its card in the chat;
@@ -224,6 +225,10 @@ def main():
     runtime_home, shots = root / 'runtime-home', root / 'shots'
     runtime_home.mkdir()
     shots.mkdir()
+    # The coordinator starts in its own folder in the runtime home. Trust it
+    # ahead, as for the projects, and remove the entry afterwards.
+    coordinator_dir = runtime_home / 'coordinator'
+    queue_check.set_directory_trust(coordinator_dir, True)
     # Claude trusts folders under the host home; the repositories stay there.
     parent = Path.home() / 'toastty-queue-steer-checks' / f'final-e2e-{uuid.uuid4().hex[:8]}'
     parent.mkdir(parents=True)
@@ -357,8 +362,11 @@ def main():
 
     def answer_dialogs():
         """Answers a first-run prompt in any agent terminal once, as a person would."""
-        for workspace in instance().query('workspace.list')['workspaces']:
-            for panel in panel_ids(instance().query('workspace.snapshot', workspaceID=workspace['workspaceID'])):
+        # The coordinator's hidden workspace is not in workspace.list.
+        coordinator_workspace = instance().query('coordinator.status').get('workspaceID')
+        workspace_ids = [w['workspaceID'] for w in instance().query('workspace.list')['workspaces']]
+        for workspace_id in workspace_ids + ([coordinator_workspace] if coordinator_workspace and coordinator_workspace not in workspace_ids else []):
+            for panel in panel_ids(instance().query('workspace.snapshot', workspaceID=workspace_id)):
                 try:
                     text = instance().query('terminal.visible-text', panelID=panel, tail=30).get('text', '')
                 except AssertionError:
@@ -625,7 +633,7 @@ def main():
             instance().kill()
         except Exception:
             pass
-        for checkout in (repository, docs):
+        for checkout in (repository, docs, coordinator_dir):
             queue_check.set_directory_trust(checkout, False)
         shutil.rmtree(parent, ignore_errors=True)
         (artifacts / f'{PREFIX}-check.json').write_text(json.dumps(evidence, indent=2, default=str))

@@ -61,7 +61,7 @@ function badge(text: string, tone: Tone): string {
 }
 
 export function newUIState(): ChatUIState {
-  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), draftContext: new Map(), replyTarget: new Map(), pendingCards: new Set(), confirmingMerge: null, expandedWork: new Set(), awaiting: null };
+  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), draftContext: new Map(), pendingCards: new Set(), confirmingMerge: null, expandedWork: new Set(), awaiting: null };
 }
 
 /// Folds a card that a newer packet just replaced, once; the user can open
@@ -221,7 +221,7 @@ export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend =
     case "card":
       return `<div class="msg-co card-row" id="card-${esc(item.id)}" data-item="${esc(item.id)}"${item.task ? ` data-task="${esc(item.task.id)}"` : ""}><span class="cmark">C</span><div class="bubble">`
         + (!item.task ? item.kind === "question" && item.options.length > 0 ? renderRoute(item, ui, coordinatorCanSend, state) : renderCompactCard(item)
-          : isExpanded(item, ui) ? renderOpenCard(item, ui, coordinatorCanSend) : renderCompactCard(item)) + `</div></div>`;
+          : isExpanded(item, ui) ? renderOpenCard(item, ui, coordinatorCanSend) : renderCompactCard(item, ui, coordinatorCanSend)) + `</div></div>`;
   }
 }
 
@@ -241,11 +241,14 @@ function cardSubtitle(item: Extract<ChatItem, { type: "card" }>): string {
   return item.text ?? "";
 }
 
-export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>): string {
+export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState = newUIState(), coordinatorCanSend = true): string {
   const task = item.task;
   if (!task) {
     // A note that names no task is the coordinator speaking.
     return `<div class="note-card md">${markdown(item.text ?? "")}</div>`;
+  }
+  if (item.kind === "question" && item.answer === null && !item.superseded && task.stageLabel !== "stuck") {
+    return renderCompactQuestion(item, task, ui, coordinatorCanSend);
   }
   const kindBadge = cardBadge(item, task);
   if (item.superseded && item.packet) {
@@ -260,6 +263,39 @@ export function renderCompactCard(item: Extract<ChatItem, { type: "card" }>): st
     + (task.project ? badge(task.project, "plain") : "")
     + (item.packet ? `<span class="chev">v${item.packet.version}</span>` : "")
     + `<span class="chev">▸</span></button>`;
+}
+
+/// An open question shows what the user must decide without opening the
+/// card: the start of its text, and its answers. The page shows Show more
+/// only when the text is cut off; see `measureClampedText` in main.ts.
+function renderCompactQuestion(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
+  return `<div class="card need qcard">`
+    + `<button class="qhead" id="expand-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" aria-expanded="false">`
+    + cardBadge(item, task)
+    + (item.isNew ? badge("new", "green") : "")
+    + `<span class="grow"><b>${esc(task.title)}</b></span>`
+    + (task.project ? badge(task.project, "plain") : "")
+    + `<span class="chev">▸</span></button>`
+    + (item.text ? `<div class="card-text md qtext" data-clamp="${esc(item.id)}">${markdown(item.text)}</div>`
+      + `<button class="lnk more hidden" id="more-${esc(item.id)}" data-act="expand" data-id="${esc(item.id)}" data-more="${esc(item.id)}" aria-expanded="false">Show more</button>` : "")
+    + renderOptions(item, task, ui, coordinatorCanSend)
+    + (item.options.length ? unavailableHint(task, coordinatorCanSend) : "")
+    + `</div>`;
+}
+
+/// Answer buttons. Every answer goes to the coordinator, which passes it
+/// to the task.
+function renderOptions(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
+  const pending = item.answerPending || ui.pendingCards.has(cardStateKey(item));
+  const disabled = !coordinatorCanSend || !task.canReply || pending;
+  return (item.options.length ? `<div class="opts">` + item.options.map((option, index) => `<button class="btn" id="option-${esc(item.id)}-${index}" data-act="answer" data-id="${esc(item.id)}" data-index="${index}"${disabled ? " disabled" : ""}>${esc(option)}</button>`).join("") + `</div>` : "")
+    + (item.answerPending ? `<div class="reply-hint dim small">Waiting for the coordinator to confirm this answer.</div>` : "");
+}
+
+function unavailableHint(task: ChatTask, coordinatorCanSend: boolean): string {
+  if (!task.canReply) return `<div class="reply-hint dim small">The task cannot take replies now.</div>`;
+  if (!coordinatorCanSend) return `<div class="reply-hint dim small">The coordinator cannot receive messages now.</div>`;
+  return "";
 }
 
 function renderChecks(packet: ChatPacket): string {
@@ -283,31 +319,21 @@ function cardBadge(item: Extract<ChatItem, { type: "card" }>, task: ChatTask): s
   return badge("question", "amber");
 }
 
-export function replyTarget(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState): "task" | "coordinator" {
-  return ui.replyTarget.get(cardStateKey(item)) ?? ui.draftContext.get(cardStateKey(item))?.target ?? (item.kind === "question"
-    ? item.task?.defaultReplyTarget ?? "coordinator"
-    : item.task?.canReply ? "task" : "coordinator");
-}
-
+/// Card replies go to the coordinator with the card's task, packet and
+/// question. The coordinator passes them on to the task when they are for it.
 function renderReplyBox(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
-  const target = replyTarget(item, ui);
-  const pending = ui.pendingCards.has(cardStateKey(item));
-  const available = target === "task" ? task.canReply : coordinatorCanSend;
-  const segment = `<span class="seg" role="group" aria-label="Send reply to">`
-    + `<button type="button" id="reply-to-task-${esc(item.id)}" class="${target === "task" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="task" aria-pressed="${target === "task"}"${!task.canReply || pending ? " disabled" : ""}>to task</button>`
-    + `<button type="button" id="reply-to-coordinator-${esc(item.id)}" class="${target === "coordinator" ? "on" : ""}" data-act="reply-to" data-id="${esc(item.id)}" data-to="coordinator" aria-pressed="${target === "coordinator"}"${!coordinatorCanSend || pending ? " disabled" : ""}>to coordinator</button></span>`;
-  const placeholder = target === "task"
-    ? `${item.kind === "packet" ? "Review note for" : "Reply to"} ${task.slug}…`
-    : "Ask the coordinator about this…";
+  const pending = item.answerPending || ui.pendingCards.has(cardStateKey(item));
+  const available = coordinatorCanSend && task.canReply;
+  const placeholder = item.kind === "packet" ? `Review note for ${task.slug}, through the coordinator…` : `Reply to the coordinator about ${task.slug}…`;
   const context = ui.draftContext.get(cardStateKey(item));
   const earlierDraft = context && context.cardID !== item.id
     ? context.questionID ? `Draft for earlier question${context.questionText ? `: ${context.questionText}` : ""}`
       : context.version != null ? `Draft for packet v${context.version}` : "Draft for an earlier task update"
     : null;
-  return `<form class="replybox" data-act="reply" data-id="${esc(item.id)}" data-task="${esc(task.id)}" data-version="${item.packet?.version ?? ""}" data-to="${target}">`
-    + segment + `<input id="reply-${esc(item.id)}" name="text" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${maximumTextLength}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(ui.drafts.get(cardStateKey(item)) ?? "")}"${!available || pending ? " disabled" : ""}><span class="kbd">↩</span></form>`
+  return `<form class="replybox" data-act="reply" data-id="${esc(item.id)}" data-task="${esc(task.id)}" data-version="${item.packet?.version ?? ""}">`
+    + `<input id="reply-${esc(item.id)}" name="text" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${maximumTextLength}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(ui.drafts.get(cardStateKey(item)) ?? "")}"${!available || pending ? " disabled" : ""}><span class="kbd">↩</span></form>`
     + (earlierDraft ? `<div class="reply-hint dim small" data-draft-context>${esc(earlierDraft)}</div>` : "")
-    + (!available ? `<div class="reply-hint dim small">${target === "task" ? "The task cannot receive replies now." : "The coordinator cannot receive messages now."}</div>` : "");
+    + unavailableHint(task, coordinatorCanSend);
 }
 
 function renderRoute(item: Extract<ChatItem, { type: "card" }>, ui: ChatUIState, coordinatorCanSend: boolean, state?: ChatState): string {
@@ -341,7 +367,7 @@ function packetVersions(item: Extract<ChatItem, { type: "card" }>): number[] {
 
 function renderThread(item: Extract<ChatItem, { type: "card" }>, task: ChatTask, ui: ChatUIState, coordinatorCanSend: boolean): string {
   return `<div class="thread">` + item.thread.map((message) => {
-    const who = message.role === "agent" ? task.slug : message.role === "coordinator" ? "coordinator" : message.role === "user-task" ? "You → task" : "You → coordinator";
+    const who = message.role === "agent" ? task.slug : message.role === "coordinator" ? "coordinator" : "You";
     const agent = message.role === "agent" || message.role === "coordinator";
     const tone = message.role === "agent" ? " agent" : message.role === "coordinator" ? " co" : "";
     return `<div class="tmsg" data-thread-item="${esc(message.id)}"><span class="who${tone}">${esc(who)}</span><div class="txt${agent ? " md" : ""}">${agent ? markdown(message.text) : linkify(message.text)}</div></div>`;
@@ -377,9 +403,8 @@ export function renderOpenCard(item: Extract<ChatItem, { type: "card" }>, ui: Ch
   if (item.kind === "question") {
     if (item.answer !== null) {
       if (!stuck) html += `<div class="answer"><span class="mono dim small">Answered</span><span class="txt">${linkify(item.answer)}</span></div>`;
-    } else if (item.options.length) {
-      const available = replyTarget(item, ui) === "task" ? task.canReply : coordinatorCanSend;
-      html += `<div class="opts">` + item.options.map((option, index) => `<button class="btn" id="option-${esc(item.id)}-${index}" data-act="answer" data-id="${esc(item.id)}" data-index="${index}"${!available || ui.pendingCards.has(cardStateKey(item)) ? " disabled" : ""}>${esc(option)}</button>`).join("") + `</div>`;
+    } else {
+      html += renderOptions(item, task, ui, coordinatorCanSend);
     }
   }
   if (packet && item.kind === "packet") {

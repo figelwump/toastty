@@ -106,6 +106,8 @@ final class CoordinatorChatController {
     let conversations: ConversationService?
     let sessionRuntimeStore: SessionRuntimeStore?
     private let loadURLInPanel: (@MainActor (UUID, String) -> Bool)?
+    /// Replaces delivery through the coordinator's conversation, for tests.
+    private let deliverToCoordinator: (@MainActor (String) async -> SendOutcome)?
     /// Each task's cards, for the sidebar.
     let cardIndex = CoordinatorChatCardIndex()
     private let now: () -> Date
@@ -123,6 +125,13 @@ final class CoordinatorChatController {
     private var taskCursors: [UUID: ConversationEventCursor] = [:]
     private var taskConversations: [UUID: RemoteConversationID] = [:]
     private var inFlightQuestions: Set<UUID> = []
+    /// Answers that may have reached the coordinator's terminal without a
+    /// confirmed submit. The question stays pending, so a second answer is
+    /// not sent, until the coordinator's transcript echoes the first one.
+    private var uncertainQuestions: Set<UUID> = []
+    /// Packet-card replies sent with an uncertain outcome, by reply ID. Once
+    /// the transcript echo saves one, it answers that packet's review.
+    private var uncertainReviewReplies: [UUID: (taskID: UUID, version: Int)] = [:]
     private var unsavedThreadReplies: [CoordinatorEvent] = []
     private var packetCache: [String: TaskPacket] = [:]
     private var staleByTaskID: [UUID: Bool] = [:]
@@ -149,6 +158,7 @@ final class CoordinatorChatController {
         conversations: ConversationService?,
         sessionRuntimeStore: SessionRuntimeStore?,
         loadURLInPanel: (@MainActor (UUID, String) -> Bool)? = nil,
+        deliverToCoordinator: (@MainActor (String) async -> SendOutcome)? = nil,
         now: @escaping () -> Date = Date.init
     ) {
         self.store = store
@@ -157,6 +167,7 @@ final class CoordinatorChatController {
         self.conversations = conversations
         self.sessionRuntimeStore = sessionRuntimeStore
         self.loadURLInPanel = loadURLInPanel
+        self.deliverToCoordinator = deliverToCoordinator
         self.now = now
         if let conversations {
             let changes = conversations.changes()
@@ -337,8 +348,11 @@ final class CoordinatorChatController {
         return false
     }
 
-    /// Copies explicitly attributed messages into the durable thread log.
-    /// Provider event IDs survive projection rebuilds; sequences do not.
+    /// Copies the user's task-scoped messages into the durable thread log:
+    /// replies from the coordinator's transcript, and answers typed in a
+    /// task's terminal. A task agent's own messages stay in its terminal;
+    /// cards do not repeat them. Provider event IDs survive projection
+    /// rebuilds; sequences do not.
     private func captureThreadMessages(events: inout [CoordinatorEvent]) {
         let taskIDs = Set(events.compactMap(\.taskID))
         var sources = Set(events.compactMap(\.sourceID))
@@ -375,6 +389,13 @@ final class CoordinatorChatController {
                                       text: text, sessionID: nil, threadRole: .userCoordinator,
                                       questionID: line.questionID, sourceID: source))
         }
+        for (replyID, review) in uncertainReviewReplies where events.contains(where: { $0.id == replyID && $0.kind == .reply }) {
+            uncertainReviewReplies[replyID] = nil
+            // A newer packet started a new review; leave that one in place.
+            if taskCoordinator.records.record(id: review.taskID)?.packetVersion == review.version {
+                try? taskCoordinator.saveMergeState(taskID: review.taskID) { $0.readyForReviewAt = nil }
+            }
+        }
         guard let conversations else { return }
         var bindings: [(taskID: UUID, panelID: UUID, sessionID: String?)] = []
         for taskID in taskIDs {
@@ -383,7 +404,7 @@ final class CoordinatorChatController {
                   let workspace = store.state.workspacesByID[workspaceID], workspace.taskID == taskID else { continue }
             let live = taskCoordinator.liveAgentSession(of: record).flatMap { $0.workspaceID == workspaceID ? $0 : nil }
             // The terminal's saved native transcript remains readable after
-            // its agent exits. Do not drop its final reply at that boundary.
+            // its agent exits. Do not drop an answer typed at that boundary.
             guard let panelID = live?.panelID ?? record.operation.worktreeSession?.panelID ?? record.operation.taskSpace?.panelID,
                   case .terminal? = workspace.allPanelsByID[panelID] else { continue }
             bindings.append((taskID, panelID, live?.sessionID))
@@ -403,11 +424,6 @@ final class CoordinatorChatController {
                     for event in page.events {
                         let entry: CoordinatorEvent?
                         switch event.payload {
-                        case .assistantMessage(let message):
-                            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            entry = text.isEmpty ? nil : CoordinatorEvent(at: event.timestamp, kind: .reply, taskID: taskID,
-                                text: text, sessionID: sessionID, threadRole: .agent,
-                                sourceID: "task:\(taskID.uuidString):\(event.eventID)")
                         case .userMessage(let message):
                             let raw = message.text.replacing(#/^Review note on packet v[0-9]+: /#, with: "")
                                 .replacing(#/^Answer from the task card: /#, with: "")
@@ -505,7 +521,6 @@ final class CoordinatorChatController {
                 )
             }
             if card.taskID != nil, let record {
-                task?.defaultReplyTarget = taskCoordinator.agentStatus(of: record).activity == .waiting ? .task : .coordinator
                 if itemsByTaskID[record.id]?.stage == .needsYou(.agentError) {
                     let status = taskCoordinator.liveAgentSession(of: record)?.status
                     let failure = status?.kind == .error
@@ -521,7 +536,11 @@ final class CoordinatorChatController {
                     }
                 }
             }
-            chatItems.append(.card(CoordinatorChatCardView(card: card, task: task, packet: packetView)))
+            var view = CoordinatorChatCardView(card: card, task: task, packet: packetView)
+            if card.kind == .question, card.answer == nil, UUID(uuidString: card.id).map(uncertainQuestions.contains) == true {
+                view.answerPending = true
+            }
+            chatItems.append(.card(view))
         }
         // `sort` is not stable; equal times keep transcript, then timeline order,
         // so a refresh cannot swap them.
@@ -769,8 +788,6 @@ final class CoordinatorChatController {
             }
             let request = CoordinatorProjectRequest(projectName: project.name, projectRoot: project.root, workspaceID: project.workspaceID, text: text)
             acknowledge(token, ok: await sendToCoordinator(request.message) != .failed)
-        case .reply(let taskID, let version, let text, let cardID, let questionID):
-            acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: true))
         case .ask(let taskID, let version, let text, let cardID, let questionID):
             acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: false))
         case .answerRoute(let questionID, let optionIndex):
@@ -891,7 +908,6 @@ final class CoordinatorChatController {
                     "packetVersions": .array(card.packetVersions.map(AutomationJSONValue.int)),
                     "failureText": optional(card.task?.failureText),
                     "canArchive": .bool(card.task?.canArchive ?? false),
-                    "defaultReplyTarget": optional(card.task?.defaultReplyTarget.rawValue),
                     "thread": .array(card.thread.map { entry in .object([
                         "id": .string(entry.id), "at": .string(entry.at.ISO8601Format()),
                         "role": .string(entry.role.rawValue), "text": .string(entry.text),
@@ -949,10 +965,11 @@ final class CoordinatorChatController {
         ack = (token, ok)
     }
 
-    private enum SendOutcome { case accepted, uncertain, failed }
+    enum SendOutcome { case accepted, uncertain, failed }
 
     @discardableResult
     private func sendToCoordinator(_ text: String) async -> SendOutcome {
+        if let deliverToCoordinator { return await deliverToCoordinator(text) }
         guard let conversations, let panelID = session.panelID,
               let conversationID = conversations.conversationID(for: panelID),
               let snapshot = conversations.localSnapshot(for: conversationID, at: now()) else {
@@ -1064,9 +1081,15 @@ final class CoordinatorChatController {
         }
         // A composer question can refer to a known closed task. Card actions
         // and direct task replies keep their existing open-task requirement.
-        if (toTask || cardID != nil),
-           taskCoordinator.board?.items().first(where: { $0.taskID == taskID })?.stage.isFinished == true {
+        let boardItem = taskCoordinator.board?.items().first(where: { $0.taskID == taskID })
+        if (toTask || cardID != nil), boardItem?.stage.isFinished == true {
             setNotice("That task is no longer open.", isError: true)
+            return false
+        }
+        // The coordinator passes a card reply on to the task's agent, so the
+        // task needs its task space, as the card's canReply says.
+        if cardID != nil, boardItem?.taskSpaceWorkspaceID == nil {
+            setNotice("The task cannot take replies now.", isError: true)
             return false
         }
         let events = session.files.events() + unsavedThreadReplies
@@ -1092,7 +1115,7 @@ final class CoordinatorChatController {
             guard normalizedCardID == questionID.uuidString,
                   events.contains(where: { $0.id == questionID && $0.kind == .question && $0.taskID == taskID }),
                   !events.contains(where: { $0.kind == .reply && $0.questionID == questionID && $0.taskID == taskID && ($0.threadRole == .userTask || $0.threadRole == .userCoordinator) }),
-                  !inFlightQuestions.contains(questionID) else {
+                  !inFlightQuestions.contains(questionID), !uncertainQuestions.contains(questionID) else {
                 setNotice("That question was already answered or changed.", isError: true)
                 return false
             }
@@ -1103,10 +1126,8 @@ final class CoordinatorChatController {
         let ask = CoordinatorTaskAsk(taskID: taskID, title: record.title, packetVersion: version, text: text, replyID: replyID, questionID: questionID)
         let accepted: Bool
         if toTask {
-            // Keep the established packet prefix. New card sends also carry
-            // explicit references so transcript replay can recover the event.
-            let body = cardID == nil ? text : ask.message
-            let message = version.map { "Review note on packet v\($0): \(body)" } ?? "Answer from the task card: \(body)"
+            // Only report marks go straight to the task, as a packet note.
+            let message = version.map { "Review note on packet v\($0): \(text)" } ?? text
             accepted = perform("Reply", { try taskCoordinator.send(taskID: taskID, text: message) }) != nil
             if accepted {
                 try? taskCoordinator.saveMergeState(taskID: taskID) { $0.readyForReviewAt = nil }
@@ -1117,7 +1138,16 @@ final class CoordinatorChatController {
             accepted = outcome != .failed
             // Keep the question open until the provider confirms receipt.
             // Its envelope echo carries both references and saves the reply.
-            if outcome == .uncertain { return true }
+            if outcome == .uncertain {
+                if let questionID { uncertainQuestions.insert(questionID) }
+                if cardID != nil, let version { uncertainReviewReplies[replyID] = (taskID, version) }
+                return true
+            }
+            // A reply on a packet card answers the review, as a direct
+            // reply to the task did. The coordinator passes it on.
+            if accepted, cardID != nil, version != nil {
+                try? taskCoordinator.saveMergeState(taskID: taskID) { $0.readyForReviewAt = nil }
+            }
         }
         guard accepted else { return false }
         let event = CoordinatorEvent(id: replyID, at: now(), kind: .reply, taskID: taskID, text: text, sessionID: nil,

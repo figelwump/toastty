@@ -6,9 +6,9 @@ import Foundation
 /// else from the task's live state.
 ///
 /// Each task has one card at its newest activity: a post, packet, or user
-/// message. The task agent's own messages join the thread without moving
-/// the card. Its latest question or
-/// task event supplies the content until a newer packet is published.
+/// message. The task agent's own messages stay in its terminal. Its latest
+/// question or task event supplies the content until a newer packet is
+/// published.
 /// An unanswered question stays visible until the user answers it. Earlier questions and replies stay in the task's bounded thread.
 public enum CoordinatorChatTimeline {
     public struct ThreadEntry: Codable, Equatable, Sendable {
@@ -139,9 +139,12 @@ public enum CoordinatorChatTimeline {
                 // reply carries one, only acceptance can enter its thread.
                 if event.kind == .reply, event.taskID != nil,
                    event.delivery == .pending || event.delivery == .rejected { continue }
+                // The task's own transcript stays in its terminal. Agent
+                // messages saved by older builds are left out of the thread.
                 guard let text = event.text,
                       text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-                      let role = event.kind == .note ? .coordinator : event.threadRole else { continue }
+                      let role = event.kind == .note ? .coordinator : event.threadRole,
+                      role != .agent else { continue }
                 if event.kind == .reply, let questionID = event.questionID,
                    let question = questions[questionID], question.taskID == event.taskID,
                    answers[questionID] == nil {
@@ -165,9 +168,7 @@ public enum CoordinatorChatTimeline {
                         contentAt: .distantPast, firstAt: event.at, order: order
                     )
                 }
-                // The task agent's own messages only grow the thread: they
-                // arrive throughout its work and would keep moving the card.
-                if tasks[taskID] != nil, role != .agent {
+                if tasks[taskID] != nil {
                     tasks[taskID]?.card.at = event.at
                     tasks[taskID]?.order = order
                 }

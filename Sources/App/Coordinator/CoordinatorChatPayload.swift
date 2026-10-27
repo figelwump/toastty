@@ -179,10 +179,6 @@ struct CoordinatorChatCardView: Encodable, Equatable {
 
 }
 
-enum CoordinatorChatReplyTarget: String, Encodable {
-    case task, coordinator
-}
-
 struct CoordinatorChatTaskView: Encodable, Equatable {
     var id: String
     var title: String
@@ -198,9 +194,10 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
     var stale: Bool
     var mergePolicy: String
     var canMerge: Bool
+    /// The task is open and has a task space, so the coordinator can pass
+    /// a card reply on to it.
     var canReply: Bool
     var projectID: String? = nil
-    var defaultReplyTarget: CoordinatorChatReplyTarget = .coordinator
     var failureText: String? = nil
     var canArchive = false
 
@@ -691,7 +688,8 @@ enum CoordinatorChatPageEvent: Equatable {
     case activate(view: CoordinatorChatPageView, selectedRowID: String?)
     case send(String)
     case project(id: String, text: String)
-    case reply(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
+    /// A card reply, an answer button, or an `@task` message. Each goes to
+    /// the coordinator, which passes it on to the task when it is for it.
     case ask(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
     case answerRoute(questionID: UUID, optionIndex: Int)
     case archiveTask(UUID)
@@ -723,7 +721,7 @@ enum CoordinatorChatPageEvent: Equatable {
         let questionID = (body["questionID"] as? String).flatMap(UUID.init(uuidString:))
         if let value = body["cardID"], !(value is NSNull), cardID == nil { return nil }
         if let value = body["questionID"], !(value is NSNull), questionID == nil { return nil }
-        if type == "reply" || type == "ask", let value = body["version"], !(value is NSNull), version() == nil { return nil }
+        if type == "ask", let value = body["version"], !(value is NSNull), version() == nil { return nil }
         switch type {
         case "ready": self = .ready
         case "projectFilter":
@@ -754,9 +752,6 @@ enum CoordinatorChatPageEvent: Equatable {
             guard let id = body["projectID"] as? String, !id.isEmpty, id.utf8.count <= 4096,
                   let text = text() else { return nil }
             self = .project(id: id, text: text)
-        case "reply":
-            guard let taskID = taskID(), let text = text() else { return nil }
-            self = .reply(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)
         case "ask":
             guard let taskID = taskID(), let text = text() else { return nil }
             self = .ask(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)
