@@ -754,6 +754,8 @@ Common query IDs include:
 failure, `workspaceID`, `panelID`, `sessionID`, `eventsFile` and `routingFile`.
 
 `coordinator.chat.state` returns `pages` (open chat pages), `canSend`,
+`hasUserRequests` (a real request has appeared, excluding the automatic launch
+prompt; it stays true when the visible timeline trims old messages),
 `items` in time order (each with `type`: `message`, `tool`, `status` or `card`,
 and `id`; a message, tool or status line also has `text`; a message has `role`
 (`user` or `assistant`), and `aboutTaskID` when the user asked it from a
@@ -1552,7 +1554,7 @@ Behavior:
 
 Request payload:
 
-- `action: "click" | "type"`
+- `action: "click" | "type" | "visible"`
 - `elementID: String`, an element ID in the chat page, such as
   `composer-input`, `expand-<cardID>`, `reply-<cardID>`, `report-<cardID>`,
   `merge-<cardID>`, `merge-go-<cardID>` or `open-pr-<cardID>`
@@ -1568,8 +1570,29 @@ Behavior:
 - Works only in automation mode.
 - `click` clicks the element. `type` sets the field's text and submits it,
   as Return does.
+- `visible` checks that the element has layout and is visible; it does not
+  click or change the page. A hidden element returns `INVALID_PAYLOAD`.
 - Acts only when exactly one open chat page has the element; otherwise
   returns `INVALID_PAYLOAD`.
+
+### `automation.coordinator_report_action`
+
+Request payload:
+
+- `panelID: UUID`, the report's browser panel
+- `action: "click" | "type"`
+- `elementID: String`, such as `report-annotate`, `shot-after-390`,
+  `report-note-0`, or `report-send`
+- `text?: String`, for `type`
+
+Result: `elementID: String`, `performed: Bool`.
+
+Works only in automation mode and only on a loaded
+`toastty://coordinator/report/<task>/<version>` page. `click` on a screenshot
+drops a pin at its center. `type` fills the note through its input handler.
+The report sends marks through its normal WebKit bridge. This command does
+not accept JavaScript or send directly to an agent. A missing report or
+control returns `INVALID_PAYLOAD`.
 
 ### `automation.dump_state`
 

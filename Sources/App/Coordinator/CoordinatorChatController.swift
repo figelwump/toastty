@@ -31,18 +31,22 @@ final class CoordinatorChatController {
     /// What `automation.coordinator_chat_action` does in the page.
     enum PageAction {
         case click(elementID: String)
+        case visible(elementID: String)
         /// Types the text into a field, then submits it as Return would.
         case type(elementID: String, text: String)
 
         var elementID: String {
             switch self {
-            case .click(let elementID), .type(let elementID, _): elementID
+            case .click(let elementID), .visible(let elementID), .type(let elementID, _): elementID
             }
         }
 
         /// True in a page that has the element.
         var probe: String {
-            "document.getElementById(\(Self.literal(elementID))) !== null"
+            if case .visible = self {
+                return "(() => { const e = document.getElementById(\(Self.literal(elementID))); if (!e) return false; const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).visibility === 'visible'; })()"
+            }
+            return "document.getElementById(\(Self.literal(elementID))) !== null"
         }
 
         private static func literal(_ value: String) -> String {
@@ -53,8 +57,10 @@ final class CoordinatorChatController {
         var script: String {
             let literal = Self.literal
             switch self {
+            case .visible:
+                return "true"
             case .click(let elementID):
-                return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; e.click(); return true; })()"
+                return "(() => { const e = document.getElementById(\(literal(elementID))); if (!e) return false; if (e.tagName === 'IMG') { const b = e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 })); } else e.click(); return true; })()"
             case .type(let elementID, let text):
                 return """
                 (() => {
@@ -433,8 +439,34 @@ final class CoordinatorChatController {
             ack: ack.map { .init(token: $0.token, ok: $0.ok) },
             view: viewRequest.map { .init(view: $0.view, filter: $0.filter, token: $0.token) },
             taskGroups: CoordinatorAllTasks.groups(items),
-            tasks: rows
+            tasks: rows,
+            addresses: composerAddresses(),
+            hasUserRequests: transcript.hasUserRequests
         )
+    }
+
+    private func composerProjects() -> [(name: String, root: String, workspaceID: UUID?)] {
+        let choices = taskCoordinator.workspaceChoices()
+        var seen: Set<String> = []
+        let projects = choices.open.compactMap { choice -> (String, String, UUID?)? in
+            choice.rootDirectory.map { (choice.title, $0, choice.id) }
+        } + choices.recent.map { ($0.title, $0.rootDirectory, nil) }
+        return projects.compactMap { name, path, id in
+            let root = TasksConfigFile.normalizedPath(path, homeDirectoryPath: taskCoordinator.homeDirectoryPath)
+            return seen.insert(root).inserted ? (name, root, id) : nil
+        }
+    }
+
+    private func composerAddresses() -> [CoordinatorComposerAddress] {
+        let tasks = taskCoordinator.records.records.map {
+            CoordinatorComposerAddress(kind: "task", id: $0.id.uuidString, token: $0.slug, title: $0.title, version: $0.packetVersion)
+        }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        return tasks + composerProjects().map {
+            CoordinatorComposerAddress(kind: "project", id: $0.root,
+                token: URL(filePath: $0.root).lastPathComponent.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0.name,
+                title: $0.name, version: nil)
+        }
     }
 
     /// The task's newest card, when it is a question.
@@ -537,6 +569,14 @@ final class CoordinatorChatController {
             runTaskAction(rowID: rowID, actionID: actionID, page: page)
         case .send(let text):
             acknowledge(token, ok: await sendToCoordinator(text) != .failed)
+        case .project(let id, let text):
+            guard let project = composerProjects().first(where: { $0.root == id }) else {
+                setNotice("That project is no longer available. Pick it again before sending.", isError: true)
+                acknowledge(token, ok: false)
+                break
+            }
+            let request = CoordinatorProjectRequest(projectName: project.name, projectRoot: project.root, workspaceID: project.workspaceID, text: text)
+            acknowledge(token, ok: await sendToCoordinator(request.message) != .failed)
         case .reply(let taskID, let version, let text, let cardID, let questionID):
             acknowledge(token, ok: await sendCardReply(taskID: taskID, version: version, text: text, cardID: cardID, questionID: questionID, toTask: true))
         case .ask(let taskID, let version, let text, let cardID, let questionID):
@@ -647,6 +687,7 @@ final class CoordinatorChatController {
         return [
             "pages": .int(pages.values.filter { $0.page != nil }.count),
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
+            "hasUserRequests": .bool(lastPayload?.hasUserRequests ?? false),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
             "currentTaskID": optional(currentTaskID?.uuidString),
@@ -730,8 +771,14 @@ final class CoordinatorChatController {
     /// Validates the exact card and question again before delivery. A task's
     /// live attention is independent of the answer stored in the chat.
     private func sendCardReply(taskID: UUID, version: Int?, text: String, cardID: String?, questionID: UUID?, toTask: Bool) async -> Bool {
-        guard let record = taskCoordinator.records.record(id: taskID),
-              taskCoordinator.board?.items().first(where: { $0.taskID == taskID })?.stage.isFinished != true else {
+        guard let record = taskCoordinator.records.record(id: taskID) else {
+            setNotice("That task is no longer available. Pick it again before sending.", isError: true)
+            return false
+        }
+        // A composer question can refer to a known closed task. Card actions
+        // and direct task replies keep their existing open-task requirement.
+        if (toTask || cardID != nil),
+           taskCoordinator.board?.items().first(where: { $0.taskID == taskID })?.stage.isFinished == true {
             setNotice("That task is no longer open.", isError: true)
             return false
         }
@@ -791,6 +838,19 @@ final class CoordinatorChatController {
         // A delivered message must not remain as a sendable draft, even if
         // disk persistence failed. Its explicit transcript echo can recover it.
         return true
+    }
+
+    /// The report bridge supplies structured marks. Only stored screenshot
+    /// names from this packet can become a versioned task reply.
+    func sendReportMarks(taskID: UUID, version: Int, marks: [CoordinatorReportMark]) async -> CoordinatorReportSendResult {
+        guard let record = taskCoordinator.records.record(id: taskID), record.archivedAt == nil, record.doneAt == nil,
+              taskCoordinator.board?.items().first(where: { $0.taskID == taskID })?.stage.isFinished != true,
+              let packet = packet(taskID: taskID, version: version),
+              let text = CoordinatorReportMark.message(marks, screenshotNames: Set(packet.screenshots.map(\.name))) else { return .rejected }
+        guard await sendCardReply(taskID: taskID, version: version, text: text, cardID: nil, questionID: nil, toTask: true) else { return .unconfirmed }
+        _ = show(taskID: taskID)
+        setNeedsRefresh()
+        return .sent
     }
 
     /// Runs an All tasks row's action. The row may be older than the task:
@@ -926,6 +986,8 @@ extension CoordinatorChatController: ToasttyCoordinatorPageDataSource {
         let view = CoordinatorChatPacketView(packet: packet, taskID: taskID, latestVersion: record?.packetVersion ?? version)
         let report = CoordinatorChatReport(
             taskID: taskID.uuidString,
+            slug: record?.slug ?? "the task",
+            canAnnotate: record != nil && record?.archivedAt == nil && record?.doneAt == nil,
             title: record?.title ?? "Task",
             version: view.version,
             latestVersion: view.latestVersion,

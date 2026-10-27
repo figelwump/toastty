@@ -13,8 +13,10 @@
       <div id="scroll" class="scroll" aria-live="polite"></div>
       <div id="tasks" class="scroll tasks hidden"></div>
       <div id="notice" class="notice hidden" role="status"></div>
+      <div id="suggestions" class="suggest"></div>
       <form id="composer" class="composer">
-        <textarea id="composer-input" rows="1" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Message the coordinator" placeholder="Tell the coordinator…"></textarea>
+        <div id="address-options" class="address-options hidden" role="listbox" aria-label="Tasks and projects"></div>
+        <textarea id="composer-input" rows="1" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Message the coordinator" placeholder="Tell the coordinator… @task to point at one, @project to route" aria-autocomplete="list" aria-controls="address-options"></textarea>
         <span id="composer-hint" class="composer-hint">
           <span id="composer-hint-text"></span>
           <button type="button" id="composer-open-terminal" class="lnk hidden" data-act="open-terminal">Open terminal</button>

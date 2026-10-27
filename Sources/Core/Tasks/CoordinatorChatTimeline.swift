@@ -114,9 +114,9 @@ public enum CoordinatorChatTimeline {
                    let questionID = event.questionID, questions[questionID] == taskID, answers[questionID] == nil {
                     answers[questionID] = text
                 }
-                // A scoped note can precede the task's first card. Keep one
-                // anchor if no other card exists, so its thread stays visible.
-                if event.kind == .note, anchors[taskID] == nil {
+                // Ordinary replies and notes can precede a posted card.
+                // An unmatched question answer must not create one.
+                if anchors[taskID] == nil, event.kind == .note || event.questionID == nil {
                     anchors[taskID] = event.id.uuidString
                     cards.append(Card(id: event.id.uuidString, at: event.at, kind: .taskStarted, taskID: taskID, text: nil))
                 }

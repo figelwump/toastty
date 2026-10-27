@@ -23,6 +23,7 @@ function element(overrides = {}) {
       toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
     },
     querySelector: () => null, closest: () => null,
+    setAttribute() {}, removeAttribute() {},
     addEventListener() {}, focus() {}, blur() {}, scrollIntoView() {},
     getBoundingClientRect: () => ({ x: 30, y: 40, width: 24, height: 28 }),
     ...overrides,
@@ -38,6 +39,7 @@ function page() {
     ["header", element()], ["scroll", element()], ["tasks", element()],
     ["composer", composer], ["composer-hint-text", element()],
     ["composer-open-terminal", element()], ["notice", element()],
+    ["suggestions", element()], ["address-options", element()],
   ]);
   const window = { webkit: { messageHandlers: { toasttyCoordinatorChat: {
     postMessage: (event) => posted.push(JSON.parse(JSON.stringify(event))),
@@ -47,6 +49,10 @@ function page() {
   vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0 });
   return {
     posted, nodes,
+    compose(text) {
+      input.value = text;
+      events.get("submit")({ target: composer, preventDefault() {} });
+    },
     receive: (state) => window.toasttyCoordinatorChat.receive(state),
     click(dataset, bounds) {
       const target = element({ dataset, ...(bounds ? { getBoundingClientRect: () => bounds } : {}) });
@@ -69,6 +75,7 @@ function page() {
 
 function state(card = {}, task = {}, coordinator = {}) {
   return {
+    hasUserRequests: false, addresses: [],
     coordinator: { title: "Coordinator", detail: "Codex", canSend: true, sendHint: null, hasTerminal: true, ...coordinator },
     items: [{ type: "card", id: "q1", at: "", kind: "question", text: "Rotate prod keys?",
       options: ["Staging only", "Prepare prod"], answer: null, thread: [], isCurrent: true,
@@ -163,4 +170,24 @@ test("a card menu sends only its task and viewport bounds to the native app", ()
   assert.deepEqual(app.posted.find((event) => event.type === "taskMenu"), {
     type: "taskMenu", taskID: "T1", x: 120, y: 250, width: 28, height: 30,
   });
+});
+
+
+test("composer task addressing keeps card sends independent and retains a draft edited while awaiting acknowledgement", () => {
+  const app = page();
+  const current = { ...state(), addresses: [{ kind: "task", id: "T1", token: "rotate-keys", title: "Rotate keys", version: null }] };
+  app.receive(current);
+  app.compose("@rotate-keys What changed?");
+  assert.deepEqual(app.sends(), [{ type: "ask", taskID: "T1", version: null, text: "What changed?", token: 1 }]);
+  app.compose("A different draft");
+  assert.equal(app.sends().length, 1, "pending composer sends block repeats");
+  app.receive({ ...current, ack: { token: 1, ok: true } });
+  app.compose("@rotate-keys Follow up");
+  assert.equal(app.sends().at(-1).text, "Follow up");
+  app.receive({ ...current, ack: { token: 2, ok: false } });
+  app.draft("Staging only");
+  app.submit("Staging only");
+  assert.equal(app.sends().at(-1).cardID, "q1");
+  app.receive({ ...current, ack: { token: 3, ok: true } });
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('value=""'));
 });
