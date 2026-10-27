@@ -83,7 +83,15 @@ PREFIX = 'remote-coordinator-chat'
 KEY_RETURN, KEY_DOWN = 36, 125
 REPLY = "Use banker's rounding"
 OPTIONS = ['Staging only', 'Prepare prod, ask before applying']
-QUESTION = 'Where should the totals bar change go?'
+# Long enough that the folded card cuts it off and offers Show more.
+QUESTION = """Where should the totals bar change go?
+Recommended: staging only, then decide on production after a day.
+
+- **Staging only**: the lowest risk; production keeps the old bar for now.
+- **Prepare prod, ask before applying**: ready sooner, but it needs a second review.
+- The change touches the checkout page, so a bad rollout is visible to every buyer.
+- Both choices keep the coupon row above the bar.
+- The task already verified both layouts at 390 and 1280 points."""
 TYPED_REPLY = 'Keep the coupon row visible.'
 
 
@@ -687,9 +695,17 @@ def main():
         page_action('click', f'collapse-{option_id}')
         wait_for('the question card to fold', lambda: option_id not in chat_state()['expandedCardIDs'])
         wait_for_page_element(f'option-{option_id}-0')
-        compact_page = rendered('chat')
+        compact_page = wait_for('Show more on the folded long question', lambda: (page := rendered('chat'))
+                                and option_id in page.get('showMoreCardIDs', []) and page)
         capture('coordinator-question-compact')
-        step('folded question shows its text and answers', cardID=option_id, capture='coordinator-question-compact.png')
+        step('folded question shows its start, Show more and its answers', cardID=option_id,
+             viewportWidth=compact_page['viewportWidth'], capture='coordinator-question-compact.png')
+        page_action('click', f'more-{option_id}')
+        wait_for('Show more to open the card', lambda: option_id in chat_state()['expandedCardIDs'])
+        capture('coordinator-question-show-more')
+        page_action('click', f'collapse-{option_id}')
+        wait_for('the question card to fold again', lambda: option_id not in chat_state()['expandedCardIDs'])
+        wait_for_page_element(f'option-{option_id}-0')
         page_action('click', f'option-{option_id}-0')
         option_answer = wait_for('the selected answer in the card thread', lambda: answered(option_id, OPTIONS[0]))
         input_text = coordinator_line(OPTIONS[0])
