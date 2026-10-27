@@ -107,6 +107,24 @@ struct CoordinatorEventTests {
         #expect(CoordinatorEvent.decodeLog(unknown).isEmpty)
     }
 
+    /// The chat sorts cards among transcript lines with sub-second times, so
+    /// a saved card must keep its place within the second it was posted.
+    @Test
+    func savedTimesKeepMillisecondsAndOldWholeSecondTimesStillRead() throws {
+        let posted = at.addingTimeInterval(0.7504)
+        let note = CoordinatorEvent(at: posted, kind: .note, taskID: nil, text: "Started the task.", sessionID: nil)
+        let line = try #require(String(data: try note.jsonLine(), encoding: .utf8))
+        #expect(line.contains(#""at":"2026-10-24T00:00:00.750Z""#))
+        let decoded = try #require(CoordinatorEvent.decodeLog(try note.jsonLine()).first)
+        #expect(abs(decoded.at.timeIntervalSince(posted)) < 0.001)
+        #expect(decoded.at > at.addingTimeInterval(0.5), "a message from earlier in the same second stays above the card")
+
+        let wholeSecond = Data(#"{"id":"E16787EF-5592-4FC8-A26A-D46548253CBF","at":"2026-10-24T00:00:00Z","kind":"note","text":"Old."}"#.utf8)
+        #expect(CoordinatorEvent.decodeLog(wholeSecond).first?.at == at)
+        let badTime = Data(#"{"id":"E16787EF-5592-4FC8-A26A-D46548253CBF","at":"yesterday","kind":"note","text":"Old."}"#.utf8)
+        #expect(CoordinatorEvent.decodeLog(badTime).isEmpty)
+    }
+
     @Test
     func malformedStoredOptionsDoNotHideTheQuestion() throws {
         let question = CoordinatorEvent(at: at, kind: .question, taskID: UUID(), text: "Which base?", sessionID: nil)

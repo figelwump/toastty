@@ -771,14 +771,15 @@ struct CoordinatorChatTests {
         let agent = try #require(fixture.tasks.coordinator.liveAgentSession(of: task))
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let asked = "2026-10-26T10:00:00.000Z", answered = "2026-10-26T10:00:05.000Z"
+        let asked = "2026-10-26T10:00:00.750Z", answered = "2026-10-26T10:00:01.200Z"
         let question = CoordinatorEvent(at: try #require(formatter.date(from: asked)), kind: .question, taskID: task.id,
                                         text: "Also change the hint?", sessionID: nil)
         try fixture.session.files.append(question)
         let nativeID = UUID().uuidString
         let transcriptURL = fixture.tasks.root.appendingPathComponent("terminal-answer.jsonl")
-        // The first message predates the question and the watch notice comes
-        // without the user, so only the last message answers it.
+        // The first two messages predate the question, one within its second,
+        // and the watch notice comes without the user, so only the last
+        // message answers it, less than a second after the question.
         let records: [[String: Any]] = [
             ["timestamp": "2026-10-26T09:59:00.000Z", "type": "session_meta", "payload": [
                 "id": nativeID, "session_id": nativeID, "timestamp": "2026-10-26T09:59:00.000Z",
@@ -787,7 +788,10 @@ struct CoordinatorChatTests {
             ["timestamp": "2026-10-26T09:59:00.000Z", "type": "event_msg", "payload": [
                 "type": "user_message", "message": "Fix the trust prompt"
             ]],
-            ["timestamp": "2026-10-26T10:00:03.000Z", "type": "event_msg", "payload": [
+            ["timestamp": "2026-10-26T10:00:00.500Z", "type": "event_msg", "payload": [
+                "type": "user_message", "message": "Keep the old wording for now"
+            ]],
+            ["timestamp": "2026-10-26T10:00:01.000Z", "type": "event_msg", "payload": [
                 "type": "user_message", "message": "\(TaskCoordinator.watchMessagePrefix)\(UUID().uuidString)] Task \"Other\" is idle."
             ]],
             ["timestamp": answered, "type": "event_msg", "payload": [

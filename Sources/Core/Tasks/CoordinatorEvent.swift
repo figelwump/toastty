@@ -160,19 +160,35 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
         return CoordinatorEvent(at: at, kind: kind, taskID: taskID, text: nonEmptyText, sessionID: sessionID, options: options)
     }
 
+    /// Times keep milliseconds. The chat orders cards among transcript lines
+    /// that have sub-second times, so whole seconds could put a card above a
+    /// message from earlier in the same second.
+    private static let timeStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
     /// One line of `events.jsonl`, without its line break.
     public func jsonLine() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.formatted(Self.timeStyle))
+        }
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
     }
 
     /// The events in a log, oldest first. A line that does not decode, such
-    /// as one cut short by a crash, is skipped.
+    /// as one cut short by a crash, is skipped. Lines written before times
+    /// kept milliseconds have whole seconds.
     public static func decodeLog(_ data: Data) -> [CoordinatorEvent] {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = (try? Date(raw, strategy: timeStyle)) ?? (try? Date(raw, strategy: Date.ISO8601FormatStyle())) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not an ISO 8601 time: \(raw)")
+        }
         return data.split(separator: UInt8(ascii: "\n")).compactMap { line in
             try? decoder.decode(CoordinatorEvent.self, from: Data(line))
         }

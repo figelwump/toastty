@@ -617,12 +617,11 @@ final class CoordinatorChatController {
     }
 
     /// The task's newest question posted before `date`, when no reply
-    /// answers it yet. The log keeps whole seconds, so a question counts as
-    /// asked by the end of its second; equal times go to the later line.
+    /// answers it yet. Equal times go to the later line.
     static func openQuestionID(taskID: UUID, before date: Date, in events: [CoordinatorEvent]) -> UUID? {
         var newest: CoordinatorEvent?
         for event in events where event.kind == .question && event.taskID == taskID
-            && event.at.addingTimeInterval(1) <= date && event.at >= (newest?.at ?? .distantPast) {
+            && event.at <= date && event.at >= (newest?.at ?? .distantPast) {
             newest = event
         }
         guard let question = newest else { return nil }
