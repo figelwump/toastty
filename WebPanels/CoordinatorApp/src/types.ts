@@ -138,6 +138,9 @@ export interface TaskRow {
 }
 
 export interface ChatState {
+  /// Excludes the automatic launch prompt; stays true after timeline trimming.
+  hasUserRequests: boolean;
+  addresses?: import("./composer").ComposerAddress[];
   coordinator: {
     title: string;
     detail: string;
@@ -169,6 +172,7 @@ export type ChatEvent =
   | { type: "rendered"; expanded: string[]; view: PageView; selected: string | null }
   | { type: "taskAction"; rowID: string; actionID: string }
   | { type: "send"; text: string; token: number }
+  | { type: "project"; projectID: string; text: string; token: number }
   | { type: "reply"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "ask"; taskID: string; version: number | null; text: string; token: number; cardID?: string; questionID?: string | null }
   | { type: "answerRoute"; questionID: string; optionIndex: number; token: number }
@@ -212,6 +216,8 @@ export interface TasksUIState {
 
 export interface ReportPacket {
   taskID: string;
+  slug: string;
+  canAnnotate: boolean;
   title: string;
   version: number;
   latestVersion: number;

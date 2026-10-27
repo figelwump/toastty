@@ -54,6 +54,16 @@ public struct CoordinatorEvent: Codable, Equatable, Sendable {
     public var sourceID: String?
     public var delivery: Delivery?
 
+    /// A scoped note or ordinary accepted reply can introduce a task's card
+    /// before the coordinator posts one. Its ID stays a valid draft context
+    /// after a later packet replaces that card.
+    public var canAnchorTaskCard: Bool {
+        guard taskID != nil, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if kind == .note { return true }
+        return kind == .reply && questionID == nil && threadRole != nil
+            && (delivery == nil || delivery == .accepted)
+    }
+
     public init(
         id: UUID = UUID(), at: Date, kind: Kind, taskID: UUID?, text: String?, sessionID: String?,
         options: [String] = [], threadRole: ThreadRole? = nil, questionID: UUID? = nil, sourceID: String? = nil,

@@ -85,6 +85,19 @@ struct CoordinatorChatTests {
         #expect(card.task?.failureText == "The command failed with exit code 1.")
         #expect(card.task?.canArchive == true && card.task?.hasTaskSpace == true)
         #expect(card.isCurrent)
+        // A retained draft still belongs to the task after recovery replaces
+        // the card that was introduced by its error status.
+        try fixture.session.files.append(CoordinatorEvent(at: Date(), kind: .taskStarted,
+            taskID: task.id, text: nil, sessionID: nil))
+        fixture.tasks.sessionRuntimeStore.updateStatus(sessionID: sessionID,
+            status: SessionStatus(kind: .ready, summary: "Recovered"), at: Date())
+        await fixture.chat.refresh()
+        #expect(fixture.card(forTask: task.id)?.id != card.id)
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep the error-card draft",
+                                        cardID: card.id), token: 75, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 75, ok: true))
+        #expect(fixture.typed.entries.last?.text.contains("Keep the error-card draft") == true)
     }
     private struct OfflineGitHub: WorkspaceMergeCommandRunning {
         func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
@@ -631,6 +644,35 @@ struct CoordinatorChatTests {
         #expect(fixture.session.files.events().filter { $0.kind == .reply } == saved)
     }
 
+    @Test func aDraftFromAnAddressedThreadStillSendsAfterItsFirstPacketArrives() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let ask = CoordinatorEvent(at: Date(), kind: .reply, taskID: task.id,
+            text: "Inspect this task", sessionID: nil, threadRole: .userCoordinator)
+        try fixture.session.files.append(ask)
+        await fixture.chat.refresh()
+        let anchorID = try #require(fixture.card(forTask: task.id)?.id)
+        #expect(anchorID == ask.id.uuidString)
+        let preparation = try fixture.tasks.coordinator.preparePacketPublish(taskID: task.id,
+            packetJSON: Data(#"{"summary":"Adds the totals bar","look_at":"The bar at 390px","not_verified":[]}"#.utf8), screenshotPaths: [])
+        _ = try await fixture.tasks.coordinator.finishPacketPublish(preparation)
+        await fixture.chat.refresh()
+        #expect(fixture.card(forTask: task.id)?.id != anchorID)
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep this original draft",
+                                        cardID: anchorID), token: 73, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 73, ok: true))
+        #expect(fixture.typed.entries.last?.text.contains("Keep this original draft") == true)
+    }
+
+    @Test func anUnavailableComposerProjectReturnsItsFailedAcknowledgement() async throws {
+        let fixture = try await Fixture()
+        await fixture.chat.handle(.project(id: "/no-longer-a-project", text: "Fix totals"), token: 74, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 74, ok: false))
+        #expect(fixture.typed.entries.isEmpty)
+    }
+
     @Test func reportHistoryNavigatesTheExistingBrowserAndReportsARefusal() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()
@@ -729,6 +771,151 @@ struct CoordinatorChatTests {
         #expect(route("toastty://coordinator/report/not-a-task/3") == nil)
         #expect(route("toastty://coordinator/index.html") == nil)
         #expect(CoordinatorChatController.reportURL(taskID: taskID, version: 2, screenshot: "a&b") == "toastty://coordinator/report/\(id)/2")
+    }
+
+    @Test func reportMarksUseThePacketReplyAndRejectOtherScreenshots() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        let marks = [CoordinatorReportMark(shot: "after-390", note: "Move the bar up", x: 0.4, y: 0.5)]
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .sent)
+        #expect(fixture.typed.entries.last?.text == "Review note on packet v1: 1 marks on the screenshots:\n1. Move the bar up [after-390]")
+        await fixture.chat.refresh()
+        let card = try #require(fixture.card(forTask: task.id))
+        #expect(card.thread.map(\.text) == ["1 marks on the screenshots:\n1. Move the bar up [after-390]"])
+        #expect(card.thread.map(\.role) == [.userTask])
+        let count = fixture.typed.entries.count
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 2, marks: marks) == .rejected)
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "missing", note: "Fix", x: 0, y: 0)]) == .rejected)
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "after-390", note: " ", x: 0, y: 0)]) == .rejected)
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: [.init(shot: "after-390", note: "Fix", x: .nan, y: 0)]) == .rejected)
+        #expect(fixture.typed.entries.count == count)
+        // A merged task can be finished before doneAt or archivedAt is set.
+        // This is a rejected send, rather than uncertain delivery.
+        try fixture.tasks.coordinator.records.save(id: task.id) { $0.mergedAt = Date() }
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .rejected)
+        #expect(fixture.typed.entries.count == count)
+        try fixture.tasks.coordinator.records.save(id: task.id) { $0.archivedAt = Date() }
+        #expect(await fixture.chat.sendReportMarks(taskID: task.id, version: 1, marks: marks) == .rejected)
+        #expect(fixture.typed.entries.count == count)
+    }
+
+    @Test func aComposerThreadCardAcceptsItsOwnFollowup() async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithoutPacket()
+        let first = CoordinatorEvent(at: Date(), kind: .reply, taskID: task.id,
+                                     text: "What changed?", sessionID: nil, threadRole: .userCoordinator)
+        try fixture.session.files.append(first)
+        await fixture.chat.refresh()
+        let anchor = try #require(fixture.card(forTask: task.id))
+        #expect(anchor.id == first.id.uuidString)
+        await fixture.chat.handle(.reply(taskID: task.id, version: nil, text: "Keep the coupon visible.",
+                                        cardID: anchor.id), from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.typed.entries.count == 1)
+        #expect(fixture.card(forTask: task.id)?.thread.map(\.text) == ["What changed?", "Keep the coupon visible."])
+    }
+
+    @Test func reportBridgeRejectsNonJSONBodiesBeforeSerialization() {
+        let good: [String: Any] = ["shot": "after-390", "note": "Move it", "x": 0.5, "y": 0.5]
+        #expect(CoordinatorReportMark.decode([good])?.count == 1)
+        for invalid in [Double.nan, Double.infinity, -Double.infinity] {
+            var raw = good
+            raw["x"] = invalid
+            #expect(CoordinatorReportMark.decode([raw]) == nil)
+        }
+        var raw = good
+        raw["note"] = Date()
+        #expect(CoordinatorReportMark.decode([raw]) == nil)
+        #expect(CoordinatorReportMark.decode(Array(repeating: good, count: 101)) == nil)
+        #expect(CoordinatorReportMark.message([.init(shot: "after-390", note: "\u{1b}[201~", x: 0, y: 0)], screenshotNames: ["after-390"]) == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func closedTasksRemainAvailableForCoordinatorQuestions(archived: Bool) async throws {
+        let fixture = try await Fixture()
+        let task = try await fixture.taskWithPacket()
+        try fixture.tasks.coordinator.records.save(id: task.id) {
+            if archived { $0.archivedAt = Date() }
+            else { $0.doneAt = Date() }
+        }
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.addresses.contains(where: { $0.kind == "task" && $0.id == task.id.uuidString }) == true)
+        await fixture.chat.handle(.ask(taskID: task.id, version: 1, text: "What changed?"), token: 91, from: nil)
+        // The fixture has no conversation transport. The task still passes
+        // target validation, so only the coordinator's availability blocks it.
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.notice?.text == "The coordinator is not running.")
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 91, ok: false))
+        await fixture.chat.handle(.ask(taskID: UUID(), version: nil, text: "What changed?"), token: 92, from: nil)
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.notice?.text == "That task is no longer available. Pick it again before sending.")
+        #expect(fixture.chat.lastPayload?.ack == .init(token: 92, ok: false))
+    }
+
+    @Test func reportBridgeOnlyAcceptsItsOwnMainFrameRoute() {
+        let id = UUID()
+        let url = URL(string: "toastty://coordinator/report/\(id.uuidString)/1")!
+        #expect(CoordinatorReportBridge.reportRoute(url: url, isMainFrame: true) != nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: url, isMainFrame: false) == nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: URL(string: "https://coordinator/report/\(id)/1"), isMainFrame: true) == nil)
+        #expect(CoordinatorReportBridge.reportRoute(url: URL(string: "toastty://coordinator/packet-data/\(id)/1"), isMainFrame: true) == nil)
+    }
+
+    @Test func projectRequestsRoundTripWithoutConfusingTaskQuestions() throws {
+        let request = CoordinatorProjectRequest(projectName: "Billing \"app\"", projectRoot: "/repos/billing", workspaceID: UUID(), text: "Fix totals\nplease")
+        #expect(CoordinatorProjectRequest(message: request.message) == request)
+        #expect(CoordinatorTaskAsk(message: request.message) == nil)
+        #expect(CoordinatorProjectRequest(message: "Route to billing please") == nil)
+        #expect(CoordinatorChatPageEvent(body: ["type": "project", "projectID": "/repos/billing", "text": "go"]) == .project(id: "/repos/billing", text: "go"))
+        #expect(CoordinatorChatPageEvent(body: ["type": "project", "projectID": "", "text": "go"]) == nil)
+    }
+
+    @Test func suggestionsIgnoreOnlyTheAutomaticFirstLaunchMessage() {
+        var transcript = CoordinatorChatTranscript()
+        let conversation = RemoteConversationID(rawValue: UUID())
+        var sequence: UInt64 = 0
+        func message(_ text: String, origin: ConversationMessageOrigin = .unknown) -> ConversationEvent {
+            sequence += 1
+            return ConversationEvent(conversationID: conversation, sequence: sequence, eventID: "\(sequence)", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: text, origin: origin)))
+        }
+        transcript.follow(conversation)
+        transcript.apply(message("  \n "))
+        let startup = message("  \(CoordinatorSessionController.initialPrompt)\n")
+        transcript.apply(startup)
+        transcript.apply(startup)
+        #expect(transcript.hasUserRequests == false)
+        let enriched = ConversationEvent(conversationID: conversation, sequence: startup.sequence, eventID: startup.eventID, timestamp: startup.timestamp, provider: .claude, payload: .userMessage(.init(text: CoordinatorSessionController.initialPrompt, origin: .local)))
+        transcript.apply(enriched)
+        #expect(transcript.hasUserRequests == false)
+        transcript.reset()
+        transcript.apply(enriched)
+        #expect(transcript.hasUserRequests == false)
+        transcript.apply(message(CoordinatorSessionController.initialPrompt))
+        #expect(transcript.hasUserRequests)
+        var restarted = CoordinatorChatTranscript()
+        restarted.follow(conversation)
+        restarted.apply(startup)
+        let nextConversation = RemoteConversationID(rawValue: UUID())
+        restarted.follow(nextConversation)
+        restarted.apply(ConversationEvent(conversationID: nextConversation, sequence: 1, eventID: "next-start", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: CoordinatorSessionController.initialPrompt))))
+        #expect(restarted.hasUserRequests == false)
+        restarted.apply(ConversationEvent(conversationID: nextConversation, sequence: 2, eventID: "next-request", timestamp: Date(), provider: .claude, payload: .userMessage(.init(text: "What needs me?"))))
+        #expect(restarted.hasUserRequests)
+        for index in 0...CoordinatorChatTranscript.maximumItems {
+            transcript.apply(ConversationEvent(conversationID: conversation, sequence: UInt64(100 + index), eventID: "assistant-\(index)", timestamp: Date(), provider: .claude, payload: .assistantMessage(.init(text: "Working"))))
+        }
+        #expect(!transcript.items.contains(where: { $0.role == "user" }))
+        #expect(transcript.hasUserRequests)
+        transcript.reset()
+        #expect(transcript.hasUserRequests)
+        transcript.follow(RemoteConversationID(rawValue: UUID()))
+        #expect(transcript.hasUserRequests)
+        for origin in [ConversationMessageOrigin.local, .remote] {
+            var fresh = CoordinatorChatTranscript()
+            fresh.follow(conversation)
+            fresh.apply(message(CoordinatorSessionController.initialPrompt, origin: origin))
+            #expect(fresh.hasUserRequests)
+        }
     }
 
     @Test func taskMenuEventsRequireAFiniteVisibleRectangle() {

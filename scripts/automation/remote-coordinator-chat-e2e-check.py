@@ -19,7 +19,7 @@ captures the window with automation.capture_screenshot at each step:
    and Full report opens in the right panel;
 3. a question asked from the card's **to coordinator** reply reaches the
    coordinator with the task named, and the chat shows only the typed text,
-   tied to the task; then a reply to the task reaches its agent as
+   in the task card's thread; then a reply to the task reaches its agent as
    `Review note on packet v1: …`, and the task leaves Needs you;
 4. packet v2 updates the only task card and retains v1 in report history;
 5. with a pull request link on the task, Open PR opens it in the right panel;
@@ -197,6 +197,17 @@ def main():
         shutil.copyfile(response['result']['path'], path)
         evidence['captures'].append(path.name)
 
+    def report_action(panel_id, action, element, text=None):
+        args = dict(panelID=panel_id, action=action, elementID=element)
+        if text is not None:
+            args['text'] = text
+        return instance.request('automation.coordinator_report_action', args).get('ok', False)
+
+    def report_panel(task_id, version):
+        snapshot = instance.query('workspace.snapshot', workspaceID=coordinator['workspaceID'])
+        return next((t['panelID'] for t in snapshot['rightPanel']['tabs']
+                     if (t.get('url') or '').startswith(f'toastty://coordinator/report/{task_id}/{version}')), None)
+
     answered = set()
 
     def answer_dialogs():
@@ -230,6 +241,11 @@ def main():
     def cards(kind=None):
         return [i for i in chat_state()['items'] if i['type'] == 'card' and (kind is None or i['kind'] == kind)]
 
+    def thread_entry(task_id, role, text):
+        current = next((c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent')), None)
+        return next((entry for entry in (current or {}).get('thread', [])
+                     if entry['role'] == role and entry['text'] == text), None)
+
     def open_card(task_id, version):
         """The task's card for a packet version, opened. A card the
         coordinator posts replaces one the chat added, with a new ID, so the
@@ -244,12 +260,18 @@ def main():
         return card
 
     try:
-        workspace_id = instance.wait_until_ready()[0]['workspaceID']
+        workspace = instance.wait_until_ready()[0]
+        workspace_id = workspace['workspaceID']
         coordinator = wait_for('the coordinator to run', waiting(lambda: (lambda s: s if s['state'] == 'running' else None)(
             instance.query('coordinator.status'))), timeout=120, interval=2)
         cli_result('coordinator', 'show')
         wait_for('the chat to accept a message', waiting(lambda: (lambda s: s['pages'] >= 1 and s['canSend'])(chat_state())),
                  timeout=300, interval=3)
+        startup = wait_for('the projected coordinator launch prompt', lambda: (lambda s: s if any(
+            i.get('role') == 'user' and i.get('text') == 'Use the toastty-coordinator skill.' for i in s['items']) else None)(chat_state()),
+            timeout=30, interval=1)
+        require(startup['hasUserRequests'] is False, 'The launch prompt hid the initial suggestions')
+        require(page('visible', 'suggestions'), 'The Try row is not rendered at startup')
         capture('e2e-1-chat-ready')
         step('1a chat ready', coordinator=coordinator['sessionID'])
 
@@ -260,12 +282,25 @@ def main():
             f'before and after pair at width 390: {shots / "before-390.png"} and {shots / "after-390.png"}. '
             'Post the task-started card, and a packet card when its packet arrives.'
         )
-        require(page('type', 'composer-input', request), 'Could not type into the composer')
+        require(page('type', 'composer-input', f'@project {request}'), 'Could not type @project into the composer')
         task = wait_for('the coordinator to create a task', waiting(lambda: (cli_result('task', 'list')['tasks'] or [None])[0]),
                         timeout=600, interval=5)
         task_id = task['taskID']
+        wait_for('the first real request to hide suggestions', lambda: chat_state()['hasUserRequests'], timeout=30, interval=1)
+        wait_for('the rendered Try row to hide', lambda: not page('visible', 'suggestions'), timeout=30, interval=1)
         capture('e2e-1-task-created')
         step('1b coordinator created the task', taskID=task_id, title=task['title'])
+        # The terminal can scroll past the envelope while the coordinator
+        # creates the task. Its decoded transcript is the durable receipt:
+        # only a valid project envelope renders as @<project title> here.
+        project_user = wait_for('the decoded explicit project request', lambda: next(
+            (i for i in chat_state()['items'] if i.get('role') == 'user'
+             and i.get('text') == f"@{workspace['title']} {request}"), None), timeout=30, interval=1)
+        routing_path = Path(coordinator['routingFile'])
+        wait_for('the explicit project pick in routing.md',
+                 lambda: str(repository) in routing_path.read_text().split('## Picks', 1)[-1], timeout=120, interval=2)
+        shutil.copyfile(routing_path, artifacts / f'{PREFIX}-routing.md')
+        step('1c explicit project pick recorded', projectRoot=str(repository), routingFile=str(routing_path), item=project_user)
 
         wait_for('a packet card for v1', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 1), None)), timeout=900, interval=5)
@@ -284,27 +319,56 @@ def main():
         question = 'In one short sentence, what does this task change? Do not act on it.'
         require(page('click', f"reply-to-coordinator-{open_card(task_id, 1)['id']}"), 'Could not switch the reply to the coordinator')
         require(page('type', f"reply-{open_card(task_id, 1)['id']}", question), 'Could not type the question')
-        asked = wait_for('the question in the chat', waiting(lambda: next(
-            (i for i in chat_state()['items'] if i['type'] == 'message' and i.get('role') == 'user'
-             and i.get('aboutTaskID') == task_id), None)), timeout=600, interval=3)
-        require(asked['text'] == question, f'The chat shows more than the question: {asked}')
+        asked = wait_for('the coordinator question in the task thread',
+                         waiting(lambda: thread_entry(task_id, 'user-coordinator', question)), timeout=600, interval=3)
+        require(not any(i.get('aboutTaskID') == task_id and i.get('text') == question for i in chat_state()['items']),
+                'The scoped question was duplicated outside its card thread')
         capture('e2e-3-asked')
-        step('3a question to the coordinator shows only its text', item=asked)
-        require(page('click', f"reply-to-task-{open_card(task_id, 1)['id']}"), 'Could not switch the reply back to the task')
+        step('3a question to the coordinator appears in the task thread', item=asked)
+
+        # An exact known slug in the composer uses the same strict ask envelope
+        # and durable task thread as a card reply.
+        addressed_question = 'What is left to verify? Answer briefly and do not change the task.'
+        record = cli_result('task', 'get', task_id)
+        wait_for('the composer to accept @task', waiting(lambda: chat_state()['canSend']), timeout=300, interval=2)
+        require(page('type', 'composer-input', f"@{record['slug']} {addressed_question}"), 'Could not send @task')
+        addressed = wait_for('the @task message in the task thread',
+                             waiting(lambda: thread_entry(task_id, 'user-coordinator', addressed_question)), timeout=300, interval=2)
+        require(not any(i.get('aboutTaskID') == task_id and i.get('text') == addressed_question for i in chat_state()['items']),
+                'The @task message was duplicated outside its card thread')
+        capture('e2e-3-addressed')
+        step('3b @task uses the strict task envelope and thread', item=addressed, slug=record['slug'])
 
         reply = 'Please change it to "Hello coordinator!" with an exclamation mark, then publish packet v2 with the same screenshots.'
-        require(page('type', f"reply-{open_card(task_id, 1)['id']}", reply), 'Could not type the reply')
+        # Drive report controls and their WebKit bridge, not task.send.
+        require(page('click', f"report-{open_card(task_id, 1)['id']}"), 'Could not reopen the report')
+        report_id = wait_for('the report panel', lambda: report_panel(task_id, 1), timeout=20)
+        wait_for('the report controls', lambda: report_action(report_id, 'click', 'report-annotate'), timeout=20)
+        require(report_action(report_id, 'click', 'shot-after-390'), 'Could not drop a pin')
+        require(report_action(report_id, 'type', 'report-note-0', reply), 'Could not enter the mark note')
+        capture('e2e-3-report-mark')
+        require(report_action(report_id, 'click', 'report-send'), 'Could not send the marks')
         wait_for('the reply to be sent', lambda: (chat_state().get('notice') or {}).get('text', '').startswith('Sent to'), timeout=20)
+        mark_text = f'1 marks on the screenshots:\n1. {reply} [after-390]'
+        marked = wait_for('the report marks in the task thread',
+                          lambda: thread_entry(task_id, 'user-task', mark_text), timeout=30, interval=1)
+        current_thread = next(c for c in cards() if c.get('taskID') == task_id and c.get('isCurrent'))['thread']
+        require(sum(e['text'] == mark_text and e['role'] == 'user-task' for e in current_thread) == 1,
+                'The report marks were duplicated in the task thread')
+        step('3c report marks entered the task thread once', item=marked)
         after = cli_result('task', 'get', task_id)
         require(after['readyForReviewAt'] is None, f'The task is still ready for review: {after}')
         task_space = after['setup']['taskSpaceWorkspaceID']
         wait_for('the review note in the task terminal', lambda: terminal_shows(task_space, 'Review note on packet v1'),
                  timeout=60, interval=2)
+        wait_for('the marks message in the task terminal', lambda: terminal_shows(task_space, '1 marks on the screenshots:')
+                 and terminal_shows(task_space, '[after-390]'), timeout=60, interval=2)
         # The agent's turn starts a moment after the note arrives.
         working = wait_for('the task to leave Needs you', lambda: (lambda r: r if not r['stage'].get('needsUser') else None)(
             cli_result('task', 'get', task_id)), timeout=120, interval=2)
         capture('e2e-3-replied')
-        step('3b reply sent to the task', stage=working.get('stage'))
+        step('3c report marks sent to the task', stage=working.get('stage'),
+             expectedMessage=f'Review note on packet v1: 1 marks on the screenshots:\n1. {reply} [after-390]')
 
         new_card = wait_for('a packet card for v2', waiting(lambda: next(
             (c for c in cards('packet') if c['taskID'] == task_id and c['packetVersion'] == 2), None)), timeout=900, interval=5)
@@ -313,6 +377,8 @@ def main():
                 f'Packet v2 duplicated the task card: {task_cards}')
         require(new_card.get('packetVersions') == [1, 2] and not new_card['superseded'],
                 f'Packet v2 lost its report history: {new_card}')
+        require(thread_entry(task_id, 'user-task', mark_text), 'The marks disappeared from the newer packet card thread')
+        require(thread_entry(task_id, 'user-coordinator', addressed_question), 'The @task question disappeared from the newer packet card thread')
         open_card(task_id, 2)
         capture('e2e-4-packet-v2')
         step('4 packet v2 updated one task card with both reports', cardID=new_card['id'], packetVersions=[1, 2])
@@ -366,6 +432,10 @@ def main():
             step('could not record terminals', error=str(error))
         raise
     finally:
+        if 'coordinator' in locals():
+            routing_path = Path(coordinator['routingFile'])
+            if routing_path.is_file():
+                shutil.copyfile(routing_path, artifacts / f'{PREFIX}-routing.md')
         try:
             instance.kill()
         except Exception:

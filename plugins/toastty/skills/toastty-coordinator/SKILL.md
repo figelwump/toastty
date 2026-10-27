@@ -56,6 +56,15 @@ When the user asks for work:
    from `task workspace-choices`, with an exact path or ID for each choice.
    Wait for the pick before creating the task. If an older app rejects this
    contract, ask the same question in chat and state the available choices.
+   The composer can send an explicit project pick as a message starting with
+   `Toastty project request: ` followed by one JSON object. Its `projectRoot`,
+   `projectName`, and optional `workspaceID` identify the user's chosen project;
+   `text` is the user's request. Use that project without asking again. Check
+   the current workspace choices before using an ID. If the workspace closed,
+   use the recorded project directory through the task's project picker. Do
+   not choose another project silently. Record this pick under "Picks" in
+   `routing.md`, using the request and project path, not the workspace ID.
+   Ordinary messages without this envelope still use the routing rules above.
 2. Create the task with
    `"$TOASTTY_CLI_PATH" --json task create "<request>" --workspace <id>`. Pass
    the user's request in their own words, with any detail they gave. Use

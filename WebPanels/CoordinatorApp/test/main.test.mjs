@@ -13,6 +13,7 @@ const source = buildSync({
 
 function element(overrides = {}) {
   const classes = new Set();
+  const listeners = new Map();
   return {
     innerHTML: "", textContent: "", className: "", value: "", disabled: false,
     scrollHeight: 500, scrollTop: 0, clientHeight: 500,
@@ -24,7 +25,10 @@ function element(overrides = {}) {
     },
     querySelector: () => null, closest: () => null,
     querySelectorAll: () => [],
-    addEventListener() {}, focus() {}, blur() {}, scrollIntoView() {},
+    setAttribute() {}, removeAttribute() {},
+    addEventListener(name, handler) { listeners.set(name, handler); },
+    emit(name, event) { listeners.get(name)?.(event); },
+    focus() {}, blur() {}, scrollIntoView() {},
     getBoundingClientRect: () => ({ x: 30, y: 40, width: 24, height: 28 }),
     ...overrides,
   };
@@ -39,6 +43,7 @@ function page() {
     ["header", element()], ["scroll", element()], ["tasks", element()],
     ["composer", composer], ["composer-hint-text", element()],
     ["composer-open-terminal", element()], ["notice", element()],
+    ["suggestions", element()], ["address-options", element()],
   ]);
   const window = { webkit: { messageHandlers: { toasttyCoordinatorChat: {
     postMessage: (event) => posted.push(JSON.parse(JSON.stringify(event))),
@@ -48,6 +53,19 @@ function page() {
   vm.runInNewContext(source, { window, document, TextEncoder, CSS: { escape: (value) => value }, setTimeout: () => 0 });
   return {
     posted, nodes, document,
+    compose(text) {
+      input.value = text;
+      events.get("submit")({ target: composer, preventDefault() {} });
+    },
+    typeComposer(text) {
+      input.value = text;
+      input.emit("input", { target: input });
+    },
+    pickAddress(index) {
+      const target = element({ dataset: { address: String(index) } });
+      target.closest = () => target;
+      nodes.get("address-options").emit("click", { target });
+    },
     receive: (state) => window.toasttyCoordinatorChat.receive(state),
     click(dataset, bounds) {
       const target = element({ dataset, ...(bounds ? { getBoundingClientRect: () => bounds } : {}) });
@@ -75,6 +93,7 @@ function page() {
 
 function state(card = {}, task = {}, coordinator = {}) {
   return {
+    hasUserRequests: false, addresses: [],
     coordinator: { title: "Coordinator", detail: "Codex", canSend: true, sendHint: null, hasTerminal: true, ...coordinator },
     items: [{ type: "card", id: "q1", at: "", kind: "question", text: "Rotate prod keys?",
       options: ["Staging only", "Prepare prod"], answer: null, thread: [], isCurrent: true,
@@ -434,4 +453,89 @@ test("a composer acknowledgement keeps text written after the send", () => {
   app.submitComposer("Second request");
   app.receive({ ...state(), ack: { token: 2, ok: true } });
   assert.equal(input.value, "");
+});
+
+test("composer task addressing keeps card sends independent and retains a draft edited while awaiting acknowledgement", () => {
+  const app = page();
+  const current = { ...state(), addresses: [{ kind: "task", id: "T1", token: "rotate-keys", title: "Rotate keys", version: null }] };
+  app.receive(current);
+  app.compose("@rotate-keys What changed?");
+  assert.deepEqual(app.sends(), [{ type: "ask", taskID: "T1", version: null, text: "What changed?", token: 1 }]);
+  app.compose("A different draft");
+  assert.equal(app.sends().length, 1, "pending composer sends block repeats");
+  app.receive({ ...current, ack: { token: 1, ok: true } });
+  app.compose("@rotate-keys Follow up");
+  assert.equal(app.sends().at(-1).text, "Follow up");
+  app.receive({ ...current, ack: { token: 2, ok: false } });
+  app.draft("Staging only");
+  app.submit("Staging only");
+  assert.equal(app.sends().at(-1).cardID, "q1");
+  app.receive({ ...current, ack: { token: 3, ok: true } });
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('value=""'));
+});
+
+test("a composer acknowledgement keeps a selected address for newer text and clears it with the matching text", () => {
+  const app = page();
+  const current = { ...state(), addresses: [
+    { kind: "task", id: "T1", token: "rotate-keys", title: "Rotate keys", version: 2 },
+    { kind: "project", id: "/repos/infra", token: "rotate-keys", title: "Infrastructure", version: null },
+  ] };
+  app.receive(current);
+  app.typeComposer("@rotate");
+  app.pickAddress(0);
+  app.typeComposer("@rotate-keys First note");
+  app.submitComposer("@rotate-keys First note");
+  app.typeComposer("@rotate-keys Later note");
+  app.receive({ ...current, ack: { token: 1, ok: true } });
+  assert.equal(app.nodes.get("composer").querySelector().value, "@rotate-keys Later note");
+  app.submitComposer("@rotate-keys Later note");
+  assert.deepEqual(app.sends(), [
+    { type: "ask", taskID: "T1", version: 2, text: "First note", token: 1 },
+    { type: "ask", taskID: "T1", version: 2, text: "Later note", token: 2 },
+  ]);
+  app.receive({ ...current, ack: { token: 2, ok: true } });
+  assert.equal(app.nodes.get("composer").querySelector().value, "");
+  app.typeComposer("@rotate-keys A fresh request");
+  app.submitComposer("@rotate-keys A fresh request");
+  assert.deepEqual(app.posted.filter((event) => event.type === "send"), [{ type: "send", text: "@rotate-keys A fresh request", token: 3 }], "a fresh ambiguous address requires a new pick");
+});
+
+test("a composer acknowledgement keeps identical text addressed to a different selected target", () => {
+  const app = page();
+  const current = { ...state(), addresses: [
+    { kind: "task", id: "T1", token: "rotate-keys", title: "First rotation task", version: 2 },
+    { kind: "task", id: "T2", token: "rotate-keys", title: "Second rotation task", version: 1 },
+  ] };
+  app.receive(current);
+  app.typeComposer("@rotate");
+  app.pickAddress(0);
+  app.typeComposer("@rotate-keys Same note");
+  app.submitComposer("@rotate-keys Same note");
+  app.typeComposer("@rotate");
+  app.pickAddress(1);
+  app.typeComposer("@rotate-keys Same note");
+  app.receive({ ...current, ack: { token: 1, ok: true } });
+  assert.equal(app.nodes.get("composer").querySelector().value, "@rotate-keys Same note", "the accepted T1 send must not clear the new T2 draft");
+  app.submitComposer("@rotate-keys Same note");
+  assert.equal(app.sends()[1].taskID, "T2");
+  app.receive({ ...current, ack: { token: 2, ok: true } });
+  assert.equal(app.nodes.get("composer").querySelector().value, "", "the matching T2 acknowledgement clears its draft");
+});
+
+test("composer and task-card acknowledgements clear only their own pending drafts", () => {
+  const app = page();
+  const current = { ...state(), addresses: [{ kind: "task", id: "T1", token: "rotate-keys", title: "Rotate keys", version: null }] };
+  app.receive(current);
+  app.draft("Answer from the card");
+  app.submit("Answer from the card");
+  app.submitComposer("@rotate-keys Separate coordinator question");
+  assert.equal(app.sends().length, 2);
+  app.receive({ ...current, ack: { token: 2, ok: true } });
+  assert.equal(app.nodes.get("composer").querySelector().value, "");
+  assert.match(app.nodes.get("scroll").innerHTML, /<input[^>]*value="Answer from the card"[^>]*disabled/);
+  app.submit("Duplicate from the card");
+  assert.equal(app.sends().length, 2);
+  app.receive({ ...state({ id: "q2" }), ack: { token: 1, ok: true } });
+  assert.ok(app.nodes.get("scroll").innerHTML.includes('value=""'));
+  assert.ok(!/<input[^>]*disabled/.test(app.nodes.get("scroll").innerHTML));
 });

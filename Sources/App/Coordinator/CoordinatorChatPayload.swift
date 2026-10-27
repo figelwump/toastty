@@ -59,6 +59,8 @@ struct CoordinatorChatPayload: Encodable, Equatable {
     var view: ViewRequest?
     var taskGroups: [CoordinatorAllTasks.Group] = []
     var tasks: [CoordinatorAllTasks.Row] = []
+    var addresses: [CoordinatorComposerAddress] = []
+    var hasUserRequests = false
 
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
@@ -320,6 +322,8 @@ struct CoordinatorChatPacketView: Encodable, Equatable {
 /// What the report page reads from `packet-data/<task>/<version>`.
 struct CoordinatorChatReport: Encodable {
     var taskID: String
+    var slug: String
+    var canAnnotate: Bool
     var title: String
     var version: Int
     var latestVersion: Int
@@ -330,6 +334,78 @@ struct CoordinatorChatReport: Encodable {
     var screenshots: [CoordinatorChatPacketView.Screenshot]
     var headCommit: String?
     var createdAt: String?
+}
+
+/// A native lookup key and the exact token offered by the composer.
+struct CoordinatorComposerAddress: Encodable, Equatable {
+    var kind: String
+    var id: String
+    var token: String
+    var title: String
+    var version: Int?
+}
+
+/// An explicit project pick, built from current workspace choices by Swift.
+/// The one-line JSON envelope keeps titles and user text unambiguous.
+struct CoordinatorProjectRequest: Codable, Equatable {
+    var projectName: String
+    var projectRoot: String
+    var workspaceID: UUID?
+    var text: String
+
+    private static let prefix = "Toastty project request: "
+    var message: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return Self.prefix + String(decoding: (try? encoder.encode(self)) ?? Data(), as: UTF8.self)
+    }
+
+    init(projectName: String, projectRoot: String, workspaceID: UUID?, text: String) {
+        self.projectName = projectName
+        self.projectRoot = projectRoot
+        self.workspaceID = workspaceID
+        self.text = text
+    }
+
+    init?(message: String) {
+        guard message.hasPrefix(Self.prefix),
+              let decoded = try? JSONDecoder().decode(Self.self, from: Data(message.dropFirst(Self.prefix.count).utf8)),
+              decoded.projectRoot.hasPrefix("/"), !decoded.projectName.isEmpty, !decoded.text.isEmpty else { return nil }
+        self = decoded
+    }
+}
+
+struct CoordinatorReportMark: Codable, Equatable {
+    var shot: String
+    var note: String
+    var x: Double
+    var y: Double
+
+    static func decode(_ raw: Any?) -> [Self]? {
+        guard let raw = raw as? [[String: Any]], raw.count <= 100,
+              JSONSerialization.isValidJSONObject(raw),
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return nil }
+        return try? JSONDecoder().decode([Self].self, from: data)
+    }
+
+    static func message(_ marks: [Self], screenshotNames: Set<String>) -> String? {
+        guard !marks.isEmpty, marks.count <= 100 else { return nil }
+        var lines: [String] = []
+        for (index, mark) in marks.enumerated() {
+            let note = mark.note.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let unsafeControls = CharacterSet.controlCharacters.subtracting(.whitespacesAndNewlines)
+            guard screenshotNames.contains(mark.shot), !note.isEmpty,
+                  !mark.note.unicodeScalars.contains(where: { unsafeControls.contains($0) }),
+                  mark.x.isFinite, mark.y.isFinite, (0...1).contains(mark.x), (0...1).contains(mark.y) else { return nil }
+            lines.append("\(index + 1). \(note) [\(mark.shot)]")
+        }
+        let text = "\(marks.count) marks on the screenshots:\n" + lines.joined(separator: "\n")
+        return text.utf8.count <= CoordinatorChatPageEvent.maximumTextLength ? text : nil
+    }
+}
+
+enum CoordinatorReportSendResult: Equatable {
+    case sent, rejected, unconfirmed
 }
 
 /// What the chat sends the coordinator when the user asks about a card: the
@@ -455,6 +531,11 @@ struct CoordinatorChatTranscript {
     private(set) var cursor: ConversationEventCursor?
     private var conversationID: RemoteConversationID?
     private var toolIndexByCallID: [String: Int] = [:]
+    /// Intro suggestions stay hidden after a real request, even when that
+    /// message falls out of the bounded timeline. Lives with this chat.
+    private(set) var hasUserRequests = false
+    private var isFirstUserMessage = true
+    private var bootstrapMessageID: String?
 
     /// A different conversation is a fresh coordinator session: its events
     /// follow the old ones.
@@ -464,6 +545,8 @@ struct CoordinatorChatTranscript {
             append(Item(type: .status, id: "session-\(conversationID.rawValue)", at: Date(), text: "A new coordinator session started"))
         }
         self.conversationID = conversationID
+        isFirstUserMessage = true
+        bootstrapMessageID = nil
         cursor = nil
         toolIndexByCallID = [:]
     }
@@ -473,6 +556,8 @@ struct CoordinatorChatTranscript {
         items.removeAll { $0.id.hasPrefix(conversationID.map { "\($0.rawValue)/" } ?? "") }
         cursor = nil
         toolIndexByCallID = [:]
+        isFirstUserMessage = true
+        // Keep bootstrap identity for a replay with late origin enrichment.
     }
 
     mutating func apply(_ page: ConversationEventPage) {
@@ -492,6 +577,13 @@ struct CoordinatorChatTranscript {
         case .userMessage(let message):
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.isEmpty == false else { return }
+            // Each fresh coordinator launch sends this exact first prompt.
+            // Restoring a session resumes it without sending the prompt again.
+            let isBootstrap = text == CoordinatorPrompts.initial &&
+                (id == bootstrapMessageID || (isFirstUserMessage && message.origin == .unknown))
+            isFirstUserMessage = false
+            if isBootstrap { bootstrapMessageID = id }
+            else { hasUserRequests = true }
             if let ask = CoordinatorTaskAsk(message: text) {
                 append(Item(
                     type: .message, id: id, at: event.timestamp, role: "user", text: ask.text,
@@ -501,6 +593,8 @@ struct CoordinatorChatTranscript {
             } else if let answer = CoordinatorRouteAnswer(message: text) {
                 append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "Project: \(answer.answer)",
                             sourceID: event.eventID, routeAnswer: answer))
+            } else if let request = CoordinatorProjectRequest(message: text) {
+                append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: "@\(request.projectName) \(request.text)"))
             } else {
                 append(Item(type: .message, id: id, at: event.timestamp, role: "user", text: text))
             }
@@ -553,6 +647,7 @@ enum CoordinatorChatPageEvent: Equatable {
     /// An All tasks row's action, by the IDs the row was drawn with.
     case taskAction(rowID: String, actionID: String)
     case send(String)
+    case project(id: String, text: String)
     case reply(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
     case ask(taskID: UUID, version: Int?, text: String, cardID: String? = nil, questionID: UUID? = nil)
     case answerRoute(questionID: UUID, optionIndex: Int)
@@ -601,6 +696,10 @@ enum CoordinatorChatPageEvent: Equatable {
         case "send":
             guard let text = text() else { return nil }
             self = .send(text)
+        case "project":
+            guard let id = body["projectID"] as? String, !id.isEmpty, id.utf8.count <= 4096,
+                  let text = text() else { return nil }
+            self = .project(id: id, text: text)
         case "reply":
             guard let taskID = taskID(), let text = text() else { return nil }
             self = .reply(taskID: taskID, version: version(), text: text, cardID: cardID, questionID: questionID)

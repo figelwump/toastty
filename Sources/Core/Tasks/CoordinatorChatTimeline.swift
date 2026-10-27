@@ -155,9 +155,9 @@ public enum CoordinatorChatTimeline {
                 }
                 guard let taskID = event.taskID else { continue }
                 threads[taskID, default: []].append(ThreadEntry(id: event.id.uuidString, at: event.at, role: role, text: text))
-                // Notes can introduce a task before its first start, packet,
-                // or question event. Replies alone do not introduce cards.
-                if event.kind == .note, tasks[taskID] == nil {
+                // Notes and ordinary replies can introduce a task before
+                // its first posted card. An unmatched answer cannot.
+                if tasks[taskID] == nil, event.canAnchorTaskCard {
                     tasks[taskID] = TaskCard(
                         card: Card(id: event.id.uuidString, at: event.at, kind: .taskStarted, taskID: taskID, text: nil),
                         contentAt: .distantPast, firstAt: event.at, order: order

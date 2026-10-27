@@ -362,6 +362,23 @@ struct CoordinatorChatTimelineTests {
     }
 
     @Test
+    func aReplyBeforeAnyPostedCardKeepsAThreadAndReusesTheNextCard() {
+        for role in [CoordinatorEvent.ThreadRole.userCoordinator, .userTask] {
+            let reply = CoordinatorEvent(at: start, kind: .reply, taskID: taskID,
+                                         text: "What changed?", sessionID: nil, threadRole: role)
+            let first = CoordinatorChatTimeline.cards(events: [reply], packets: [:])
+            #expect(first.count == 1)
+            #expect(first.first?.taskID == taskID)
+            #expect(first.first?.thread.map(\.text) == ["What changed?"])
+            let question = event(.question, at: 10, task: taskID, text: "Continue?")
+            let next = CoordinatorChatTimeline.cards(events: [reply, question], packets: [:])
+            #expect(next.count == 1)
+            #expect(next.first?.id == question.id.uuidString)
+            #expect(next.first?.thread == first.first?.thread)
+        }
+    }
+
+    @Test
     func sourceMessagesDeduplicatePerTaskAndThreadsKeepTheLastHundredInStableTimeOrder() {
         let note = event(.note, at: 0, task: taskID, text: "The task's first note.")
         let otherTaskID = UUID()

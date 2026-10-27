@@ -217,6 +217,19 @@ def main():
         require(response.get('ok'), f'The page could not {action} {element_id}: {response}')
         return response
 
+    def wait_for_page_element(element_id):
+        def visible():
+            response = instance.request('automation.coordinator_chat_action',
+                                        dict(action='visible', elementID=element_id))
+            if not response.get('ok'):
+                error = response.get('error') or {}
+                require(error.get('code') == 'INVALID_PAYLOAD'
+                        and error.get('message', '').startswith('no open chat page has'),
+                        f'The page visibility probe failed: {response}')
+                return False
+            return True
+        wait_for(f'the rendered page element {element_id}', visible)
+
     def sidebar_row(title, reason):
         result = run_tool(driver, 'labels', pid, '*', check=False)
         if result.returncode != 0:
@@ -343,6 +356,7 @@ def main():
 
         # 3. A reply typed into the card reaches the task as a review note.
         bring_to_front()
+        wait_for_page_element(f"reply-{packet_card['id']}")
         reply_field = f"title:Review note for {task['slug']}"
         # WebKit builds the page's Accessibility tree lazily, so the first
         # lookups after a render can miss.
@@ -358,6 +372,11 @@ def main():
             raise AssertionError(f'No {reply_field} in the Accessibility tree; see {PREFIX}-ax.txt')
         time.sleep(0.3)
         run_tool(driver, 'type', REPLY)
+        focused_input = json.loads(run_tool(driver, 'focused', pid).stdout)
+        step('keyboard reply entered', focusedInput=focused_input,
+             frontmostPID=run_tool(helper, 'frontmost-pid').stdout.strip())
+        require(focused_input.get('value') == REPLY,
+                f'The keyboard reply did not reach the focused field: {focused_input}')
         run_tool(driver, 'key', KEY_RETURN)
         expected = f'Review note on packet v1: {REPLY}'
 
@@ -640,6 +659,10 @@ def main():
         wait_for('the stuck card after opening its space', lambda: stuck_id in chat_state()['expandedCardIDs'])
         bring_to_front()
 
+        # Native expansion state survives workspace navigation. It can be
+        # current before the replacement web page has received its payload.
+        wait_for_page_element(f'archive-{stuck_id}')
+
         def archive_probe(tool, *arguments):
             try:
                 result = subprocess.run([str(tool), *map(str, arguments)], capture_output=True, text=True, timeout=3)
@@ -846,6 +869,20 @@ Both projects have settings."""
 
         evidence['status'] = 'passed'
     except Exception as error:
+        diagnostics = dict(error=str(error))
+        for name, read in [('chatState', chat_state),
+                           ('focusedInput', lambda: json.loads(run_tool(driver, 'focused', pid).stdout)),
+                           ('frontmostPID', lambda: run_tool(helper, 'frontmost-pid').stdout.strip()),
+                           ('accessibilityTree', lambda: run_tool(helper, 'dump', pid).stdout)]:
+            try:
+                diagnostics[name] = read()
+            except Exception as probe_error:
+                diagnostics[name] = dict(error=str(probe_error))
+        (artifacts / f'{PREFIX}-failure-diagnostics.json').write_text(json.dumps(diagnostics, indent=2))
+        try:
+            capture('coordinator-failed')
+        except Exception:
+            pass
         if route_context is not None:
             route_diagnostics(error)
         raise
