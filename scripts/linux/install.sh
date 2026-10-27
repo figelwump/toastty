@@ -13,6 +13,7 @@
 # Layout (PREFIX=~/.local):
 #   PREFIX/lib/toastty/bin/{toastty-linux,toastty,toastty-agent-shim}
 #   PREFIX/lib/toastty/lib/      libghostty.so, libtoastty-ghostty-gtk.so, Swift runtime
+#   PREFIX/lib/toastty/libexec/swift/linux/swift-backtrace   (Swift crash backtracer)
 #   PREFIX/lib/toastty/share/toastty/Resources/   (Sources/App/Resources: WebPanels, setup docs, …,
 #                                                  ToasttyAgentPluginBundle/, WorkflowExamples/skills/)
 #   PREFIX/lib/toastty/share/{ghostty,terminfo}/  (Ghostty shell integration + terminfo)
@@ -108,6 +109,17 @@ if [[ "$dry_run" != "1" ]]; then
       esac
     done
   done
+  # The Swift runtime hands crashes to swift-backtrace, which it looks up
+  # relative to libswiftCore (<root>/libexec/swift/linux). Without it a crash
+  # leaves no backtrace in the journal.
+  swift_bin="$(dirname "$(readlink -f "$(command -v swift)")")"
+  backtracer="$swift_bin/../libexec/swift/linux/swift-backtrace-static"
+  if [[ -x "$backtracer" ]]; then
+    mkdir -p "$libdir/libexec/swift/linux"
+    install -m 0755 "$backtracer" "$libdir/libexec/swift/linux/swift-backtrace"
+  else
+    echo "warning: swift-backtrace not found next to the Swift toolchain; crashes will have no backtrace" >&2
+  fi
   # The CLI and agent shim only search $ORIGIN: link the runtime next to them.
   for lib in "$libdir"/lib/*.so*; do
     ln -sf "../lib/$(basename "$lib")" "$libdir/bin/$(basename "$lib")"
