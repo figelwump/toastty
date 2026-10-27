@@ -435,11 +435,12 @@ private struct SubspaceRailStatusIcon: View {
     private static let cornerRadius: CGFloat = 1.5
 
     let status: SidebarSubspacePresentation.RowStatus
+    let isWaiting: Bool
     var isDoneTogglePreviewed = false
 
     var body: some View {
         switch status {
-        case .working:
+        case .working where isWaiting == false:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
         case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed,
              .review where isDoneTogglePreviewed:
@@ -447,7 +448,7 @@ private struct SubspaceRailStatusIcon: View {
                 .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
                 .overlay { checkGlyph(ToastyTheme.sidebarSubspaceDoneMark) }
-        case .idle:
+        case .idle, .working:
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
                 .frame(width: Self.markSize, height: Self.markSize)
@@ -1120,7 +1121,7 @@ struct SidebarView: View {
             let label = "\(item.title), \(TaskBoardPresentation.statusLine(item))"
             let open = { openFinishedTask(item) }
             HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-                SubspaceRailStatusIcon(status: .toShip, isDoneTogglePreviewed: false)
+                SubspaceRailStatusIcon(status: .toShip, isWaiting: false, isDoneTogglePreviewed: false)
                     .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
                     .accessibilityHidden(true)
                 Self.styledSessionNameText(item.title, isEmphasized: false)
@@ -1302,7 +1303,7 @@ struct SidebarView: View {
                 if showsUnreadSessionAccent(for: status.panelID, in: workspace) {
                     content.unreadSessionRowIDs.insert(rowID)
                 }
-                if status.status.kind == .working {
+                if status.showsWorkingIndicator {
                     content.workingSessionRowIDs.insert(rowID)
                 }
             }
@@ -2025,6 +2026,7 @@ struct SidebarView: View {
             projection: workspaceSessionStatus.projection,
             railState: SidebarSessionPresentation.sessionRailState(
                 for: status.kind,
+                isWaiting: workspaceSessionStatus.projection.isWaitingOnChildren,
                 showsUnreadSessionAccent: showsUnreadSessionAccent
             ),
             showsUnreadSessionAccent: showsUnreadSessionAccent,
@@ -2270,6 +2272,7 @@ struct SidebarView: View {
     ) -> some View {
         let railState = SidebarSessionPresentation.sessionRailState(
             for: status.kind,
+            isWaiting: projection.isWaitingOnChildren,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
         // Ready (unread), approval, and error: the states that want the user.
@@ -3497,9 +3500,11 @@ struct SidebarView: View {
         case .session:
             switch child.statusKind {
             case .working:
-                SessionChildActivityDot(
-                    phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: child.sidebarStableID)
-                )
+                if child.showsWorkingIndicator {
+                    SessionChildActivityDot(
+                        phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: child.sidebarStableID)
+                    )
+                }
             case .needsApproval, .error, .ready:
                 if let statusKind = child.statusKind {
                     sessionStatusChip(kind: statusKind)
@@ -4337,7 +4342,7 @@ struct SidebarView: View {
                     // The glyph stays in the rail, but the click target reaches
                     // into the row's padding and the gap beside the rail, so a
                     // near miss does not fall through and open the workspace.
-                    SubspaceRailStatusIcon(status: row.status, isDoneTogglePreviewed: isPreviewed)
+                    SubspaceRailStatusIcon(status: row.status, isWaiting: row.isWaiting, isDoneTogglePreviewed: isPreviewed)
                         .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
                         .padding(Self.subspaceDoneToggleHitOutset)
                         .contentShape(Rectangle())
@@ -4359,7 +4364,7 @@ struct SidebarView: View {
                 .accessibilityIdentifier("sidebar.workspace.subspace.doneToggle.\(row.id.uuidString)")
             }
         } else {
-            SubspaceRailStatusIcon(status: row.status)
+            SubspaceRailStatusIcon(status: row.status, isWaiting: row.isWaiting)
                 .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
                 .accessibilityHidden(true)
                 .onAppear {

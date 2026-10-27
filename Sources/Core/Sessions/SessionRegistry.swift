@@ -611,6 +611,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                   ancestorIDs.contains(candidate.sessionID) == false else {
                 return nil
             }
+            let projected = Self.projectedStatus(from: candidate, at: now)
             return SessionChildRow(
                 id: candidate.sessionID,
                 source: .session,
@@ -619,7 +620,8 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                     ?? candidate.agent.displayName,
                 context: candidate.status?.detail,
                 startedAt: candidate.startedAt,
-                statusKind: Self.projectedStatus(from: candidate, at: now)?.status.kind,
+                statusKind: projected?.status.kind,
+                isWaiting: projected?.projection.isWaitingOnChildren ?? false,
                 panelID: candidate.panelID,
                 workspaceID: candidate.workspaceID,
                 sessionID: candidate.sessionID

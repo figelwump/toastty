@@ -375,14 +375,16 @@ struct CoordinatorChatTests {
         #expect(state(nil).canSend == false)
     }
 
-    @Test func theChatShowsTheCoordinatorWorkingAsItsSidebarRowDoes() {
+    @Test func theChatShowsActiveWorkButNotWaitingOnBackgroundTasks() {
         func working(_ presentation: RemoteSessionPresentationStatus?, state: RemoteSessionState = .ready,
+                     waiting: SessionWaitingSummary? = nil,
                      status: CoordinatorSessionController.Status = .running(sessionID: "s1")) -> Bool {
             var summary = RemoteConversationSummary(
                 conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
                 state: state, inputAvailability: .unavailable(reason: .working), latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
             )
             summary.presentationStatus = presentation
+            summary.waiting = waiting
             return CoordinatorChatController.isWorking(status: status, snapshot: RemoteConversationSnapshot(summary: summary, pendingInteractions: []))
         }
         #expect(working(.working))
@@ -390,6 +392,9 @@ struct CoordinatorChatTests {
         #expect(working(.needsApproval) == false)
         #expect(working(nil, state: .working))
         #expect(working(nil) == false)
+        let backgroundWait = SessionWaitingSummary(agentCount: 0, processCount: 1, workflowCount: 0, taskCount: 0, items: [])
+        #expect(working(.working, waiting: backgroundWait) == false, "a background watch is not an active coordinator turn")
+        #expect(working(nil, state: .working, waiting: backgroundWait) == false, "waiting also overrides the provider fallback")
         #expect(working(.working, status: .starting) == false)
         #expect(CoordinatorChatController.isWorking(status: .running(sessionID: "s1"), snapshot: nil) == false)
     }

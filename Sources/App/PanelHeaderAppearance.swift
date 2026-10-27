@@ -32,7 +32,8 @@ struct PanelHeaderAppearance: Equatable {
     static func resolve(
         isFocused: Bool,
         hasUnreadNotification: Bool,
-        sessionStatusKind: SessionStatusKind?
+        sessionStatusKind: SessionStatusKind?,
+        isWaiting: Bool
     ) -> Self {
         if let unreadReason = unreadReason(
             hasUnreadNotification: hasUnreadNotification,
@@ -47,7 +48,7 @@ struct PanelHeaderAppearance: Equatable {
         }
 
         let treatment: PanelHeaderTreatment = isFocused ? .focused : .neutral
-        let indicatorState: SessionStatusIndicatorState = sessionStatusKind == .working ? .spinner : .hidden
+        let indicatorState: SessionStatusIndicatorState = sessionStatusKind?.showsWorkingIndicator(isWaiting: isWaiting) == true ? .spinner : .hidden
         return Self(treatment: treatment, indicatorState: indicatorState)
     }
 

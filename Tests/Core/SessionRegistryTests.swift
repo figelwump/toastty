@@ -1686,6 +1686,16 @@ struct SessionRegistryTests {
         #expect(waitingSummary.rowText(.full) == "1 background process · npm test")
         #expect(registry.sessionsByID["parent"]?.status?.kind == .ready)
 
+        let idleSummary = WorkspaceAgentSummary.make(from: registry.workspaceStatuses(for: workspaceID), workspaceID: workspaceID)
+        #expect(idleSummary.running == 1, "the waiting session is still alive")
+        #expect(idleSummary.active == 0, "the background process does not make the agent's turn active")
+
+        registry.updateStatus(sessionID: "parent", status: SessionStatus(kind: .working, summary: "Working"), at: now.addingTimeInterval(3))
+        let activeSummary = WorkspaceAgentSummary.make(from: registry.workspaceStatuses(for: workspaceID), workspaceID: workspaceID)
+        #expect(activeSummary.running == 1)
+        #expect(activeSummary.active == 1, "a new turn is active even while the background process remains")
+        registry.updateStatus(sessionID: "parent", status: SessionStatus(kind: .ready, summary: "Ready"), at: now.addingTimeInterval(4))
+
         // An activity and a task, or two tasks the provider gave one ID, keep
         // separate identities.
         let didSyncCollidingIDs = registry.syncBackgroundActivities(
@@ -1695,15 +1705,15 @@ struct SessionRegistryTests {
                 SessionBackgroundActivity(
                     id: "pending-0",
                     kind: .subagent,
-                    startedAt: now.addingTimeInterval(2),
-                    lastUpdatedAt: now.addingTimeInterval(2)
+                    startedAt: now.addingTimeInterval(5),
+                    lastUpdatedAt: now.addingTimeInterval(5)
                 ),
             ],
             pendingBackgroundTasks: [
                 SessionPendingBackgroundTask(id: "pending-0", kind: .task),
                 SessionPendingBackgroundTask(id: "pending-0", kind: .task),
             ],
-            at: now.addingTimeInterval(2)
+            at: now.addingTimeInterval(5)
         )
         #expect(didSyncCollidingIDs)
         let collidingItems = try #require(registry.workspaceStatuses(for: workspaceID).first?.waitingSummary?.items)
@@ -1715,11 +1725,11 @@ struct SessionRegistryTests {
             kind: .subagent,
             entries: [],
             pendingBackgroundTasks: [],
-            at: now.addingTimeInterval(3)
+            at: now.addingTimeInterval(6)
         )
         #expect(didClearPendingCount)
         let resumingStatus = try #require(
-            registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(4)).first
+            registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(7)).first
         )
         #expect(resumingStatus.status.kind == .working)
         #expect(resumingStatus.status.detail == "Resuming…")
@@ -2086,7 +2096,7 @@ struct SessionRegistryTests {
         #expect(waitingStatuses[0].projection == .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0))
         let waitingSummary = WorkspaceAgentSummary.make(from: waitingStatuses, workspaceID: workspaceID)
         #expect(waitingSummary.running == 2)
-        #expect(waitingSummary.active == 2)
+        #expect(waitingSummary.active == 1, "only the child has an active turn; the parent is waiting")
 
         registry.stopSession(sessionID: "parent", at: now.addingTimeInterval(4))
 
@@ -2140,6 +2150,40 @@ struct SessionRegistryTests {
         let childHomeStatuses = registry.workspaceStatuses(for: childWorkspaceID)
         #expect(childHomeStatuses.map(\.sessionID) == ["child"])
         #expect(childHomeStatuses.first?.parentSessionID == "parent")
+
+        registry.syncBackgroundActivities(
+            sessionID: "child",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTasks: [SessionPendingBackgroundTask(id: "shell", kind: .process)],
+            at: now.addingTimeInterval(4)
+        )
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(5)
+        )
+        let waitingParent = try #require(registry.workspaceStatuses(for: parentWorkspaceID, at: now.addingTimeInterval(5)).first)
+        let waitingChild = try #require(waitingParent.children.first)
+        #expect(waitingChild.statusKind == .working, "waiting preserves the child's lifecycle status")
+        #expect(waitingChild.isWaiting)
+        #expect(waitingChild.showsWorkingIndicator == false)
+        let waitingSummary = WorkspaceAgentSummary.make(from: [waitingParent])
+        #expect(waitingSummary.running == 2)
+        #expect(waitingSummary.active == 0)
+
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(6)
+        )
+        let activeParent = try #require(registry.workspaceStatuses(for: parentWorkspaceID, at: now.addingTimeInterval(6)).first)
+        let activeChild = try #require(activeParent.children.first)
+        #expect(activeChild.isWaiting == false)
+        #expect(activeChild.showsWorkingIndicator)
+        let activeSummary = WorkspaceAgentSummary.make(from: [activeParent])
+        #expect(activeSummary.running == 2)
+        #expect(activeSummary.active == 1, "a resumed child turn is active while its background task remains")
     }
 
     @Test(arguments: [false, true])

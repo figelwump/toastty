@@ -2046,6 +2046,27 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceTabWaitDoesNotSpinButAnActiveSiblingDoes() {
+        let panelID = UUID()
+        let siblingID = UUID()
+        let tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID, scratchpadPanelID: siblingID, sessionLink: nil
+        )
+        var waiting = makeAgentStatus(.claude, .working, panelID: panelID)
+        waiting.projection = .waitingOnChildren(childCount: 0, pendingBackgroundTaskCount: 1)
+        XCTAssertEqual(WorkspaceView.workspaceTabSessionIndicatorState(
+            tab: tab, hasUnread: false, panelSessionStatusesByPanelID: [panelID: waiting]
+        ), .hidden)
+        let working = makeAgentStatus(.codex, .working, panelID: siblingID)
+        XCTAssertEqual(WorkspaceView.workspaceTabSessionIndicatorState(
+            tab: tab, hasUnread: false, panelSessionStatusesByPanelID: [panelID: waiting, siblingID: working]
+        ), .spinner)
+        waiting.projection = .resuming
+        XCTAssertEqual(WorkspaceView.workspaceTabSessionIndicatorState(
+            tab: tab, hasUnread: false, panelSessionStatusesByPanelID: [panelID: waiting]
+        ), .spinner)
+    }
+
     func testWorkspaceTabSessionIndicatorStateUnreadDotTakesPrecedence() {
         let panelID = UUID()
         let tab = makeTerminalWorkspaceTab(panelID: panelID, unreadPanelIDs: [panelID])

@@ -692,10 +692,11 @@ final class CoordinatorChatController {
                      working: working, turnStartedAt: working ? snapshot?.summary.turnStartedAt : nil)
     }
 
-    /// Whether the coordinator's turn runs: the state its sidebar row shows,
-    /// else the provider's own state.
+    /// Whether the coordinator's own turn runs. A background watch can keep
+    /// its projected status working after the turn has ended.
     static func isWorking(status: CoordinatorSessionController.Status, snapshot: RemoteConversationSnapshot?) -> Bool {
         guard case .running = status, let summary = snapshot?.summary else { return false }
+        guard summary.waiting == nil else { return false }
         if let presentation = summary.presentationStatus { return presentation == .working }
         return summary.state == .working
     }
@@ -871,8 +872,9 @@ final class CoordinatorChatController {
     /// `coordinator.chat.state`, for automation and checks.
     func stateSnapshot() -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        let snapshot = conversationSnapshot()
         let inputState: String
-        switch conversationSnapshot()?.summary.inputAvailability {
+        switch snapshot?.summary.inputAvailability {
         case .openPrompt?: inputState = "openPrompt"
         case .unavailable(reason: .working)?: inputState = "working"
         case .pendingInteraction?: inputState = "interaction"
@@ -925,6 +927,7 @@ final class CoordinatorChatController {
             "sendHint": optional(lastPayload?.coordinator.sendHint),
             "inputState": .string(inputState),
             "working": .bool(lastPayload?.coordinator.working ?? false),
+            "waiting": .bool(snapshot?.summary.waiting != nil),
             "hasUserRequests": .bool(lastPayload?.hasUserRequests ?? false),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),
