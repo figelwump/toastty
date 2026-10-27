@@ -668,7 +668,17 @@ final class CoordinatorChatController {
         if let configError = taskCoordinator.board?.configError {
             detail = "tasks.toml: \(configError)"
         }
-        return .init(title: "Coordinator", detail: detail, canSend: canSend, sendHint: hint, hasTerminal: session.workspaceID != nil)
+        let working = Self.isWorking(status: session.status, snapshot: snapshot)
+        return .init(title: "Coordinator", detail: detail, canSend: canSend, sendHint: hint, hasTerminal: session.workspaceID != nil,
+                     working: working, turnStartedAt: working ? snapshot?.summary.turnStartedAt : nil)
+    }
+
+    /// Whether the coordinator's turn runs: the state its sidebar row shows,
+    /// else the provider's own state.
+    static func isWorking(status: CoordinatorSessionController.Status, snapshot: RemoteConversationSnapshot?) -> Bool {
+        guard case .running = status, let summary = snapshot?.summary else { return false }
+        if let presentation = summary.presentationStatus { return presentation == .working }
+        return summary.state == .working
     }
 
     private func conversationSnapshot() -> RemoteConversationSnapshot? {
@@ -858,6 +868,7 @@ final class CoordinatorChatController {
                 return .object([
                     "type": .string(line.type.rawValue),
                     "id": .string(line.id),
+                    "at": .string(line.at.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))),
                     "text": optional(line.text ?? line.name),
                     "role": optional(line.role),
                     "aboutTaskID": optional(line.aboutTaskID),
@@ -866,6 +877,7 @@ final class CoordinatorChatController {
                 return .object([
                     "type": .string("card"),
                     "id": .string(card.id),
+                    "at": .string(card.at.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))),
                     "kind": .string(card.kind),
                     "taskID": optional(card.task?.id),
                     "packetVersion": card.packet.map { .int($0.version) } ?? .null,
@@ -896,6 +908,7 @@ final class CoordinatorChatController {
             "canSend": .bool(lastPayload?.coordinator.canSend ?? false),
             "sendHint": optional(lastPayload?.coordinator.sendHint),
             "inputState": .string(inputState),
+            "working": .bool(lastPayload?.coordinator.working ?? false),
             "hasUserRequests": .bool(lastPayload?.hasUserRequests ?? false),
             "items": .array(items),
             "expandedCardIDs": .array(expandedCardIDs.map(AutomationJSONValue.string)),

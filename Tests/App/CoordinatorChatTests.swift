@@ -356,6 +356,25 @@ struct CoordinatorChatTests {
         #expect(state(nil).canSend == false)
     }
 
+    @Test func theChatShowsTheCoordinatorWorkingAsItsSidebarRowDoes() {
+        func working(_ presentation: RemoteSessionPresentationStatus?, state: RemoteSessionState = .ready,
+                     status: CoordinatorSessionController.Status = .running(sessionID: "s1")) -> Bool {
+            var summary = RemoteConversationSummary(
+                conversationID: RemoteConversationID(), provider: .claude, title: "Coordinator",
+                state: state, inputAvailability: .unavailable(reason: .working), latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
+            )
+            summary.presentationStatus = presentation
+            return CoordinatorChatController.isWorking(status: status, snapshot: RemoteConversationSnapshot(summary: summary, pendingInteractions: []))
+        }
+        #expect(working(.working))
+        #expect(working(.ready, state: .working) == false, "the sidebar's state wins over the provider's")
+        #expect(working(.needsApproval) == false)
+        #expect(working(nil, state: .working))
+        #expect(working(nil) == false)
+        #expect(working(.working, status: .starting) == false)
+        #expect(CoordinatorChatController.isWorking(status: .running(sessionID: "s1"), snapshot: nil) == false)
+    }
+
     @Test func aReplyGoesToTheTaskAsAReviewNoteAndTakesItOutOfNeedsYou() async throws {
         let fixture = try await Fixture()
         let task = try await fixture.taskWithPacket()
@@ -1046,14 +1065,21 @@ struct CoordinatorChatTests {
             ConversationEvent(conversationID: conversation, sequence: sequence, eventID: "\(sequence)", timestamp: at, provider: .claude, payload: payload)
         }
         transcript.follow(first)
-        transcript.apply(event(1, .userMessage(.init(text: "What needs me?")), in: first))
-        transcript.apply(event(2, .toolStarted(.init(callID: "c1", toolName: "Bash", detail: "toastty task list")), in: first))
-        transcript.apply(event(3, .toolFinished(.init(callID: "c1", outcome: .succeeded)), in: first))
-        transcript.apply(event(4, .assistantMessage(.init(text: "Two tasks need you.")), in: first))
-        transcript.apply(event(5, .assistantMessage(.init(text: "  ")), in: first))
-        #expect(transcript.items.map(\.type) == [.message, .tool, .message])
-        #expect(transcript.items[1].outcome == "succeeded")
-        #expect(transcript.items.map(\.role) == ["user", nil, "assistant"])
+        transcript.apply(event(1, .userMessage(.init(text: CoordinatorSessionController.initialPrompt)), in: first))
+        transcript.apply(event(2, .userMessage(.init(text: "What needs me?")), in: first))
+        transcript.apply(event(3, .assistantMessage(.init(text: "Reading the task list.", phase: .commentary)), in: first))
+        transcript.apply(event(4, .toolStarted(.init(callID: "c1", toolName: "Bash", detail: "toastty task list")), in: first))
+        transcript.apply(event(5, .toolFinished(.init(callID: "c1", outcome: .succeeded)), in: first))
+        transcript.apply(event(6, .assistantMessage(.init(text: "Two tasks need you.", phase: .final)), in: first))
+        transcript.apply(event(7, .assistantMessage(.init(text: "  ")), in: first))
+        transcript.apply(event(8, .assistantMessage(.init(text: "A provider without phases")), in: first))
+        #expect(transcript.items.map(\.type) == [.message, .message, .message, .tool, .message, .message])
+        #expect(transcript.items[3].outcome == "succeeded")
+        #expect(transcript.items.map(\.role) == ["user", "user", "assistant", nil, "assistant", "assistant"])
+        // The page folds commentary with tool calls and hides the launch
+        // prompt; a message with no phase shows as a reply.
+        #expect(transcript.items.map(\.phase) == [nil, nil, "commentary", nil, "final", nil])
+        #expect(transcript.items.map(\.launch) == [true, nil, nil, nil, nil, nil])
 
         transcript.follow(RemoteConversationID(rawValue: UUID()))
         #expect(transcript.items.last?.text == "A new coordinator session started")

@@ -71,6 +71,12 @@ export type ChatItem =
       /// Set on a question the user asked from a card: the task it is about.
       aboutTaskID?: string | null;
       aboutTitle?: string | null;
+      /// An assistant message between tool calls, which the chat folds with
+      /// them, or the turn's final message. Absent when the provider does
+      /// not say; such a message shows.
+      phase?: "commentary" | "final" | null;
+      /// The automatic first message of a coordinator session; not shown.
+      launch?: boolean | null;
     }
   | { type: "tool"; id: string; at: string; name: string; detail: string | null; outcome: "running" | "succeeded" | "failed" | "unknown" }
   | { type: "status"; id: string; at: string; text: string }
@@ -157,6 +163,10 @@ export interface ChatState {
     canSend: boolean;
     sendHint: string | null;
     hasTerminal: boolean;
+    /// The coordinator's turn runs, as its sidebar row shows.
+    working?: boolean;
+    /// When that turn began, when the provider reports it.
+    turnStartedAt?: string | null;
   };
   items: ChatItem[];
   projects: ChatProject[];
@@ -219,6 +229,13 @@ export interface ChatUIState {
   /// Task or route identities waiting for acknowledgement.
   pendingCards: Set<string>;
   confirmingMerge: string | null;
+  /// Folds of the coordinator's work that the user opened.
+  expandedWork: Set<string>;
+  /// A message the user just sent to the coordinator, so the chat shows it
+  /// working before the app reports the turn. `replies` are the final
+  /// messages the chat had then; a new one ends the wait. `queued` is set
+  /// while the message waits behind a turn that was running at the send.
+  awaiting: { since: number; token: number; sawWorking: boolean; queued: boolean; replies: Set<string> } | null;
 }
 
 /// What the user is doing on All tasks.

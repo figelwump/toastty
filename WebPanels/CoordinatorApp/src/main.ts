@@ -7,6 +7,7 @@ import { currentProject, projectID } from "./projects";
 import { post } from "./bridge";
 import { addressFor, addressMatches, pickedAddress } from "./composer";
 import type { AddressPick, ComposerAddress } from "./composer";
+import { durationLabel } from "./turns";
 import type { ChatItem, ChatState } from "./types";
 
 const ui = newUIState();
@@ -131,8 +132,33 @@ function render(preserveFocus = true) {
   renderComposerOptions();
 }
 
+/// Final messages, which end a wait for the coordinator.
+function replyIDs(items: ChatItem[]): Set<string> {
+  return new Set(items.filter((item) => item.type === "message" && item.role === "assistant" && item.phase !== "commentary").map((item) => item.id));
+}
+
+/// Shows the coordinator working from the moment a message to it is sent.
+function awaitCoordinator(token: number) {
+  ui.awaiting = { since: Date.now(), token, sawWorking: false, queued: state?.coordinator.working === true, replies: replyIDs(state?.items ?? []) };
+}
+
+/// The app's own working state takes over from a send's wait once it
+/// reports the turn, a reply arrives, the send fails, or a minute passes.
+/// A message sent during a turn goes in when that turn ends, so that end
+/// starts the wait again instead of ending it.
+function settleAwaiting(next: ChatState) {
+  const waiting = ui.awaiting;
+  if (!waiting) return;
+  if (next.ack?.token === waiting.token && !next.ack.ok) ui.awaiting = null;
+  else if (next.coordinator.working) waiting.sawWorking = !waiting.queued;
+  else if (waiting.queued) ui.awaiting = { ...waiting, since: Date.now(), queued: false, sawWorking: false, replies: replyIDs(next.items) };
+  else if (waiting.sawWorking || Date.now() - waiting.since > 60_000
+    || [...replyIDs(next.items)].some((id) => !waiting.replies.has(id))) ui.awaiting = null;
+}
+
 function receive(next: ChatState) {
   retainTaskCards(state, next, ui);
+  settleAwaiting(next);
   state = next;
   collapseNewlySuperseded(next, ui);
   if (next.ack && pendingSends.has(next.ack.token)) {
@@ -231,6 +257,7 @@ function sendCard(item: Extract<ChatItem, { type: "card" }>, text: string, clear
     questionID,
   };
   post({ type: target === "task" ? "reply" : "ask", ...fields });
+  if (target === "coordinator") awaitCoordinator(token);
   render();
 }
 
@@ -249,6 +276,13 @@ document.addEventListener("click", (event) => {
         render();
       }
       break;
+    case "toggle-work": {
+      const id = data.work!;
+      if (ui.expandedWork.has(id)) ui.expandedWork.delete(id);
+      else ui.expandedWork.add(id);
+      render();
+      break;
+    }
     case "expand": {
       const id = data.id!;
       if (ui.expanded.has(id)) ui.expanded.delete(id);
@@ -279,7 +313,9 @@ document.addEventListener("click", (event) => {
       const index = Number(data.index);
       if (!item || item.task || item.kind !== "question" || item.answer !== null || item.answerPending || !state?.coordinator.canSend
         || data.index == null || !/^\d+$/.test(data.index) || !Number.isInteger(index) || index < 0 || index >= item.options.length || ui.pendingCards.has(cardStateKey(item))) break;
-      post({ type: "answerRoute", questionID: item.id, optionIndex: index, token: track(null, null, cardStateKey(item)) });
+      const token = track(null, null, cardStateKey(item));
+      post({ type: "answerRoute", questionID: item.id, optionIndex: index, token });
+      awaitCoordinator(token);
       render();
       break;
     }
@@ -409,6 +445,8 @@ function sendComposer() {
   } else if (resolved?.address.kind === "project") {
     post({ type: "project", projectID: resolved.address.id, text: resolved.text, token });
   } else post({ type: "send", text, token });
+  awaitCoordinator(token);
+  render(false);
   scroll.scrollTop = scroll.scrollHeight;
 }
 
@@ -426,6 +464,18 @@ composerInput.addEventListener("keydown", (event) => {
     sendComposer();
   }
 });
+
+// The working row's time ticks without rebuilding the chat. A send's wait
+// that the app never answered ends after a minute.
+setInterval(() => {
+  if (ui.awaiting && !state?.coordinator.working && Date.now() - ui.awaiting.since > 60_000) {
+    ui.awaiting = null;
+    render();
+  }
+  for (const element of scroll.querySelectorAll<HTMLElement>("[data-since]")) {
+    element.textContent = durationLabel(Date.now() - Date.parse(element.dataset.since!));
+  }
+}, 1000);
 
 window.toasttyCoordinatorChat = { receive };
 post({ type: "ready" });

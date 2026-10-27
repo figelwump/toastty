@@ -4,6 +4,8 @@
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
 import { currentProject, projectForOption, projectID, projectsFor } from "./projects";
+import { durationLabel, foldWork, latestStep } from "./turns";
+import type { WorkFold } from "./turns";
 import type { ChatItem, ChatPacket, ChatScreenshot, ChatState, ChatTask, ChatUIState, ReportPacket, Tone } from "./types";
 
 export function esc(value: unknown): string {
@@ -59,7 +61,7 @@ function badge(text: string, tone: Tone): string {
 }
 
 export function newUIState(): ChatUIState {
-  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), draftContext: new Map(), replyTarget: new Map(), pendingCards: new Set(), confirmingMerge: null };
+  return { expanded: new Set(), superseded: new Set(), drafts: new Map(), draftContext: new Map(), replyTarget: new Map(), pendingCards: new Set(), confirmingMerge: null, expandedWork: new Set(), awaiting: null };
 }
 
 /// Folds a card that a newer packet just replaced, once; the user can open
@@ -148,20 +150,64 @@ export function visibleExpandedIDs(state: ChatState, ui: ChatUIState): string[] 
   return [...ui.expanded].filter((id) => visible.has(id));
 }
 
-export function renderTimeline(state: ChatState, ui: ChatUIState): string {
-  if (state.items.length === 0) {
+export function renderTimeline(state: ChatState, ui: ChatUIState, now = Date.now()): string {
+  const working = state.coordinator.working === true;
+  if (state.items.length === 0 && !working && !ui.awaiting) {
     return `<div class="empty-chat"><div class="cmark big">C</div><p>Tell the coordinator what you want done.</p>`
       + `<p class="dim">It routes each request to a task in the right project and posts here when one needs you.</p></div>`;
   }
-  return visibleItems(state).map((item) => renderItem(item, ui, state.coordinator.canSend, state)).join("");
+  const entries = foldWork(visibleItems(state), working, state.coordinator.turnStartedAt);
+  const html = entries.map((entry) => entry.type === "work"
+    ? renderWork(entry.fold, ui, state, now)
+    : renderItem(entry.item, ui, state.coordinator.canSend, state)).join("");
+  const live = entries.some((entry) => entry.type === "work" && entry.fold.live);
+  // Until the turn's first step arrives, the row stands alone.
+  return html + ((working || ui.awaiting) && !live ? renderActivity(null, state.coordinator.turnStartedAt ?? (ui.awaiting ? new Date(ui.awaiting.since).toISOString() : null), now) : "");
+}
+
+/// "worked 48s"; a run that took under a second says only "worked".
+function workedLabel(milliseconds: number): string {
+  return milliseconds >= 1000 ? `worked ${durationLabel(milliseconds)}` : "worked";
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/// The working row's text, with its time ticking from `since`.
+function activityLabel(step: string | null, since: string | null, now: number): string {
+  const elapsed = since && Number.isFinite(Date.parse(since))
+    ? ` · <span class="elapsed" data-since="${esc(since)}">${durationLabel(now - Date.parse(since))}</span>` : "";
+  return `<span id="coordinator-activity" class="work-label">Working${elapsed}${step ? `<span class="work-step">${esc(step)}</span>` : ""}</span>`;
+}
+
+function renderActivity(step: string | null, since: string | null, now: number): string {
+  return `<div class="work" data-item="coordinator-activity-row"><div class="work-strip live"><span class="tool-mark running"></span>${activityLabel(step, since, now)}</div></div>`;
+}
+
+/// A run of work as one line; the user can open it to see each step.
+export function renderWork(fold: WorkFold, ui: ChatUIState, state: ChatState | undefined, now = Date.now()): string {
+  const open = ui.expandedWork.has(fold.id);
+  const counts = [fold.toolCount ? plural(fold.toolCount, "tool call") : "", fold.noteCount ? plural(fold.noteCount, "note") : ""].filter(Boolean);
+  const label = fold.live
+    ? activityLabel(latestStep(fold), state?.coordinator.turnStartedAt ?? fold.startedAt, now)
+    : `<span class="work-label">${esc([workedLabel(Date.parse(fold.endedAt) - Date.parse(fold.startedAt)), ...counts].join(" · "))}</span>`;
+  // The strip, not the whole fold, anchors scrolling: an open fold's own
+  // lines anchor the reader inside it.
+  return `<div class="work">`
+    + `<button type="button" id="work-${esc(fold.id)}" class="work-strip${fold.live ? " live" : ""}" data-item="work-${esc(fold.id)}" data-act="toggle-work" data-work="${esc(fold.id)}" aria-expanded="${open}">`
+    + `<span class="${fold.live ? "tool-mark running" : `work-chev${open ? " open" : ""}`}"></span>${label}</button>`
+    + (open ? `<div class="work-items">${fold.items.map((item) => renderItem(item, ui, state?.coordinator.canSend ?? true, state)).join("")}</div>` : "")
+    + `</div>`;
 }
 
 export function renderItem(item: ChatItem, ui: ChatUIState, coordinatorCanSend = true, state?: ChatState): string {
   switch (item.type) {
     case "message":
       if (item.role === "assistant") {
-        return `<div class="msg-co" data-item="${esc(item.id)}"><span class="cmark">C</span><div class="bubble md">${markdown(item.text)}</div></div>`;
+        return `<div class="msg-co${item.phase === "commentary" ? " commentary" : ""}" data-item="${esc(item.id)}"><span class="cmark">C</span><div class="bubble md">${markdown(item.text)}</div></div>`;
       }
+      if (item.launch) return "";
       return `<div class="msg-user" data-item="${esc(item.id)}">`
         + (item.aboutTaskID
           ? `<button class="about" data-act="focus-task" data-task="${esc(item.aboutTaskID)}" title="Show the task's card">About ${esc(item.aboutTitle ?? "a task")}</button>`
