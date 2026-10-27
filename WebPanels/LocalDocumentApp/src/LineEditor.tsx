@@ -145,6 +145,8 @@ export function LocalDocumentLineEditor(props: {
           history(),
           drawSelection(),
           lineEditorTheme,
+          // Markdown is prose, so it wraps; code keeps one row per line.
+          ...(props.bootstrap.format === "markdown" ? [EditorView.lineWrapping] : []),
           keymap.of([
             { key: "Tab", run: indent("indent"), shift: indent("outdent") },
             ...historyKeymap,
