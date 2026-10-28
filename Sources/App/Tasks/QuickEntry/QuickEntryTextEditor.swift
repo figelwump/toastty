@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import SwiftUI
 
 /// The task text field. An `NSTextView`, so the panel can handle Esc,
@@ -90,9 +91,9 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         }
         if context.coordinator.lastFocusRequestID != focusRequestID {
             context.coordinator.lastFocusRequestID = focusRequestID
-            // The panel may not be key yet on the first pass.
+            // Leave the SwiftUI update before changing AppKit focus.
             DispatchQueue.main.async {
-                textView.window?.makeFirstResponder(textView)
+                textView.requestFocus()
             }
         }
     }
@@ -130,6 +131,36 @@ final class QuickEntryNSTextView: NSTextView {
     var onCancel: () -> Void = {}
     var onPasteAttachments: (NSPasteboard) -> Bool = { _ in false }
     weak var dropTarget: QuickEntryDropTarget?
+
+    private var hasPendingFocusRequest = false
+
+    /// SwiftUI can update the editor before it attaches to the panel.
+    /// Keep that request until AppKit can assign its first responder.
+    func requestFocus() {
+        hasPendingFocusRequest = true
+        applyPendingFocus()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard hasPendingFocusRequest, window != nil else { return }
+        // Attachment can happen inside SwiftUI layout too.
+        DispatchQueue.main.async { [weak self] in self?.applyPendingFocus() }
+    }
+
+    private func applyPendingFocus() {
+        guard hasPendingFocusRequest, let window else { return }
+        // A request waits only for attachment. Do not retry a refused
+        // request on a later attachment, after the user moves focus.
+        hasPendingFocusRequest = false
+        guard isEditable else { return }
+        if window.makeFirstResponder(self) == false {
+            ToasttyLog.debug("Could not focus the quick entry editor", category: .tasks, metadata: [
+                "window_number": String(window.windowNumber),
+                "is_key_window": String(window.isKeyWindow),
+            ])
+        }
+    }
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)

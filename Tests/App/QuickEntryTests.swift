@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreState
 import Foundation
+import SwiftUI
 import Testing
 @testable import ToasttyApp
 
@@ -141,6 +142,7 @@ struct QuickEntryTests {
         let fixture = harness.fixture
         harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
         let model = try #require(harness.controller.model)
+        let panel = try #require(harness.controller.panel)
         #expect(harness.controller.isPresented)
         #expect(harness.controller.panel?.styleMask.contains(.nonactivatingPanel) == true)
 
@@ -159,6 +161,7 @@ struct QuickEntryTests {
 
         try harness.pressCommandReturn()
         await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        await fixture.waitUntil("the submitted window is hidden") { panel.isVisible == false }
 
         let record = try #require(fixture.coordinator.records.records.last)
         #expect(record.source == .quickEntry)
@@ -281,14 +284,20 @@ struct QuickEntryTests {
         let harness = try Harness()
         let fixture = harness.fixture
         harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
         let model = try #require(harness.controller.model)
         try harness.type("Never mind")
         model.attachText("notes", named: "notes.txt")
         #expect(harness.stagedDirectories.count == 1)
+        harness.controller.openPicker(.workspace)
+        let pickerPanel = try #require(harness.controller.pickerPanel)
 
         try harness.textView().cancelOperation(nil)
 
         #expect(harness.controller.isPresented == false)
+        #expect(panel.isVisible == false)
+        #expect(pickerPanel.isVisible == false)
+        #expect(harness.controller.pickerPanel == nil)
         #expect(harness.stagedDirectories.isEmpty)
         #expect(fixture.coordinator.records.records.isEmpty)
     }
@@ -422,6 +431,47 @@ struct QuickEntryTests {
         // ⌘⌫ deletes to the start of the line, in the text, not in a menu.
         try harness.pressCommand("\u{7F}", keyCode: kVK_Delete, in: panel)
         #expect(harness.controller.model?.text == "First line\n")
+        harness.controller.dismiss()
+    }
+
+    @Test func focusRequestedBeforeTheEditorHasAWindowIsAppliedWhenItAttaches() async throws {
+        let harness = try Harness()
+        let panel = QuickEntryPanel()
+        defer { panel.close() }
+        let content = NSView(frame: NSRect(origin: .zero, size: QuickEntryPanel.defaultSize))
+        panel.contentView = content
+        let otherField = NSTextField(string: "Other field")
+        content.addSubview(otherField)
+        #expect(panel.makeFirstResponder(otherField))
+
+        let editor = QuickEntryNSTextView()
+        editor.requestFocus()
+        #expect(editor.window == nil)
+        content.addSubview(editor)
+
+        await harness.fixture.waitUntil("the attached editor takes focus") { panel.firstResponder === editor }
+    }
+
+    @Test func aQueuedHeightChangeDoesNotResizeTheClosedPanelOrItsReplacement() async throws {
+        let harness = try Harness()
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let hostingView = try #require(panel.contentView?.subviews.first as? NSHostingView<QuickEntryView>)
+        let oldFrame = panel.frame
+        // SwiftUI reports a new height, then the user cancels before the
+        // controller's deferred resize runs.
+        hostingView.rootView.onHeightChange(oldFrame.height + 100)
+        harness.controller.dismiss()
+        harness.controller.present(prefill: .empty)
+        let replacement = try #require(harness.controller.panel)
+        let replacementFrame = replacement.frame
+        // Use the same queue as the deferred geometry callback.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(panel.isVisible == false)
+        #expect(panel.frame == oldFrame)
+        #expect(replacement.frame == replacementFrame)
         harness.controller.dismiss()
     }
 

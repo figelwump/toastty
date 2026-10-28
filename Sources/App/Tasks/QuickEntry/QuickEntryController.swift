@@ -225,10 +225,13 @@ final class QuickEntryController: ObservableObject {
                 dropTarget: dropTarget,
                 attachFiles: { [weak self] in self?.chooseFiles() },
                 togglePicker: { [weak self] kind in self?.togglePicker(kind) },
-                onHeightChange: { [weak panel] height in
+                onHeightChange: { [weak self, weak panel] height in
                     // Called during SwiftUI layout; resizing the window there
                     // would start a layout pass inside the current one.
-                    DispatchQueue.main.async { panel?.fitContentHeight(height) }
+                    DispatchQueue.main.async { [weak self, weak panel] in
+                        guard let self, let panel, self.panel === panel else { return }
+                        panel.fitContentHeight(height)
+                    }
                 }
             ),
             dropTarget: dropTarget
@@ -258,6 +261,8 @@ final class QuickEntryController: ObservableObject {
         refreshCodexModels()
         ToasttyLog.info("Opened the quick entry panel", category: .tasks, metadata: [
             "from_app": previousApplication?.bundleIdentifier ?? "toastty",
+            "window_number": String(panel.windowNumber),
+            "is_key_window": String(panel.isKeyWindow),
         ])
     }
 
@@ -295,11 +300,18 @@ final class QuickEntryController: ObservableObject {
                 screenFrame: $0.frame
             )
         }
-        panel.orderOut(nil)
-        panel.contentView = nil
+        let model = self.model
+        let windowNumber = panel.windowNumber
+        // Clear presentation before AppKit sends window-close callbacks.
         self.panel = nil
+        self.model = nil
+        panel.close()
+        panel.contentView = nil
         model?.close()
-        model = nil
+        ToasttyLog.info("Closed the quick entry panel", category: .tasks, metadata: [
+            "window_number": String(windowNumber),
+            "is_visible": String(panel.isVisible),
+        ])
     }
 
     /// Gives focus back: to the app that was in front, or to the Toastty
