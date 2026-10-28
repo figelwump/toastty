@@ -541,7 +541,7 @@ Notable action-specific behavior:
 - `coordinator.tasks.show`
   - opens All tasks in the coordinator workspace's right panel beside the
     chat; returns the `coordinator.status` object.
-  - optional `group` (`needsYou`, `running`, `toShip`, `done` or `archived`)
+  - optional `group` (`needsYou`, `running`, `idle`, `toShip`, `done` or `archived`)
     opens that group and selects its first row. Optional `project`, which
     needs `group`, selects the window's shared project filter by project root
     or unique display title, as the sidebar's To ship and Done counts do.
@@ -782,7 +782,7 @@ the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`
 worktree's commit then, or `null`),
 `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
-`group` (`needsYou`, `running`, `toShip`, `done`, or `archived`),
+`group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`),
 `needsUser`, and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.

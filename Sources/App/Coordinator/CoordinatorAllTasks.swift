@@ -79,6 +79,7 @@ enum CoordinatorAllTasks {
         switch group {
         case .needsYou: "needsYou"
         case .running: "running"
+        case .idle: "idle"
         case .toShip: "toShip"
         case .done: "done"
         case .archived: "archived"

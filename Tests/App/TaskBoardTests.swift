@@ -116,11 +116,11 @@ struct TaskBoardTests {
         let watched = try #require(items.first { $0.id == .taskSpace(untracked) })
         #expect(watched.record == nil)
         #expect(watched.projectTitle == "toastty")
-        #expect(watched.stage == .running)
+        #expect(watched.stage == .idle)
         let tracked = try #require(items.first { $0.id == .task(task.id) })
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         #expect(tracked.taskSpaceWorkspaceID == taskSpace)
-        #expect(tracked.stage.group == .running)
+        #expect(tracked.stage.group == .idle)
         // A task space with a record is listed once, as its task.
         #expect(items.contains { $0.id == .taskSpace(taskSpace) } == false)
 
@@ -342,8 +342,8 @@ struct TaskBoardTests {
         let panel = try #require(task.operation.taskSpace?.panelID)
         func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
 
-        // Started but no turn finished yet: still running.
-        #expect(try item().stage == .running)
+        // Started but no turn finished yet: idle.
+        #expect(try item().stage == .idle)
 
         fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
         #expect(try item().stage == .running)

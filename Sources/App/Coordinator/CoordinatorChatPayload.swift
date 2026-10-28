@@ -247,6 +247,7 @@ struct CoordinatorChatTaskView: Encodable, Equatable {
         switch stage {
         // Amber is for what needs the user; working stays calm.
         case .running: ("working", "working")
+        case .idle: ("idle", "plain")
         case .toShip: ("merged · to ship", "violet")
         case .done: ("done", "green")
         case .archived: ("archived", "plain")

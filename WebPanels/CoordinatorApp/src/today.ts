@@ -25,6 +25,7 @@ export function renderToday(state: ChatState, now: Date): string {
   const group = (id: string) => rows.filter((row) => row.group === id);
   const needsYou = group("needsYou");
   const running = group("running");
+  const idle = group("idle");
   const toShip = group("toShip");
   const completed = (state.today?.completed ?? []).flatMap((completion) => {
     const row = rows.find((candidate) => candidate.id === completion.rowID);
@@ -37,5 +38,6 @@ export function renderToday(state: ChatState, now: Date): string {
     + `</div>`
     + section("needsYou", "Needs you", needsYou.map((row) => todayRow(row, now)), "Nothing needs you.")
     + section("running", "Running", running.map((row) => todayRow(row, now)), "No tasks running.")
+    + section("idle", "Idle", idle.map((row) => todayRow(row, now)), "No idle tasks.")
     + section("completed", "Merged or released today", completed, "Nothing merged or released today.");
 }

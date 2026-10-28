@@ -3,11 +3,12 @@ import Foundation
 /// Where a task stands: worked out from its record and from what Toastty
 /// sees now, never stored, so it cannot go stale. The rules are checked in
 /// order and the first match wins: a stopped cleanup, Archived, Done, To
-/// ship, Needs you, Running. Setup progress is Running; setup that needs
+/// ship, Needs you, Running, Idle. Setup progress is Running; setup that needs
 /// the user is Needs you.
 public enum TaskStage: Equatable, Sendable {
     case needsYou(Attention)
     case running
+    case idle
     case toShip
     case done
     case archived
@@ -47,6 +48,7 @@ public enum TaskStage: Equatable, Sendable {
     public enum Group: Int, CaseIterable, Comparable, Sendable {
         case needsYou
         case running
+        case idle
         case toShip
         case done
         case archived
@@ -61,6 +63,7 @@ public enum TaskStage: Equatable, Sendable {
         switch self {
         case .needsYou: .needsYou
         case .running: .running
+        case .idle: .idle
         case .toShip: .toShip
         case .done: .done
         case .archived: .archived
@@ -78,7 +81,7 @@ public enum TaskStage: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .toShip, .done, .archived: true
-        case .needsYou, .running: false
+        case .needsYou, .running, .idle: false
         }
     }
 
@@ -151,7 +154,7 @@ public enum TaskStage: Equatable, Sendable {
         if live.agent == .finished, live.waitsOnTask == false {
             return .needsYou(.agentFinished)
         }
-        return .running
+        return live.waitsOnTask ? .running : .idle
     }
 }
 

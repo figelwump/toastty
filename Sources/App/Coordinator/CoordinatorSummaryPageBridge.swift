@@ -187,7 +187,7 @@ enum CoordinatorPageInspection {
             })),
             visibleTaskRowIDs: ids('.task-row, [data-row-id]'),
             todayCounts: {needsYou:count('needsYou'),running:count('running'),toShip:count('toShip')},
-            todaySections: {needsYou:ids('#today-needsYou [data-row-id]'),running:ids('#today-running [data-row-id]'),completed:ids('#today-completed [data-row-id]')},
+            todaySections: {needsYou:ids('#today-needsYou [data-row-id]'),running:ids('#today-running [data-row-id]'),idle:ids('#today-idle [data-row-id]'),completed:ids('#today-completed [data-row-id]')},
             intakeVisible: shown(document.getElementById('today-intake')),
             confirming: confirmation ? {rowID:confirmation.closest('.task-row').dataset.id,text:confirmation.firstElementChild?.textContent || ''} : null,
             openGroupIDs: [...document.querySelectorAll('[data-act="task-group"][aria-expanded="true"]')].filter(shown).map(e=>e.dataset.group),

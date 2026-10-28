@@ -20,7 +20,7 @@ const tasks = await import(outfile);
 rmSync(directory, { recursive: true, force: true });
 
 const groups = [
-  { id: "needsYou", title: "Needs you", total: 0 }, { id: "running", title: "Running", total: 0 },
+  { id: "needsYou", title: "Needs you", total: 0 }, { id: "running", title: "Running", total: 0 }, { id: "idle", title: "Idle", total: 0 },
   { id: "toShip", title: "To ship", total: 0 }, { id: "done", title: "Done", total: 0 }, { id: "archived", title: "Archived", total: 0 },
 ];
 
@@ -236,4 +236,22 @@ test("a filter from the sidebar shows one project with its group open and its fi
   // another project is selected.
   tasks.applyFilter(s, ui, { project: "gone", group: "done" });
   assert.equal(ui.selected, null);
+});
+
+
+test("idle rows follow running, remain navigable and keep their actions across updates", () => {
+  const ui = tasks.newTasksUIState();
+  const idle = row("idle", "idle", { stageLabel: "idle", stageTone: "plain", status: "No agent running" });
+  const active = row("active", "running");
+  const s = state([idle, active]);
+  const html = tasks.renderTasks(s, ui, new Date());
+  assert.ok(html.indexOf('id="group-running"') < html.indexOf('id="group-idle"'));
+  assert.match(html, /id="task-row-idle"/);
+  assert.deepEqual(tasks.navigableRows(s, ui).map((r) => r.id), ["active", "idle"]);
+  tasks.applyFilter(s, ui, { project: null, group: "idle" });
+  assert.equal(ui.selected, "idle");
+  const updated = state([{ ...idle, group: "running" }, active]);
+  tasks.normalize(updated, ui);
+  assert.equal(ui.selected, "idle");
+  assert.ok(!tasks.renderTasks(updated, ui, new Date()).includes('id="group-idle"'));
 });

@@ -17,7 +17,7 @@ function row(id, group, projectID = "one") {
 
 const state = {
   projects: [{ id: "one", title: "same" }, { id: "two", title: "same" }, { id: "empty", title: "Empty" }],
-  tasks: [row("A", "needsYou"), row("B", "running"), row("C", "toShip"), row("D", "done"), row("E", "done"), row("F", "needsYou", "two")],
+  tasks: [row("A", "needsYou"), row("B", "running"), row("C", "toShip"), row("D", "done"), row("E", "done"), row("F", "needsYou", "two"), row("G", "idle"), row("H", "idle", "two")],
   // D has new activity today but did not merge or release today. Only
   // native completion metadata makes E appear in the completion section.
   today: { completed: [{ rowID: "E", kind: "released", at: "2026-10-25T09:50:00Z" }] },
@@ -27,9 +27,11 @@ const now = new Date("2026-10-25T10:00:00Z");
 test("Today shows filtered stats, Needs you, Running and actual completions, with empty Intake absent", () => {
   const html = renderToday({ ...state, projectFilter: "one" }, now);
   for (const id of ["needsYou", "running", "toShip"]) assert.match(html, new RegExp(`id="today-stat-${id}"[^>]*><span class="n">1<`));
-  for (const id of ["A", "B"]) assert.ok(html.includes(`id="today-row-${id}"`));
+  for (const id of ["A", "B", "G"]) assert.ok(html.includes(`id="today-row-${id}"`));
   assert.ok(html.includes('id="today-completed-row-E"'));
-  for (const id of ["C", "D", "F"]) assert.ok(!html.includes(`id="today-row-${id}"`));
+  for (const id of ["C", "D", "F", "H"]) assert.ok(!html.includes(`id="today-row-${id}"`));
+  assert.ok(html.indexOf('id="today-running"') < html.indexOf('id="today-idle"'));
+  assert.match(html, /id="today-idle"[^]*?<span>Idle<\/span><span>1<\/span>/);
   assert.match(html, /Merged or released today/);
   assert.match(html, /class="badge b-green">released/);
   assert.match(html, /data-act="today-open" data-id="E"/);
@@ -42,6 +44,7 @@ test("a valid empty project has zero stats and no other-project rows", () => {
   assert.ok(!html.includes('id="today-row-'));
   assert.match(html, /Nothing needs you/);
   assert.match(html, /No tasks running/);
+  assert.match(html, /No idle tasks/);
   assert.match(html, /Nothing merged or released today/);
 });
 

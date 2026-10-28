@@ -141,8 +141,8 @@ struct CommandPaletteTaskCommandsTests {
 
         harness.select(firstSpace)
         #expect(harness.taskRows() == [
-            "Task: Mark Done — Fix the composer · Running",
-            "Task: Archive… — Fix the composer · Running",
+            "Task: Mark Done — Fix the composer · Idle",
+            "Task: Archive… — Fix the composer · Idle",
         ])
 
         #expect(harness.failures.isEmpty)

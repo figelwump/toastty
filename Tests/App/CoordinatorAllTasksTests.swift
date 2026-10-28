@@ -32,7 +32,7 @@ struct CoordinatorAllTasksTests {
         await fixture.chat.refresh()
         let payload = try #require(fixture.chat.lastPayload)
         #expect(payload.view?.view == .tasks)
-        #expect(payload.taskGroups.map(\.id) == ["needsYou", "running", "toShip", "done", "archived"])
+        #expect(payload.taskGroups.map(\.id) == ["needsYou", "running", "idle", "toShip", "done", "archived"])
 
         let reviewRow = try #require(row(fixture, reviewed.id))
         #expect(reviewRow.group == "needsYou")
@@ -41,8 +41,23 @@ struct CoordinatorAllTasksTests {
         #expect(reviewRow.primary?.id == "action:markDone")
         #expect(reviewRow.confirm == nil)
         let quietRow = try #require(row(fixture, quiet.id))
+        #expect(quietRow.group == "idle")
+        #expect(quietRow.stageLabel == "idle")
+        #expect(quietRow.stageTone == "plain")
+        #expect(quietRow.menu.joined().map(\.id).contains("action:markDone"))
+        #expect(quietRow.menu.joined().map(\.id).contains("action:archive"))
         #expect(quietRow.hasCard == false)
         #expect(quietRow.menu.joined().map(\.id).contains("openTaskSpace"))
+
+        // The CLI snapshot and the dashboard filter use the same stage.
+        let snapshot = try fixture.executor().runQuery(id: "task.get", args: ["taskID": .string(quiet.id.uuidString)])
+        #expect(snapshot["stage"] == .object(["group": .string("idle"), "needsUser": .bool(false)]))
+        _ = try await fixture.executor().runActionAsync(
+            id: "coordinator.tasks.show", args: ["group": .string("idle")],
+            context: AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_action")
+        )
+        await fixture.chat.refresh()
+        #expect(fixture.chat.lastPayload?.view?.filter?.group == "idle")
 
         // The palette acts on the selected row while All tasks shows.
         await fixture.chat.handle(.rendered(expanded: [], view: .tasks, selectedRowID: quietRow.id), from: nil)
@@ -374,7 +389,7 @@ struct CoordinatorAllTasksTests {
         #expect(shown.count == 1 + CoordinatorAllTasks.finishedRowLimit + 1)
         #expect(shown.filter { $0.stage == .done }.map(\.id) == done.prefix(CoordinatorAllTasks.finishedRowLimit).map(\.id))
         let totals = Dictionary(uniqueKeysWithValues: CoordinatorAllTasks.groups(items).map { ($0.id, $0.total) })
-        #expect(totals == ["needsYou": 0, "running": 1, "toShip": 0, "done": 205, "archived": 1])
+        #expect(totals == ["needsYou": 0, "running": 1, "idle": 0, "toShip": 0, "done": 205, "archived": 1])
     }
 
     @Test func setupTasksOfferRecoveryWithoutACardOrTaskSpace() async throws {

@@ -92,7 +92,7 @@ struct TaskSpaceCloseQuestionTests {
     @Test func cancelClosesNothingAndMarkDoneClosesAndFinishesTheTask() async throws {
         let harness = try Harness()
         let task = try await harness.fixture.startedTask()
-        #expect(harness.stage(task.id) == .running)
+        #expect(harness.stage(task.id) == .idle)
 
         harness.answer = nil
         #expect(harness.closeTaskSpace(task) == .canceled)
@@ -212,7 +212,7 @@ struct TaskSpaceCloseQuestionTests {
         #expect(harness.closeTaskSpace(task) == .closed)
         #expect(harness.isOpen(task))
         #expect(harness.fixture.record(task.id)?.doneAt == nil)
-        #expect(harness.stage(task.id) == .running)
+        #expect(harness.stage(task.id) == .idle)
     }
 
     @Test func closingOneOfSeveralTabsDoesNotAsk() async throws {
