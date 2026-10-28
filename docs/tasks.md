@@ -56,13 +56,22 @@ Focus goes back to the app you were in.
   live sessions reported recently (while remote access is on), the
   `[defaults]` model, and **Default**; type any other model name to use it.
   Codex also loads its model catalog in the background when you open a new
-  draft. These choices do not need remote access or a recent session. Toastty
+  draft. These choices do not need remote access or a recent session. A new
+  draft offers the last successful catalog at once and refreshes it in the
+  background. The saved choices last until quit or **Reload Configuration**.
+  With no saved catalog, the picker shows **Loading Codex models…**, or
+  **Codex models unavailable** with **Retry** (`Cmd+R`). Retry loads the choices in the
+  same picker and keeps your search and selection. Toastty
   runs the configured Codex executable's `debug models` command with its
   normal configuration and `CODEX_HOME`; extra arguments in the Toastty
   profile are not applied to this lookup. Custom wrapper commands are not
   queried. Catalog choices are suggestions,
   not a check of account access. If an older CLI does not support the command
   or the lookup fails, the existing choices and manual entry remain available.
+  The app log records lookup duration, outcome, and model count on success.
+  It does not record the command's output.
+  An empty or failed refresh keeps the last available catalog. Choices
+  already in an open draft stay available during a configuration reload.
   A column is hidden when the agent takes no model or no effort. The pill
   then shows `model · effort`, or the agent's name when no model is chosen.
 - The panel floats over other apps and full-screen windows and stays open

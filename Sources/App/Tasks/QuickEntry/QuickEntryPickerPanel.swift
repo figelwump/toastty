@@ -19,6 +19,8 @@ final class QuickEntryPickerPanel: NSPanel {
     /// ⌘→. Returns false when the picker has no use for it, so the search
     /// field moves its caret.
     var onCommandRight: () -> Bool = { false }
+    /// Retry the visible failed catalog request without leaving the search.
+    var onRetryCodexModels: () -> Bool = { false }
     var onClose: () -> Void = {}
     /// The picker lost focus: a click elsewhere, or another app came forward.
     var onResignKey: () -> Void = {}
@@ -61,6 +63,7 @@ final class QuickEntryPickerPanel: NSPanel {
         guard modifiers.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
             return super.performKeyEquivalent(with: event)
         }
+        if modifiers == .command, key == "r", onRetryCodexModels() { return true }
         if modifiers == .command, event.keyCode == QuickEntryPanel.rightArrowKeyCode, onCommandRight() {
             // As in the search field's own key handling: the next key can
             // arrive before SwiftUI shows the cleared search.

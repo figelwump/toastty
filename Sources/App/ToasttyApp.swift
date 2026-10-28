@@ -1928,6 +1928,7 @@ struct ToasttyApp: App {
                 excludedDirectoryPaths: [runtimePaths.agentShimDirectoryURL.path]
             )
         )
+        quickEntryController.invalidateCodexModels()
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,

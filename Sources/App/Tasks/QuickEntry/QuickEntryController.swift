@@ -41,6 +41,11 @@ final class QuickEntryController: ObservableObject {
     /// I/O; tests and other providers need no installed Codex or remote access.
     var loadCodexModels: (@MainActor () async throws -> [String])?
     private(set) var modelLoadTask: Task<Void, Never>?
+    private var cachedCodexModels: [String] = []
+    private var codexCatalogGeneration = 0
+    private var codexCatalogStatus: QuickEntryCodexCatalogStatus? {
+        didSet { picker?.codexCatalogStatus = picker?.kind == .agent ? codexCatalogStatus : nil }
+    }
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
     // Removed in deinit, which is not main-actor isolated.
@@ -407,6 +412,8 @@ final class QuickEntryController: ObservableObject {
         case .agent:
             QuickEntryPicker(profiles: model.agentProfiles, frequent: model.frequentPresets, current: model.preset)
         }
+        picker.codexCatalogStatus = kind == .agent ? codexCatalogStatus : nil
+        picker.onRetryCodexModels = { [weak self] in self?.refreshCodexModels() }
         picker.onChoose = { [weak self, weak model] choice in
             switch choice {
             case .workspace(let workspaceID):
@@ -435,6 +442,11 @@ final class QuickEntryController: ObservableObject {
         pickerPanel.onCommandRight = { [weak picker] in
             guard let picker, picker.kind == .agent, picker.columns == nil else { return false }
             picker.openColumns()
+            return true
+        }
+        pickerPanel.onRetryCodexModels = { [weak picker] in
+            guard let picker, picker.showsCodexCatalogStatus, picker.codexCatalogStatus == .unavailable else { return false }
+            picker.onRetryCodexModels()
             return true
         }
         pickerPanel.currentQuery = { [weak picker] in picker?.query ?? "" }
@@ -512,6 +524,10 @@ final class QuickEntryController: ObservableObject {
                     if defaults?.agent == summary.profileID, let model = defaults?.model, models.contains(model) == false {
                         models.append(model)
                     }
+                    if summary.profileID == AgentKind.codex.rawValue {
+                        var seen = Set(models)
+                        models += cachedCodexModels.filter { seen.insert($0).inserted }
+                    }
                 }
                 return QuickEntryAgentProfile(
                     id: summary.profileID,
@@ -545,26 +561,73 @@ final class QuickEntryController: ObservableObject {
 
     // MARK: - Options
 
+    /// A reloaded profile or PATH must not reuse choices or results from
+    /// the previous CLI. Choices already in an open draft stay usable.
+    func invalidateCodexModels() {
+        codexCatalogGeneration += 1
+        modelLoadTask?.cancel()
+        modelLoadTask = nil
+        cachedCodexModels = []
+        codexCatalogStatus = nil
+        refreshCodexModels()
+    }
+
     private func refreshCodexModels() {
         guard modelLoadTask == nil, let loadCodexModels,
               model?.agentProfiles.contains(where: { $0.id == AgentKind.codex.rawValue && $0.supportsModel }) == true else { return }
-        // Coalesce close/reopen while the CLI is running. Completion updates
-        // the current draft, never a captured draft that has been dismissed.
+        let generation = codexCatalogGeneration
+        let requestID = UUID().uuidString
+        let startedAt = Date()
+        codexCatalogStatus = cachedCodexModels.isEmpty ? .loading : nil
+        ToasttyLog.info("Loading the Codex model catalog", category: .tasks, metadata: ["request_id": requestID])
+        // Coalesce close/reopen and Retry. Cache a late success even with
+        // no draft; update only the current draft, never a dismissed one.
         modelLoadTask = Task { [weak self] in
-            let models: [String]
+            let result: Result<[String], any Error>
             do {
-                models = try await loadCodexModels()
+                result = .success(try await loadCodexModels())
             } catch {
-                // CLI stderr can contain private configuration. Keep the
-                // diagnostic generic and the existing choices usable.
-                ToasttyLog.debug("Codex model catalog unavailable", category: .tasks, metadata: [
-                    "error_type": String(reflecting: type(of: error)),
-                ])
-                self?.modelLoadTask = nil
+                result = .failure(error)
+            }
+            var metadata = [
+                "request_id": requestID,
+                "duration_ms": String(Int(Date().timeIntervalSince(startedAt) * 1_000)),
+            ]
+            guard let self, self.codexCatalogGeneration == generation else {
+                metadata["outcome"] = "stale"
+                ToasttyLog.info("Finished the Codex model catalog lookup", category: .tasks, metadata: metadata)
                 return
             }
-            guard let self else { return }
             self.modelLoadTask = nil
+            let models: [String]
+            switch result {
+            case .success(let loaded):
+                models = loaded
+                // An empty response supplies no replacement suggestions.
+                // Keep the last usable catalog, as on a failed refresh.
+                if models.isEmpty == false { self.cachedCodexModels = models }
+                self.codexCatalogStatus = self.cachedCodexModels.isEmpty ? .unavailable : nil
+                metadata["outcome"] = models.isEmpty ? "empty" : "success"
+                metadata["model_count"] = String(models.count)
+            case .failure(let error):
+                self.codexCatalogStatus = self.cachedCodexModels.isEmpty ? .unavailable : nil
+                // CLI stderr can contain private configuration. Record
+                // categories and exit status, never the command's output.
+                switch error {
+                case CodexPluginCLIError.timedOut:
+                    metadata["outcome"] = "timeout"
+                case CodexPluginCLIError.commandFailed(_, let status, _):
+                    metadata["outcome"] = "command_failed"
+                    metadata["exit_status"] = String(status)
+                case is DecodingError, CodexPluginCLIError.malformedJSON:
+                    metadata["outcome"] = "invalid_json"
+                default:
+                    metadata["outcome"] = "unavailable"
+                }
+                ToasttyLog.info("Finished the Codex model catalog lookup", category: .tasks, metadata: metadata)
+                return
+            }
+            ToasttyLog.info("Finished the Codex model catalog lookup", category: .tasks, metadata: metadata)
             guard let model = self.model else { return }
             let profiles = model.agentProfiles.map { profile in
                 guard profile.id == AgentKind.codex.rawValue, profile.supportsModel else { return profile }

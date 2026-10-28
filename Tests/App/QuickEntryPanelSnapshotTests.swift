@@ -238,6 +238,55 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         try renderWithPicker("quick-entry-codex-catalog-scroll-selection")
     }
 
+    func testCodexCatalogRetryKeepsTheOpenPickerAndSearchFocus() async throws {
+        let lookup = QuickEntryCatalogRefreshTests.Lookup()
+        controller.loadCodexModels = { try await lookup.load() }
+        controller.present(prefill: .empty)
+        controller.togglePicker(.agent)
+        let picker = try XCTUnwrap(controller.picker)
+        let pickerPanel = try XCTUnwrap(controller.pickerPanel)
+        picker.openColumns(agent: "codex")
+        try renderWithPicker("quick-entry-codex-loading")
+        let firstDeadline = Date().addingTimeInterval(2)
+        while lookup.calls == 0, Date() < firstDeadline { await Task.yield() }
+        XCTAssertEqual(lookup.calls, 1)
+        try lookup.finish(.failure(CodexPluginCLIError.timedOut))
+        await controller.modelLoadTask?.value
+        try renderWithPicker("quick-entry-codex-unavailable")
+        let editor = try XCTUnwrap(pickerPanel.firstResponder as? NSTextView)
+        editor.insertText("catalog", replacementRange: editor.selectedRange())
+        let selection = editor.selectedRange()
+
+        // Click the Retry control in the status strip, as an AppKit mouse
+        // event. It must not dismiss the picker or take the search focus.
+        let point = NSPoint(x: pickerPanel.frame.width - 25, y: pickerPanel.frame.height - 50)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            pickerPanel.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: pickerPanel.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1
+            )))
+        }
+        let retryDeadline = Date().addingTimeInterval(2)
+        while lookup.calls < 2, Date() < retryDeadline { await Task.yield() }
+        try renderWithPicker("quick-entry-codex-retry-loading")
+        XCTAssertEqual(lookup.calls, 2, "The visible Retry button starts the second request")
+        XCTAssertTrue(controller.picker === picker)
+        XCTAssertTrue(pickerPanel.firstResponder === editor)
+        XCTAssertEqual(editor.string, "catalog")
+        XCTAssertEqual(editor.selectedRange(), selection)
+        // Resume even if a click assertion fails, so teardown never leaves
+        // a suspended test request behind.
+        if lookup.calls == 2 {
+            try lookup.finish(.success(["catalog-model"]))
+            await controller.modelLoadTask?.value
+        }
+        picker.query = ""
+        try renderWithPicker("quick-entry-codex-retry-success")
+        XCTAssertTrue(picker.columns?.cells(in: .model).contains { $0.title == "catalog-model" } == true)
+        XCTAssertNil(picker.codexCatalogStatus)
+        XCTAssertTrue(pickerPanel.firstResponder === editor)
+    }
+
     private static let keyboardDesignText = "Sidebar drops the Inbox group after a restart even though one task is still in it"
 
     /// Renders the panel and its open picker together, placed as on screen,
