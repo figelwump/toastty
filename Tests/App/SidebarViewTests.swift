@@ -2217,7 +2217,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("Tasks, 3 need you"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
         // The finished task space leaves its card; the footer counts it.
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Checklist, task space") }, "\(textValues)")
         XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
@@ -2231,7 +2231,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix nav drawer focus, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
         // Top-level workspaces show only in Projects.
         XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
