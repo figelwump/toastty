@@ -142,6 +142,132 @@ struct TaskBoardTests {
         #expect(Set(board.items(windowID: windowID).map(\.id)) == Set(board.items().map(\.id)))
     }
 
+    private func startNamedSession(
+        _ fixture: TaskCoordinatorTests.Fixture, workspaceID: UUID, panelID: UUID, sessionID: String,
+        override: String? = nil
+    ) throws {
+        let runtime = fixture.sessionRuntimeStore
+        let date = Date()
+        runtime.startSession(
+            sessionID: sessionID, agent: .opencode, panelID: panelID,
+            windowID: try #require(fixture.store.state.windows.first?.id), workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: override,
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: date
+        )
+        #expect(runtime.confirmNativeSessionBinding(
+            managedSessionID: sessionID, panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .opencode, nativeSessionID: sessionID,
+                sessionFilePath: fixture.root.appendingPathComponent("\(sessionID).json").path,
+                cwd: fixture.projectRoot, capturedAt: date
+            )
+        ))
+    }
+
+    private func reportTitle(_ title: String, sessionID: String, fixture: TaskCoordinatorTests.Fixture) -> Bool {
+        fixture.sessionRuntimeStore.applyReportedProviderSessionName(
+            sessionID: sessionID, agent: .opencode, nativeSessionID: sessionID, name: title
+        )
+    }
+
+    @Test func providerTitlesReachTheBoardAndSidebarAndSurviveClosingTheTaskSpace() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let launchedID = try #require(task.currentSessionID)
+        let launched = try #require(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[launchedID])
+        #expect(launched.displayTitleOverride == nil, "Task launch must not mask provider names")
+        #expect(board.items().first { $0.taskID == task.id }?.title == task.title)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "restored-owner")
+        #expect(reportTitle("Unread dot repair", sessionID: "restored-owner", fixture: fixture))
+        await waitUntil { fixture.record(task.id)?.title == "Unread dot repair" }
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Unread dot repair")
+        let runtime = TerminalRuntimeRegistry()
+        let sidebar = SidebarView(
+            windowID: try #require(fixture.store.state.windows.first?.id), store: fixture.store,
+            terminalRuntimeRegistry: runtime, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(), taskBoard: board,
+            terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: try #require(fixture.store.state.windows.first?.id), runtimeRegistry: runtime)
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
+        #expect(sidebar.subspaceRowModel(workspace: workspace, spawner: nil, windowWorkspaceIDs: [workspaceID]).title == "Unread dot repair")
+        #expect(workspace.title == task.slug)
+        #expect(fixture.record(task.id)?.slug == task.slug)
+
+        // A title and exit in one publication burst must still be saved.
+        #expect(reportTitle("Unread dot fixed", sessionID: "restored-owner", fixture: fixture))
+        fixture.sessionRuntimeStore.stopSession(sessionID: "restored-owner", at: Date())
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "monitor", agent: .processWatch, panelID: panelID,
+            windowID: try #require(fixture.store.state.windows.first?.id), workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: "Watching a process",
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+        )
+        _ = fixture.store.send(.closeWorkspace(workspaceID: workspaceID))
+        await waitUntil { fixture.record(task.id)?.title == "Unread dot fixed" }
+        try fixture.coordinator.records.flush()
+        #expect(fixture.savedRecord(task.id)?.title == "Unread dot fixed")
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Unread dot fixed")
+        #expect(gitHub.calls.isEmpty, "A title change does not query GitHub")
+    }
+
+    @Test func aMovedTaskUsesItsOwnerAndKeepsExplicitTitles() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let originalPanel = try #require(task.operation.taskSpace?.panelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: originalPanel, sessionID: "original")
+        #expect(reportTitle("Original work", sessionID: "original", fixture: fixture))
+        _ = fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
+        let movedPanel = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(movedPanel != originalPanel)
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.operation.worktreeSession = TaskOperation.WorktreeSession(
+                workspaceID: workspaceID, panelID: movedPanel, sessionID: "old-moved-id", forked: true
+            )
+        }
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: movedPanel, sessionID: "restored-moved")
+        #expect(reportTitle("Worktree repair", sessionID: "restored-moved", fixture: fixture))
+        await waitUntil { fixture.record(task.id)?.title == "Worktree repair" }
+        #expect(reportTitle("Unrelated work", sessionID: "original", fixture: fixture))
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Worktree repair")
+
+        try fixture.coordinator.records.save(id: task.id) { $0.title = "My title"; $0.titleSetByUser = true }
+        #expect(reportTitle("Another provider title", sessionID: "restored-moved", fixture: fixture))
+        #expect(board.items().first { $0.taskID == task.id }?.title == "My title")
+        // Wait for the deferred observer by doing another observable change.
+        let other = try await startTask(fixture, text: "Other task")
+        await waitUntil { fixture.record(other.id)?.setup == .started }
+        #expect(fixture.record(task.id)?.title == "My title")
+    }
+
+    @Test func olderTaskSpacesUseTheFirstNamedAgentAcrossStopsAndRestores() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let workspaceID = try makeUntrackedTaskSpace(fixture, title: "temporary-task-name")
+        let panelID = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "first")
+        // Construct the board after the sessions, as happens on startup.
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func title() -> String? { board.items().first { $0.id == .taskSpace(workspaceID) }?.title }
+        #expect(title() == "temporary-task-name")
+        _ = fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
+        let secondPanel = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: secondPanel, sessionID: "second")
+        #expect(reportTitle("Second task", sessionID: "second", fixture: fixture))
+        #expect(title() == "Second task", "An unnamed first session must not hide an available title")
+        #expect(reportTitle("Older task repair", sessionID: "first", fixture: fixture))
+        #expect(title() == "Older task repair")
+        fixture.sessionRuntimeStore.stopSession(sessionID: "first", at: Date())
+        #expect(title() == "Older task repair")
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "first-restored", override: "Chosen session title")
+        #expect(reportTitle("Provider title", sessionID: "first-restored", fixture: fixture))
+        #expect(title() == "Chosen session title")
+    }
+
     @Test func aMergeSeenOnGitHubStaysOnTheTaskAfterItsTaskSpaceCloses() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let gitHub = FakeGitHub()
