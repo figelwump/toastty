@@ -35,7 +35,13 @@ if args[:2] == ["repo", "view"]:
                       "mergeCommitAllowed": state.get("merge_commit_allowed", True),
                       "squashMergeAllowed": True, "rebaseMergeAllowed": True}))
 elif args[:2] == ["pr", "view"]:
-    print(json.dumps(next(p for p in state["prs"] if p["number"] == int(args[2]))))
+    pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
+    field = args[args.index("--json") + 1]
+    if (state.get("retarget_on_refresh") and field == "mergeable,mergeStateStatus,baseRefName"
+            or state.get("retarget_before_merge") and field == "baseRefName"):
+        pr.update(baseRefName="main", mergeStateStatus="CLEAN")
+        save()
+    print(json.dumps(pr))
 elif args[:2] == ["pr", "list"]:
     if state.get("fail_pr_list"):
         sys.exit("could not read open pull requests")
@@ -148,11 +154,11 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.git("commit", "-q", "-m", message, cwd=cwd)
         return self.git("rev-parse", "HEAD", cwd=cwd)
 
-    def task(self, number, state="MERGED", session=False, busy=False, done=True):
+    def task(self, number, state="MERGED", session=False, busy=False, done=True, base="main"):
         """A pushed task branch and worktree with a PR whose head is the pushed tip,
         and a subspace whose terminal sits in the worktree."""
         branch, path = f"task-{number}", self.root / f"task-{number}"
-        self.git("worktree", "add", "-q", "-b", branch, str(path))
+        self.git("worktree", "add", "-q", "-b", branch, str(path), base)
         head = self.commit(path, branch)
         self.git("push", "-q", "-u", "origin", branch, cwd=path)
         self.prs.append({
@@ -181,7 +187,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
         return branch, path
 
-    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None):
+    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None,
+                   accepted_base="main"):
         """Runs the script as Toastty does, from the workspace's checkout: the
         task's worktree unless `repo` says otherwise. `head` is a waiting
         merge's accepted commit; `expect_head` the commit a merge skill checked."""
@@ -192,6 +199,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
              "--pr-url", url or f"https://github.com/test/repo/pull/{number}",
              "--workspace", workspace or workspace_id(number), "--repo", str(repo or self.root / f"task-{number}"),
              *(["--head", head] if head else []),
+             *(["--base", accepted_base] if head and accepted_base else []),
              *(["--expect-head", expect_head] if expect_head else [])],
             env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -239,6 +247,44 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.actions(), [])
         self.assertEqual(self.run_script("merge", 1, expect_head=newer)["status"], "merged")
 
+    def test_merge_into_an_open_parent_branch_waits_then_cleans_up_only_the_child(self):
+        parent, parent_path = self.task(1, state="OPEN")
+        parent_head = self.git("rev-parse", parent)
+        main_head = self.git("rev-parse", "main")
+        child, child_path = self.task(2, state="OPEN", base=parent)
+        pr = self.prs[-1]
+        pr["baseRefName"] = parent
+        head = pr["headRefOid"]
+        pr["statusCheckRollup"] = [{"name": "CI gate", "status": "IN_PROGRESS", "conclusion": None}]
+        pr["mergeStateStatus"] = "BLOCKED"
+
+        waiting = self.run_script("merge", 2, expect_head=head)
+        self.assertEqual(waiting["status"], "waiting", waiting)
+        self.assertEqual(waiting["head"], head)
+        self.assertEqual(self.actions(), [])
+
+        pr["statusCheckRollup"][0].update(status="COMPLETED", conclusion="SUCCESS")
+        pr["mergeStateStatus"] = "CLEAN"
+        self.assertEqual(waiting["base"], parent)
+        merged = self.run_script("merge", 2, head=head, accepted_base=waiting["base"])
+        self.assertEqual(merged["status"], "merged", merged)
+        self.assertEqual(self.actions(), [self.merge_call(2, head)])
+        self.assertEqual(self.gh_state(1)["state"], "OPEN")
+
+        pr["state"] = "MERGED"
+        cleaned = self.run_script("clean-up", 2)
+        self.assertEqual(cleaned["status"], "cleaned", cleaned)
+        self.assertFalse(child_path.exists())
+        self.assertFalse(self.remote_has(child))
+        self.assertEqual(self.git("branch", "--list", child), "")
+        self.assertTrue(parent_path.exists())
+        self.assertEqual(self.git("rev-parse", parent), parent_head)
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", parent).split()[0], parent_head)
+        self.assertEqual(self.git("rev-parse", "main"), main_head)
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", "main").split()[0], main_head)
+        self.assertEqual(len(self.closed()), 1)
+        self.assertIn(workspace_id(2), self.closed()[0])
+
     def test_merge_waits_while_checks_run_then_merges_the_accepted_commit(self):
         _, path = self.task(1, state="OPEN")
         head = self.prs[0]["headRefOid"]
@@ -272,6 +318,43 @@ class WorkspacePullRequestTests(unittest.TestCase):
         # A PR merged by someone else at another commit is not this merge.
         self.prs[0]["state"] = "MERGED"
         self.assertEqual(self.run_script("merge", 1, head=accepted)["status"], "refused")
+        self.assertEqual(self.actions(), [])
+
+    def test_waiting_merge_refuses_a_retarget_after_acceptance(self):
+        parent, _ = self.task(1, state="OPEN")
+        self.task(2, state="OPEN", base=parent)
+        pr = self.prs[-1]
+        pr.update(baseRefName=parent, mergeStateStatus="BLOCKED")
+        waiting = self.run_script("merge", 2)
+        self.assertEqual(waiting["status"], "waiting", waiting)
+        pr.update(baseRefName="main", mergeStateStatus="CLEAN")
+        result = self.run_script("merge", 2, head=waiting["head"], accepted_base=waiting["base"])
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("target branch changed", result["detail"])
+        pr["state"] = "MERGED"
+        result = self.run_script("merge", 2, head=waiting["head"], accepted_base=waiting["base"])
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("target branch changed", result["detail"])
+        self.assertEqual(self.actions(), [])
+
+    def test_merge_rechecks_the_target_during_refresh_and_before_the_merge_request(self):
+        parent, _ = self.task(1, state="OPEN")
+        self.task(2, state="OPEN", base=parent)
+        pr = self.prs[-1]
+        for flag in ("retarget_on_refresh", "retarget_before_merge"):
+            with self.subTest(flag=flag):
+                pr.update(baseRefName=parent, mergeStateStatus="UNKNOWN" if flag == "retarget_on_refresh" else "CLEAN")
+                self.extra_state = {flag: True}
+                result = self.run_script("merge", 2)
+                self.assertEqual(result["status"], "refused", result)
+                self.assertIn("target branch changed", result["detail"])
+                self.assertEqual(self.actions(), [])
+
+    def test_waiting_merge_requires_the_original_target_branch(self):
+        self.task(1, state="OPEN")
+        result = self.run_script("merge", 1, head=self.prs[0]["headRefOid"], accepted_base=None)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("no accepted target branch", result["detail"])
         self.assertEqual(self.actions(), [])
 
     def test_waiting_merge_stops_when_a_check_fails(self):
@@ -330,13 +413,16 @@ class WorkspacePullRequestTests(unittest.TestCase):
         _, ahead = self.task(2, state="OPEN")
         self.commit(ahead, "local only")
         self.task(3, state="OPEN")
+        self.prs[-1]["baseRefName"] = "task-1"
         self.prs[-1]["statusCheckRollup"].append({"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"})
         self.task(4, state="OPEN")
+        self.prs[-1]["baseRefName"] = "task-1"
         self.prs[-1]["mergeable"] = "CONFLICTING"
         self.task(5, state="OPEN")
         self.prs[-1]["baseRefName"] = "task-1"
+        self.prs[-1]["mergeStateStatus"] = "BEHIND"
         expected = {1: "uncommitted changes", 2: "is not the commit in this workspace", 3: "failing checks: lint",
-                    4: "merge conflicts", 5: "targets task-1, not main"}
+                    4: "merge conflicts", 5: "its branch is behind task-1 and must be updated"}
         for number, reason in expected.items():
             result = self.run_script("merge", number)
             self.assertEqual(result["status"], "refused", result)

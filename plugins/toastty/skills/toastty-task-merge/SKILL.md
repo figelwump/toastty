@@ -29,8 +29,6 @@ Stop and report, without merging, when:
   has not seen need their review first; do not commit or push as part of a merge;
 - a required check failed. Checks that are still running do not block: Toastty
   waits for them;
-- the base is not the repository's default branch. The base pull request merges
-  first, and GitHub then retargets this one;
 - the description says something must happen before this pull request
   merges, such as another pull request merging first or an artifact being
   rebuilt. Read the whole description and judge what each step means: a
@@ -43,12 +41,24 @@ Stop and report, without merging, when:
   merge. Report each unresolved thread's link, including outdated ones. Do not
   resolve threads or change code here.
 
+Merge into the pull request's current `baseRefName`, including a feature
+branch. The base branch does not need to merge into the default branch first.
+Do not retarget the pull request as part of this check.
+
 ## Check tasks that must land first
 
-Read this task with `"$TOASTTY_CLI_PATH" task get`. When it has a
-`parentTaskID`, or the description names other tasks or pull requests this one
-builds on, check them with `"$TOASTTY_CLI_PATH" task get <task-id>` and
-`gh pr view`. A dependency that has not merged blocks this merge.
+Read this task with `"$TOASTTY_CLI_PATH" task get`. Check tasks or pull requests
+that its description names as merge prerequisites with
+`"$TOASTTY_CLI_PATH" task get <task-id>` and `gh pr view`. A prerequisite that
+has not merged blocks this merge. Check that where it merged satisfies what
+the description requires.
+
+`parentTaskID` records which task created this one; it does not by itself
+require that task to merge first. A child may merge into its parent's feature
+branch while the parent's pull request stays open. Read the parent task and
+its pull request when present. If the child includes the parent's unmerged
+work but targets another branch, stop and report that dependency. Do not land
+that work outside the parent's branch before its prerequisite merge.
 
 ## Merge or report
 

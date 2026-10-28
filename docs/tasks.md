@@ -520,6 +520,13 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 3. Toastty merges at exactly that commit with GitHub's merge API. If checks
    still run, the task shows "Waiting for checks" and Toastty merges when they
    pass. It never turns on auto-merge, so commits pushed later are not merged.
+   The pull request may target a feature branch while that branch's own pull
+   request stays open. Explicit merge prerequisites still apply. A child that
+   carries unmerged parent work into another branch must wait for that work
+   to merge first.
+   Toastty saves the target branch with a waiting merge and stops if the pull
+   request is retargeted. Older saved waits with no target require you to
+   accept the merge again.
 4. Toastty records the merge on the task first. Once the agent's turn ends, it
    closes the task space, removes the worktree and deletes the branch, the same
    way as the Merge button does for any task space. In a project with

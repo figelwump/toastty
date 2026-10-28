@@ -10,9 +10,10 @@ import Testing
 /// fake `gh` reports the pull request and records merges.
 @MainActor
 struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
-    @Test
-    func taskMergeWaitsForTheAgentsTurnThenCleansUp() async throws {
-        try await withScenario { scenario in
+    @Test(arguments: ["main", "feat/integration"])
+    func taskMergeWaitsForTheAgentsTurnThenCleansUp(baseBranch: String) async throws {
+        try await withScenario(baseBranch: baseBranch) { scenario in
+            let baseHead = try scenario.git(["rev-parse", baseBranch], in: scenario.repo)
             let merged = try scenario.watch(.merged)
             let done = try scenario.watch(.done)
             // The merge skill calls task merge in the middle of its turn.
@@ -37,6 +38,9 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.boardItem?.stage == .done)
             #expect(scenario.fired(merged))
             #expect(scenario.fired(done))
+            // Cleanup removes the child branch, but keeps the target branch.
+            #expect(try scenario.git(["rev-parse", baseBranch], in: scenario.repo) == baseHead)
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", baseBranch], in: scenario.repo).hasPrefix(baseHead))
         }
     }
 
@@ -172,6 +176,36 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.record?.mergeRequestedAt == nil)
             #expect(scenario.record?.mergeCancelledAt != nil)
             #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+        }
+    }
+
+    @Test
+    func retargetingAWaitingFeatureMergeRequiresAcceptanceAgain() async throws {
+        try await withScenario(checksPending: true, baseBranch: "feat/integration") { scenario in
+            let mainHead = try scenario.git(["rev-parse", "main"], in: scenario.repo)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: .unmanaged)
+            await scenario.waitUntil("the merge waits") {
+                scenario.merges.request(workspaceID: scenario.taskSpaceID)?.acceptedBase == "feat/integration"
+            }
+            FileManager.default.createFile(atPath: scenario.mergedMarker + "-retargeted", contents: nil)
+            await scenario.waitUntil("the retargeted merge stops") {
+                scenario.notifications.contains { $0.contains("target branch changed") }
+            }
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            #expect(scenario.record?.mergedAt == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+            #expect(try scenario.git(["rev-parse", "main"], in: scenario.repo) == mainHead)
+            // A new acceptance uses the new target and can finish normally.
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: .unmanaged)
+            await scenario.waitUntil("the accepted merge and cleanup finish") {
+                scenario.record?.cleanup?.finishedAt != nil
+            }
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
         }
     }
 
@@ -333,9 +367,11 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     }
 
     /// A task whose worktree holds a pushed branch with one commit on top
-    /// of main, its task space open with the pull request linked, wired the
+    /// of its base branch, its task space open with the pull request linked, wired the
     /// way the app wires it.
-    private func withScenario(checksPending: Bool = false, _ body: (Scenario) async throws -> Void) async throws {
+    private func withScenario(
+        checksPending: Bool = false, baseBranch: String = "main", _ body: (Scenario) async throws -> Void
+    ) async throws {
         let root = URL(filePath: NSTemporaryDirectory())
             .appendingPathComponent("toastty-task-merge-e2e-\(UUID().uuidString.prefix(8))", isDirectory: true)
             .resolvingSymlinksInPath()
@@ -351,6 +387,11 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         try git(["config", "user.email", "merge@example.invalid"], in: repo)
         _ = try commit("base", in: repo)
         try git(["push", "-q", "origin", "main"], in: repo)
+        if baseBranch != "main" {
+            try git(["checkout", "-q", "-b", baseBranch], in: repo)
+            _ = try commit("feature", in: repo)
+            try git(["push", "-q", "origin", baseBranch], in: repo)
+        }
         try git(["worktree", "add", "-q", "-b", "fix/task-7", worktree], in: repo)
         _ = try commit("first", in: worktree)
         let head = try commit("second", in: worktree)
@@ -363,13 +404,17 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             : [["name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"]]
         let pullRequest: [String: Any] = [
             "number": 7, "title": "task", "state": "OPEN", "isDraft": false, "headRefName": "fix/task-7",
-            "headRefOid": head, "baseRefName": "main", "isCrossRepository": false,
+            "headRefOid": head, "baseRefName": baseBranch, "isCrossRepository": false,
             "mergeable": "MERGEABLE", "mergeStateStatus": checksPending ? "BLOCKED" : "CLEAN",
             "url": "https://github.com/test/repo/pull/7", "statusCheckRollup": checks, "body": "",
         ]
         var merged = pullRequest
         merged["state"] = "MERGED"
         merged["mergeCommit"] = ["oid": head]
+        var retargeted = pullRequest
+        retargeted["baseRefName"] = "main"
+        retargeted["mergeStateStatus"] = "CLEAN"
+        retargeted["statusCheckRollup"] = [["name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"]]
         func json(_ object: [String: Any]) throws -> String {
             String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         }
@@ -379,7 +424,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         #!/bin/sh
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
-          "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; else echo '\(try json(pullRequest))'; fi ;;
+          "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; else echo '\(try json(pullRequest))'; fi ;;
           "api --method") [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;
         esac
