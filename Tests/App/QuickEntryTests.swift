@@ -597,7 +597,7 @@ struct QuickEntryTests {
         #expect(sent.contains("model_reasoning_effort"))
     }
 
-    @Test func aPresetChosenTwiceIsListedFirstAndItsNumberPicksIt() async throws {
+    @Test func aCodexPresetIsRememberedFromItsFirstTaskAndItsNumberPicksIt() async throws {
         let harness = try Harness(recordsPresetUsage: true)
         let fixture = harness.fixture
         fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
@@ -623,23 +623,30 @@ struct QuickEntryTests {
             await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
         }
 
-        // Until a preset has two uses, Frequent is the [defaults] preset.
+        // The old favorite keeps its higher rank, but must not replace the
+        // Codex model used by the most recent successful task.
+        for index in 0..<3 {
+            try await create("Defaults \(index)", choosing: false)
+        }
         try await create("First", choosing: true)
-        // Accepting the preset the panel starts on counts too.
-        try await create("With the defaults preset", choosing: false)
         harness.controller.present(prefill: .empty)
-        #expect(harness.controller.model?.preset == QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        #expect(harness.controller.model?.preset == sol)
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
-        #expect(harness.controller.picker?.rows.first?.title == "Claude Code · claude-opus-5-5")
+        #expect(harness.controller.picker?.rows.filter { $0.section == "Frequent" }.map(\.title) == [
+            "Claude Code · claude-opus-5-5", "Codex · gpt-6.1-sol",
+        ])
         harness.controller.dismiss()
 
-        try await create("Second", choosing: true)
+        // Accepting the restored model counts too, without choosing again.
+        try await create("Second", choosing: false)
         harness.controller.present(prefill: .empty)
         let model = try #require(harness.controller.model)
-        #expect(model.preset == sol, "The panel starts on the top Frequent preset")
+        #expect(model.preset == sol, "The panel starts on the last successfully used preset")
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
         let picker = try #require(harness.controller.picker)
-        #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Codex · gpt-6.1-sol"])
+        #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == [
+            "Claude Code · claude-opus-5-5", "Codex · gpt-6.1-sol",
+        ])
         #expect(picker.rows.first?.number == 1)
 
         // With text in the search, a digit is typed.
@@ -650,13 +657,13 @@ struct QuickEntryTests {
         #expect(harness.controller.picker?.query == "c1")
         try await harness.pickerEditor().string = ""
         harness.controller.picker?.query = ""
-        // Shift+1 is a character, not the shortcut.
-        let shifted = try QuickEntryTests.commandKey("!", keyCode: kVK_ANSI_1, modifiers: .shift)
+        // Shift+2 is a character, not the shortcut.
+        let shifted = try QuickEntryTests.commandKey("@", keyCode: kVK_ANSI_2, modifiers: .shift)
         harness.controller.pickerPanel?.sendEvent(shifted)
         #expect(harness.controller.pickerPanel != nil)
         try await harness.pickerEditor().string = ""
         harness.controller.picker?.query = ""
-        try harness.typeKeyInPicker("1", keyCode: kVK_ANSI_1)
+        try harness.typeKeyInPicker("2", keyCode: kVK_ANSI_2)
         #expect(harness.controller.pickerPanel == nil)
         #expect(model.preset == sol)
 
@@ -673,6 +680,84 @@ struct QuickEntryTests {
         #expect(saved.contains("\"count\" : 2"))
         let lastWorkspace = try String(contentsOf: fixture.root.appendingPathComponent(".toastty/task-last-workspace.json"), encoding: .utf8)
         #expect(lastWorkspace.contains(fixture.workspaceID.uuidString))
+    }
+
+    @Test func aFirstCodexTaskReplacesTheDefaultsAndRestoresWithoutACatalogAfterRestart() async throws {
+        let harness = try Harness(recordsPresetUsage: true)
+        let fixture = harness.fixture
+        fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        let sol = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high")
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        harness.controller.openPicker(.agent)
+        let picker = try #require(harness.controller.picker)
+        picker.openColumns(agent: "codex", model: "gpt-6.1-sol")
+        picker.query = "high"
+        picker.submit()
+        try harness.type("First task uses Codex")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+
+        // A new controller and store read the original JSON. No recent
+        // sessions or catalog are needed to keep an explicit model.
+        let restarted = QuickEntryController(
+            store: fixture.store,
+            agentProfiles: { fixture.launcher.launchProfileSummaries() },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:])),
+            create: { try await fixture.coordinator.create($0, caller: .quickEntry) },
+            configLoader: { fixture.config },
+            stagingRootURL: harness.stagingRoot,
+            registersGlobalHotKey: false,
+            frontmostApplication: { nil }
+        )
+        restarted.present(prefill: .empty)
+        defer { restarted.dismiss() }
+        #expect(restarted.model?.preset == sol)
+        #expect(restarted.model?.frequentPresets == [sol], "Configured defaults are a fallback before the first task")
+        restarted.openPicker(.agent)
+        let restoredPicker = try #require(restarted.picker)
+        #expect(restoredPicker.highlightedRow?.action == .preset(sol))
+        restoredPicker.openColumns()
+        #expect(restoredPicker.columns?.cells(in: .model).contains { $0.value == .model("gpt-6.1-sol") } == true)
+        restoredPicker.submit()
+        #expect(restarted.model?.preset == sol)
+    }
+
+    @Test func cancellingOrFailingACreateDoesNotReplaceTheSavedPreset() async throws {
+        let harness = try Harness(recordsPresetUsage: true)
+        let fixture = harness.fixture
+        let saved = QuickEntryPreset(agent: "claude")
+        let sol = QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol", effort: "high")
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        try harness.type("Save the first preset")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+
+        func chooseSol() throws {
+            harness.controller.openPicker(.agent)
+            let picker = try #require(harness.controller.picker)
+            picker.openColumns(agent: "codex", model: "gpt-6.1-sol")
+            picker.query = "high"
+            picker.submit()
+            #expect(harness.controller.model?.preset == sol)
+        }
+
+        harness.controller.present(prefill: .empty)
+        try chooseSol()
+        harness.controller.model?.cancel()
+        harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.preset == saved)
+        try chooseSol()
+        try harness.type("This create will fail")
+        fixture.configError = TaskError("Cannot read tasks.toml")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the create fails") { harness.controller.model?.errorMessage != nil }
+        #expect(harness.controller.isPresented)
+        fixture.configError = nil
+        harness.controller.dismiss()
+        harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.preset == saved)
+        #expect(harness.controller.model?.frequentPresets == [saved])
+        harness.controller.dismiss()
     }
 
     @Test func aPromisedFileHoldsItsSlotAndBlocksCreateUntilItArrives() async throws {
