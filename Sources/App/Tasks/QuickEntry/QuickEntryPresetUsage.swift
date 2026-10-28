@@ -12,7 +12,7 @@ struct QuickEntryPresetUsageRecord: Codable, Equatable, Sendable {
 }
 
 /// Counts the presets of the tasks created in quick entry, so the Agent
-/// picker lists the user's favorites first and starts on the top one.
+/// picker lists the user's favorites first and remembers the last used one.
 /// Agent-created tasks do not count. Kept in
 /// `~/.toastty/task-preset-usage.json`, as the command palette keeps its
 /// usage. Also remembers the last workspace a quick entry task went to, in
@@ -22,14 +22,14 @@ final class QuickEntryPresetUsage {
     static let fileName = "task-preset-usage.json"
     static let lastWorkspaceFileName = "task-last-workspace.json"
     static let halfLife: TimeInterval = 14 * 24 * 60 * 60
-    /// A preset is listed once it has been used this many times.
-    static let minimumUses = 2
     static let frequentLimit = 5
 
     private let fileURL: URL
     private let lastWorkspaceFileURL: URL
     private let fileManager: FileManager
     private let now: () -> Date
+    /// Updated records move to the end. lastUsed uses this order to break
+    /// timestamp ties, including dates rounded by ISO8601 persistence.
     private var records: [QuickEntryPresetUsageRecord]
     /// The workspace of the last task created in quick entry. It may have
     /// closed since.
@@ -61,14 +61,31 @@ final class QuickEntryPresetUsage {
 
     func record(_ preset: QuickEntryPreset) {
         let date = now()
+        var record: QuickEntryPresetUsageRecord
         if let index = records.firstIndex(where: { $0.preset == preset }) {
-            records[index].score = Self.decayed(records[index], at: date) + 1
-            records[index].count += 1
-            records[index].lastUsedAt = date
+            record = records.remove(at: index)
+            record.score = Self.decayed(record, at: date) + 1
+            record.count += 1
+            record.lastUsedAt = date
         } else {
-            records.append(QuickEntryPresetUsageRecord(preset: preset, count: 1, score: 1, lastUsedAt: date))
+            record = QuickEntryPresetUsageRecord(preset: preset, count: 1, score: 1, lastUsedAt: date)
         }
+        // Keep use order when ISO8601 persistence rounds two dates to the
+        // same second. Ranking still uses the score, not array order.
+        records.append(record)
         save()
+    }
+
+    /// The last successful choice, even when it is not a top-five favorite.
+    func lastUsed(agents: Set<String>) -> QuickEntryPreset? {
+        records.enumerated()
+            .filter { agents.contains($0.element.preset.agent) }
+            .max { lhs, rhs in
+                if lhs.element.lastUsedAt != rhs.element.lastUsedAt {
+                    return lhs.element.lastUsedAt < rhs.element.lastUsedAt
+                }
+                return lhs.offset < rhs.offset
+            }?.element.preset
     }
 
     /// The top presets whose agent is still offered.
@@ -76,12 +93,12 @@ final class QuickEntryPresetUsage {
         Self.ranked(records, agents: agents, at: now())
     }
 
-    /// Presets used at least `minimumUses` times, by recency-weighted count;
-    /// a tie goes to the one used last, then to a fixed order. A preset
+    /// Presets by recency-weighted count; a tie goes to the one used last,
+    /// then to a fixed order. A preset
     /// whose agent profile is gone is left out.
     static func ranked(_ records: [QuickEntryPresetUsageRecord], agents: Set<String>, at date: Date) -> [QuickEntryPreset] {
         records
-            .filter { $0.count >= minimumUses && agents.contains($0.preset.agent) }
+            .filter { agents.contains($0.preset.agent) }
             .map { (record: $0, score: decayed($0, at: date)) }
             .sorted { lhs, rhs in
                 if lhs.score != rhs.score { return lhs.score > rhs.score }

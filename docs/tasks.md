@@ -34,20 +34,24 @@ Focus goes back to the app you were in.
   Opened from another app, it starts on the workspace you last used in quick
   entry, while it is open, and otherwise on the selected project. Toastty
   keeps the last one in `~/.toastty/task-last-workspace.json`. Agent starts
-  on your top Frequent preset, or the `[defaults]` preset before one has
-  been used twice. When a pill has no value, Create Task stays off and the
-  panel says `Pick a workspace with ⌘1` or `Pick an agent with ⌘2`.
+  on the agent, model and effort of your last successful quick entry task,
+  or the `[defaults]` preset before the first task. Cancelled and failed
+  tasks do not change this choice. When a pill has no value, Create Task
+  stays off and the panel says `Pick a workspace with ⌘1` or `Pick an agent with ⌘2`.
 - **Pick from the keyboard:** `Cmd+1` opens the Workspace list and `Cmd+2`
   the Agent list. Type to filter, move with the arrow keys, and press
   `Return` to choose; the caret goes back to the task text. `Esc` closes
   only the list. The Workspace list holds the open workspaces.
 - **Agent, model and effort** are chosen together. The Agent list shows
-  your Frequent presets first. A preset is listed once you have created two
-  tasks with it; recent use counts more, with a 14-day half-life, and the
+  your Frequent presets first. A preset is eligible after its first successful
+  task; recent use counts more, with a 14-day half-life, and the
   top five are shown. Until then the list shows the `[defaults]` preset from
   `tasks.toml`. Every task from quick entry counts its preset, including one
   the panel started on. Toastty keeps the counts in
   `~/.toastty/task-preset-usage.json`.
+  The last-used preset can differ from the top Frequent preset. If it is
+  outside the top five, the list shows it under Current. Presets whose
+  agents are no longer offered are skipped when restoring the last choice.
   With the search empty, `1` to `5` pick a Frequent preset. With a preset
   highlighted, `Left Arrow` and `Right Arrow` change its effort. Typing also
   lists every agent and agent + model pair. **Choose agent, model, effort…**

@@ -194,9 +194,9 @@ final class QuickEntryController: ObservableObject {
         )
         let model = QuickEntryModel(
             prefill: prefill,
-            // The top Frequent preset, which is `[defaults]` until one has
-            // been used twice.
-            preset: frequent.first,
+            // Restore the last successful choice independently of Frequent
+            // ranking. Before the first task, use the configured defaults.
+            preset: presetUsage?.lastUsed(agents: Set(profiles.map(\.id))) ?? frequent.first,
             workspaceOptions: options,
             agentProfiles: profiles,
             frequentPresets: frequent,
@@ -523,8 +523,8 @@ final class QuickEntryController: ObservableObject {
             }
     }
 
-    /// The presets used most, recent use counting more; `[defaults]` until
-    /// one has been used twice.
+    /// The presets used most, recent use counting more; `[defaults]` before
+    /// the first successful task.
     private func frequentPresets(defaults: TasksConfig.Defaults?, profiles: [QuickEntryAgentProfile]) -> [QuickEntryPreset] {
         let used = presetUsage?.frequent(agents: Set(profiles.map(\.id))) ?? []
         guard used.isEmpty else { return used }
