@@ -77,6 +77,17 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         XCTAssertEqual(typed.size.height, empty.size.height, "Two lines fit the text area's minimum height")
     }
 
+    func testSavedCustomCodexModelStaysInColumnsAfterUsingAnotherAgent() throws {
+        presetUsage.record(QuickEntryPreset(agent: "codex", model: "custom-codex-model", effort: "high"))
+        presetUsage.record(QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        controller.present(prefill: .empty)
+        controller.model?.text = "Choose the custom Codex model used in an earlier task"
+        controller.openPicker(.agent)
+        controller.picker?.openColumns(agent: "codex")
+        try renderWithPicker("quick-entry-saved-custom-codex-model")
+        XCTAssertTrue(controller.picker?.columns?.cells(in: .model).contains { $0.title == "custom-codex-model" } == true)
+    }
+
     func testDesignStateWithScreenshotAttached() throws {
         controller.present(prefill: .empty)
         let model = try XCTUnwrap(controller.model)

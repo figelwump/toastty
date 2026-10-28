@@ -57,8 +57,10 @@ Focus goes back to the app you were in.
   lists every agent and agent + model pair. **Choose agent, model, effort…**
   (`Cmd+Right Arrow`) opens three columns: `Tab` moves between them, and
   typing filters the one in focus. The Model column lists the models that
-  live sessions reported recently (while remote access is on), the
-  `[defaults]` model, and **Default**; type any other model name to use it.
+  you used to create tasks, followed by models that live sessions reported
+  recently (while remote access is on). It keeps up to five distinct saved
+  or live models per profile, plus the `[defaults]` model and **Default**;
+  type any other model name to use it.
   Codex also loads its model catalog in the background when you open a new
   draft. These choices do not need remote access or a recent session. A new
   draft offers the last successful catalog at once and refreshes it in the
