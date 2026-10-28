@@ -922,12 +922,12 @@ Supported action IDs:
   - when a sidebar has not rendered, task spaces use stored workspace order; hidden or newly added task spaces remain reachable after the recorded rows
   - traversal visits rows below the current focus, then other windows in stored window order starting after the current window, then wraps to rows above the focus in the current window
   - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
-  - a `ready` session only participates while unread; once visited it collapses back to `idle`
+  - a `ready` session participates through unread state and collapses back to `idle` once visited; its task space remains in the cycle if the task is ready for review
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
-  - if no attention-required panel exists, it builds an active-session cycle anchored to the current focus
-  - that active cycle first includes working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
+  - read attention-required panels and open task spaces whose task-board stage is ready for review stay in the cycle, before working panels; each review task space uses its focused panel, even without a live agent; a task space already represented by an agent or later flag keeps that existing target instead of adding a review target
+  - the cycle is anchored to the current focus and first includes attention-required panels, then review task spaces, then working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
   - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
-  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
+  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, review-stage changes, later-flag changes, or unread preemption reset the active cycle and rebuild it from the new focus
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`

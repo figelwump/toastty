@@ -66,7 +66,7 @@ A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toas
 - **Rows that need you are tinted:** green when ready, amber when waiting for approval, red on an error.
 - **Task spaces** nest task workspaces under the session that started them, each with its own status and chips such as `PR #128`.
 - Sessions that start their own subagents or background work show them as expandable rows.
-- **Jump to what's next:** `Cmd+Shift+A` cycles through unread, approval, and active sessions. `Cmd+Shift+L` marks a session for later; the flag clears when the session moves forward.
+- **Jump to what's next:** `Cmd+Shift+A` cycles through unread panels, sessions that need input, task spaces ready for review, and active sessions. `Cmd+Shift+L` marks a session for later; the flag clears when the session moves forward.
 - **Watch any command:** `Cmd+Shift+M` gives a long build or test run its own row and a notification when it exits.
 - **Unread badges and macOS notifications**, so you can look away.
 

@@ -142,6 +142,151 @@ struct TaskBoardTests {
         #expect(Set(board.items(windowID: windowID).map(\.id)) == Set(board.items().map(\.id)))
     }
 
+    @Test(arguments: [true, false])
+    func jumpCyclesReviewTaskSpacesAlongsideWorkingAgents(hasWorkingAgent: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        if hasWorkingAgent {
+            runtime.startSession(
+                sessionID: "working", agent: .codex, panelID: workingPanelID,
+                windowID: windowID, workspaceID: fixture.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        }
+
+        // A tracked task explicitly ready for review, with its answer read.
+        let task = try await startTask(fixture, text: "Review the fix")
+        let trackedPanelID = try #require(task.operation.taskSpace?.panelID)
+        runtime.updateStatus(
+            sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
+        try fixture.coordinator.readyForReview(taskID: task.id)
+
+        // An older task space with a linked PR and no live agent also needs review.
+        let observedID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        let observedPanelID = try #require(store.state.workspacesByID[observedID]?.focusedPanelID)
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: observedID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .needsYou(.readyForReview))
+        #expect(board.items().first { $0.id == .taskSpace(observedID) }?.stage == .needsYou(.review))
+
+        #expect(store.selectedWorkspace?.focusedPanelID == workingPanelID)
+        // Repeated jumps visit both review spaces and the working agent, then wrap.
+        let expectedCycle = hasWorkingAgent
+            ? [trackedPanelID, observedPanelID, workingPanelID, trackedPanelID]
+            : [trackedPanelID, observedPanelID, trackedPanelID]
+        for expectedPanelID in expectedCycle {
+            #expect(store.nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            )?.panelID == expectedPanelID)
+            #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+
+        // Resuming work removes the task from the review segment immediately.
+        let sessionID = try #require(task.currentSessionID)
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .running)
+        for expectedPanelID in [observedPanelID, hasWorkingAgent ? workingPanelID : trackedPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: try #require(task.taskSpaceWorkspaceID)))
+
+        // A completed review leaves the cycle. Its workspace remains open.
+        try fixture.coordinator.markDone(taskID: task.id)
+        #expect(store.state.workspacesByID[try #require(task.taskSpaceWorkspaceID)] != nil)
+        #expect(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ))
+        #expect(store.selectedWorkspace?.focusedPanelID == observedPanelID)
+        _ = store.send(.setWorkspaceDone(workspaceID: observedID, doneAt: Date()))
+        #expect(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ) == hasWorkingAgent)
+        #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
+    }
+
+    @Test func jumpKeepsReviewCycleStableWithLaterPaneAndPreservesUnreadAndApprovalPriority() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        let laterSpaceID = try makeUntrackedTaskSpace(fixture, title: "Review with later pane")
+        let reviewSpaceID = try makeUntrackedTaskSpace(fixture, title: "Another review")
+        let reviewPanelID = try #require(store.state.workspacesByID[reviewSpaceID]?.focusedPanelID)
+        for workspaceID in [laterSpaceID, reviewSpaceID] {
+            _ = store.send(.setWorkspaceAnnotation(
+                workspaceID: workspaceID, key: "github-pr",
+                annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+            ))
+        }
+        let laterPanelID = UUID()
+        _ = store.send(.createBackgroundTerminalTab(
+            workspaceID: laterSpaceID, tabID: UUID(), panelID: laterPanelID, terminalCWD: fixture.projectRoot
+        ))
+        for (sessionID, workspaceID, panelID, kind) in [
+            ("working", fixture.workspaceID, workingPanelID, SessionStatusKind.working),
+            ("later", laterSpaceID, laterPanelID, SessionStatusKind.idle),
+        ] {
+            runtime.startSession(
+                sessionID: sessionID, agent: .codex, panelID: panelID,
+                windowID: windowID, workspaceID: workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: kind, summary: kind.rawValue), at: Date())
+        }
+        runtime.setLaterFlag(sessionID: "later", isFlagged: true)
+        #expect(board.items().first { $0.id == .taskSpace(laterSpaceID) }?.stage == .needsYou(.review))
+        // The review space with a later pane is already reachable. Changing
+        // its selected tab through the jump must not reset the saved cycle.
+        for expectedPanelID in [reviewPanelID, laterPanelID, workingPanelID, reviewPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+
+        runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .needsApproval, summary: "Approve"), at: Date())
+        // Read the approval notice so the next cycle tests approval status,
+        // independently of the unread notification created by that transition.
+        _ = store.send(.markPanelNotificationsRead(workspaceID: fixture.workspaceID, panelID: workingPanelID))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: laterSpaceID))
+        _ = store.send(.recordDesktopNotification(workspaceID: reviewSpaceID, panelID: reviewPanelID))
+        #expect(store.state.workspacesByID[reviewSpaceID]?.unreadPanelIDs.contains(reviewPanelID) == true)
+        // Unread preempts approval. Starting at that review then visits
+        // approval, later, and the starting review panel, without repeats.
+        for expectedPanelID in [reviewPanelID, workingPanelID, laterPanelID, reviewPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+    }
+
     private func startNamedSession(
         _ fixture: TaskCoordinatorTests.Fixture, workspaceID: UUID, panelID: UUID, sessionID: String,
         override: String? = nil
