@@ -566,7 +566,8 @@ anything:
 
 - The workspace's checkout must be the pull request's worktree, and the
   worktree must be clean and at exactly the pull request's head commit. The
-  pull request must target the repository's default branch.
+  merge uses the pull request's current target branch, including a feature
+  branch. That branch does not need to merge into the default branch first.
 - Toastty refuses a pull request with merge conflicts, failing checks, or a
   branch that GitHub requires to be updated first. It does not read the
   description: check its merge prerequisites before you click. For a task,
@@ -582,7 +583,9 @@ still running, or GitHub is waiting on a required review, Toastty waits and
 tries again every 30 seconds. It never turns on GitHub auto-merge, because
 GitHub would then also merge commits pushed after your click. Toastty merges
 only the commit you accepted, and GitHub refuses that merge if the branch has
-moved. Toastty marks the workspace done when you click, so a Merge Only shows
+moved. Toastty saves the target branch with a waiting merge and stops if the
+pull request is retargeted. A saved wait from an older version that did not
+record the target requires a new merge acceptance. Toastty marks the workspace done when you click, so a Merge Only shows
 **Done · PR #N** while it waits.
 
 - A waiting merge needs Toastty to be running. It is kept across launches and

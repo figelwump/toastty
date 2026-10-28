@@ -448,6 +448,11 @@ final class WorkspaceMergeCoordinator {
             presentFailure("Unable to Merge \(pullRequest)", outcome.detail)
             return
         }
+        if isWaiting, outcome.base?.isEmpty != false {
+            update(workspaceID, nil)
+            presentFailure("Unable to Merge \(pullRequest)", "The merge did not report its target branch. Check the pull request, then merge again.")
+            return
+        }
         // The workspace may have closed, or moved to another pull request,
         // while the script ran; the done mark belongs to this one only.
         let annotation = store?.state.workspacesByID[workspaceID]?
@@ -461,6 +466,7 @@ final class WorkspaceMergeCoordinator {
         store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
         var next = request
         if isWaiting {
+            next.acceptedBase = outcome.base
             next.phase = .awaitingChecks(acceptedHead: acceptedHead, thenCleanUp: thenCleanUp)
             update(workspaceID, next)
         } else if thenCleanUp {
@@ -479,11 +485,15 @@ final class WorkspaceMergeCoordinator {
         acceptedHead: String,
         thenCleanUp: Bool
     ) async -> Bool {
+        guard let acceptedBase = request.acceptedBase, acceptedBase.isEmpty == false else {
+            stopWaitingMerge(workspaceID, pullRequest: "PR #\(request.pullRequest.number)", reason: "The saved merge has no accepted target branch. Check the pull request, then merge again.")
+            return false
+        }
         let outcome = await runScript(
             "merge",
             workspaceID: workspaceID,
             request: request,
-            extraArguments: ["--head", acceptedHead]
+            extraArguments: ["--head", acceptedHead, "--base", acceptedBase]
         )
         guard Task.isCancelled == false, requests[workspaceID] == request else { return false }
         let pullRequest = "PR #\(request.pullRequest.number)"
@@ -727,6 +737,8 @@ final class WorkspaceMergeCoordinator {
         var detail: String
         /// For a merge, the commit the user accepted.
         var head: String?
+        /// For a merge, the target branch accepted with that commit.
+        var base: String?
     }
 
     static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
@@ -737,7 +749,10 @@ final class WorkspaceMergeCoordinator {
               let status = object["status"] as? String else {
             return ScriptOutcome(status: nil, detail: "The pull request script printed no report.")
         }
-        return ScriptOutcome(status: status, detail: object["detail"] as? String ?? status, head: object["head"] as? String)
+        return ScriptOutcome(
+            status: status, detail: object["detail"] as? String ?? status,
+            head: object["head"] as? String, base: object["base"] as? String
+        )
     }
 
     private func fail(_ workspaceID: UUID, _ request: WorkspaceMergeRequest, _ reason: String) {

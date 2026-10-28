@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Merge, clean up, or close one task pull request for a Toastty subspace.
 
-Usage: workspace-pull-request.py ACTION --pr NUMBER --pr-url URL --workspace ID --repo PATH [--head SHA]
+Usage: workspace-pull-request.py ACTION --pr NUMBER --pr-url URL --workspace ID --repo PATH [--head SHA --base BRANCH]
        [--expect-head SHA]
 
 Toastty runs this for a subspace's Merge button; it is not a user command.
@@ -16,12 +16,13 @@ ACTION is one of:
             Without --head, the accepted commit is the clicked checkout's HEAD,
             read first; the checkout must be the PR's worktree, clean at that
             commit, and the PR head must be that commit. With --head, the PR head
-            must still be that commit, and the workspace must still be marked
+            must still be that commit, its base must match --base, and the workspace must still be marked
             done, which is how the user cancels a waiting merge. --expect-head,
             without --head, also requires the checkout's HEAD to be that commit:
-            the version a merge skill checked. Either way it
-            refuses, changing nothing, unless the PR targets the default branch
-            and has no conflicts or failing checks. It does not read the PR's
+            the version a merge skill checked. It merges into the PR's current
+            base branch, including a feature branch. It refuses, changing nothing,
+            if the PR has conflicts, failing checks, or a branch GitHub requires
+            to be updated. It does not read the PR's
             description: a merge skill, or the user, judges what it asks. A draft
             is marked ready first. The merge method is the first one the
             repository allows: merge commit, squash, then rebase.
@@ -238,16 +239,28 @@ def refresh_merge_state(ctx: Context) -> None:
     for _ in range(2):
         if ctx.pr.get("mergeStateStatus") != "UNKNOWN":
             return
-        view = run(["gh", "pr", "view", str(ctx.pr["number"]), "--json", "mergeable,mergeStateStatus"],
+        view = run(["gh", "pr", "view", str(ctx.pr["number"]), "--json", "mergeable,mergeStateStatus,baseRefName"],
                    cwd=ctx.repo, check=False)
         ctx.pr.update(json.loads(view or "{}"))
 
 
 # MARK: - Merge
 
-def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
+def check_target_branch(actual: str | None, accepted: str) -> None:
+    if actual != accepted:
+        raise Refusal(f"the target branch changed after the merge was accepted: it is now {actual}, "
+                      f"not {accepted}; check the pull request, then merge again")
+
+
+def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tuple[str, str, str]:
     """Returns the status, a description, and the accepted commit."""
     pr, number = ctx.pr, ctx.pr["number"]
+    if accepted is not None:
+        if not accepted_base:
+            raise Refusal("the waiting merge has no accepted target branch; check the pull request, then merge again")
+        check_target_branch(pr["baseRefName"], accepted_base)
+    else:
+        accepted_base = pr["baseRefName"]
     if accepted is None:
         # The click: what merges is the version in the clicked workspace, as
         # it was before this script fetched or asked GitHub anything.
@@ -279,16 +292,14 @@ def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
     if pr.get("autoMergeRequest"):
         raise Refusal(f"auto-merge is on for PR #{number}, so GitHub would also merge commits pushed later; "
                       "turn it off on GitHub, then merge again")
-    if pr["baseRefName"] != ctx.default_branch:
-        raise Refusal(f"it targets {pr['baseRefName']}, not {ctx.default_branch}; merge that pull request "
-                      "first, and GitHub then retargets this one")
     refresh_merge_state(ctx)
+    check_target_branch(pr["baseRefName"], accepted_base)
     failing, pending = check_summary(pr)
     reasons: list[str] = []
     if pr.get("mergeable") == "CONFLICTING" or pr.get("mergeStateStatus") == "DIRTY":
         reasons.append("it has merge conflicts")
     if pr.get("mergeStateStatus") == "BEHIND":
-        reasons.append(f"its branch is behind {ctx.default_branch} and must be updated")
+        reasons.append(f"its branch is behind {pr['baseRefName']} and must be updated")
     if failing:
         reasons.append("failing checks: " + ", ".join(failing))
     if reasons:
@@ -315,6 +326,10 @@ def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
         workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
         if workspace is None or not workspace.get("done"):
             raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
+    # Recheck after the other calls. The API locks the head SHA, but has no
+    # equivalent target-branch condition, so the final request still has a race.
+    current = json.loads(run(["gh", "pr", "view", str(number), "--json", "baseRefName"], cwd=ctx.repo))
+    check_target_branch(current.get("baseRefName"), accepted_base)
     # GitHub's merge API merges now or fails; unlike `gh pr merge`, it never
     # turns on auto-merge or adds the PR to a merge queue. `sha` makes GitHub
     # refuse if the head is no longer the accepted commit.
@@ -611,17 +626,21 @@ def main() -> None:
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--repo", required=True, help="any checkout of the repository")
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
+    parser.add_argument("--base", help="with --head: the target branch from the earlier waiting report")
     parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
     options = parser.parse_args()
     if options.head and options.action != "merge":
         parser.error("--head is only for merge")
+    if options.base and not options.head:
+        parser.error("--base is only for a merge with --head")
     if options.expect_head and (options.action != "merge" or options.head):
         parser.error("--expect-head is only for a merge without --head")
     report: dict = {}
     try:
         ctx = load(options)
         if options.action == "merge":
-            status, detail, report["head"] = merge(ctx, options.head)
+            report["base"] = ctx.pr["baseRefName"]
+            status, detail, report["head"] = merge(ctx, options.head, options.base)
         else:
             status, detail = clean_up(ctx, close_pr=options.action == "close")
     except Refusal as refusal:

@@ -71,6 +71,9 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// the repository's main checkout from it.
     public let repoPath: String
     public var phase: Phase
+    /// The target branch reported when a merge started waiting for checks.
+    /// Older saved waits have no target and must be accepted again.
+    public var acceptedBase: String?
 
     public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase) {
         self.pullRequest = pullRequest
