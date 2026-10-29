@@ -58,7 +58,7 @@ final class QuickEntryModel: ObservableObject {
     /// picker opens under it.
     var pillFrames: [QuickEntryPickerKind: CGRect] = [:]
 
-    let workspaceOptions: [Option]
+    @Published var workspaceOptions: [Option]
     var agentProfiles: [QuickEntryAgentProfile]
     /// Presets listed first in the Agent picker.
     let frequentPresets: [QuickEntryPreset]

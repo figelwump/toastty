@@ -477,6 +477,41 @@ struct QuickEntryTests {
 
     // MARK: - Pickers
 
+    @Test func workspacePickerRefreshesWithoutDiscardingTheDraft() async throws {
+        let harness = try Harness()
+        defer { harness.controller.dismiss() }
+        let store = harness.fixture.store
+        let windowID = try #require(store.state.windows.first?.id)
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        let model = try #require(harness.controller.model)
+        let originalID = try #require(model.workspaceID)
+        try harness.type("Keep this draft")
+
+        #expect(store.send(.createWorkspace(windowID: windowID, title: "Workspace 1", activate: false)))
+        let addedID = try #require(store.state.workspacesByID.values.first { $0.title == "Workspace 1" }?.id)
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        #expect(harness.controller.picker?.rows.contains { $0.title == "Workspace 1" } == true)
+        #expect(model.workspaceID == originalID)
+        try await harness.typeInPicker("Workspace 1")
+        try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
+        #expect(model.workspaceID == addedID)
+
+        #expect(store.send(.renameWorkspace(workspaceID: addedID, title: "Renamed")))
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        #expect(harness.controller.picker?.highlightedRow?.title == "Renamed")
+        #expect(model.workspaceTitle == "Renamed")
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+
+        #expect(store.send(.closeWorkspace(workspaceID: addedID)))
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        #expect(harness.controller.picker?.rows.contains { $0.title == "Renamed" } == false)
+        #expect(model.workspaceID == nil)
+        #expect(model.missingChoiceHint == "Pick a workspace with ⌘1")
+        #expect(model.text == "Keep this draft")
+        #expect(harness.controller.panel === panel)
+    }
+
     @Test func commandOneOpensTheWorkspacePickerAndReturnPicksAndRefocusesTheText() async throws {
         let harness = try Harness()
         let fixture = harness.fixture

@@ -41,7 +41,10 @@ Focus goes back to the app you were in.
 - **Pick from the keyboard:** `Cmd+1` opens the Workspace list and `Cmd+2`
   the Agent list. Type to filter, move with the arrow keys, and press
   `Return` to choose; the caret goes back to the task text. `Esc` closes
-  only the list. The Workspace list holds the open workspaces.
+  only the list. The Workspace list refreshes each time you open it. It holds
+  open top-level workspaces from all windows, including folders without Git
+  repositories. Nested task spaces are excluded. If the selected workspace
+  has closed, choose another one.
 - **Agent, model and effort** are chosen together. The Agent list shows
   your Frequent presets first. A preset is eligible after its first successful
   task; recent use counts more, with a 14-day half-life, and the
