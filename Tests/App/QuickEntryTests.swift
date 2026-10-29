@@ -231,21 +231,42 @@ struct QuickEntryTests {
         harness.controller.dismiss()
     }
 
-    @Test func theStartingWorkspaceDependsOnWhereThePanelOpened() {
+    @Test func theStartingWorkspaceIsTheLastUsedOneWhileItIsOpen() {
         let selected = UUID()
         let lastUsed = UUID()
         let closed = UUID()
         let options = [selected, lastUsed].map { QuickEntryModel.Option(id: $0.uuidString, title: "w") }
-        func start(_ selectedProject: UUID?, _ last: UUID?, inToastty: Bool) -> UUID? {
-            QuickEntryController.initialWorkspaceID(
-                selectedProject: selectedProject, lastUsed: last, openedInToastty: inToastty, options: options
-            )
+        func start(_ selectedProject: UUID?, _ last: UUID?) -> UUID? {
+            QuickEntryController.initialWorkspaceID(selectedProject: selectedProject, lastUsed: last, options: options)
         }
-        #expect(start(selected, lastUsed, inToastty: true) == selected)
-        #expect(start(selected, lastUsed, inToastty: false) == lastUsed)
-        #expect(start(selected, closed, inToastty: false) == selected, "A closed last workspace is skipped")
-        #expect(start(nil, lastUsed, inToastty: true) == lastUsed)
-        #expect(start(closed, nil, inToastty: true) == nil)
+        #expect(start(selected, lastUsed) == lastUsed)
+        #expect(start(selected, closed) == selected, "A closed last workspace is skipped")
+        #expect(start(selected, nil) == selected, "Before the first task")
+        #expect(start(closed, nil) == nil)
+    }
+
+    @Test func overToasttyThePanelStartsOnTheLastUsedWorkspaceNotTheSelectedOne() async throws {
+        let harness = try Harness(recordsPresetUsage: true)
+        let fixture = harness.fixture
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: fixture.workspaceID))
+        try harness.type("Goes to the fixture workspace")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+
+        // The user moves to another project in the main window.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "Elsewhere", activate: true)))
+        let elsewhereID = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "Elsewhere" }?.id)
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == elsewhereID)
+
+        harness.controller.present(prefill: .empty)
+        #expect(harness.controller.model?.workspaceID == fixture.workspaceID)
+        harness.controller.dismiss()
+
+        // A selection keeps its terminal's workspace.
+        harness.controller.present(prefill: QuickEntryPrefill(workspaceID: elsewhereID, selectionText: "log line"))
+        #expect(harness.controller.model?.workspaceID == elsewhereID)
+        harness.controller.dismiss()
     }
 
     @Test func aFailedCreateKeepsThePanelAndTheTextUntilItSucceeds() async throws {

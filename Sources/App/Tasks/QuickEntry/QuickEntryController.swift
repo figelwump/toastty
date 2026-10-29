@@ -194,7 +194,6 @@ final class QuickEntryController: ObservableObject {
         prefill.workspaceID = prefill.workspaceID ?? Self.initialWorkspaceID(
             selectedProject: selectedProjectID(),
             lastUsed: presetUsage?.lastWorkspaceID,
-            openedInToastty: previousApplication == nil,
             options: options
         )
         let model = QuickEntryModel(
@@ -690,19 +689,16 @@ final class QuickEntryController: ObservableObject {
         return state.subspaceParentIDsByWorkspaceID()[selected] ?? selected
     }
 
-    /// The workspace the panel starts on. Opened over Toastty, it is the
-    /// selected project, where the user is working. Opened from another
-    /// app, it is the workspace last used in quick entry, since the
-    /// selection in a window in the background says less; the selected
-    /// project when that one closed. nil when neither is open.
+    /// The workspace the panel starts on: the workspace last used in quick
+    /// entry, wherever the panel opens, so a choice sticks until the user
+    /// changes it. The selected project when that one closed or before the
+    /// first task. nil when neither is open.
     static func initialWorkspaceID(
         selectedProject: UUID?,
         lastUsed: UUID?,
-        openedInToastty: Bool,
         options: [QuickEntryModel.Option]
     ) -> UUID? {
-        let candidates = openedInToastty ? [selectedProject, lastUsed] : [lastUsed, selectedProject]
-        return candidates.compactMap { $0 }.first { id in options.contains { $0.id == id.uuidString } }
+        [lastUsed, selectedProject].compactMap { $0 }.first { id in options.contains { $0.id == id.uuidString } }
     }
 
     /// The top-level workspace that holds a panel, for "New Task from

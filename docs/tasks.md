@@ -29,10 +29,10 @@ Focus goes back to the app you were in.
   files.
 - **Drop a link** to add it to the text.
 - **Workspace and Agent** start chosen, and both go into the task.
-  Opened over Toastty, Workspace starts on the project of the workspace
-  selected in the main window; a selected task space counts as its project.
-  Opened from another app, it starts on the workspace you last used in quick
-  entry, while it is open, and otherwise on the selected project. Toastty
+  Workspace starts on the workspace of your last quick entry task, while it
+  is open, wherever you open the panel. Before the first task, or when that
+  workspace has closed, it starts on the project of the workspace selected
+  in the main window; a selected task space counts as its project. Toastty
   keeps the last one in `~/.toastty/task-last-workspace.json`. Agent starts
   on the agent, model and effort of your last successful quick entry task,
   or the `[defaults]` preset before the first task. Cancelled and failed
