@@ -420,6 +420,10 @@ Tasks view, gives one a record, so its history stays after it closes.
 
 ## The sidebar and the Tasks view
 
+`Cmd+Shift+A` includes open task spaces ready for review, even after you read
+the agent’s answer or its session exits. They follow unread panels and agents
+that need input, and precede working agents in the cycle.
+
 The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
 the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
 the sidebar by **Projects** or by **Status**. The choice is saved for each

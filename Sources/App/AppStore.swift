@@ -11,6 +11,7 @@ private struct NextActiveCycleAnchor: Equatable {
 
 private enum NextActiveCycleSegment: String, Equatable {
     case actionRequired = "fallback_attention"
+    case review = "fallback_review"
     case workingForward = "fallback_working"
     case later = "fallback_later"
     case workingWrapped = "fallback_working_wrapped"
@@ -2229,6 +2230,28 @@ final class AppStore: ObservableObject {
             workspaceID: anchor.workspaceID,
             focusedPanelID: anchor.focusedPanelID
         )
+        // A task space already reached through an agent or later flag needs
+        // no second target. Jumping between its panes must not remap a review
+        // entry and restart the cycle.
+        let representedWorkspaceIDs = Set(actionRequiredPanelIDs.union(workingPanelIDs).union(laterPanelIDs).compactMap {
+            state.workspaceSelection(containingPanelID: $0)?.workspaceID
+        })
+        // Review is a task stage, not an agent status. Use the board's cached
+        // stage so a read answer or an exited agent does not hide the task.
+        let reviewPanelIDs = Set((sessionRuntimeStore.taskCoordinator?.board?.items() ?? []).compactMap { item -> UUID? in
+            switch item.stage {
+            case .needsYou(.review), .needsYou(.readyForReview): break
+            default: return nil
+            }
+            guard let workspaceID = item.taskSpaceWorkspaceID,
+                  !representedWorkspaceIDs.contains(workspaceID),
+                  let workspace = state.workspacesByID[workspaceID] else { return nil }
+            if let panelID = workspace.focusedPanelID,
+               workspace.tabID(containingPanelID: panelID) != nil {
+                return panelID
+            }
+            return navigationOrder.all.first { $0.workspaceID == workspaceID }?.panelID
+        })
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
@@ -2238,6 +2261,14 @@ final class AppStore: ObservableObject {
         entries.append(contentsOf: actionRequiredTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
+        })
+
+        let reviewTargets = navigationOrder.all.filter {
+            reviewPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
+        entries.append(contentsOf: reviewTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .review)
         })
 
         let forwardWorkingTargets = navigationOrder.forward.filter {
@@ -2269,6 +2300,8 @@ final class AppStore: ObservableObject {
            seenPanelIDs.contains(focusedPanelID) == false {
             if actionRequiredPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .actionRequired))
+            } else if reviewPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .review))
             } else if workingPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .workingWrapped))
             } else if laterPanelIDs.contains(focusedPanelID) {

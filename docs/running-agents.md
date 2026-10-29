@@ -1070,7 +1070,7 @@ socket event. Custom agents should normally use the ordinary `session status`,
 
 Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-up.
 
-Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
+Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then open task spaces ready for review, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
 
