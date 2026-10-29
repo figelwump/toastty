@@ -13,6 +13,7 @@ final class WorkspaceViewTests: XCTestCase {
         let panelID: UUID
         let store: AppStore
         let sessionRuntimeStore: SessionRuntimeStore
+        let taskCoordinator: TaskCoordinator?
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let terminalRuntimeRegistry: TerminalRuntimeRegistry
         let hostingView: NSView
@@ -1714,6 +1715,80 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
+    /// A task with no worktree or PR can be archived before or after an
+    /// explicit completion signal. Cancel in the real dialog preserves it.
+    @MainActor
+    func testTaskWithoutPullRequestHeaderOffersArchiveAndCancelPreservesTask() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Investigate a question", title: "Investigate a question",
+            slug: "investigate-question", source: .quickEntry
+        )
+        var mergeRequests: [UUID] = []
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            taskRecord: task,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                state.workspacesByID[workspaceID]?.parentWorkspaceID = parent.id
+                state.workspacesByID[workspaceID]?.title = task.title
+                let panelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+                state.workspacesByID[workspaceID]?.unreadPanelIDs = [panelID]
+            },
+            requestWorkspaceMerge: { workspaceID, _ in mergeRequests.append(workspaceID) }
+        )
+        defer { harness.window.orderOut(nil) }
+        let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+
+        for state in ["idle", "ready", "done"] {
+            if state == "ready" { _ = try coordinator.readyForReview(taskID: task.id) }
+            if state == "done" { _ = try coordinator.markDone(taskID: task.id) }
+            pumpMainRunLoop(duration: 0.05)
+            try writeTopBarEvidence(harness, name: "topbar-task-archive-\(state)")
+
+            var dialogText: [String] = []
+            func textFields(in view: NSView) -> [String] {
+                (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
+            }
+            // This timer also runs inside NSAlert's modal loop. It cancels
+            // the real confirmation instead of replacing the archive path.
+            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+                    dialogText = textFields(in: content)
+                    NSApp.stopModal(withCode: .alertSecondButtonReturn)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            defer { timer.invalidate() }
+            try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+            pumpMainRunLoop(duration: 0.2)
+            timer.invalidate()
+            XCTAssertTrue(dialogText.contains("Archive \(task.title)?"), "\(state): \(dialogText)")
+            XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
+            XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+            XCTAssertTrue(mergeRequests.isEmpty)
+        }
+
+        // Adding a PR replaces Archive with the existing merge control,
+        // even when the optional workspace-merge setting is disabled.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: harness.workspaceID, doneAt: nil))
+        _ = harness.store.send(.setWorkspaceAnnotation(
+            workspaceID: harness.workspaceID, key: "github-pr",
+            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(
+                text: "PR #59", url: "https://github.com/example/toastty/pull/59"
+            ))
+        ))
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-task-archive-replaced-by-merge")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+    }
+
     /// While GitHub says the pull request is not ready to merge, the button
     /// reads Open PR in a neutral color and opens it instead of merging; it
     /// turns back into Merge once GitHub says it is ready.
@@ -2971,6 +3046,7 @@ final class WorkspaceViewTests: XCTestCase {
         hostWidth: CGFloat = 900,
         appIsActive: Bool? = nil,
         isWorkspaceMergeEnabled: Bool = false,
+        taskRecord: TaskRecord? = nil,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
         pullRequestStateCache: PullRequestStateCache? = nil,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
@@ -3029,6 +3105,21 @@ final class WorkspaceViewTests: XCTestCase {
             withIntermediateDirectories: true,
             attributes: nil
         )
+        var taskCoordinator: TaskCoordinator?
+        if var taskRecord {
+            taskRecord.operation.taskSpace = .init(workspaceID: workspaceID, panelID: panelID)
+            taskRecord.setup = .started
+            let records = TaskRecordStore(fileURL: tempHomeDirectory.appendingPathComponent("tasks.json"))
+            try records.insert(taskRecord)
+            taskCoordinator = TaskCoordinator(
+                records: records, store: store, launcher: nil,
+                configLoader: { TasksConfig() },
+                attachmentsDirectoryURL: tempHomeDirectory.appendingPathComponent("attachments"),
+                hasActiveSession: { _ in false }, grantScope: { _, _ in }
+            )
+            sessionRuntimeStore.taskCoordinator = taskCoordinator
+            _ = store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: taskRecord.id))
+        }
         let agentCatalogStore = AgentCatalogStore(homeDirectoryPath: tempHomeDirectory.path)
         let terminalProfileStore = TerminalProfileStore(
             homeDirectoryPath: tempHomeDirectory.path,
@@ -3088,6 +3179,7 @@ final class WorkspaceViewTests: XCTestCase {
             panelID: panelID,
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
+            taskCoordinator: taskCoordinator,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             terminalRuntimeRegistry: registry,
             hostingView: hostingView,
