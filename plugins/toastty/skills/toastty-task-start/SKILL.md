@@ -13,6 +13,20 @@ worktree, write a handoff, or fork the session yourself.
 Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, and stop.
 
+## Sandbox permissions
+
+Every Toastty CLI command in this skill connects to the app's local socket.
+In a sandboxed runtime, request the runtime's per-command sandbox escalation
+on the first attempt. Do not try the command sandboxed first.
+
+In Codex, use `sandbox_permissions="require_escalated"` with a short
+justification that the command needs Toastty's local socket. Escalation runs
+that invocation outside the sandbox; it does not restrict access to one socket.
+Limit the request to the exact command. Do not request a broad approval prefix,
+change sandbox settings, or widen Toastty's workspace scope. If escalation is
+unavailable or denied by runtime policy or approval review, report the
+restriction and stop.
+
 ## Move this task into a worktree
 
 When the user says to implement, start work, or move to a worktree:
