@@ -28,6 +28,8 @@ MANUAL_REVIEW=0
 DELETE_FAILURES=0
 ELIGIBLE_BYTES=0
 RECLAIMED_BYTES=0
+RUN_VALIDATION_REASON=""
+MATCHED_PROCESS_PID=""
 
 usage() {
   cat <<'EOF'
@@ -175,13 +177,20 @@ path_has_live_process() {
   local target_path="$1"
   local pid
   local command_line
-  [[ -n "$target_path" && "$target_path" == /* ]] || return 0
+  local process_inventory
+  local has_process=0
+  MATCHED_PROCESS_PID=""
+  [[ -n "$target_path" && "$target_path" == /* ]] || return 2
+  # Capture the status before reading so an unavailable inventory cannot look idle.
+  process_inventory="$(ps -axww -o pid=,command= 2>/dev/null)" || return 2
   while read -r pid command_line; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    has_process=1
     case "$command_line" in
-      *"$target_path"*) return 0 ;;
+      *"$target_path"*) MATCHED_PROCESS_PID="$pid"; return 0 ;;
     esac
-  done < <(ps -axww -o pid=,command=)
+  done <<<"$process_inventory" || return 2
+  [[ "$has_process" == "1" ]] || return 2
   return 1
 }
 
@@ -195,6 +204,9 @@ validate_run_manifest() {
   local owner_pid
   local owner_started_at
   local directory_modified_epoch
+  local process_status
+
+  RUN_VALIDATION_REASON="invalid-run-ownership"
 
   [[ -d "$run_dir" && ! -L "$run_dir" ]] || return 2
   [[ -f "$manifest" && ! -L "$manifest" ]] || return 2
@@ -220,23 +232,54 @@ validate_run_manifest() {
       and (.createdAt | type == "string")
     ' "$manifest" >/dev/null 2>&1 || return 2
 
-  [[ ! -e "$run_dir/.keep" ]] || return 1
+  if [[ -e "$run_dir/.keep" ]]; then
+    RUN_VALIDATION_REASON="keep-marker"
+    return 1
+  fi
   created_epoch="$(jq -er '.createdAt | fromdateiso8601' "$manifest" 2>/dev/null)" || return 2
   (( created_epoch <= NOW_EPOCH )) || return 2
-  (( created_epoch <= cutoff_epoch )) || return 1
+  if (( created_epoch > cutoff_epoch )); then
+    RUN_VALIDATION_REASON="recent-creation"
+    return 1
+  fi
   directory_modified_epoch="$(stat -f %m "$run_dir" 2>/dev/null)" || return 2
   [[ "$directory_modified_epoch" =~ ^[0-9]+$ ]] || return 2
   (( directory_modified_epoch <= NOW_EPOCH )) || return 2
-  (( directory_modified_epoch <= cutoff_epoch )) || return 1
+  if (( directory_modified_epoch > cutoff_epoch )); then
+    RUN_VALIDATION_REASON="recent-modification"
+    return 1
+  fi
 
   owner_pid="$(jq -r '.owner.pid' "$manifest")"
   owner_started_at="$(jq -r '.owner.startedAt' "$manifest")"
-  process_matches_live_owner "$owner_pid" "$owner_started_at" && return 1
-  path_has_live_process "$run_dir" && return 1
+  if process_matches_live_owner "$owner_pid" "$owner_started_at"; then
+    RUN_VALIDATION_REASON="live-owner pid=$owner_pid"
+    return 1
+  fi
+  if path_has_live_process "$run_dir"; then
+    RUN_VALIDATION_REASON="run-process pid=$MATCHED_PROCESS_PID"
+    return 1
+  else
+    process_status=$?
+    if [[ "$process_status" != "1" ]]; then
+      RUN_VALIDATION_REASON="process-inventory-failed"
+      return 2
+    fi
+  fi
   if [[ -e "$expected_worktree" ]]; then
     [[ -d "$expected_worktree" && ! -L "$expected_worktree" ]] || return 2
-    path_has_live_process "$expected_worktree" && return 1
+    if path_has_live_process "$expected_worktree"; then
+      RUN_VALIDATION_REASON="worktree-process pid=$MATCHED_PROCESS_PID"
+      return 1
+    else
+      process_status=$?
+      if [[ "$process_status" != "1" ]]; then
+        RUN_VALIDATION_REASON="process-inventory-failed"
+        return 2
+      fi
+    fi
   fi
+  RUN_VALIDATION_REASON=""
   return 0
 }
 
@@ -306,6 +349,8 @@ process_runs() {
   local bytes
   local simulator_status
 
+  find "$REMOTE_GUI_ROOT/test-runs" -mindepth 1 -maxdepth 1 -print0 >"$TEMP_DIR/run-candidates" \
+    || fail "could not enumerate remote test runs; no candidates were deleted"
   while IFS= read -r -d '' run_dir; do
     if validate_run_manifest "$run_dir"; then
       if validate_and_delete_owned_simulator "$run_dir"; then
@@ -326,7 +371,7 @@ process_runs() {
             RECLAIMED_BYTES=$((RECLAIMED_BYTES + bytes))
           else
             DELETE_FAILURES=$((DELETE_FAILURES + 1))
-            warn "failed safety recheck or deletion: $run_dir"
+            warn "failed safety recheck or deletion: reason=${RUN_VALIDATION_REASON:-safety-recheck-or-deletion} run=$(basename "$run_dir")"
           fi
         fi
       else
@@ -338,12 +383,13 @@ process_runs() {
       status=$?
       if [[ "$status" == "1" ]]; then
         RETAINED=$((RETAINED + 1))
+        log "retained reason=$RUN_VALIDATION_REASON run=$(basename "$run_dir")"
       else
         MANUAL_REVIEW=$((MANUAL_REVIEW + 1))
-        warn "manual review: missing or invalid run ownership for $run_dir"
+        warn "manual review: reason=$RUN_VALIDATION_REASON run=$(basename "$run_dir")"
       fi
     fi
-  done < <(find "$REMOTE_GUI_ROOT/test-runs" -mindepth 1 -maxdepth 1 -print0)
+  done <"$TEMP_DIR/run-candidates"
 }
 
 run_remote_mode() {
