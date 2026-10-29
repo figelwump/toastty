@@ -1,9 +1,9 @@
 import CoreState
 import SwiftUI
 
-/// The Status segment's groups: Needs you and Running as rows, To ship as
-/// one line per project with its latest tasks under it, and Done as a
-/// count. Kept apart
+/// The Status segment's groups: Needs you, Running and Idle as rows, To
+/// ship as one line per project with its latest tasks under it, and Done as
+/// a count. Kept apart
 /// from the view so the grouping can be tested without hosting it.
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {
@@ -36,26 +36,31 @@ struct SidebarStatusSections: Equatable {
 
     var needsYou: [Entry] = []
     var running: [Entry] = []
+    var idle: [Entry] = []
     var toShip: [Lane] = []
     var doneCount = 0
 
     var isEmpty: Bool {
-        needsYou.isEmpty && running.isEmpty && toShip.isEmpty && doneCount == 0
+        needsYou.isEmpty && running.isEmpty && idle.isEmpty && toShip.isEmpty && doneCount == 0
     }
 
     /// `items` newest activity first, as the board gives them. Needs you
-    /// keeps that order, so the latest request is on top; Running sorts by
-    /// project and title, so rows hold still while agents work.
+    /// keeps that order, so the latest request is on top; Running and Idle
+    /// sort by project and title, so rows hold still while agents work.
     static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
         var sections = Self()
         sections.needsYou = grouped(items.filter { $0.stage.group == .needsYou })
-        sections.running = grouped(items.filter { $0.stage.group == .running }.sorted { lhs, rhs in
-            let lhsProject = lhs.projectTitle ?? ""
-            let rhsProject = rhs.projectTitle ?? ""
-            return lhsProject != rhsProject
-                ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
-                : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-        })
+        func byProjectAndTitle(_ group: TaskStage.Group) -> [Entry] {
+            grouped(items.filter { $0.stage.group == group }.sorted { lhs, rhs in
+                let lhsProject = lhs.projectTitle ?? ""
+                let rhsProject = rhs.projectTitle ?? ""
+                return lhsProject != rhsProject
+                    ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
+                    : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            })
+        }
+        sections.running = byProjectAndTitle(.running)
+        sections.idle = byProjectAndTitle(.idle)
         let shipping = Dictionary(grouping: items.filter { $0.stage == .toShip }, by: laneKey)
         sections.toShip = shipping.map { key, lane in
             Lane(
@@ -191,6 +196,10 @@ struct SidebarStatusSegment<RowContent: View>: View {
             if sections.running.isEmpty == false {
                 header("Running", count: sections.running.count)
                 rows(sections.running)
+            }
+            if sections.idle.isEmpty == false {
+                header("Idle", count: sections.idle.count)
+                rows(sections.idle)
             }
             if sections.toShip.isEmpty == false {
                 header("To ship", count: sections.toShip.reduce(0) { $0 + $1.count })

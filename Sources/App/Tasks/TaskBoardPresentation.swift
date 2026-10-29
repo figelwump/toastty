@@ -8,6 +8,7 @@ enum TaskBoardPresentation {
         switch group {
         case .needsYou: "Needs you"
         case .running: "Running"
+        case .idle: "Idle"
         case .toShip: "To ship"
         case .done: "Done"
         case .archived: "Archived"
@@ -65,6 +66,8 @@ enum TaskBoardPresentation {
                 }
                 return "\(agentName(item)) · idle"
             }
+        case .idle:
+            return item.agent == TaskAgentActivity.none ? "No agent running" : "\(agentName(item)) · idle"
         case .toShip: return "Merged · waiting for a release"
         case .done: return item.record?.shippedAt != nil ? "Shipped" : "Done"
         case .archived: return "Archived"
@@ -89,6 +92,7 @@ enum TaskBoardPresentation {
             case .cleanupStopped(let reason): return ("Needs you", reason)
             }
         case .running: return ("Running", statusLine(item))
+        case .idle: return ("Idle", statusLine(item))
         case .toShip: return ("To ship", "merged, waiting for a release tag")
         case .done:
             if let tag = item.record?.releaseTag { return ("Done", "shipped in \(tag)") }
@@ -174,7 +178,7 @@ enum TaskBoardPresentation {
         switch item.stage {
         case .needsYou(let attention) where attention.isBeforeStart == false && attention != .taskSpaceClosed:
             break
-        case .running:
+        case .running, .idle:
             break
         case .needsYou(.taskSpaceClosed):
             return [.archive]
@@ -425,7 +429,7 @@ struct TaskStageMark: View {
                             RoundedRectangle(cornerRadius: 1.5).stroke(ToastyTheme.sidebarSessionRailApprovalHalo, lineWidth: 3)
                         }
                 }
-            case .running:
+            case .running, .idle:
                 if item.agent == .working {
                     SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
                 } else {

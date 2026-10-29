@@ -252,7 +252,7 @@ def main():
         require('Archive Explain the empty file search?' in dialog['texts'], f'Unexpected alert: {dialog}')
         run_driver('dialog-press', pid, 'Cancel')
         time.sleep(1)
-        require(stage(to_archive)['group'] == 'running', 'Cancel should keep the task')
+        require(stage(to_archive)['group'] == 'idle', 'Cancel should keep the task')
         require(detail_title() == 'Explain the empty file search', f'Cancel should keep the selection: {detail_title()}')
         step('archive cancelled', selected=detail_title())
         capture('tasks-view-after-cancel')

@@ -125,18 +125,18 @@ struct TaskStageTests {
 
         var draft = idle
         draft.pullRequest = draftPR
-        #expect(stage(started(), draft) == .running)
+        #expect(stage(started(), draft) == .idle)
 
         var closed = idle
         closed.pullRequest = TaskPullRequestState(state: .closed)
-        #expect(stage(started(), closed) == .running)
+        #expect(stage(started(), closed) == .idle)
     }
 
     @Test
     func withoutAnAnswerFromGitHubALinkedPullRequestCountsAsOpen() {
         let unknown = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: nil, hasPullRequestLink: true)
         #expect(stage(started(), unknown) == .needsYou(.review))
-        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .running)
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .idle)
     }
 
     @Test
@@ -151,11 +151,18 @@ struct TaskStageTests {
         let finished = TaskLiveFacts(taskSpaceOpen: true, agent: .finished)
         #expect(stage(started(), finished) == .needsYou(.agentFinished))
         #expect(stage(started(), finished).group == .needsYou)
-        // An agent that has not finished a turn yet is still running.
-        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .running)
-        // One that waits on another task through a watch is running too.
+        // An agent at its prompt with the turn read is idle, and so is a
+        // task space with no agent.
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == .idle)
+        #expect(stage(started(), TaskLiveFacts(taskSpaceOpen: true, agent: .none)) == .idle)
+        #expect(TaskStage.idle.group == .idle)
+        #expect(TaskStage.idle.needsUser == false)
+        // One that waits on another task through a watch is running, read
+        // or not.
         var waiting = finished
         waiting.waitsOnTask = true
+        #expect(stage(started(), waiting) == .running)
+        waiting.agent = .idle
         #expect(stage(started(), waiting) == .running)
         // Review reasons say more, so they come first.
         let review = TaskLiveFacts(taskSpaceOpen: true, agent: .finished, pullRequest: openPR, hasPullRequestLink: true)
@@ -179,7 +186,7 @@ struct TaskStageTests {
     @Test
     func observedTaskSpacesUseTheirDoneMarkAndPullRequest() {
         #expect(stage(.observed(doneAt: date)) == .done)
-        #expect(stage(.observed(doneAt: nil)) == .running)
+        #expect(stage(.observed(doneAt: nil)) == .idle)
         let merged = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: mergedPR, hasPullRequestLink: true)
         #expect(stage(.observed(doneAt: nil), merged, releaseTags: true) == .toShip)
         let review = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true)
@@ -227,7 +234,8 @@ struct TaskStageTests {
         #expect(TaskStage.archived.isFinished)
         #expect(TaskStage.needsYou(.review).isFinished == false)
         #expect(TaskStage.running.isFinished == false)
-        #expect(TaskStage.Group.allCases.sorted() == [.needsYou, .running, .toShip, .done, .archived])
+        #expect(TaskStage.idle.isFinished == false)
+        #expect(TaskStage.Group.allCases.sorted() == [.needsYou, .running, .idle, .toShip, .done, .archived])
     }
 
     @Test

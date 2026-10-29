@@ -36,7 +36,7 @@ struct TaskSpaceCloseQuestion: Equatable {
               record.archivedAt == nil, record.doneAt == nil,
               record.mergedAt == nil, record.shippedAt == nil else { return nil }
         switch item.stage {
-        case .running, .needsYou:
+        case .running, .idle, .needsYou:
             if case .needsYou(.cleanupStopped) = item.stage { return nil }
         case .starting, .toShip, .done, .archived:
             return nil

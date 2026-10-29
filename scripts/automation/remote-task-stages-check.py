@@ -166,11 +166,12 @@ def main():
         terminal_panel = snapshot['slotPanelIDs'][0]
         step('booted', workspaceID=workspace_id, panelID=terminal_panel)
 
-        # 1. A started task runs; a linked pull request with no answer from
-        # GitHub waits for review; the done mark finishes it.
+        # 1. A started task whose agent sits at its prompt is idle; a linked
+        # pull request with no answer from GitHub waits for review; the done
+        # mark finishes it.
         task = cli_json('task', 'create', 'Fix the unread dot', '--workspace', workspace_id, '--wait', '--timeout', '90')
         task_id, task_space = task['taskID'], task['setup']['taskSpaceWorkspaceID']
-        require(stage(task_id)['group'] == 'running', f'A started task should be running: {stage(task_id)}')
+        require(stage(task_id)['group'] == 'idle', f'A started task at its prompt should be idle: {stage(task_id)}')
         cli_json('action', 'run', 'workspace.set-annotation', '--workspace', task_space,
                  'key=github-pr', 'text=PR #9', f'url={PULL_REQUEST}')
         review = wait_for('the review stage', lambda: (s := stage(task_id)).get('attention') == 'review' and s)
@@ -240,9 +241,9 @@ def main():
         wait_for('the unread turn to need the user', lambda: stage(read_id).get('attention') == 'agentFinished')
         read_panel = instance.query('workspace.snapshot', workspaceID=read_space)['slotPanelIDs'][0]
         cli_json('action', 'run', 'workspace.focus-panel', '--workspace', read_space, '--panel', read_panel)
-        idle = wait_for('the read turn to run', lambda: (s := stage(read_id))['group'] == 'running' and s)
+        idle = wait_for('the read turn to go idle', lambda: (s := stage(read_id))['group'] == 'idle' and s)
         require(idle['needsUser'] is False, f'A read turn should not need the user: {idle}')
-        step('read turn runs', stage=idle)
+        step('read turn idle', stage=idle)
         capture('tasks-view-read-turn')
         # Focusing the panel selected its task space, which closed the Tasks
         # view; the typing check below needs both back.

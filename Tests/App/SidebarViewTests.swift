@@ -2205,7 +2205,8 @@ final class SidebarViewTests: XCTestCase {
             source: .cli,
             setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")
         )
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [pickWorkspace], withTaskBoard: true)
+        // The extra task space's agent sits idle at its prompt.
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [pickWorkspace], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
         _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
         pumpMainRunLoop(duration: 0.6)
@@ -2230,6 +2231,12 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
+        // An idle agent lists apart from the working one.
+        XCTAssertTrue(textValues.contains("Idle, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review task 1, task space") }, "\(textValues)")
+        let sections = SidebarStatusSections.make(try XCTUnwrap(harness.taskBoard).items(windowID: harness.windowID))
+        XCTAssertEqual(sections.running.map(\.item.agent), [.working])
+        XCTAssertEqual(sections.idle.map(\.item.agent), [.idle])
         XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix nav drawer focus, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
         // Top-level workspaces show only in Projects.
@@ -2239,7 +2246,7 @@ final class SidebarViewTests: XCTestCase {
     }
 
     func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
-        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
         let board = try XCTUnwrap(harness.taskBoard)
         board.selectionByWindowID[harness.windowID] = .taskSpace(ids.annotatedIdleID)
@@ -2261,6 +2268,8 @@ final class SidebarViewTests: XCTestCase {
 
         let textValues = renderedTextValues(in: hostingView)
         XCTAssertTrue(textValues.contains("Task detail, qa-private-app-verification, Review"), "\(textValues)")
+        // The idle agent lists under Idle, apart from the working one.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review task 1") }, "\(textValues)")
         // The unread finished turn the sidebar marks ready waits for the
         // user here too.
         let readyUnread = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
