@@ -418,6 +418,15 @@ final class QuickEntryController: ObservableObject {
         guard let panel, let model, model.isEditable else { return }
         closePicker(refocusText: false)
 
+        if kind == .workspace {
+            // The draft can stay open while workspaces change in another window.
+            model.workspaceOptions = workspaceOptions()
+            if let selected = model.workspaceID,
+               model.workspaceOptions.contains(where: { $0.id == selected.uuidString }) == false {
+                model.workspaceID = nil
+            }
+        }
+
         let picker = switch kind {
         case .workspace:
             QuickEntryPicker(workspaces: model.workspaceOptions, current: model.workspaceID)
