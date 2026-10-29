@@ -146,7 +146,7 @@ struct QuickEntryView: View {
                 }
                 .padding(.vertical, 1)
             }
-            .frame(height: 54)
+            .frame(height: 74)
             // Keeps Attach in view once the files fill the row.
             .onChange(of: model.attachments.count + model.pendingAttachmentCount) {
                 scroller.scrollTo(Self.attachChipID, anchor: .trailing)
@@ -319,17 +319,21 @@ private struct AttachmentChip: View {
                         .background(Color.white.opacity(0.05))
                 }
             }
-            // The preview leads the chip; the name stays quiet beside it.
-            .frame(width: 64, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .frame(width: attachment.thumbnail == nil ? 48 : 96, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .help(attachment.displayName)
 
-            Text(attachment.displayName)
-                .font(.system(size: 11))
-                .foregroundStyle(QuickEntryView.mutedText)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 120, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
+            // A preview identifies an image by itself; the name shows only
+            // beside a file icon, and on hover.
+            if attachment.thumbnail == nil {
+                Text(attachment.displayName)
+                    .font(.system(size: 11))
+                    .foregroundStyle(QuickEntryView.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 120, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
 
             Button(action: remove) {
                 Image(systemName: "xmark")
