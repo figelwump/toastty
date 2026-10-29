@@ -594,6 +594,11 @@ For work that has no pull request, the agent runs `toastty task
 ready-for-review`, and the task waits in Needs you. **Mark Done**, or
 `toastty task mark-done`, finishes it.
 
+The header of a task space without a pull request offers **Archive Task…**.
+It is available before and after the agent reports completion, including for
+a task already marked done. It opens the archive confirmation and uses the
+same checks as [Archive a task](#archive-a-task).
+
 A task that has no worktree and no pull request often answers in place. When
 you close its task space, Toastty asks what happens to the task:
 

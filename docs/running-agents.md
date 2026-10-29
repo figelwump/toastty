@@ -529,11 +529,15 @@ the merge. Saying "merge it" in the session runs the same skill. See
 
 ### Merging a task's pull request
 
-A task space that has a task record always shows the Merge button. Its Merge
-goes through the task: the agent checks the pull request first unless the
+A task space that has a task record and a pull request shows the Merge button.
+Its Merge goes through the task: the agent checks the pull request first unless the
 project sets `merge = "direct"`, Toastty always cleans up after the merge, and
 the arrow menu offers **Merge Without Checks** and **Archive Task…** instead of
 the modes below. See [Tasks](tasks.md#merge-a-task).
+
+Without a pull request, the task header offers **Archive Task…** instead.
+The agent does not need to mark the task ready first. Archiving asks for
+confirmation and keeps the existing checks for unsaved work.
 
 For other subspaces, the Merge button, its context menu items, and
 `Option+Shift+M` are off by default. To turn them on, run

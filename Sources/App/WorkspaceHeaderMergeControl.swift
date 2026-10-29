@@ -213,8 +213,28 @@ struct WorkspaceHeaderMergeControl: View {
     }
 }
 
+/// A task without a pull request still needs a way to close its task space.
+struct WorkspaceHeaderArchiveControl: View {
+    let archive: () -> Void
+
+    var body: some View {
+        Button(action: archive) {
+            HStack(spacing: 4) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 8, weight: .bold))
+                Text("Archive Task…")
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .all, tone: .neutral))
+        .help("Review what will close before archiving this task")
+        .accessibilityIdentifier("topbar.workspace.archive-task")
+    }
+}
+
 private struct WorkspaceHeaderMergeButtonStyle: ButtonStyle {
     enum Corners {
+        case all
         case leading
         case trailing
     }
@@ -240,10 +260,10 @@ private struct WorkspaceHeaderMergeButtonStyle: ButtonStyle {
             .frame(height: ToastyTheme.workspaceMergeControlHeight)
             .background(
                 UnevenRoundedRectangle(
-                    topLeadingRadius: corners == .leading ? radius : 0,
-                    bottomLeadingRadius: corners == .leading ? radius : 0,
-                    bottomTrailingRadius: corners == .trailing ? radius : 0,
-                    topTrailingRadius: corners == .trailing ? radius : 0
+                    topLeadingRadius: corners != .trailing ? radius : 0,
+                    bottomLeadingRadius: corners != .trailing ? radius : 0,
+                    bottomTrailingRadius: corners != .leading ? radius : 0,
+                    topTrailingRadius: corners != .leading ? radius : 0
                 )
                 .fill(tone == .merge ? ToastyTheme.sidebarSubspaceDoneMark : ToastyTheme.sidebarDisclosureBackground)
             )
