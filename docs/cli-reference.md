@@ -914,7 +914,7 @@ move forks the conversation after the turn ends. `task get` reports the move
 under `worktree`, and `task retry` continues a move that failed.
 
 `task get` and `task list` report each task's `stage`: its `group`
-(`needsYou`, `running`, `toShip`, `done` or `archived`), `needsUser`, and for
+(`needsYou`, `running`, `idle`, `toShip`, `done` or `archived`), `needsUser`, and for
 Needs you the `attention` and `reason`. A task that is starting reports
 `running`; its `setup` and `worktree` say how far it got. See [Stages](tasks.md#stages).
 `task adopt` gives a task space without a record one; it defaults to the

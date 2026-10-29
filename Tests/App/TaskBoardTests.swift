@@ -116,11 +116,11 @@ struct TaskBoardTests {
         let watched = try #require(items.first { $0.id == .taskSpace(untracked) })
         #expect(watched.record == nil)
         #expect(watched.projectTitle == "toastty")
-        #expect(watched.stage == .running)
+        #expect(watched.stage == .idle)
         let tracked = try #require(items.first { $0.id == .task(task.id) })
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         #expect(tracked.taskSpaceWorkspaceID == taskSpace)
-        #expect(tracked.stage.group == .running)
+        #expect(tracked.stage.group == .idle)
         // A task space with a record is listed once, as its task.
         #expect(items.contains { $0.id == .taskSpace(taskSpace) } == false)
 
@@ -613,8 +613,8 @@ struct TaskBoardTests {
         let panel = try #require(task.operation.taskSpace?.panelID)
         func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
 
-        // Started but no turn finished yet: still running.
-        #expect(try item().stage == .running)
+        // Started but no turn finished yet: the agent sits at its prompt.
+        #expect(try item().stage == .idle)
 
         fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
         #expect(try item().stage == .running)
@@ -630,17 +630,18 @@ struct TaskBoardTests {
         #expect(finished.hasUnreadTurn)
         #expect(TaskBoardPresentation.statusLine(finished) == "Codex finished · waiting for you")
 
-        // Once the user reads it, the idle agent is running again.
+        // Once the user reads it, the task is idle.
         _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
         let read = try item()
-        #expect(read.stage == .running)
+        #expect(read.stage == .idle)
+        #expect(read.stage.group == .idle)
         #expect(read.agent == .idle)
         #expect(read.hasUnreadTurn == false)
         #expect(TaskBoardPresentation.statusLine(read) == "Codex · idle")
         fixture.sessionRuntimeStore.updateStatus(
             sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(1)
         )
-        #expect(try item().stage == .running)
+        #expect(try item().stage == .idle)
 
         // After a relaunch the restored session starts idle under a new
         // session ID: it does not need the user.
@@ -653,7 +654,7 @@ struct TaskBoardTests {
         fixture.sessionRuntimeStore.updateStatus(
             sessionID: "restored-\(session)", status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(3)
         )
-        #expect(try item().stage == .running)
+        #expect(try item().stage == .idle)
 
         // An agent that ended its turn to wait on another task is running,
         // even with the turn unread.
@@ -686,10 +687,20 @@ struct TaskBoardTests {
         let secondChild = item("ios-outbox", taskID: UUID(), parent: parentID, stage: .running)
         let mergedChild = item("store-sidebar", taskID: UUID(), parent: parentID, stage: .toShip)
         let other = item("pricing-page", taskID: UUID(), stage: .running)
+        let quiet = item("coordinator-brainstorm", taskID: UUID(), stage: .idle)
+        let idleChild = item("composer-blank-line", taskID: UUID(), parent: parentID, stage: .idle)
 
-        let sections = SidebarStatusSections.make([firstChild, other, parent, secondChild, mergedChild])
+        let sections = SidebarStatusSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
         #expect(sections.running.map(\.item.title) == ["pricing-page", "task-inbox", "hotkey-capture", "ios-outbox"])
         #expect(sections.running.map(\.isLinkedChild) == [false, false, true, true])
+        // Idle tasks list apart from Running. A child whose parent is in
+        // another group lists on its own.
+        #expect(sections.idle.map(\.item.title) == ["composer-blank-line", "coordinator-brainstorm"])
+        #expect(sections.idle.map(\.isLinkedChild) == [false, false])
+        let tasksView = TasksViewSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
+        #expect(tasksView.idle.map(\.item.title) == ["coordinator-brainstorm", "composer-blank-line"])
+        // The Tasks view lists Idle after Running and before To ship.
+        #expect(tasksView.all.map(\.item.title).suffix(3) == ["coordinator-brainstorm", "composer-blank-line", "store-sidebar"])
         #expect(sections.toShip.map(\.count) == [1])
         let progress = TaskBoard.childProgress(of: parentID, items: [parent, firstChild, secondChild, mergedChild, other])
         #expect(progress?.merged == 1)

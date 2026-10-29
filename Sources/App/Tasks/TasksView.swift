@@ -18,6 +18,7 @@ struct TasksViewSections: Equatable {
 
     var needsYou: [SidebarStatusSections.Entry] = []
     var running: [SidebarStatusSections.Entry] = []
+    var idle: [SidebarStatusSections.Entry] = []
     var toShip: [Lane] = []
     var done: [SidebarStatusSections.Entry] = []
     var archived: [SidebarStatusSections.Entry] = []
@@ -29,6 +30,7 @@ struct TasksViewSections: Equatable {
         var sections = Self()
         sections.needsYou = entries(.needsYou)
         sections.running = entries(.running)
+        sections.idle = entries(.idle)
         sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
             .map { key, entries in
                 Lane(
@@ -46,13 +48,13 @@ struct TasksViewSections: Equatable {
 
     /// Every entry in display order, for picking a selection.
     var all: [SidebarStatusSections.Entry] {
-        needsYou + running + toShip.flatMap(\.entries) + done + archived
+        needsYou + running + idle + toShip.flatMap(\.entries) + done + archived
     }
 
     /// The entries the list shows, in order: Done and Archived only while
     /// they are expanded.
     func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
-        needsYou + running + toShip.flatMap(\.entries)
+        needsYou + running + idle + toShip.flatMap(\.entries)
             + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
     }
 
@@ -258,6 +260,8 @@ struct TasksView: View {
             rows(sections.needsYou, selectedID: selectedID)
             groupHeader(.running, count: sections.running.count)
             rows(sections.running, selectedID: selectedID)
+            groupHeader(.idle, count: sections.idle.count)
+            rows(sections.idle, selectedID: selectedID)
             groupHeader(.toShip, count: sections.toShip.reduce(0) { $0 + $1.entries.count })
                 .id(TaskStage.Group.toShip)
             ForEach(sections.toShip) { lane in

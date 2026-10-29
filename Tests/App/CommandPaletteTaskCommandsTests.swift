@@ -141,8 +141,8 @@ struct CommandPaletteTaskCommandsTests {
 
         harness.select(firstSpace)
         #expect(harness.taskRows() == [
-            "Task: Mark Done — Fix the composer · Running",
-            "Task: Archive… — Fix the composer · Running",
+            "Task: Mark Done — Fix the composer · Idle",
+            "Task: Archive… — Fix the composer · Idle",
         ])
 
         // Show Tasks covers the task space without selecting anything else.
@@ -156,9 +156,9 @@ struct CommandPaletteTaskCommandsTests {
         // Now the commands act on the Tasks view's selected row.
         harness.board.selectionByWindowID[harness.windowID] = .task(second.id)
         #expect(harness.taskRows() == [
-            "Task: Mark Done — Keep the sidebar order · Running",
-            "Task: Archive… — Keep the sidebar order · Running",
-            "Task: Open Task Space — Keep the sidebar order · Running",
+            "Task: Mark Done — Keep the sidebar order · Idle",
+            "Task: Archive… — Keep the sidebar order · Idle",
+            "Task: Open Task Space — Keep the sidebar order · Idle",
         ])
 
         // Pressed again, it returns to the task space that was showing.

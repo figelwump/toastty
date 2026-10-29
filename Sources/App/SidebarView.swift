@@ -1040,7 +1040,7 @@ struct SidebarView: View {
         _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
     }
 
-    /// The Status segment: Needs you, Running, To ship and Done.
+    /// The Status segment: Needs you, Running, Idle, To ship and Done.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
         let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)

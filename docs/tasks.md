@@ -410,8 +410,9 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | To ship | it merged, and its project has `release_tags` |
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
-| Needs you | its agent finished a turn you have not read yet: "Claude finished · waiting for you". Once you read the answer, or after a relaunch restores the agent, the task is Running with its agent idle |
-| Running | anything else: an agent that works, waits on its sub-agents, or is idle at its prompt; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
+| Running | an agent that works or waits on its sub-agents; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
+| Needs you | its agent finished a turn you have not read yet: "Claude finished · waiting for you". Once you read the answer, or after a relaunch restores the agent, the task is Idle |
+| Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space |
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about it every two minutes while the task is open, when an agent's
@@ -444,7 +445,7 @@ window.
   merged To ship tasks show as rows. A footer line after them has **Show N more** when the
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
-- **Status** lists task spaces by stage: Needs you, Running, To ship (one line
+- **Status** lists task spaces by stage: Needs you, Running, Idle, To ship (one line
   for each project), and a Done count. Each row carries its project's name.
   Under each project's To ship line, its 3 most recently merged tasks show as
   rows, then **Show N more** when the project has more.

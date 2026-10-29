@@ -3,14 +3,17 @@ import Foundation
 /// Where a task stands: worked out from its record and from what Toastty
 /// sees now, never stored, so it cannot go stale. The rules are checked in
 /// order and the first match wins: a stopped cleanup, Archived, Done, To
-/// ship, Needs you, Starting, Running. Needs you comes before Starting, so
-/// a task whose setup failed counts toward the Needs you badge.
+/// ship, Needs you, Starting, Running, Idle. Needs you comes before
+/// Starting, so a task whose setup failed counts toward the Needs you badge.
 public enum TaskStage: Equatable, Sendable {
     /// Setup, triage, or a move into a worktree is under way. Lists show it
     /// with Running.
     case starting
     case needsYou(Attention)
     case running
+    /// Nothing is under way and nothing waits for the user: the agent is at
+    /// the prompt with its last turn read, or no agent runs.
+    case idle
     case toShip
     case done
     case archived
@@ -52,6 +55,7 @@ public enum TaskStage: Equatable, Sendable {
     public enum Group: Int, CaseIterable, Comparable, Sendable {
         case needsYou
         case running
+        case idle
         case toShip
         case done
         case archived
@@ -67,6 +71,7 @@ public enum TaskStage: Equatable, Sendable {
         switch self {
         case .needsYou: .needsYou
         case .starting, .running: .running
+        case .idle: .idle
         case .toShip: .toShip
         case .done: .done
         case .archived: .archived
@@ -85,7 +90,7 @@ public enum TaskStage: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .done, .archived: true
-        case .starting, .needsYou, .running, .toShip: false
+        case .starting, .needsYou, .running, .idle, .toShip: false
         }
     }
 
@@ -96,7 +101,7 @@ public enum TaskStage: Equatable, Sendable {
         switch self {
         case .starting: true
         case .needsYou(let attention): attention.isBeforeStart
-        case .running, .toShip, .done, .archived: false
+        case .running, .idle, .toShip, .done, .archived: false
         }
     }
 
@@ -164,13 +169,16 @@ public enum TaskStage: Equatable, Sendable {
         if facts.readyForReviewAt != nil {
             return .needsYou(.readyForReview)
         }
-        // The agent's turn is over and unread, so the next step is the
-        // user's, unless the agent ended its turn to wait for another task.
-        // Once the user reads the turn, an idle agent counts as running.
-        if live.agent == .finished, live.waitsOnTask == false {
+        // An agent that ended its turn to wait for another task is still
+        // running. Otherwise a finished turn that is unread makes the next
+        // step the user's, and once the user reads it the task is idle.
+        if live.waitsOnTask {
+            return .running
+        }
+        if live.agent == .finished {
             return .needsYou(.agentFinished)
         }
-        return .running
+        return .idle
     }
 }
 

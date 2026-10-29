@@ -195,7 +195,7 @@ public enum TaskWatchEvaluation {
             // "Merged · clean up?": the cleanup after the merge stopped, but
             // the merge happened.
             return merged ? [.readyForReview, .merged] : []
-        case .starting, .needsYou, .running:
+        case .starting, .needsYou, .running, .idle:
             return []
         }
     }
