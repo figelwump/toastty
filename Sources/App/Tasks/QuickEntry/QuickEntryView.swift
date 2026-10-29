@@ -146,7 +146,7 @@ struct QuickEntryView: View {
                 }
                 .padding(.vertical, 1)
             }
-            .frame(height: 38)
+            .frame(height: 54)
             // Keeps Attach in view once the files fill the row.
             .onChange(of: model.attachments.count + model.pendingAttachmentCount) {
                 scroller.scrollTo(Self.attachChipID, anchor: .trailing)
@@ -313,21 +313,22 @@ private struct AttachmentChip: View {
                         .aspectRatio(contentMode: .fill)
                 } else {
                     Image(systemName: attachment.isImage ? "photo" : "doc")
-                        .font(.system(size: 12))
+                        .font(.system(size: 16))
                         .foregroundStyle(QuickEntryView.mutedText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.white.opacity(0.05))
                 }
             }
-            .frame(width: 34, height: 26)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            // The preview leads the chip; the name stays quiet beside it.
+            .frame(width: 64, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
 
             Text(attachment.displayName)
-                .font(.system(size: 12))
-                .foregroundStyle(QuickEntryView.secondaryText)
+                .font(.system(size: 11))
+                .foregroundStyle(QuickEntryView.mutedText)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 200, alignment: .leading)
+                .frame(maxWidth: 120, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
 
             Button(action: remove) {
@@ -341,7 +342,7 @@ private struct AttachmentChip: View {
             .help("Remove \(attachment.displayName)")
             .accessibilityLabel("Remove \(attachment.displayName)")
         }
-        .padding(EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 9))
+        .padding(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 9))
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(QuickEntryView.chipBackground))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(QuickEntryView.chipBorder, lineWidth: 1))
         .accessibilityElement(children: .contain)

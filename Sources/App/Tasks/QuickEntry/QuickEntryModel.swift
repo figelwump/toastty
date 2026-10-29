@@ -474,7 +474,7 @@ final class QuickEntryModel: ObservableObject {
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true,
                   kCGImageSourceCreateThumbnailWithTransform: true,
-                  kCGImageSourceThumbnailMaxPixelSize: 96,
+                  kCGImageSourceThumbnailMaxPixelSize: 256,
               ] as CFDictionary) else {
             return nil
         }
