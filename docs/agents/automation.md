@@ -478,36 +478,105 @@ sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
 ```
 
-Use this scheduled-task prompt so local artifacts and remote simulators retain
-separate failure boundaries:
+### Scheduled cleanup on the remote Mac
 
-```text
-In /Users/vishal/GiantThings/repos/toastty, run these four cleanup groups independently. Within each group, run the dry-run first and run apply only when that dry-run succeeds. If a command fails, skip the rest of that group, record the failure, and continue to the next group.
+Use the host service when remote cleanup must continue without the local computer
+or Codex App. It runs the three existing remote cleaners every four hours, each
+with a dry-run before apply. A failed preview skips that group's apply; the other
+groups continue. Run retention stays at 24 hours, with a cap of 30 test runs per
+execution. Active processes, `.keep` markers, invalid ownership and booted
+simulators remain protected. Failed process inventories stop run deletion.
 
-1. Local artifacts:
-./scripts/automation/cleanup-artifacts.sh --dry-run
-./scripts/automation/cleanup-artifacts.sh --apply
+Install only after reviewing, testing and committing the four service source
+files. From that commit's checkout, these commands target the existing configured
+remote Mac through the repository's `.secrets` manifest:
 
-2. Manifest-owned remote runs and their simulator clones:
-sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
-
-3. Legacy remote simulators:
-sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
-
-4. Stale Simulator.app window shells:
-sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
-
-Do not edit source, use --include-unowned, invoke simctl directly, or manually shut down/delete booted simulators. Report all eight summary lines, every manual-review count, and every skipped or failed group.
+```bash
+# Installs a per-user LaunchAgent and a versioned script snapshot on the mini.
+sv exec -- python3 scripts/remote/cleanup-service.py install
+# Requests one guarded cleanup through launchd; this can delete eligible data.
+sv exec -- python3 scripts/remote/cleanup-service.py run-now
+# Read-only installed hashes, job state, disk space and last-run evidence.
+sv exec -- python3 scripts/remote/cleanup-service.py status
+# Stops future scheduling and removes only the job plist; refuses a busy run.
+sv exec -- python3 scripts/remote/cleanup-service.py disable
 ```
 
-The scheduled task must use the main local checkout, not an isolated worktree,
-because artifact directories belong to that checkout. If the machine or Codex
-App is not running, cleanup waits until a later scheduled run; there is no cron
-or LaunchAgent fallback. The remote steps also require the three
-`TOASTTY_REMOTE_GUI_*` values from the repository's `.secrets` manifest.
+The job is `com.giantthings.toastty.remote-cleanup`. Its plist is in the remote
+user's `~/Library/LaunchAgents/`. It runs while that user is logged in, including
+when the screen is locked. It loads again at login. A powered-off or logged-out
+mini cannot run this user agent. See [Apple's launchd guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
+
+Installed files live under the configured validation root's `.cleanup-service/`,
+outside `test-runs`, `worktrees` and `runs`. `versions/<commit>/bundle.json`
+records the exact SHA-256 hashes of the installed scripts. Each run verifies them
+before invoking a cleaner. The job uses `/usr/bin/python3 -I`, an explicit PATH
+and a fixed locale. Cleaner processes receive only a minimal environment, so
+shell startup hooks and Git overrides cannot change their target. Status,
+run-now and disable dispatch to the installed controller version. The job
+needs no credentials on the mini and does not depend on
+the task worktree. Installation refuses an existing job. To update or roll back,
+disable the idle job, then install the reviewed target commit. Old script
+snapshots remain available for inspection; the installer does not delete them.
+
+`status.json` records each step's exit code, summary and log path, plus disk space
+before and after. It reports a backlog, manual-review counts, cleanup/reporting
+failures and free space below 30 GiB. The read-only status command also warns if
+no run has completed within 8 hours 15 minutes, or if the job is absent, disabled
+or its plist differs from the installed configuration. `run-now` returns after
+requesting execution; inspect status until the new run completes. A successful
+request alone does not establish cleanup success.
+
+Each step has one log file, replaced on the next run and trimmed to its last
+1 MiB after completion. `launchd-error.log` retains startup errors and is trimmed
+when the next run starts. A running step can temporarily exceed that limit.
+Status-write failures, corrupt prior status and startup-log trim failures do
+not suppress cleanup. Unsafe file ownership still blocks the operation. A missing summary is a reporting
+failure, but a successful preview exit still permits its guarded apply. Disk
+space changes can include other concurrent work; use the cleaner's summary for
+reclaimed storage.
+
+The service holds one file lock across all steps. Cleaner children inherit that
+lock and write directly to files, so a crashed supervisor cannot admit another
+run while a cleaner is still active. Read-only previews have a 120-second timeout;
+apply operations are never killed on a timeout. A busy service returns exit 75
+without changing the current report. Existing per-cleaner locks still protect
+manual invocations. If a run remains incomplete, inspect its recorded PID, step
+log and cleaner lock before recovery. Do not delete an ambiguous lock or stop an
+active test to force cleanup.
+
+GUI runs without ownership manifests, unpaired worktrees, ordinary simulators,
+Xcode installations and release artifacts remain outside automatic deletion.
+Review those paths separately. The run cleaner now logs its retention reason
+and matched PID, so an unexpected preview/apply difference can be investigated
+without recording process command text.
+
+### Local daily maintenance after service installation
+
+Keep the daily task in the main local checkout for that checkout's artifacts.
+After the mini service completes a verified run, remove the daily task's remote
+apply groups and use read-only service health reporting instead. Preserve the
+local artifact dry-run/apply policy and its failure boundary. Do not leave two
+schedulers deliberately applying remote cleanup.
+
+```text
+Run local artifact cleanup in the main checkout, using the existing policy:
+PATH="/usr/bin:$PATH" ./scripts/automation/cleanup-artifacts.sh --dry-run
+PATH="/usr/bin:$PATH" ./scripts/automation/cleanup-artifacts.sh --apply
+Run apply only when preview succeeds and cleanup scripts/policy are clean.
+Independently inspect the remote cleanup service:
+sv exec -- python3 scripts/remote/cleanup-service.py status
+Report local summaries and manual-review counts, remote free space, service
+revision, last completed run and every warning or unavailable measurement.
+Do not apply remote cleanup or change service, retention or ownership policy.
+```
+
+Local maintenance still requires the local computer and Codex App. Remote cleanup
+runs independently in the mini's login session. If the service command is not yet
+in the main checkout, retain a checksum-verified copy of its committed controller
+beside the automation configuration for read-only `status` calls. Replace that
+copy intentionally when the service interface changes; do not reference a task
+worktree that can be removed.
 
 Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
