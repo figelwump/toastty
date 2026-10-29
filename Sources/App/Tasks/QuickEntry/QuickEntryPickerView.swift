@@ -48,6 +48,27 @@ struct QuickEntryPickerView: View {
 
             Rectangle().fill(Self.divider).frame(height: 1)
 
+            if picker.showsCodexCatalogStatus, let status = picker.codexCatalogStatus {
+                HStack(spacing: 8) {
+                    Text(status == .loading ? "Loading Codex models…" : "Codex models unavailable")
+                    Spacer(minLength: 0)
+                    if status == .unavailable {
+                        Button("Retry ⌘R") { picker.onRetryCodexModels() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Self.accent)
+                            .focusable(false)
+                            .accessibilityIdentifier("quick-entry.picker.retry-codex-models")
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(QuickEntryView.mutedText)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("quick-entry.picker.codex-catalog-status")
+                Rectangle().fill(Self.divider).frame(height: 1)
+            }
+
             if let columns = picker.columns {
                 ColumnsView(picker: picker, columns: columns)
             } else {

@@ -26,6 +26,11 @@ enum QuickEntryPickerKind: Equatable {
     case agent
 }
 
+enum QuickEntryCodexCatalogStatus: Equatable {
+    case loading
+    case unavailable
+}
+
 /// The searchable list behind a quick entry pill. Typing filters it with
 /// the command palette's fuzzy scorer; ↑ ↓ move, Return chooses. The Agent
 /// picker can switch to three columns for choosing the agent, model and
@@ -70,9 +75,17 @@ final class QuickEntryPicker: ObservableObject {
     @Published private(set) var highlightedID: Row.ID?
     /// Set while the Agent picker shows its three columns.
     @Published private(set) var columns: QuickEntryPresetColumns?
+    @Published var codexCatalogStatus: QuickEntryCodexCatalogStatus?
 
     var onChoose: (Choice) -> Void = { _ in }
     var onClose: () -> Void = {}
+    var onRetryCodexModels: () -> Void = {}
+
+    var showsCodexCatalogStatus: Bool {
+        kind == .agent && codexCatalogStatus != nil
+            && profiles.contains { $0.id == AgentKind.codex.rawValue && $0.supportsModel }
+            && (columns == nil || columns?.agentID == AgentKind.codex.rawValue)
+    }
 
     private let workspaces: [QuickEntryModel.Option]
     private(set) var profiles: [QuickEntryAgentProfile]
