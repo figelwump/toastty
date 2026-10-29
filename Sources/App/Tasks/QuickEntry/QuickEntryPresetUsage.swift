@@ -93,6 +93,20 @@ final class QuickEntryPresetUsage {
         Self.ranked(records, agents: agents, at: now())
     }
 
+    /// Saved choices, newest first. Preserve use order when persisted
+    /// timestamps tie, as lastUsed does.
+    func recent(agents: Set<String>) -> [QuickEntryPreset] {
+        records.enumerated()
+            .filter { agents.contains($0.element.preset.agent) }
+            .sorted {
+                if $0.element.lastUsedAt != $1.element.lastUsedAt {
+                    return $0.element.lastUsedAt > $1.element.lastUsedAt
+                }
+                return $0.offset > $1.offset
+            }
+            .map(\.element.preset)
+    }
+
     /// Presets by recency-weighted count; a tie goes to the one used last,
     /// then to a fixed order. A preset
     /// whose agent profile is gone is left out.

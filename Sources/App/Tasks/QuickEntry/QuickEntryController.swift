@@ -530,7 +530,11 @@ final class QuickEntryController: ObservableObject {
             .map { summary in
                 var models: [String] = []
                 if summary.supportsModel {
-                    models = Array(recentModels(summary.agent).prefix(RemoteSessionStartPolicy.maximumRecentModelCount))
+                    let saved = presetUsage?.recent(agents: [summary.profileID]).compactMap(\.model) ?? []
+                    var seen: Set<String> = []
+                    models = Array((saved + recentModels(summary.agent))
+                        .filter { seen.insert($0).inserted }
+                        .prefix(RemoteSessionStartPolicy.maximumRecentModelCount))
                     // `[defaults]` names a model even when no live session
                     // has reported one, as when remote access is off.
                     if defaults?.agent == summary.profileID, let model = defaults?.model, models.contains(model) == false {

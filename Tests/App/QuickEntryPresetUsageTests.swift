@@ -66,6 +66,25 @@ struct QuickEntryPresetUsageTests {
         #expect(restarted.lastUsed(agents: []) == nil)
     }
 
+    @Test func recentChoicesPreserveLastUseOrderAndProfileScopeAfterRestart() {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = Clock()
+        let saved = usage(root: root, clock: clock)
+        saved.record(Self.solHigh)
+        saved.record(Self.opusHigh)
+        saved.record(Self.solHigh)
+        let restarted = usage(root: root, clock: clock)
+        #expect(restarted.recent(agents: Self.agents) == [Self.solHigh, Self.opusHigh])
+        #expect(restarted.recent(agents: Self.agents).first == restarted.lastUsed(agents: Self.agents))
+        #expect(restarted.recent(agents: ["claude"]) == [Self.opusHigh])
+        #expect(restarted.recent(agents: []).isEmpty)
+        clock.now += Self.day
+        let providerDefault = QuickEntryPreset(agent: "codex")
+        saved.record(providerDefault)
+        #expect(usage(root: root, clock: clock).recent(agents: Self.agents) == [providerDefault, Self.solHigh, Self.opusHigh])
+    }
+
     @Test func repeatedPresetsInTheSameSecondKeepTheirLastUseOrderAfterRestart() {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -96,6 +115,7 @@ struct QuickEntryPresetUsageTests {
         let clock = Clock()
         let loaded = usage(root: root, clock: clock)
         #expect(loaded.lastUsed(agents: Self.agents) == Self.solHigh)
+        #expect(loaded.recent(agents: Self.agents) == [Self.solHigh, Self.opusHigh, records[0].preset])
         #expect(loaded.frequent(agents: Self.agents).contains(Self.solHigh))
         clock.now = clock.now.addingTimeInterval(Self.day)
         loaded.record(Self.opusHigh)

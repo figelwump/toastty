@@ -302,6 +302,49 @@ struct QuickEntryTests {
         #expect(fixture.coordinator.records.records.isEmpty)
     }
 
+    @Test(arguments: [2, 7])
+    func savedModelsAreUniqueAndScopedToTheProfileEvenBeforeFrequent(savedCount: Int) throws {
+        let harness = try Harness(recordsPresetUsage: true)
+        let fixture = harness.fixture
+        let clock = QuickEntryPresetUsageTests.Clock()
+        let usage = QuickEntryPresetUsage(
+            runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:]),
+            now: { clock.now }
+        )
+        for index in 0..<savedCount {
+            usage.record(QuickEntryPreset(agent: "codex", model: "saved-\(index)", effort: "high"))
+            clock.now += 1
+        }
+        let latest = "saved-\(savedCount - 1)"
+        usage.record(QuickEntryPreset(agent: "codex", model: latest, effort: "low"))
+        clock.now += 1
+        usage.record(QuickEntryPreset(agent: "codex"))
+        clock.now += 1
+        usage.record(QuickEntryPreset(agent: "claude", model: "claude-only"))
+        for defaultModel in ["configured-model", latest] {
+            // No catalog loader is injected: this fixture tests saved,
+            // live and configured choices without a real provider lookup.
+            let controller = QuickEntryController(
+                store: fixture.store,
+                agentProfiles: { fixture.launcher.launchProfileSummaries() },
+                presetUsage: QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:])),
+                create: { _ in throw TaskError("not used") },
+                configLoader: { TasksConfig(defaults: .init(agent: "codex", model: defaultModel)) },
+                stagingRootURL: harness.stagingRoot,
+                registersGlobalHotKey: false,
+                frontmostApplication: { nil }
+            )
+            controller.recentModels = { $0 == .codex ? [latest, "live-only"] : [] }
+            controller.present(prefill: .empty)
+            var expected = Array((0..<savedCount).reversed().prefix(5)).map { "saved-\($0)" }
+            if savedCount == 2 { expected.append("live-only") }
+            if defaultModel == "configured-model" { expected.append(defaultModel) }
+            #expect(controller.model?.agentProfiles.first { $0.id == "codex" }?.models == expected)
+            #expect(controller.model?.agentProfiles.first { $0.id == "claude" }?.models == ["claude-only"])
+            controller.dismiss()
+        }
+    }
+
     @Test func newTaskFromSelectionAttachesTheTextAndPicksTheTerminalsWorkspace() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
