@@ -190,7 +190,7 @@ B snapshot                       # outline with refs: - button "Save" [ref=e7]
 B fill e4 "Buy milk"; B press Enter --target e4
 B click 'role=button[name="Save"]'; B check 'label=Remember me'; B select '#size' Large
 B wait text "Saved"              # or: wait visible|hidden <target>, wait url '*/done', wait idle
-B text '#status'; B eval 'window.store.getState().items.length'
+B text '#status'; B eval 'document.querySelectorAll(".todo-list li").length'
 B console --errors; B network --failed
 B screenshot --out /tmp/page.png # then read the PNG to look at the page
 ```
@@ -213,6 +213,27 @@ B screenshot --out /tmp/page.png # then read the PNG to look at the page
   command. `open` creates the browser in the right panel; pass `--placement`
   only when the user asks for a split or tab. A browser in a workspace or tab the user has never shown still
   loads and takes input, but `screenshot` needs it on screen once.
+
+## Local Dev Servers On The User's Phone
+
+The user's paired phone can preview a right-panel browser. For a server on
+this computer, such as `http://localhost:5173`, Toastty maps the port onto the
+tailnet with Tailscale Serve and the phone loads
+`https://<machine>.<tailnet>.ts.net:5173/`. Keep opening the `localhost` URL in
+the panel; Toastty does the mapping. When you start or configure a dev server
+the user may look at:
+
+- Serve plain `http` on `127.0.0.1`. Serve forwards to `127.0.0.1:<port>`, so a
+  server listening only on IPv6 `::1` (Vite's default for `localhost` on macOS)
+  or only on HTTPS cannot be previewed. Vite: `server.host: '127.0.0.1'`.
+- Allow `.ts.net` host names. The phone's requests arrive with
+  `Host: <machine>.<tailnet>.ts.net:<port>`, which servers that check hosts
+  reject by default. Vite: `server.allowedHosts: ['.ts.net']`.
+  webpack-dev-server: `allowedHosts: ['.ts.net']`. Next.js:
+  `allowedDevOrigins: ['*.ts.net']`. Give any other host-checking server the
+  same allowance.
+- Do not expose the server any wider (no `0.0.0.0`, Funnel, or port forwarding)
+  for the phone's sake; the tailnet mapping is enough.
 
 ## Closing Panels
 

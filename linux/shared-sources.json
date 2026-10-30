@@ -272,6 +272,7 @@
         "RemoteAccessServiceSafetyTests.swift",
         "RemoteAccessSettingsPresentationTests.swift",
         "RemotePanelMetadataCacheTests.swift",
+        "RemoteLocalServerPreviewsTests.swift",
         "RemotePreviewProviderTests.swift",
         "RemotePushMacPresenceTests.swift",
         "RemotePushRelayClientTests.swift",

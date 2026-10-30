@@ -657,9 +657,24 @@ network connections, forms, and embedded frames blocked. This can prevent a
 local page that depends on external services from working completely.
 
 A regular website panel opens its URL in an independent mobile browser
-session; desktop cookies and page state are not copied. A development server
-address such as `localhost` belongs to the Mac and cannot be opened as the
-phone's `localhost`.
+session; desktop cookies and page state are not copied.
+
+A development server on the Mac's own address, such as `http://localhost:5173`
+or `http://127.0.0.1:8082`, cannot be opened as the phone's `localhost`. When
+the phone previews one, Toastty adds a tailnet-only Tailscale Serve mapping on
+the same port number, forwarding to `127.0.0.1:<port>`, and sends the phone
+`https://<mac>.ts.net:5173/…`. Serve passes the `ts.net` host name on, so a
+dev server that checks hosts must allow it, for example Vite's
+`server.allowedHosts: ['.ts.net']`. The Toastty capabilities skill tells agents
+to set this up. Only plain `http` servers listening on IPv4 loopback can be
+previewed; HTTPS servers and `[::1]` addresses still show as unavailable. If
+the port already has a Serve mapping straight to the server, Toastty uses it
+as is; any other mapping on that port is left alone and the preview stays
+unavailable.
+
+Toastty removes the mappings it created once no right-panel browser shows that
+port, when the last phone disconnects, and when Remote Access turns off. It
+records them so the next launch removes any left behind by a quit or crash.
 
 The Mac must remain connected while loading previews. Missing content,
 unsupported previews, and files exceeding the preview size limits show an
@@ -673,6 +688,10 @@ support conversations; update Toastty on the Mac to enable previews.
   through Funnel, a public reverse proxy, port forwarding, or another ingress.
 - Tailscale terminates HTTPS. The hop from Tailscale Serve to Toastty is plain
   HTTP confined to loopback.
+- While a phone previews a local development server, that server is reachable
+  from your whole tailnet on its port, not only from the paired phone, with no
+  Toastty pairing check in front of it. Previewing a local server from the
+  phone is what turns this on.
 - Toastty stores only a SHA-256 hash of each browser or native credential,
   never the credential itself. Browser profiles paired by earlier builds hold
   their credential in an HttpOnly cookie; the native app receives its Bearer

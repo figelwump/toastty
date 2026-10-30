@@ -280,6 +280,43 @@ struct TailscaleServeSetupTests {
         }
     }
 
+    @Test func exposesALocalServerOnItsOwnPortAndReusesAnExistingMapping() async throws {
+        let local = mapping(proxy: "http://127.0.0.1:8082", httpsPort: 8082)
+        let fixture = try Fixture(before: mapping(), after: try merged(mapping(), local))
+        defer { fixture.remove() }
+        let first = try await fixture.setup.exposeLocalServer(port: 8082)
+        #expect(first.origin == origin + ":8082" && first.created)
+        #expect(try fixture.commands.filter { $0.contains("--bg") } == ["serve --bg --https=8082 http://127.0.0.1:8082"])
+        let second = try await fixture.setup.exposeLocalServer(port: 8082)
+        #expect(second.origin == origin + ":8082" && second.created == false)
+        #expect(try fixture.commands.filter { $0.contains("--bg") }.count == 1)
+    }
+
+    @Test func neverExposesALocalServerOverAnOccupiedOrPublicPort() async throws {
+        for (json, expected) in [
+            (mapping(proxy: "http://localhost:3000", httpsPort: 8082), TailscaleServeSetupError.portInUse(8082)),
+            (#"{"AllowFunnel":{"mac.tailnet.ts.net:8082":true}}"#, .funnelEnabled),
+        ] {
+            let fixture = try Fixture(before: json)
+            defer { fixture.remove() }
+            await expectFailure(expected) { try await fixture.setup.exposeLocalServer(port: 8082).origin }
+            #expect(try fixture.commands.allSatisfy { !$0.contains("--bg") })
+        }
+    }
+
+    @Test func removesOnlyAnUnchangedLocalServerMapping() async throws {
+        let ours = try Fixture(before: mapping(proxy: "http://127.0.0.1:8082", httpsPort: 8082))
+        defer { ours.remove() }
+        try await ours.setup.removeLocalServer(port: 8082)
+        #expect(try ours.commands.contains("serve --https=8082 off"))
+        for json in ["{}", mapping(proxy: "http://localhost:3000", httpsPort: 8082)] {
+            let other = try Fixture(before: json)
+            defer { other.remove() }
+            try? await other.setup.removeLocalServer(port: 8082)
+            #expect(try other.commands.allSatisfy { !$0.hasSuffix(" off") })
+        }
+    }
+
     private func state(_ json: String, origin: String? = nil) throws -> TailscaleServeConfigurationState {
         try TailscaleServeSetup.configurationState(from: Data(json.utf8), origin: origin ?? self.origin, port: port)
     }

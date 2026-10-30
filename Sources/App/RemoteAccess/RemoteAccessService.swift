@@ -424,6 +424,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private let panelMetadataCache = RemotePanelMetadataCache()
+    private let localServerPreviews: RemoteLocalServerPreviews
     private var panelMetadataPollTask: Task<Void, Never>?
     private let previewScratchpadDirectory: URL
     private let store: AppStore
@@ -599,10 +600,15 @@ final class RemoteAccessService: ObservableObject {
                 configureIfNeeded: configureIfNeeded
             )
         },
+        localServerPreviews: RemoteLocalServerPreviews? = nil,
         gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
+        self.localServerPreviews = localServerPreviews ?? RemoteLocalServerPreviews(
+            fileURL: runtimePaths.remoteAccessDirectoryURL.appending(
+                path: "local-server-previews.json", directoryHint: .notDirectory)
+        )
         self.attachmentStore = RemoteMessageAttachmentStore(root: runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true))
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
@@ -778,6 +784,7 @@ final class RemoteAccessService: ObservableObject {
             }
         } else {
             invalidateTailnetSetup()
+            localServerPreviews.removeMappings()
             let shouldAudit = activationState != .off
             activationState = .off
             for task in pushTasksByEventID.values { task.cancel() }
@@ -799,6 +806,7 @@ final class RemoteAccessService: ObservableObject {
     private func failActivation(_ failure: RemoteAccessListenerFailure) {
         guard activationState != .off else { return }
         invalidateTailnetSetup()
+        localServerPreviews.removeMappings()
         activationState = .failed(
             message: failure.recoveryMessage(port: port)
         )
@@ -1477,12 +1485,14 @@ final class RemoteAccessService: ObservableObject {
             scratchpadDirectory: previewScratchpadDirectory
         ))
         panelMetadataCache.requestRefresh()
+        localServerPreviews.removeMappings(except: RemoteLocalServerPreviews.previewablePorts(in: store.state))
     }
 
     private func updatePanelMetadataPolling() {
         guard isEnabled, connectedNativeClientCount > 0 else {
             panelMetadataPollTask?.cancel()
             panelMetadataPollTask = nil
+            localServerPreviews.removeMappings()
             return
         }
         refreshPanelMetadata()
@@ -1555,9 +1565,30 @@ final class RemoteAccessService: ObservableObject {
         do {
             let captured = try previewContext(target: operation.request.target)
             context = captured
+            // A browser on a loopback server is previewed through a tailnet
+            // mapping of its port; the recheck below still compares the
+            // panel's own URL.
+            var readContext = captured
+            if case .web(let url) = captured.source, RemoteLocalServerPreviews.loopbackPort(of: url) != nil {
+                do {
+                    readContext.source = .web(try await localServerPreviews.phoneURL(for: url))
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    ToasttyLog.warning(
+                        "Could not map a local server onto the tailnet for a phone preview",
+                        category: .automation,
+                        metadata: [
+                            "underlying_error": (error as? TailscaleServeSetupError)?.title
+                                ?? String(reflecting: type(of: error)),
+                        ]
+                    )
+                    throw RemotePreviewError.unsupported
+                }
+            }
             stage = .read
-            let work = Task.detached(priority: .utility) {
-                try RemotePreviewProvider.response(operation: operation, context: captured)
+            let work = Task.detached(priority: .utility) { [readContext] in
+                try RemotePreviewProvider.response(operation: operation, context: readContext)
             }
             let response = try await withTaskCancellationHandler {
                 try await work.value
