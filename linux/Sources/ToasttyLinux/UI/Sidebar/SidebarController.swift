@@ -210,11 +210,12 @@ public final class SidebarController {
             Gtk.append(nameLine, flag)
         }
         if let chip = session.chipLabel {
-            Gtk.append(nameLine, Gtk.label(chip, classes: ["status-chip", session.statusClass], xalign: 0.5, ellipsize: false))
+            let chipClass = chip == "waiting" ? "waiting" : session.statusClass
+            Gtk.append(nameLine, Gtk.label(chip, classes: ["status-chip", chipClass], xalign: 0.5, ellipsize: false))
         }
         Gtk.append(text, nameLine)
         if let summary = session.summary {
-            Gtk.append(text, Gtk.label(summary, classes: ["session-summary"]))
+            Gtk.append(text, Gtk.label(summary, classes: session.summaryIsWaiting ? ["session-summary", "waiting"] : ["session-summary"]))
         } else {
             Gtk.append(text, Gtk.label(session.agentLabel, classes: ["session-agent"]))
         }
