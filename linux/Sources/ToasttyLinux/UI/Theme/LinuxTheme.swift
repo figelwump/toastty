@@ -78,6 +78,7 @@ public enum LinuxTheme {
       --toastty-ready: #4fa58a;
       --toastty-error: #e55c5c;
       --toastty-idle: #a8977f;
+      --toastty-waiting: #c1aa8a;
       --toastty-later: #a77bd6;
       --toastty-card-radius: 12px;
       --toastty-terminal-bg: #1d1d20;
@@ -120,6 +121,7 @@ public enum LinuxTheme {
     .session-row.unread .session-name { font-weight: 700; }
     .session-row .session-agent { font-size: 0.78em; font-family: monospace; opacity: 0.6; }
     .session-row .session-summary { font-size: 0.82em; opacity: 0.7; }
+    .session-row .session-summary.waiting { color: var(--toastty-waiting); opacity: 1; }
 
     .status-dot { min-width: 8px; min-height: 8px; border-radius: 999px; margin: 0 2px; background-color: var(--toastty-idle); }
     .status-dot.working { background-color: var(--toastty-working); }
@@ -132,6 +134,7 @@ public enum LinuxTheme {
     .status-chip.needs-approval { color: var(--toastty-approval); background-color: color-mix(in srgb, var(--toastty-approval) 16%, transparent); }
     .status-chip.error { color: var(--toastty-error); background-color: color-mix(in srgb, var(--toastty-error) 14%, transparent); }
     .status-chip.ready { color: var(--toastty-ready); background-color: color-mix(in srgb, var(--toastty-ready) 14%, transparent); }
+    .status-chip.waiting { color: var(--toastty-waiting); background-color: color-mix(in srgb, var(--toastty-waiting) 14%, transparent); }
 
     .later-flag { color: var(--toastty-later); }
 

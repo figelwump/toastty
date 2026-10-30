@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyLinuxUI
 
@@ -271,6 +272,44 @@ struct PaletteAndSidebarTests {
         #expect(row.dotClass == "needs-approval")
         let plain = SidebarModel.sessionRow(status, workspace: workspace, isFocused: false, isFlagged: false)
         #expect(plain.chipLabel == nil && plain.statusKind == .working)
+    }
+
+    /// macOS `sessionWaitingSummaryLabel`: once Claude's turn ends with a
+    /// background shell still running, the row keeps the working dot but its
+    /// summary names the shell instead of reading "Working".
+    @Test func sidebarSessionRowNamesWhatAWaitingSessionWaitsOn() {
+        let fixture = Fixture()
+        let workspace = fixture.store.state.workspacesByID.values.first!
+        func status(waitingSummary: SessionWaitingSummary?, pendingCount: Int) -> WorkspaceSessionStatus {
+            WorkspaceSessionStatus(
+                sessionID: "claude-1", panelID: workspace.focusedPanelID!, workspaceID: workspace.id, agent: .claude,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Started the dev server"),
+                projection: .waitingOnChildren(childCount: 0, pendingBackgroundTaskCount: pendingCount),
+                waitingSummary: waitingSummary, cwd: nil, updatedAt: Date(), isActive: true
+            )
+        }
+        let shell = SessionWaitingSummary(items: [
+            SessionWaitingSummary.Item(id: "task:0:shell-1", kind: .process, label: "shell", detail: "npm run dev"),
+        ])
+
+        let row = SidebarModel.sessionRow(status(waitingSummary: shell, pendingCount: 1), workspace: workspace,
+                                          isFocused: false, isFlagged: false)
+        #expect(row.summary == "1 background process · npm run dev")
+        #expect(row.summaryIsWaiting)
+        #expect(row.chipLabel == "waiting")
+        #expect(row.dotClass == "working")
+
+        // Without an item list the counts still say what it waits on.
+        let counted = SidebarModel.sessionRow(status(waitingSummary: nil, pendingCount: 2), workspace: workspace,
+                                              isFocused: false, isFlagged: false)
+        #expect(counted.summary == "2 background tasks")
+        #expect(counted.summaryIsWaiting)
+
+        // A pending question still takes the summary line.
+        let asking = SidebarModel.sessionRow(status(waitingSummary: shell, pendingCount: 1), workspace: workspace,
+                                             isFocused: false, isFlagged: false, pendingQuestion: "Which port?")
+        #expect(asking.summary == "Which port?")
+        #expect(asking.summaryIsWaiting == false)
     }
 
     @Test func dragReorderDestination() {

@@ -15,6 +15,9 @@ public struct SidebarSessionRowModel: Equatable, Sendable {
     /// "question", "approval", "error", "ready" or "waiting"; nil when the dot says enough.
     public let chipLabel: String?
     public let summary: String?
+    /// The agent's own turn has ended and `summary` names the sub-agents or
+    /// background work it waits on (macOS `sessionWaitingSummaryLabel`).
+    public let summaryIsWaiting: Bool
     public let isUnread: Bool
     public let isFocused: Bool
     public let isFlaggedForLater: Bool
@@ -139,7 +142,11 @@ public enum SidebarModel {
             case .idle, .working: return nil
             }
         }()
-        let summary = (pendingQuestion ?? session.status.summary).trimmingCharacters(in: .whitespacesAndNewlines)
+        // While waiting, the summary says what the session waits on rather
+        // than "Working", so a background shell does not read as Claude busy.
+        let waitingText = pendingQuestion == nil ? waitingSummary(for: session)?.rowText(.full) : nil
+        let summary = (pendingQuestion ?? waitingText ?? session.status.summary)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let name = session.displayTitleOverride ?? session.providerSessionName ?? session.agent.displayName
         return SidebarSessionRowModel(
             sessionID: session.sessionID,
@@ -151,9 +158,30 @@ public enum SidebarModel {
             statusKind: pendingQuestion != nil ? .needsApproval : session.status.kind,
             chipLabel: chip,
             summary: summary.isEmpty ? nil : summary,
+            summaryIsWaiting: waitingText != nil,
             isUnread: isUnread,
             isFocused: isFocused,
             isFlaggedForLater: isFlagged
         )
+    }
+
+    /// What a waiting session waits on, or nil when it is not waiting
+    /// (macOS `SidebarSessionPresentation.sessionWaitingSummary`). A status
+    /// without an item list falls back to the projection's counts.
+    static func waitingSummary(for session: WorkspaceSessionStatus) -> SessionWaitingSummary? {
+        guard case .waitingOnChildren(let childCount, let pendingCount) = session.projection else {
+            return nil
+        }
+        if let summary = session.waitingSummary, summary.totalCount > 0 {
+            return summary
+        }
+        let fallback = SessionWaitingSummary(
+            agentCount: childCount,
+            processCount: 0,
+            workflowCount: 0,
+            taskCount: pendingCount,
+            items: []
+        )
+        return fallback.totalCount > 0 ? fallback : nil
     }
 }

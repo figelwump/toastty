@@ -130,7 +130,8 @@ struct UnreadAttentionTests {
         func row(_ kind: SessionStatusKind, unread: Bool) -> SidebarSessionRowModel {
             SidebarSessionRowModel(
                 sessionID: "s", panelID: UUID(), name: "Claude", agentLabel: "claude", statusKind: kind,
-                chipLabel: nil, summary: nil, isUnread: unread, isFocused: false, isFlaggedForLater: false
+                chipLabel: nil, summary: nil, summaryIsWaiting: false, isUnread: unread, isFocused: false,
+                isFlaggedForLater: false
             )
         }
         #expect(row(.ready, unread: true).dotClass == "ready")
