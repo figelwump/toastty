@@ -872,7 +872,7 @@ struct TaskBoardTests {
         #expect(before.needsYou.map(\.item.title) == ["first", "clicked", "last"])
 
         let pin = SidebarStatusSections.pin(previous: nil, selected: clicked.id, displayed: before.slots)
-        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, group: .needsYou, index: 1))
+        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, slot: .init(group: .needsYou, above: [first.id])))
         var read = clicked
         read.stage = .idle
         let held = SidebarStatusSections.make([first, read, last, quiet], pin: pin)
@@ -900,7 +900,23 @@ struct TaskBoardTests {
         let urgent = SidebarStatusSections.make([first, clicked, last, asks], pin: quietPin)
         #expect(urgent.needsYou.map(\.item.title).contains("quiet"))
         #expect(urgent.idle.isEmpty)
-        #expect(urgent.pin?.group == .needsYou)
+        #expect(urgent.pin?.slot.group == .needsYou)
+
+        // Found on the mini: selecting another task releases the one held
+        // before it, which leaves the group at the same time. The newly
+        // selected task must not jump past the rows that were below it.
+        let parentID = UUID()
+        let parent = statusItem("parent", taskID: parentID, stage: .idle)
+        let child = statusItem("child", parent: parentID, stage: .needsYou(.review))
+        var answered = first
+        answered.stage = .idle
+        let previousPin = SidebarStatusSections.Pin(subject: first.id, slot: .init(group: .needsYou, above: []))
+        let shown = SidebarStatusSections.make([clicked, child, answered, parent], pin: previousPin)
+        #expect(shown.needsYou.map(\.item.title) == ["first", "clicked", "parent", "child"])
+        let next = SidebarStatusSections.pin(previous: shown.pin, selected: clicked.id, displayed: shown.slots)
+        let switched = SidebarStatusSections.make([child, answered, read, parent], pin: next)
+        #expect(switched.needsYou.map(\.item.title) == ["clicked", "parent", "child"])
+        #expect(switched.idle.map(\.item.title) == ["first"])
     }
 
     private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {

@@ -554,7 +554,7 @@ private final class SubspaceOrderMemory {
 /// out of view state, like `SubspaceOrderMemory`, so recording them does not
 /// draw the sidebar again.
 private final class StatusOrderMemory {
-    var displayedSlots: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)] = [:]
+    var displayedSlots: [TaskBoardItem.Subject: SidebarStatusSections.Slot] = [:]
     var pin: SidebarStatusSections.Pin?
 }
 

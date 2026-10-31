@@ -231,7 +231,6 @@ def main():
         wait_for('the finished turn to need the user', lambda: stage(clicked_id).get('attention') == 'agentFinished')
         before = wait_for('the finished task in Needs you',
                           lambda: (o := sidebar_order()) and group_of(o, clicked_space) == 'Needs you' and o)
-        slot = rows_in(before, 'Needs you').index(clicked_space)
         step('before the click', order=before)
         capture('4-before-select')
         cli_json('action', 'run', 'workspace.focus-panel', '--workspace', clicked_space,
@@ -240,7 +239,11 @@ def main():
         time.sleep(1.0)
         held = sidebar_order()
         require(group_of(held, clicked_space) == 'Needs you', f'The selected row left Needs you: {held}')
-        require(rows_in(held, 'Needs you').index(clicked_space) == slot, f'The selected row moved: {before} -> {held}')
+        # Rows can leave above it (the task selected before is released at
+        # the same time), but it never jumps past a row that stayed.
+        kept_before = [row for row in rows_in(before, 'Needs you') if row in rows_in(held, 'Needs you')]
+        kept_after = [row for row in rows_in(held, 'Needs you') if row in kept_before]
+        require(clicked_space in kept_after and kept_before == kept_after, f'The selected row moved: {before} -> {held}')
         step('selected row holds its slot', order=held)
         capture('5-selected-holds')
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)

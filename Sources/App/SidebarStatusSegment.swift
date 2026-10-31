@@ -27,12 +27,18 @@ struct SidebarStatusSections: Equatable {
         var group: TaskStage.Group { members.map(\.stage.group).min() ?? root.stage.group }
     }
 
-    /// Where the selected task's family holds while the task stays selected:
-    /// the group and position it had on screen. See `pin(previous:selected:displayed:)`.
+    /// Where a family is on screen: its group, and the families above it
+    /// there, by their first task.
+    struct Slot: Equatable {
+        let group: TaskStage.Group
+        let above: [TaskBoardItem.Subject]
+    }
+
+    /// Where the selected task's family holds while the task stays selected.
+    /// See `pin(previous:selected:displayed:)`.
     struct Pin: Equatable {
         let subject: TaskBoardItem.Subject
-        let group: TaskStage.Group
-        let index: Int
+        let slot: Slot
     }
 
     struct Lane: Equatable, Identifiable {
@@ -85,15 +91,19 @@ struct SidebarStatusSections: Equatable {
         entries(group).filter { $0.item.stage.group == group }.count
     }
 
-    /// Each family's group and position on screen, by every member, so the
-    /// next selection can pin its family where the user saw it.
-    var slots: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)] {
-        var result: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)] = [:]
+    /// Each family's slot on screen, by every member, so the next selection
+    /// can pin its family where the user saw it.
+    var slots: [TaskBoardItem.Subject: Slot] {
+        var result: [TaskBoardItem.Subject: Slot] = [:]
         for group in Self.rowGroups {
-            var index = -1
+            var above: [TaskBoardItem.Subject] = []
+            var slot = Slot(group: group, above: [])
             for entry in entries(group) {
-                if entry.isLinkedChild == false { index += 1 }
-                result[entry.id] = (group, index)
+                if entry.isLinkedChild == false {
+                    slot = Slot(group: group, above: above)
+                    above.append(entry.id)
+                }
+                result[entry.id] = slot
             }
         }
         return result
@@ -113,20 +123,21 @@ struct SidebarStatusSections: Equatable {
             familiesByGroup[group] = sortedFamilies(familiesByGroup[group] ?? [], group: group, items: items)
         }
         // Selecting a task reads its turn, which can move it to a calmer
-        // group under the pointer. Its family keeps the group and slot it had
-        // until the selection moves. Anything more urgent still moves it,
-        // and it holds in its new place from then on.
+        // group under the pointer. Its family keeps its group, and stays
+        // right after the families that were above it and are still there,
+        // until the selection moves: rows above it can leave or arrive, but it
+        // never jumps past a row. Anything more urgent still moves it, and
+        // it holds in its new place from then on.
         if let pin, let located = locate(pin.subject, in: familiesByGroup) {
-            if located.group >= pin.group {
-                let family = familiesByGroup[located.group]!.remove(at: located.index)
-                var target = familiesByGroup[pin.group] ?? []
-                let slot = min(pin.index, target.count)
-                target.insert(family, at: slot)
-                familiesByGroup[pin.group] = target
-                sections.pin = Pin(subject: pin.subject, group: pin.group, index: slot)
-            } else {
-                sections.pin = Pin(subject: pin.subject, group: located.group, index: located.index)
-            }
+            let group = min(located.group, pin.slot.group)
+            let family = familiesByGroup[located.group]!.remove(at: located.index)
+            var target = familiesByGroup[group] ?? []
+            let insertion = group == pin.slot.group
+                ? target.lastIndex { $0.members.contains { pin.slot.above.contains($0.id) } }.map { $0 + 1 } ?? 0
+                : located.index
+            target.insert(family, at: insertion)
+            familiesByGroup[group] = target
+            sections.pin = Pin(subject: pin.subject, slot: Slot(group: group, above: target.prefix(insertion).map(\.root.id)))
         }
         // A row whose own stage is in another group is drawn dimmed: a
         // relative listed with its family, or a held row the user has read.
@@ -172,12 +183,11 @@ struct SidebarStatusSections: Equatable {
     static func pin(
         previous: Pin?,
         selected: TaskBoardItem.Subject?,
-        displayed: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)]
+        displayed: [TaskBoardItem.Subject: Slot]
     ) -> Pin? {
         guard let selected else { return nil }
         if let previous, previous.subject == selected { return previous }
-        guard let slot = displayed[selected] else { return nil }
-        return Pin(subject: selected, group: slot.group, index: slot.index)
+        return displayed[selected].map { Pin(subject: selected, slot: $0) }
     }
 
     /// Splits the tasks in Needs you, Running and Idle into families: each

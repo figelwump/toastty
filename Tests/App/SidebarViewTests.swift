@@ -2196,6 +2196,129 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(harness.hostingView, name: "sidebar-status-starting")
     }
 
+    /// The report behind these rules: a clicked unread task jumped to Idle
+    /// from under the pointer, a parent showed apart from its child, and a
+    /// question looked idle once read.
+    func testStatusSegmentKeepsQuestionsFamiliesAndTheClickedRowInPlace() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        func task(_ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil, unread: Bool = false) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, unreadPanelIDs: unread ? [panelID] : [],
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("Public URL warning")
+        _ = task("Private pages stay private", parent: parentID, pullRequest: 322)
+        _ = task("Thumbnail filenames", unread: true)
+        _ = task("Hostname options", question: "Pick a hostname option")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        // Newest report last, so Needs you lists Thumbnail, then Hostname,
+        // then the family of the pull request's child.
+        let reports: [(String, SessionStatusKind, TimeInterval)] = [
+            ("Public URL warning", .idle, 1), ("Private pages stay private", .idle, 2),
+            ("Hostname options", .idle, 3), ("Thumbnail filenames", .ready, 4),
+        ]
+        for (title, kind, seconds) in reports {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .ready ? "Ready" : "Waiting"),
+                at: now.addingTimeInterval(seconds)
+            )
+        }
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
+        let root = harness.hostingView
+
+        /// Group headers and rows, top to bottom.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            let top = try semanticTextFrame(in: root, prefix: "Tasks, ")
+            // Not every group shows, so look up without recording a failure.
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you", "Running", "Idle"] {
+                if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
+            }
+            for title in panelByTitle.keys {
+                if let found = frame("\(title), task space") { frames.append((title, found)) }
+            }
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // A question waits in Needs you with its text; a family lists with
+        // its child that waits for review.
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options", "Public URL warning", "Private pages stay private",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
+        XCTAssertTrue(textValues.contains {
+            $0.hasPrefix("Hostname options, task space, waiting for your reply") && $0.contains("Asks: Pick a hostname option")
+        }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "status-1-before-click")
+        try attachSidebarRender(root, name: "status-1-before-click")
+
+        // Selecting the unread task reads it; it holds its place, dimmed and
+        // no longer counted.
+        let clicked = try XCTUnwrap(panelByTitle["Thumbnail filenames"])
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: clicked.workspaceID)))
+        XCTAssertTrue(harness.store.send(.focusPanel(workspaceID: clicked.workspaceID, panelID: clicked.panelID)))
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options", "Public URL warning", "Private pages stay private",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "status-2-clicked-row-holds")
+        try attachSidebarRender(root, name: "status-2-clicked-row-holds")
+
+        // Once the selection moves, the read task lists in Idle.
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: project.id)))
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Hostname options", "Public URL warning", "Private pages stay private", "IDLE", "Thumbnail filenames",
+        ])
+        try writeSidebarEvidence(root, name: "status-3-after-selection-moves")
+        try attachSidebarRender(root, name: "status-3-after-selection-moves")
+    }
+
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
         let pickWorkspace = TaskRecord(
             createdAt: Date(),
