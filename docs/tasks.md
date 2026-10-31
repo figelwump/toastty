@@ -471,9 +471,8 @@ window.
   when the project has more.
   Top-level workspaces show only in Projects.
 
-A To ship row opens its task space, which stays open until the release ships;
-for a task whose task space has closed, it opens the Tasks view with the task
-selected. **Show N more**
+A To ship row opens the Tasks view with the task selected. The task space
+closed at the merge; if you kept it open, the row opens it instead. **Show N more**
 opens the Tasks view at To ship with the first task the sidebar did not show
 selected, and the To ship and Done counts open it at their group. The newest
 merge comes first; a task with no merge time uses its latest change. A To ship
@@ -568,9 +567,8 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 4. Toastty records the merge on the task first. Once the agent's turn ends, it
    closes the task space, removes the worktree and deletes the branch, the same
    way as the Merge button does for any task space. In a project with
-   `release_tags`, the task goes to To ship instead and keeps its task space
-   and worktree, so you can still open them, until the release ships or you
-   mark it done; see [Release](#release).
+   `release_tags`, the cleanup runs the same way, and the task then waits in
+   To ship until a release tag contains its merge; see [Release](#release).
 
 Saying "merge it" to the task's agent runs the same skill. **Merge Without
 Checks**, or `merge = "direct"` for the project, skips the agent and merges at
@@ -579,8 +577,11 @@ checks: a `task merge` from the agent's turn that was checking is then refused.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
 its task space when no agent there is working and the worktree is clean at the
-merged commit, or, in a project with `release_tags`, once the release ships. Otherwise the task shows **Merged · clean up?** in Needs you;
+merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+While a merged task's task space stays open, its header no longer offers Merge:
+it shows **Done · PR #N**, with **Archive Task…** in its menu, or **Cleanup
+Stopped** while a stopped cleanup waits for you.
 
 ## Archive a task
 
@@ -651,14 +652,10 @@ for an open project even when its To ship list is empty.
 Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
 release made outside Toastty counts too. When a tag contains a task's merge
-commit, the task is Done, and the Tasks view shows the tag. Once its agent is at
-rest, a shipped task that kept its task space gets the cleanup its merge left
-for the release: Toastty closes the task space, removes the worktree and
-deletes the branch, as after any merge; with local work left, it shows
-**Merged · clean up?** instead. Marking a To ship task done cleans it up the
-same way. A shipped release task closes its task space and removes its
-worktree once its agent is at rest, unless the worktree's commit is on no
-remote branch or tag.
+commit, the task is Done, and the Tasks view shows the tag. The release adds
+no cleanup for the task: its merge already ran it. A shipped release task
+closes its task space and removes its worktree once its agent is at rest,
+unless the worktree's commit is on no remote branch or tag.
 
 ## Skills for task events
 

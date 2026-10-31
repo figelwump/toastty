@@ -89,8 +89,9 @@ public enum TaskStage: Equatable, Sendable {
     }
 
     /// Whether the task's work is over: it shipped, finished, or was
-    /// archived. A merged task waiting for a release is not finished: its
-    /// task space stays open until the release ships.
+    /// archived. A merged task waiting for a release is not finished yet,
+    /// so the board still asks GitHub about its pull request once: a task
+    /// space still open after the merge then gets the merge's cleanup.
     public var isFinished: Bool {
         switch self {
         case .done, .archived: true

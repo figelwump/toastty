@@ -726,7 +726,8 @@ struct WorkspaceView: View {
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
             mode: store.workspaceMergeMode,
-            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id)
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id)
         ) {
             // A pull request subspace gives the whole slot to its merge
             // control; the sidebar and tab dots still show unreads.
@@ -740,6 +741,7 @@ struct WorkspaceView: View {
                             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
                             mode: store.workspaceMergeMode,
                             isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+                            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id),
                             pullRequestState: pullRequestState
                         ) ?? mergePresentation
                     )

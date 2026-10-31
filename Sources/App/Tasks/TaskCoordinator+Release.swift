@@ -96,18 +96,6 @@ extension TaskCoordinator {
         }
     }
 
-    /// Whether the task keeps its task space and worktree after its merge,
-    /// so the user can still look at them: its project has `release_tags`,
-    /// and the task has not shipped or been marked done. A release task
-    /// never waits. When tasks.toml cannot be read, the last version the
-    /// board read decides, as it does for the stage the task shows.
-    func waitsForRelease(_ record: TaskRecord) -> Bool {
-        guard record.release == nil, record.shippedAt == nil, record.doneAt == nil,
-              let root = record.projectRoot ?? record.workspaceID.flatMap({ store.state.workspacesByID[$0]?.rootDirectory }),
-              let config = (try? configLoader()) ?? board?.config else { return false }
-        return config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releaseTags != nil
-    }
-
     /// The project's merged tasks that no release tag contains yet.
     func toShipTasks(projectRoot root: String) -> [TaskRecord] {
         if let board {
@@ -127,10 +115,10 @@ extension TaskCoordinator {
     /// Looks for release tags that contain the To ship tasks' merge
     /// commits and the release tasks' commits, in every project with
     /// `release_tags`. Only the remote's tags count: a tag that exists only
-    /// here was not released. A shipped task then closes its task space and
-    /// removes its worktree, once its agent is at rest: a release task with
-    /// its own steps, and a merged task with the cleanup its merge left
-    /// for the release.
+    /// here was not released. A shipped release task then closes its
+    /// task space and removes its worktree, once its agent is at rest. A
+    /// merged task's task space closed at its merge, so it only becomes
+    /// Done.
     func checkReleases() async {
         guard isCheckingReleases == false else { return }
         isCheckingReleases = true
@@ -148,7 +136,6 @@ extension TaskCoordinator {
             await checkReleases(root: root, pattern: pattern, tasks: tasks)
         }
         cleanUpShippedReleases()
-        cleanUpShippedMergedTasks()
     }
 
     private func checkReleases(root: String, pattern: String, tasks: [TaskRecord]) async {
@@ -245,19 +232,6 @@ extension TaskCoordinator {
             }
         }
         return commits
-    }
-
-    /// Runs the cleanup after the merge for merged tasks that kept their
-    /// task space while they waited for the release, now that it shipped.
-    /// A task whose agent is working waits for the next check.
-    private func cleanUpShippedMergedTasks() {
-        let shipped = records.records.filter { record in
-            guard record.release == nil, record.shippedAt != nil, record.mergedAt != nil, record.cleanup == nil,
-                  let taskSpaceID = record.taskSpaceWorkspaceID,
-                  store.state.workspacesByID[taskSpaceID] != nil else { return false }
-            return agentInTurn(workspaceID: taskSpaceID) == false
-        }
-        cleanUpMergedTasks(shipped.map(\.id))
     }
 
     /// Closes the task spaces of shipped releases whose agents are at rest.

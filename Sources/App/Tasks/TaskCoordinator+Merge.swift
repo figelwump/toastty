@@ -178,11 +178,6 @@ extension TaskCoordinator {
         if let taskSpaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[taskSpaceID] != nil {
             _ = store.send(.setWorkspaceDone(workspaceID: taskSpaceID, doneAt: doneAt))
         }
-        // A merged task that kept its task space for the release is
-        // finished now, so its merge's cleanup runs.
-        if record.mergedAt != nil {
-            cleanUpMergedTasks([taskID])
-        }
         return records.record(id: taskID)!
     }
 
@@ -193,17 +188,16 @@ extension TaskCoordinator {
         guard let record = records.record(taskSpaceWorkspaceID: workspaceID) else { return }
         switch event {
         case .merged(let state):
-            // A task that waits for a release keeps its task space and
-            // worktree until the release ships, so the request ends here.
-            let keepsTaskSpace = waitsForRelease(record)
             // Saved before anything closes, so the task keeps its merge if
-            // the cleanup or the app stops partway.
+            // the cleanup or the app stops partway. A task in a project with
+            // `release_tags` is cleaned up now too and waits in To ship
+            // without its task space.
             do {
                 try records.save(id: record.id) {
                     $0.mergedAt = $0.mergedAt ?? self.now()
                     $0.mergeCommit = state?.mergeCommit ?? $0.mergeCommit
                     $0.mergeRequestedAt = $0.mergeRequestedAt ?? self.now()
-                    $0.cleanup = keepsTaskSpace ? nil : TaskCleanup(kind: .merge)
+                    $0.cleanup = TaskCleanup(kind: .merge)
                 }
                 try records.flush()
             } catch {
@@ -211,10 +205,6 @@ extension TaskCoordinator {
                     "task_id": record.id.uuidString,
                     "error": error.localizedDescription,
                 ])
-            }
-            if keepsTaskSpace {
-                merges?.finishWithoutCleanup(workspaceID: workspaceID)
-                ToasttyLog.info("Kept a merged task's task space until its release", category: .tasks, metadata: ["task_id": record.id.uuidString])
             }
         case .cleaned(let detail):
             records.update(id: record.id) {
@@ -250,8 +240,8 @@ extension TaskCoordinator {
     /// for it, and no agent there is in a turn. The pull request script
     /// then checks that the worktree is clean at the merged head. A task
     /// whose agent was working gets "Merged · clean up?" instead. A task
-    /// that waits for a release keeps its task space until the release
-    /// ships or the task is marked done, and is cleaned up then.
+    /// in a project with `release_tags` is cleaned up the same way and
+    /// waits in To ship without its task space.
     func cleanUpMergedTasks(_ taskIDs: [UUID]) {
         guard let merges else { return }
         for taskID in taskIDs {
@@ -259,7 +249,6 @@ extension TaskCoordinator {
                   record.archivedAt == nil,
                   record.release == nil,
                   record.cleanup == nil,
-                  waitsForRelease(record) == false,
                   let worktree = record.worktree, worktree.isDetached == false,
                   let taskSpaceID = record.taskSpaceWorkspaceID,
                   store.state.workspacesByID[taskSpaceID] != nil,

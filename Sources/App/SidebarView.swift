@@ -1123,8 +1123,8 @@ struct SidebarView: View {
     }
 
     /// A merged task waiting for a release, under its project's card. Its
-    /// task space stays open until the release ships, so the row opens it;
-    /// a task whose task space has closed opens in the Tasks view.
+    /// task space usually closed at the merge, so the row opens the task in
+    /// the Tasks view; a task space the user kept open opens instead.
     private func toShipTaskRow(_ item: TaskBoardItem) -> some View {
         let hoverID = switch item.id {
         case .task(let id), .taskSpace(let id): id
@@ -3743,7 +3743,8 @@ struct SidebarView: View {
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
             mode: store.workspaceMergeMode,
-            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id)
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id)
         ) else { return false }
         return true
     }
@@ -4436,7 +4437,8 @@ struct SidebarView: View {
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],
                 mode: store.workspaceMergeMode,
-                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: row.id)
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: row.id),
+                isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: row.id)
               ) else {
             return nil
         }

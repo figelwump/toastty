@@ -643,6 +643,15 @@ extension SessionRuntimeStore {
         return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))?.merge == .checking
     }
 
+    /// Whether a task space's task has merged, through Toastty or on
+    /// GitHub. Its Merge button then shows the merge as done instead of
+    /// offering it again while the task space stays open.
+    func isTaskMerged(workspaceID: UUID) -> Bool {
+        guard let coordinator = taskCoordinator,
+              let taskID = coordinator.store.state.workspacesByID[workspaceID]?.taskID else { return false }
+        return coordinator.records.record(id: taskID)?.mergedAt != nil
+    }
+
     /// Whether the workspace is a task space with a task record, whose
     /// Merge goes through the task.
     func isTaskSpaceWithRecord(workspaceID: UUID) -> Bool {
