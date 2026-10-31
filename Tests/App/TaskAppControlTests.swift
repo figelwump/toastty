@@ -378,6 +378,12 @@ struct TaskAppControlTests {
         let consumerSession = try #require(consumer.operation.agentLaunch?.sessionID)
         let producerPanel = try #require(producer.operation.taskSpace?.panelID)
         let consumerPanel = try #require(consumer.operation.taskSpace?.panelID)
+        // Both agents finish the turn their launch started.
+        for session in [producerSession, consumerSession] {
+            for kind in [SessionStatusKind.working, .idle] {
+                fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
+            }
+        }
 
         // A first poll lists every task with its agent's state and a cursor.
         let first = try executor.runQuery(id: "task.list", args: [:])
