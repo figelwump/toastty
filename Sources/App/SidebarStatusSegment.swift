@@ -8,10 +8,31 @@ import SwiftUI
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {
         let item: TaskBoardItem
-        /// Drawn under the task that started it, which is in the same group.
+        /// Drawn under the task that started it.
         var isLinkedChild = false
+        /// Drawn dimmed: the task's own stage is in a calmer group. It lists
+        /// here to keep its family together, or because it is selected and
+        /// holds its place.
+        var isContext = false
 
         var id: TaskBoardItem.Subject { item.id }
+    }
+
+    /// A task and the tasks it started, which list together in the group of
+    /// the most urgent one. One level only, as in the project cards.
+    struct Family: Equatable {
+        var root: TaskBoardItem
+        var children: [TaskBoardItem] = []
+        var members: [TaskBoardItem] { [root] + children }
+        var group: TaskStage.Group { members.map(\.stage.group).min() ?? root.stage.group }
+    }
+
+    /// Where the selected task's family holds while the task stays selected:
+    /// the group and position it had on screen. See `pin(previous:selected:displayed:)`.
+    struct Pin: Equatable {
+        let subject: TaskBoardItem.Subject
+        let group: TaskStage.Group
+        let index: Int
     }
 
     struct Lane: Equatable, Identifiable {
@@ -34,33 +55,90 @@ struct SidebarStatusSections: Equatable {
         item.record?.projectRoot ?? item.projectTitle ?? "Other"
     }
 
+    /// The groups that list rows, in their order.
+    static let rowGroups: [TaskStage.Group] = [.needsYou, .running, .idle]
+
     var needsYou: [Entry] = []
     var running: [Entry] = []
     var idle: [Entry] = []
     var toShip: [Lane] = []
     var doneCount = 0
+    /// Where the pinned family is shown, for the next `make`.
+    var pin: Pin?
 
     var isEmpty: Bool {
         needsYou.isEmpty && running.isEmpty && idle.isEmpty && toShip.isEmpty && doneCount == 0
     }
 
+    func entries(_ group: TaskStage.Group) -> [Entry] {
+        switch group {
+        case .needsYou: needsYou
+        case .running: running
+        case .idle: idle
+        case .toShip, .done, .archived: []
+        }
+    }
+
+    /// The header count: rows whose own stage is in the group, so a dimmed
+    /// relative or a held row does not count.
+    func count(_ group: TaskStage.Group) -> Int {
+        entries(group).filter { $0.item.stage.group == group }.count
+    }
+
+    /// Each family's group and position on screen, by every member, so the
+    /// next selection can pin its family where the user saw it.
+    var slots: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)] {
+        var result: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)] = [:]
+        for group in Self.rowGroups {
+            var index = -1
+            for entry in entries(group) {
+                if entry.isLinkedChild == false { index += 1 }
+                result[entry.id] = (group, index)
+            }
+        }
+        return result
+    }
+
     /// `items` newest activity first, as the board gives them. Needs you
     /// keeps that order, so the latest request is on top; Running and Idle
     /// sort by project and title, so rows hold still while agents work.
-    static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
+    static func make(
+        _ items: [TaskBoardItem],
+        releasable: (TaskBoardItem) -> Bool = { _ in false },
+        pin: Pin? = nil
+    ) -> Self {
         var sections = Self()
-        sections.needsYou = grouped(items.filter { $0.stage.group == .needsYou })
-        func byProjectAndTitle(_ group: TaskStage.Group) -> [Entry] {
-            grouped(items.filter { $0.stage.group == group }.sorted { lhs, rhs in
-                let lhsProject = lhs.projectTitle ?? ""
-                let rhsProject = rhs.projectTitle ?? ""
-                return lhsProject != rhsProject
-                    ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
-                    : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-            })
+        var familiesByGroup = Dictionary(grouping: families(items), by: \.group)
+        for group in rowGroups {
+            familiesByGroup[group] = sortedFamilies(familiesByGroup[group] ?? [], group: group, items: items)
         }
-        sections.running = byProjectAndTitle(.running)
-        sections.idle = byProjectAndTitle(.idle)
+        // Selecting a task reads its turn, which can move it to a calmer
+        // group under the pointer. Its family keeps the group and slot it had
+        // until the selection moves. Anything more urgent still moves it,
+        // and it holds in its new place from then on.
+        if let pin, let located = locate(pin.subject, in: familiesByGroup) {
+            if located.group >= pin.group {
+                let family = familiesByGroup[located.group]!.remove(at: located.index)
+                var target = familiesByGroup[pin.group] ?? []
+                let slot = min(pin.index, target.count)
+                target.insert(family, at: slot)
+                familiesByGroup[pin.group] = target
+                sections.pin = Pin(subject: pin.subject, group: pin.group, index: slot)
+            } else {
+                sections.pin = Pin(subject: pin.subject, group: located.group, index: located.index)
+            }
+        }
+        // A row whose own stage is in another group is drawn dimmed: a
+        // relative listed with its family, or a held row the user has read.
+        func entries(_ group: TaskStage.Group) -> [Entry] {
+            (familiesByGroup[group] ?? []).flatMap { family in
+                [Entry(item: family.root, isContext: family.root.stage.group != group)]
+                    + family.children.map { Entry(item: $0, isLinkedChild: true, isContext: $0.stage.group != group) }
+            }
+        }
+        sections.needsYou = entries(.needsYou)
+        sections.running = entries(.running)
+        sections.idle = entries(.idle)
         let shipping = Dictionary(grouping: items.filter { $0.stage == .toShip }, by: laneKey)
         sections.toShip = shipping.map { key, lane in
             Lane(
@@ -77,8 +155,83 @@ struct SidebarStatusSections: Equatable {
         return sections
     }
 
+    private static func locate(
+        _ subject: TaskBoardItem.Subject,
+        in familiesByGroup: [TaskStage.Group: [Family]]
+    ) -> (group: TaskStage.Group, index: Int)? {
+        for group in rowGroups {
+            if let index = familiesByGroup[group]?.firstIndex(where: { $0.members.contains { $0.id == subject } }) {
+                return (group, index)
+            }
+        }
+        return nil
+    }
+
+    /// The pin for the selected task: kept while the same task stays
+    /// selected, else taken from where the task's family was on screen.
+    static func pin(
+        previous: Pin?,
+        selected: TaskBoardItem.Subject?,
+        displayed: [TaskBoardItem.Subject: (group: TaskStage.Group, index: Int)]
+    ) -> Pin? {
+        guard let selected else { return nil }
+        if let previous, previous.subject == selected { return previous }
+        guard let slot = displayed[selected] else { return nil }
+        return Pin(subject: selected, group: slot.group, index: slot.index)
+    }
+
+    /// Splits the tasks in Needs you, Running and Idle into families: each
+    /// task whose parent is among them lists under that parent, unless the
+    /// parent itself lists under another task. Every task is in exactly one
+    /// family, in `items` order.
+    static func families(_ items: [TaskBoardItem]) -> [Family] {
+        let listed = items.filter { rowGroups.contains($0.stage.group) }
+        let taskIDs = Set(listed.compactMap(\.taskID))
+        func parent(_ item: TaskBoardItem) -> UUID? {
+            guard let parentID = item.parentTaskID, parentID != item.taskID, taskIDs.contains(parentID) else { return nil }
+            return parentID
+        }
+        let rootTaskIDs = Set(listed.filter { parent($0) == nil }.compactMap(\.taskID))
+        let childrenByParentID = Dictionary(grouping: listed.filter { parent($0).map(rootTaskIDs.contains) == true }) { parent($0)! }
+        let childIDs = Set(childrenByParentID.values.flatMap { $0.map(\.id) })
+        return listed.filter { childIDs.contains($0.id) == false }.map { root in
+            Family(root: root, children: root.taskID.flatMap { childrenByParentID[$0] } ?? [])
+        }
+    }
+
+    /// Needs you lists the family with the newest request first: its newest
+    /// member that needs you. Running and Idle sort by project and title,
+    /// so rows hold still while agents work. Children always sort by project
+    /// and title, so reading one does not move it within its family.
+    private static func sortedFamilies(_ families: [Family], group: TaskStage.Group, items: [TaskBoardItem]) -> [Family] {
+        let sorted = families.map { family in
+            var family = family
+            family.children.sort(by: byProjectAndTitle)
+            return family
+        }
+        switch group {
+        case .needsYou:
+            let position = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+            func rank(_ family: Family) -> Int {
+                family.members.filter { $0.stage.group == group }.compactMap { position[$0.id] }.min() ?? Int.max
+            }
+            return sorted.sorted { rank($0) < rank($1) }
+        case .running, .idle, .toShip, .done, .archived:
+            return sorted.sorted { byProjectAndTitle($0.root, $1.root) }
+        }
+    }
+
+    private static func byProjectAndTitle(_ lhs: TaskBoardItem, _ rhs: TaskBoardItem) -> Bool {
+        let lhsProject = lhs.projectTitle ?? ""
+        let rhsProject = rhs.projectTitle ?? ""
+        return lhsProject != rhsProject
+            ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
+            : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+    }
+
     /// Puts each task right after the task that started it when both are
-    /// in the group. One level only, as in the project cards.
+    /// in the group. One level only, as in the project cards. The Tasks view
+    /// lists each group this way.
     static func grouped(_ items: [TaskBoardItem]) -> [Entry] {
         let taskIDs = Set(items.compactMap(\.taskID))
         let topLevel = items.filter { item in
@@ -190,15 +343,15 @@ struct SidebarStatusSegment<RowContent: View>: View {
                     .padding(.vertical, 8)
             }
             if sections.needsYou.isEmpty == false {
-                header("Needs you", count: sections.needsYou.count, isHot: true)
+                header("Needs you", count: sections.count(.needsYou), isHot: true)
                 rows(sections.needsYou)
             }
             if sections.running.isEmpty == false {
-                header("Running", count: sections.running.count)
+                header("Running", count: sections.count(.running))
                 rows(sections.running)
             }
             if sections.idle.isEmpty == false {
-                header("Idle", count: sections.idle.count)
+                header("Idle", count: sections.count(.idle))
                 rows(sections.idle)
             }
             if sections.toShip.isEmpty == false {
@@ -255,6 +408,8 @@ struct SidebarStatusSegment<RowContent: View>: View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(entries) { entry in
                 row(entry)
+                    // Its own stage is in a calmer group; see `Entry.isContext`.
+                    .opacity(entry.isContext ? 0.55 : 1)
             }
         }
     }

@@ -256,6 +256,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.cancel-merge`
 - `task.clean-up`
 - `task.ready-for-review`
+- `task.needs-reply`
 - `task.mark-done`
 - `task.archive`
 - `task.release`
@@ -454,10 +455,14 @@ Notable action-specific behavior:
 - `task.clean-up`
   - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
     archive or a release.
-- `task.ready-for-review`, `task.mark-done`
-  - `task.ready-for-review` takes optional `taskID` and sets
-    `readyForReviewAt`. `task.mark-done` requires `taskID`, sets `doneAt`, and
-    marks the task space done.
+- `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
+  - `task.ready-for-review` takes optional `taskID`, sets
+    `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
+    optional `taskID` and `question` and sets `replyRequest`: the task waits in
+    Needs you with attention `awaitingReply`, even after the user reads the
+    turn, until the task's own agent starts its next turn.
+    `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
+    done.
 - `task.archive`
   - requires `args.taskID`; takes booleans `closePullRequest`,
     `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
@@ -700,7 +705,7 @@ and `setup` with
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
-`mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
+`replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
 `group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`; a task that
 is starting reports `running`), `needsUser`, and for Needs you `attention` and, for failures and a stopped
@@ -924,7 +929,7 @@ Supported action IDs:
   - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
   - a `ready` session participates through unread state and collapses back to `idle` once visited; its task space remains in the cycle if the task is ready for review
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
-  - read attention-required panels and open task spaces whose task-board stage is ready for review stay in the cycle, before working panels; each review task space uses its focused panel, even without a live agent; a task space already represented by an agent or later flag keeps that existing target instead of adding a review target
+  - read attention-required panels and open task spaces whose task-board stage is ready for review or waiting for the user's reply stay in the cycle, before working panels; each review task space uses its focused panel, even without a live agent; a task space already represented by an agent or later flag keeps that existing target instead of adding a review target
   - the cycle is anchored to the current focus and first includes attention-required panels, then review task spaces, then working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
   - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
   - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, review-stage changes, later-flag changes, or unread preemption reset the active cycle and rebuild it from the new focus

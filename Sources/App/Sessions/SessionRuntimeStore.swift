@@ -889,7 +889,12 @@ final class SessionRuntimeStore: ObservableObject {
             nextStatus: storedStatus
         )
         var nextRegistry = sessionRegistry
-        nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        nextRegistry.updateStatus(
+            sessionID: sessionID,
+            status: storedStatus,
+            fromAgent: isUIOnlyReadyCollapse == false,
+            at: now
+        )
         if previousRecord?.turnStartedAt == nil, nextRegistry.sessionsByID[sessionID]?.turnStartedAt != nil {
             // Unread from an earlier turn must not be retired by this turn's exit.
             if let panelID = previousRecord?.panelID {
@@ -954,6 +959,7 @@ final class SessionRuntimeStore: ObservableObject {
            let acceptedKind = acceptedRecord.status?.kind,
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
+            taskCoordinator?.clearReplyRequest(taskSpaceWorkspaceID: acceptedRecord.workspaceID, sessionID: sessionID)
         }
         // Turn boundaries also catch later title changes after the short
         // first-turn polling window has ended.

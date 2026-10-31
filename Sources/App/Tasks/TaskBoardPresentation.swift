@@ -40,6 +40,7 @@ enum TaskBoardPresentation {
             case .moveFailed: return "⚠ worktree failed"
             case .taskSpaceClosed: return "Task space closed before the task finished"
             case .agentNeedsInput: return "\(agentName(item)) is waiting for your input"
+            case .awaitingReply: return replyLine(item)
             case .agentError: return "\(agentName(item)) stopped with an error"
             case .review, .readyForReview: return "Ready for your review"
             case .agentFinished: return "\(agentName(item)) finished · waiting for you"
@@ -74,6 +75,15 @@ enum TaskBoardPresentation {
         }
     }
 
+    /// What a task that waits for the user's reply shows: the agent's
+    /// question when it gave one.
+    static func replyLine(_ item: TaskBoardItem) -> String {
+        if let question = item.record?.replyRequest?.question {
+            return "Asks: \(question)"
+        }
+        return "\(agentName(item)) is waiting for your reply"
+    }
+
     /// The stage's name and why, for the detail pane.
     static func stageDescription(_ item: TaskBoardItem) -> (stage: String, why: String) {
         switch item.stage {
@@ -84,6 +94,7 @@ enum TaskBoardPresentation {
                 return ("Needs you", reason)
             case .taskSpaceClosed: return ("Needs you", "task space closed")
             case .agentNeedsInput: return ("Needs you", "the agent asked for input")
+            case .awaitingReply: return ("Needs you", "the agent asked a question")
             case .agentError: return ("Needs you", "the agent stopped with an error")
             case .review:
                 return ("Review", item.pullRequestState == nil ? "PR linked, agent idle" : "PR open, agent idle")
@@ -395,6 +406,16 @@ enum TaskSetupPresentation {
     }
 }
 
+/// The question mark inside the tinted box of a task that waits for the
+/// user's reply, in the sidebar and the Tasks view.
+struct TaskQuestionGlyph: View {
+    var body: some View {
+        Image(systemName: "questionmark")
+            .font(.system(size: 6.5, weight: .black))
+            .foregroundStyle(ToastyTheme.sidebarTaskQuestionMark)
+    }
+}
+
 /// A task's square mark: the same family as the sidebar's task space marks.
 struct TaskStageMark: View {
     let item: TaskBoardItem
@@ -411,6 +432,10 @@ struct TaskStageMark: View {
                 case .review, .readyForReview:
                     tinted(ToastyTheme.sidebarTaskReviewMarkBackground) {
                         Circle().fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 4.5, height: 4.5)
+                    }
+                case .awaitingReply:
+                    tinted(ToastyTheme.sidebarTaskQuestionMarkBackground) {
+                        TaskQuestionGlyph()
                     }
                 case .pickWorkspace, .setupFailed, .moveFailed:
                     RoundedRectangle(cornerRadius: 1.5)

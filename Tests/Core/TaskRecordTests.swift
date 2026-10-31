@@ -50,14 +50,17 @@ struct TaskRecordTests {
         Attached files:
         - /tmp/a.png
         - /tmp/b c.pdf
+
+        \(TaskPrompt.replyLine)
         """)
     }
 
     @Test
     func promptWithoutFirstPromptIsTheTextAlone() {
         // The text keeps its own spacing, such as indented code.
-        #expect(TaskPrompt.compose(firstPrompt: nil, text: "    let x = 1\n", attachmentPaths: []) == "    let x = 1\n")
-        #expect(TaskPrompt.compose(firstPrompt: "Same", text: "Same", attachmentPaths: []) == "Same")
+        #expect(TaskPrompt.compose(firstPrompt: nil, text: "    let x = 1\n", attachmentPaths: [])
+            == "    let x = 1\n\n\n\(TaskPrompt.replyLine)")
+        #expect(TaskPrompt.compose(firstPrompt: "Same", text: "Same", attachmentPaths: []) == "Same\n\n\(TaskPrompt.replyLine)")
     }
 
     @Test
@@ -67,6 +70,8 @@ struct TaskRecordTests {
         Use the task-start skill.
 
         Fix it
+
+        \(TaskPrompt.replyLine)
         """)
         // Before the worktree line and a first prompt that triage or the
         // caller wrote.
@@ -86,6 +91,8 @@ struct TaskRecordTests {
         The task, as written:
 
         Fix it
+
+        \(TaskPrompt.replyLine)
         """)
     }
 
@@ -102,7 +109,7 @@ struct TaskRecordTests {
         )
         let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
         #expect(fresh.hasPrefix("Use the task-start skill.\n\nYou are in the git worktree /w/fix"))
-        #expect(fresh.hasSuffix("cannot continue.\n\nFix it"))
+        #expect(fresh.hasSuffix("cannot continue.\n\nFix it\n\n\(TaskPrompt.replyLine)"))
         let forked = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: true)
         #expect(forked.contains("skill") == false)
     }
@@ -119,7 +126,7 @@ struct TaskRecordTests {
 
     @Test
     func recordRoundTripsThroughJSON() throws {
-        let record = TaskRecord(
+        var record = TaskRecord(
             clientRequestID: "req-1",
             createdAt: Date(timeIntervalSince1970: 1_000),
             text: "Fix it",
@@ -137,6 +144,10 @@ struct TaskRecordTests {
                 agentLaunch: .init(sessionID: "s2", at: Date(timeIntervalSince1970: 2_000))
             )
         )
+        // A record without a reply request, as saved before it existed,
+        // leaves the key out.
+        #expect(String(decoding: try JSONEncoder().encode(record), as: UTF8.self).contains("replyRequest") == false)
+        record.replyRequest = TaskReplyRequest(askedAt: Date(timeIntervalSince1970: 3_000), question: "Which option?")
         let data = try JSONEncoder().encode(record)
         #expect(try JSONDecoder().decode(TaskRecord.self, from: data) == record)
         #expect(record.taskSpaceWorkspaceID == record.operation.taskSpace?.workspaceID)

@@ -129,8 +129,38 @@ extension TaskCoordinator {
         guard records.record(id: taskID) != nil else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
-        try saveMergeState(taskID: taskID) { $0.readyForReviewAt = self.now() }
+        // The latest mark wins: work marked ready no longer waits for a reply.
+        try saveMergeState(taskID: taskID) {
+            $0.readyForReviewAt = self.now()
+            $0.replyRequest = nil
+        }
         return records.record(id: taskID)!
+    }
+
+    /// `task.needs-reply`: the agent ends its turn with a question for the
+    /// user. The task waits in Needs you, even after the user reads the
+    /// turn, until the task's agent starts new work.
+    @discardableResult
+    func needsReply(taskID: UUID, question: String?) throws -> TaskRecord {
+        guard records.record(id: taskID) != nil else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        let request = TaskReplyRequest(askedAt: now(), question: question.flatMap(taskNonEmpty))
+        try saveMergeState(taskID: taskID) { $0.replyRequest = request }
+        return records.record(id: taskID)!
+    }
+
+    /// Clears the reply request of the task whose task space is
+    /// `workspaceID` when the task's own agent, `sessionID`, starts new work:
+    /// the user answered, or the work went on without an answer. Another
+    /// agent in the task space does not answer the question.
+    func clearReplyRequest(taskSpaceWorkspaceID workspaceID: UUID, sessionID: String) {
+        guard let record = records.record(taskSpaceWorkspaceID: workspaceID), record.replyRequest != nil,
+              liveAgentSession(of: record)?.sessionID == sessionID else { return }
+        saveOrDefer(taskID: record.id) { $0.replyRequest = nil }
+        ToasttyLog.info("Cleared a task's reply request for new work", category: .tasks, metadata: [
+            "task_id": record.id.uuidString,
+        ])
     }
 
     /// `task.mark-done`: the user finished the task by hand. The task space

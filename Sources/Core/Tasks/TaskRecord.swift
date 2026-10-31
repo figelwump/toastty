@@ -70,6 +70,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// Set by an agent whose work has no pull request, when it is ready for
     /// the user to look at.
     public var readyForReviewAt: Date?
+    /// Set by an agent that ends its turn with a question for the user. It
+    /// clears when an agent in the task space starts new work, which is
+    /// usually the user's reply.
+    public var replyRequest: TaskReplyRequest?
     /// When the pull request was seen merged, and the commit it made. The
     /// commit is what a release tag must contain for the task to ship.
     public var mergedAt: Date?
@@ -180,6 +184,19 @@ public struct TaskCleanup: Codable, Equatable, Sendable {
         self.problem = problem
         self.finishedAt = finishedAt
         self.archiveOptions = archiveOptions
+    }
+}
+
+/// An agent's mark that its turn ended with a question for the user
+/// (`task.needs-reply`).
+public struct TaskReplyRequest: Codable, Equatable, Sendable {
+    public var askedAt: Date
+    /// The question in a few words, which the task's row shows.
+    public var question: String?
+
+    public init(askedAt: Date, question: String? = nil) {
+        self.askedAt = askedAt
+        self.question = question
     }
 }
 

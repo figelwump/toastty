@@ -7,13 +7,15 @@ import Foundation
 @MainActor
 enum SidebarSubspacePresentation {
     /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers an unread finished turn. `review` and
-    /// `toShip` come from the task's stage: a pull request waiting for the
-    /// user, and a merge waiting for a release. `done` is the workspace's
+    /// always win; `ready` covers an unread finished turn. `question`,
+    /// `review` and `toShip` come from the task's stage: an agent that waits
+    /// for the user's reply, a pull request waiting for the user, and a merge
+    /// waiting for a release. `done` is the workspace's
     /// done mark or the task's stage rather than a session state, so finished
     /// tasks sink to the bottom.
     enum RowStatus: Int, Comparable, Sendable {
         case ready = 0
+        case question
         case needsApproval
         case error
         case review
@@ -39,7 +41,7 @@ enum SidebarSubspacePresentation {
             case .error: return 3
             case .ready: return 2
             case .working: return 1
-            case .idle, .review, .toShip, .done: return 0
+            case .idle, .question, .review, .toShip, .done: return 0
             }
         }
     }
@@ -116,7 +118,7 @@ enum SidebarSubspacePresentation {
                 return nil
             case .done:
                 return [doneAt, latestActivityAt].compactMap { $0 }.max()
-            case .idle, .review, .toShip:
+            case .idle, .question, .review, .toShip:
                 return latestActivityAt
             case .ready, .needsApproval, .error:
                 return sessions.lazy.filter {
@@ -158,8 +160,9 @@ enum SidebarSubspacePresentation {
         var needsApproval = 0
         var error = 0
         var review = 0
+        var question = 0
 
-        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 && review == 0 }
+        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 && review == 0 && question == 0 }
     }
 
     /// Tone of the ⑂ chip on a spawning session's row.
@@ -187,7 +190,7 @@ enum SidebarSubspacePresentation {
     static func rowStatus(sessionStatus: RowStatus, isDone: Bool) -> RowStatus {
         guard isDone else { return sessionStatus }
         switch sessionStatus {
-        case .idle, .ready, .done, .review, .toShip: return .done
+        case .idle, .ready, .done, .question, .review, .toShip: return .done
         case .needsApproval, .error, .working: return sessionStatus
         }
     }
@@ -199,10 +202,12 @@ enum SidebarSubspacePresentation {
         switch sessionStatus {
         case .needsApproval, .error, .working:
             return sessionStatus
-        case .idle, .ready, .review, .toShip, .done:
+        case .idle, .ready, .question, .review, .toShip, .done:
             break
         }
         switch stage {
+        case .needsYou(.awaitingReply)?:
+            return .question
         case .needsYou(.review)?, .needsYou(.readyForReview)?:
             return .review
         case .toShip?:
@@ -230,7 +235,7 @@ enum SidebarSubspacePresentation {
             return row.sessions.contains { session in
                 session.statusKind == .working || session.statusKind == .needsApproval || session.statusKind == .error
             } == false
-        case .ready, .needsApproval, .error, .review, .working, .idle:
+        case .ready, .needsApproval, .error, .question, .review, .working, .idle:
             return false
         }
     }
@@ -378,6 +383,7 @@ enum SidebarSubspacePresentation {
             case .needsApproval: tally.needsApproval += 1
             case .error: tally.error += 1
             case .review: tally.review += 1
+            case .question: tally.question += 1
             case .working, .idle, .toShip, .done: break
             }
         }
@@ -441,7 +447,7 @@ enum SidebarSubspacePresentation {
     /// error mark is about the agent, not the task.
     static func showsDoneToggle(_ row: Row) -> Bool {
         switch row.status {
-        case .idle, .ready, .done, .review: return true
+        case .idle, .ready, .done, .question, .review: return true
         case .needsApproval, .error, .working, .toShip: return false
         }
     }
@@ -470,6 +476,7 @@ enum SidebarSubspacePresentation {
         if tally.needsApproval > 0 { components.append("\(tally.needsApproval) need approval") }
         if tally.error > 0 { components.append("\(tally.error) with errors") }
         if tally.review > 0 { components.append("\(tally.review) ready for review") }
+        if tally.question > 0 { components.append("\(tally.question) waiting for your reply") }
         return components.joined(separator: ", ")
     }
 
@@ -481,6 +488,7 @@ enum SidebarSubspacePresentation {
         case .error: components.append("error")
         case .working: components.append(row.isWaiting ? "waiting" : "working")
         case .review: components.append("ready for review")
+        case .question: components.append("waiting for your reply")
         case .toShip: components.append("merged, to ship")
         case .done: components.append("done")
         case .idle: break

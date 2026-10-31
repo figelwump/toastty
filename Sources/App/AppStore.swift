@@ -2236,11 +2236,12 @@ final class AppStore: ObservableObject {
         let representedWorkspaceIDs = Set(actionRequiredPanelIDs.union(workingPanelIDs).union(laterPanelIDs).compactMap {
             state.workspaceSelection(containingPanelID: $0)?.workspaceID
         })
-        // Review is a task stage, not an agent status. Use the board's cached
-        // stage so a read answer or an exited agent does not hide the task.
+        // Review and a pending question are task stages, not agent statuses.
+        // Use the board's cached stage so a read answer or an exited agent
+        // does not hide the task.
         let reviewPanelIDs = Set((sessionRuntimeStore.taskCoordinator?.board?.items() ?? []).compactMap { item -> UUID? in
             switch item.stage {
-            case .needsYou(.review), .needsYou(.readyForReview): break
+            case .needsYou(.review), .needsYou(.readyForReview), .needsYou(.awaitingReply): break
             default: return nil
             }
             guard let workspaceID = item.taskSpaceWorkspaceID,

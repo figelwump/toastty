@@ -940,6 +940,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
+      toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>]
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
@@ -2006,8 +2007,13 @@ public enum ToasttyCLI {
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.workspace-choices", args: args))
 
-        case "merge", "cancel-merge", "ready-for-review":
-            let parsed = try parseCommandArguments(remaining, valueOptions: verb == "merge" ? ["--head"] : [])
+        case "merge", "cancel-merge", "ready-for-review", "needs-reply":
+            let valueOptions: Set<String> = switch verb {
+            case "merge": ["--head"]
+            case "needs-reply": ["--question"]
+            default: []
+            }
+            let parsed = try parseCommandArguments(remaining, valueOptions: valueOptions)
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task \(verb) takes at most one task ID\n\n\(usage)")
             }
@@ -2020,6 +2026,9 @@ public enum ToasttyCLI {
             }
             if let head = parsed.singleValue("--head") {
                 args["head"] = .string(head)
+            }
+            if let question = parsed.singleValue("--question") {
+                args["question"] = .string(question)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
 

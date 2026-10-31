@@ -237,6 +237,13 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "task.merge", args: ["taskID": .string(taskID)]))
         #expect(try command(["cancel-merge"]) == .appControlRun(kind: .action, id: "task.cancel-merge", args: [:]))
         #expect(try command(["ready-for-review"]) == .appControlRun(kind: .action, id: "task.ready-for-review", args: [:]))
+        #expect(try command(["needs-reply"]) == .appControlRun(kind: .action, id: "task.needs-reply", args: [:]))
+        #expect(try command(["needs-reply", taskID, "--question", "Pick a hostname option"])
+            == .appControlRun(kind: .action, id: "task.needs-reply", args: [
+                "taskID": .string(taskID),
+                "question": .string("Pick a hostname option"),
+            ]))
+        #expect(throws: ToasttyCLIError.self) { try command(["ready-for-review", "--question", "Why?"]) }
         #expect(try command(["mark-done", taskID])
             == .appControlRun(kind: .action, id: "task.mark-done", args: ["taskID": .string(taskID)]))
         #expect(try command(["clean-up", taskID])

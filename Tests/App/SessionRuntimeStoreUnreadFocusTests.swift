@@ -250,6 +250,9 @@ extension SessionRuntimeStoreTests {
         #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .idle)
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.detail == "Finished")
+        // Reading is not agent activity: the task board, which orders Needs
+        // you by it, must not move the task the user just clicked.
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.agentStatusUpdatedAt == startedAt.addingTimeInterval(1))
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
     }

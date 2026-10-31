@@ -29,6 +29,9 @@ public enum TaskStage: Equatable, Sendable {
         case taskSpaceClosed
         /// The agent asked a question or wants an approval.
         case agentNeedsInput
+        /// The agent ended its turn with a question and marked the task as
+        /// waiting for the user's reply (`task.needs-reply`).
+        case awaitingReply
         case agentError
         /// The pull request is open and the agent is idle.
         case review
@@ -46,7 +49,8 @@ public enum TaskStage: Equatable, Sendable {
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
-            case .taskSpaceClosed, .agentNeedsInput, .agentError, .review, .readyForReview, .agentFinished, .cleanupStopped: false
+            case .taskSpaceClosed, .agentNeedsInput, .awaitingReply, .agentError, .review, .readyForReview, .agentFinished,
+                 .cleanupStopped: false
             }
         }
     }
@@ -157,6 +161,11 @@ public enum TaskStage: Equatable, Sendable {
         if live.merge != nil {
             return .running
         }
+        // The agent's own mark that it waits for an answer outranks a pull
+        // request: the user's reply comes before a review.
+        if facts.replyRequestedAt != nil {
+            return .needsYou(.awaitingReply)
+        }
         if let pullRequest = live.pullRequest {
             if pullRequest.state == .open, pullRequest.isDraft == false {
                 return .needsYou(.review)
@@ -190,6 +199,8 @@ public struct TaskStageFacts: Equatable, Sendable {
     /// Whether setup made a task space, which may have closed since.
     public var hasTaskSpace: Bool
     public var readyForReviewAt: Date?
+    /// When the agent marked that it waits for the user's reply.
+    public var replyRequestedAt: Date?
     public var mergedAt: Date?
     public var shippedAt: Date?
     public var archivedAt: Date?
@@ -202,6 +213,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         startWork: TaskStartWorkState? = nil,
         hasTaskSpace: Bool,
         readyForReviewAt: Date? = nil,
+        replyRequestedAt: Date? = nil,
         mergedAt: Date? = nil,
         shippedAt: Date? = nil,
         archivedAt: Date? = nil,
@@ -212,6 +224,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.startWork = startWork
         self.hasTaskSpace = hasTaskSpace
         self.readyForReviewAt = readyForReviewAt
+        self.replyRequestedAt = replyRequestedAt
         self.mergedAt = mergedAt
         self.shippedAt = shippedAt
         self.archivedAt = archivedAt
@@ -225,6 +238,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             startWork: record.startWork?.state,
             hasTaskSpace: record.operation.taskSpace != nil,
             readyForReviewAt: record.readyForReviewAt,
+            replyRequestedAt: record.replyRequest?.askedAt,
             mergedAt: record.mergedAt,
             shippedAt: record.shippedAt,
             archivedAt: record.archivedAt,

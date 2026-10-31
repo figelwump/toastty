@@ -96,15 +96,22 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    /// `fromAgent` is false for Toastty's own changes, such as collapsing a
+    /// read `ready` to `idle`: they keep `agentStatusUpdatedAt`, so the task
+    /// board does not move a task because the user read it.
     public mutating func updateStatus(
         sessionID: String,
         status: SessionStatus,
+        fromAgent: Bool = true,
         at now: Date
     ) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         Self.applyTurnTiming(to: &record, nextStatusKind: status.kind, at: now)
         record.status = status
         record.statusUpdatedAt = now
+        if fromAgent || record.agentStatusUpdatedAt == nil {
+            record.agentStatusUpdatedAt = now
+        }
         record.updatedAt = now
         sessionsByID[sessionID] = record
     }
@@ -574,6 +581,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             cwd: record.cwd,
             updatedAt: record.updatedAt,
             statusUpdatedAt: record.statusUpdatedAt,
+            agentStatusUpdatedAt: record.agentStatusUpdatedAt,
             turnStartedAt: projected.status.kind == .working ? record.turnStartedAt : nil,
             lastTurnDuration: record.lastTurnDuration,
             isActive: record.isActive,

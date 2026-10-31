@@ -881,6 +881,7 @@ toastty task merge [<task-id>] [--head <commit>]
 toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
+toastty task needs-reply [<task-id>] [--question <text>]
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
 toastty task release [--workspace <id>]
@@ -935,6 +936,10 @@ waits for checks that still run, and cleans up after the agent's turn ends.
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise
 refuse or leave. `task clean-up` retries a cleanup that stopped.
+`task needs-reply` is what an agent runs just before it ends a turn with a
+question: the task stays in Needs you, showing `--question`, after the user
+reads the turn, until the task's agent starts its next turn. A later
+`task ready-for-review` replaces it.
 `task ready-for-review` marks work without a pull request ready, and
 `task mark-done` finishes it. `task release` starts a release task for a
 project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
@@ -942,7 +947,7 @@ project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#me
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.

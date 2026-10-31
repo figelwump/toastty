@@ -7,8 +7,15 @@ public enum TaskPrompt {
         "Use the \(skill) skill."
     }
 
+    /// Tells the agent how to keep a question it asks in Needs you: without
+    /// the mark, the task looks idle once the user reads the turn.
+    public static let replyLine = "If you end a turn with a question for the user, first run "
+        + "`toastty task needs-reply --question \"<the question in a few words>\"`, "
+        + "so the task waits in Needs you until the user answers."
+
     /// The skill line, when there is a skill, then the worktree, the first
-    /// prompt, the task text exactly as written, and the attached files.
+    /// prompt, the task text exactly as written, the attached files, and
+    /// `replyLine`.
     /// Toastty adds the text and files itself, so nothing that writes the
     /// first prompt can drop or reword them. The text keeps its own spacing
     /// and indentation.
@@ -40,6 +47,7 @@ public enum TaskPrompt {
                 "Attached files:\n" + attachmentPaths.map { "- \($0)" }.joined(separator: "\n")
             )
         }
+        sections.append(replyLine)
         return sections.joined(separator: "\n\n")
     }
 
