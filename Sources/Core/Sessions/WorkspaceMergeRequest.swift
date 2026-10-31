@@ -74,11 +74,18 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// The target branch reported when a merge started waiting for checks.
     /// Older saved waits have no target and must be accepted again.
     public var acceptedBase: String?
+    /// An adopted task with no saved checkout may close only its empty
+    /// task space. A checkout found by branch name must stay untouched.
+    public var requiresAbsentWorktree: Bool?
 
-    public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase) {
+    public init(
+        pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase,
+        requiresAbsentWorktree: Bool? = nil
+    ) {
         self.pullRequest = pullRequest
         self.repoPath = repoPath
         self.phase = phase
+        self.requiresAbsentWorktree = requiresAbsentWorktree
     }
 
     /// The request after a change to its workspace, or `nil` when it no longer

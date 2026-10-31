@@ -4067,7 +4067,7 @@ struct SidebarView: View {
             // in layout it takes whatever the chips leave.
             Self.styledSessionNameText(row.title, isEmphasized: isEmphasized, isItalic: row.status == .working)
                 .foregroundStyle(
-                    row.status == .done || row.status == .toShip
+                    row.status == .done
                         ? ToastyTheme.sidebarSubspaceDoneTitleText
                         : ToastyTheme.sidebarSessionAgentText
                 )

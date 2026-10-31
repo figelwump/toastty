@@ -236,9 +236,10 @@ extension TaskCoordinator {
 
     /// Cleans up the task spaces whose pull request merged on GitHub, which
     /// counts as the user's acceptance. Only when nothing is in the way:
-    /// the task has a worktree on its own branch, no merge or cleanup ran
-    /// for it, and no agent there is in a turn. The pull request script
-    /// then checks that the worktree is clean at the merged head. A task
+    /// no merge or cleanup ran for it, and no agent is in a turn. The task
+    /// has a worktree on its own branch, or was adopted from an older space.
+    /// Without a saved checkout, only an absent worktree permits cleanup.
+    /// The script checks an existing worktree is clean at the merged head. A task
     /// whose agent was working gets "Merged · clean up?" instead. A task
     /// in a project with `release_tags` is cleaned up the same way and
     /// waits in To ship without its task space.
@@ -249,7 +250,8 @@ extension TaskCoordinator {
                   record.archivedAt == nil,
                   record.release == nil,
                   record.cleanup == nil,
-                  let worktree = record.worktree, worktree.isDetached == false,
+                  record.worktree != nil || record.source == .adopted,
+                  record.worktree?.isDetached != true,
                   let taskSpaceID = record.taskSpaceWorkspaceID,
                   store.state.workspacesByID[taskSpaceID] != nil,
                   merges.request(workspaceID: taskSpaceID) == nil,
@@ -264,7 +266,10 @@ extension TaskCoordinator {
                 continue
             }
             records.update(id: taskID) { $0.cleanup = TaskCleanup(kind: .merge) }
-            merges.cleanUpAfterMerge(workspaceID: taskSpaceID, pullRequest: target.pullRequest, repoPath: target.repoPath)
+            merges.cleanUpAfterMerge(
+                workspaceID: taskSpaceID, pullRequest: target.pullRequest, repoPath: target.repoPath,
+                requiresAbsentWorktree: record.worktree == nil
+            )
             ToasttyLog.info("Cleaning up a task merged on GitHub", category: .tasks, metadata: ["task_id": taskID.uuidString])
         }
     }
@@ -346,6 +351,10 @@ extension TaskCoordinator {
         let repoPath: String
         if let worktree = record.worktree, isDirectory(worktree.path) {
             repoPath = worktree.path
+        } else if afterMerge, let root = record.projectRoot, isDirectory(root) {
+            // A restored pane can fall back outside Git after its worktree
+            // was removed. The script resolves the PR's checkout from here.
+            repoPath = root
         } else if let directory = Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) {
             repoPath = directory
         } else {
