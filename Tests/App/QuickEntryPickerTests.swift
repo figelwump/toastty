@@ -80,7 +80,7 @@ struct QuickEntryPickerTests {
 
     @Test func agentPickerListsFrequentThenColumnsAndStartsOnTheTopPreset() {
         let (picker, _) = agentPicker()
-        #expect(picker.rows.map(\.title) == ["Claude Code · claude-opus-5-5", "Choose agent, model, effort…"], "No Auto row")
+        #expect(picker.rows.map(\.title) == ["Claude Code · opus-5.5", "Choose agent, model, effort…"], "No Auto row")
         #expect(picker.rows.map(\.section) == ["Frequent", "Other"])
         #expect(picker.rows.first?.detail == "high")
         #expect(picker.highlightedRow?.action == .preset(Self.opusHigh), "With none chosen, ⌘2 then Return picks the top preset")
@@ -124,7 +124,30 @@ struct QuickEntryPickerTests {
 
     @Test func presetsOfProfilesThatAreGoneAreNotListed() {
         let (picker, _) = agentPicker(frequent: [QuickEntryPreset(agent: "gemini", model: "gemini-pro"), Self.opusHigh])
-        #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Claude Code · claude-opus-5-5"])
+        #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == ["Claude Code · opus-5.5"])
+    }
+
+    @Test(arguments: [
+        ("claude-opus-5-5", "opus-5.5"),
+        ("claude-fable-5-1", "fable-5.1"),
+        ("claude-opus-5-5[1m]", "opus-5.5[1m]"),
+        ("claude-opus-4-5-20251101", "opus-4.5"),
+        ("claude-sonnet-4-20250514", "sonnet-4"),
+        ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20241022"),
+        ("opus", "opus"),
+        ("gpt-6.1-sol", "gpt-6.1-sol"),
+        ("composer-2", "composer-2"),
+    ])
+    func shortModelNames(model: String, short: String) {
+        #expect(QuickEntryPreset.shortModelName(model) == short)
+    }
+
+    @Test func aShortenedModelStillMatchesASearchForItsFullID() {
+        let (picker, _) = agentPicker(frequent: [Self.opusHigh])
+        picker.query = "claude-opus"
+        #expect(picker.rows.first?.title == "Claude Code · opus-5.5")
+        #expect(picker.rows.first?.section == "Frequent")
+        #expect(picker.rows.contains { $0.title == "Claude Code · sonnet-5.5" } == false)
     }
 
     @Test func searchListsMatchingPresetsFirstThenAgentModelPairs() {
@@ -374,7 +397,7 @@ struct QuickEntryPickerTests {
         #expect(model.missingChoiceHint == "Pick an agent with ⌘2")
         model.preset = Self.opusHigh
         #expect(model.missingChoiceHint == nil)
-        #expect(model.agentTitle == "claude-opus-5-5 · high")
+        #expect(model.agentTitle == "opus-5.5 · high")
         model.preset = QuickEntryPreset(agent: "claude", effort: "high")
         #expect(model.agentTitle == "Claude Code · high")
         model.preset = QuickEntryPreset(agent: "shipper")

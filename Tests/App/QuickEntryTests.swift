@@ -674,13 +674,13 @@ struct QuickEntryTests {
 
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: panel)
         let picker = try #require(harness.controller.picker)
-        #expect(picker.rows.first?.title == "Claude Code · claude-opus-5-5")
+        #expect(picker.rows.first?.title == "Claude Code · opus-5.5")
         #expect(picker.highlightedRow?.id == picker.rows.first?.id)
         try await harness.pickerCommand(#selector(NSResponder.moveRight(_:)))
         #expect(picker.rows.first?.detail == "xhigh")
         try await harness.pickerCommand(#selector(NSResponder.insertNewline(_:)))
         #expect(model.preset == QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh"))
-        #expect(model.agentTitle == "claude-opus-5-5 · xhigh")
+        #expect(model.agentTitle == "opus-5.5 · xhigh")
 
         try harness.pressCommandReturn()
         await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
@@ -782,7 +782,7 @@ struct QuickEntryTests {
         #expect(harness.controller.model?.preset == sol)
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
         #expect(harness.controller.picker?.rows.filter { $0.section == "Frequent" }.map(\.title) == [
-            "Claude Code · claude-opus-5-5", "Codex · gpt-6.1-sol",
+            "Claude Code · opus-5.5", "Codex · gpt-6.1-sol",
         ])
         harness.controller.dismiss()
 
@@ -794,7 +794,7 @@ struct QuickEntryTests {
         try harness.pressCommand("2", keyCode: kVK_ANSI_2, in: harness.controller.panel)
         let picker = try #require(harness.controller.picker)
         #expect(picker.rows.filter { $0.section == "Frequent" }.map(\.title) == [
-            "Claude Code · claude-opus-5-5", "Codex · gpt-6.1-sol",
+            "Claude Code · opus-5.5", "Codex · gpt-6.1-sol",
         ])
         #expect(picker.rows.first?.number == 1)
 

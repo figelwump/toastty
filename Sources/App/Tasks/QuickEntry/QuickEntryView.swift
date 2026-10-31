@@ -4,8 +4,9 @@ import SwiftUI
 /// The quick entry panel's content, drawn to "Task Inbox Mockups" panel 1:
 /// a small label, the task text, a row of attachments, and a footer with
 /// the Workspace and Agent choices and Create Task. The footer's pills
-/// follow "Task Keyboard Flow" revision 3, section 1. The panel's height
-/// follows the text.
+/// follow "Task Keyboard Flow" revision 3, section 1, except that a small
+/// icon takes the place of each pill's name, so the values have room. The
+/// panel's height follows the text.
 struct QuickEntryView: View {
     @ObservedObject var model: QuickEntryModel
     let dropTarget: QuickEntryDropTarget
@@ -161,6 +162,7 @@ struct QuickEntryView: View {
             pill(
                 .workspace,
                 title: "Workspace",
+                icon: "square.grid.2x2",
                 value: model.workspaceTitle,
                 isMissing: model.workspaceID == nil,
                 help: "The workspace the task starts in."
@@ -170,6 +172,7 @@ struct QuickEntryView: View {
             pill(
                 .agent,
                 title: "Agent",
+                icon: "sparkle",
                 value: model.agentTitleParts.name,
                 suffix: model.agentTitleParts.effort.map { " · \($0)" },
                 accessibilityValue: model.agentTitle,
@@ -204,6 +207,7 @@ struct QuickEntryView: View {
     private func pill(
         _ kind: QuickEntryPickerKind,
         title: String,
+        icon: String,
         value: String,
         suffix: String? = nil,
         accessibilityValue: String? = nil,
@@ -215,7 +219,7 @@ struct QuickEntryView: View {
             togglePicker(kind)
         } label: {
             PillLabel(
-                title: title,
+                icon: icon,
                 value: value,
                 suffix: suffix,
                 shortcut: shortcut,
@@ -251,11 +255,11 @@ private struct KeyCap: View {
     }
 }
 
-/// A footer choice: its name, its value, and the shortcut that opens its
+/// A footer choice: its icon, its value, and the shortcut that opens its
 /// picker. Only the value shrinks, ending in "…"; a suffix such as
-/// " · high" stays whole.
+/// " · high" stays whole. The tooltip and VoiceOver give the pill's name.
 private struct PillLabel: View {
-    let title: String
+    let icon: String
     let value: String
     let suffix: String?
     let shortcut: String
@@ -265,7 +269,8 @@ private struct PillLabel: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         HStack(spacing: 6) {
-            Text(title)
+            Image(systemName: icon)
+                .font(.system(size: 11))
                 .foregroundStyle(QuickEntryView.mutedText)
                 .fixedSize()
             HStack(spacing: 0) {

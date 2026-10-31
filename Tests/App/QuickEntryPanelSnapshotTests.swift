@@ -69,7 +69,7 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         let model = try XCTUnwrap(controller.model)
         XCTAssertFalse(model.canSubmit)
         XCTAssertEqual(model.workspaceTitle, "toastty", "The selected workspace")
-        XCTAssertEqual(model.agentTitle, "claude-opus-5-5 · high", "The [defaults] preset")
+        XCTAssertEqual(model.agentTitle, "opus-5.5 · high", "The [defaults] preset")
         let empty = try render("quick-entry-empty")
 
         model.text = Self.designText
@@ -107,7 +107,7 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         model.attachImageData(try Self.screenshotData(), named: "Screenshot 4.11.52 PM.png")
         XCTAssertEqual(model.attachments.map(\.displayName), ["selection.txt", "Screenshot 4.11.52 PM.png"])
         XCTAssertEqual(model.workspaceTitle, "toastty")
-        XCTAssertEqual(model.agentTitle, "claude-opus-5-5 · high")
+        XCTAssertEqual(model.agentTitle, "opus-5.5 · high")
         try render("quick-entry-pinned-workspace")
     }
 
@@ -167,6 +167,18 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
 
         model.preset = QuickEntryPreset(agent: "shipper")
         try render("quick-entry-footer-profile-name")
+    }
+
+    /// A usual workspace name and Claude model show whole.
+    func testFooterShowsUsualNamesWhole() throws {
+        let workspace = try XCTUnwrap(store.selectedWorkspace)
+        _ = store.send(.renameWorkspace(workspaceID: workspace.id, title: "toastty task-system"))
+        controller.present(prefill: QuickEntryPrefill(workspaceID: workspace.id))
+        let model = try XCTUnwrap(controller.model)
+        model.text = Self.designText
+        model.preset = QuickEntryPreset(agent: "claude", model: "claude-opus-5-5", effort: "xhigh")
+        XCTAssertEqual(model.agentTitle, "opus-5.5 · xhigh")
+        try render("quick-entry-footer-usual-names")
     }
 
     func testWorkspacePicker() throws {
