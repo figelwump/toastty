@@ -450,10 +450,13 @@ window.
   merged To ship tasks show as rows. A footer line after them has **Show N more** when the
   project has more To ship tasks, and the Done count. Without To ship rows,
   the footer counts To ship tasks instead.
-- **Status** lists task spaces by stage: Needs you, Running, Idle, To ship (one line
-  for each project), and a Done count. Each row carries its project's name.
-  Under each project's To ship line, its 3 most recently merged tasks show as
-  rows, then **Show N more** when the project has more.
+- **Status** lists task spaces by stage: Needs you, Running, Idle, To ship,
+  and a Done count. Each row carries its project's name, except under To ship.
+  To ship starts collapsed to one line that names each project and its count.
+  Click it to expand the group in place; the choice resets when the sidebar
+  hides or the app quits. Expanded, each project has a header as in the Tasks
+  view, with its 3 most recently merged tasks under it, then **Show N more**
+  when the project has more.
   Top-level workspaces show only in Projects.
 
 A To ship row opens its task space, which stays open until the release ships;
@@ -485,7 +488,7 @@ pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…
 and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project can release (see
 [Release](#release)); the sidebar's
-Status To ship lines have one too. A task that is starting, or whose setup or
+Status To ship project headers have one too when the group is expanded. A task that is starting, or whose setup or
 move failed, shows its setup controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
 it hides the view and returns to the workspace it covered. Up and Down Arrow
