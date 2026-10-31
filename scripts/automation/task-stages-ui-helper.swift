@@ -110,7 +110,8 @@ case "dump":
         if let extent = value(element, kAXSizeAttribute) { AXValueGetValue(extent as! AXValue, .cgSize, &size) }
         let role = value(element, kAXRoleAttribute) as? String ?? "?"
         let identifier = value(element, "AXIdentifier") as? String ?? ""
-        let title = (value(element, kAXTitleAttribute) as? String) ?? (value(element, kAXDescriptionAttribute) as? String) ?? ""
+        let title = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].lazy
+            .compactMap { value(element, $0) as? String }.first { $0.isEmpty == false } ?? ""
         print("\(depth) \(role) id=\(identifier) title=\(title.prefix(40)) frame=\(Int(origin.x)),\(Int(origin.y)) \(Int(size.width))x\(Int(size.height))")
         guard depth < 150 else { return }
         for child in (value(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {

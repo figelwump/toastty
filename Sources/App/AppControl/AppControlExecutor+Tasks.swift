@@ -5,8 +5,8 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskMarkDone, .taskArchive, .taskRelease,
-             .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone, .taskArchive,
+             .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -68,6 +68,10 @@ extension AppControlExecutor {
         case .taskReadyForReview:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let updated = try perform { try coordinator.readyForReview(taskID: record.id) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskNeedsReply:
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            let updated = try perform { try coordinator.needsReply(taskID: record.id, question: args.taskString("question")) }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMarkDone:
             let record = try visibleTask(args: args, coordinator: coordinator)
@@ -551,6 +555,7 @@ extension AppControlExecutor {
                 result["reason"] = .string(reason)
             case .taskSpaceClosed: result["attention"] = .string("taskSpaceClosed")
             case .agentNeedsInput: result["attention"] = .string("agentNeedsInput")
+            case .awaitingReply: result["attention"] = .string("awaitingReply")
             case .agentError: result["attention"] = .string("agentError")
             case .review: result["attention"] = .string("review")
             case .readyForReview: result["attention"] = .string("readyForReview")
@@ -616,6 +621,9 @@ extension AppControlExecutor {
             "mergedAt": date(record.mergedAt),
             "mergeCommit": optional(record.mergeCommit),
             "readyForReviewAt": date(record.readyForReviewAt),
+            "replyRequest": record.replyRequest.map {
+                .object(["askedAt": date($0.askedAt), "question": optional($0.question)])
+            } ?? .null,
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),
             "shippedAt": date(record.shippedAt),

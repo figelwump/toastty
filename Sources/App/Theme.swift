@@ -61,6 +61,11 @@ enum ToastyTheme {
     /// reads apart from amber "the agent asked you something".
     static let sidebarTaskReviewMark = Color(hex: 0x6E9FE6)
     static let sidebarTaskReviewMarkBackground = Color(hex: 0x6E9FE6, alpha: 0.22)
+    /// A task whose agent ended its turn with a question. Amber, as when the
+    /// agent asks something, but a tinted box like review: nothing blocks
+    /// until the user replies.
+    static let sidebarTaskQuestionMark = Color(hex: 0xE8A635)
+    static let sidebarTaskQuestionMarkBackground = Color(hex: 0xE8A635, alpha: 0.22)
     /// A merged task waiting for a release.
     static let sidebarTaskToShipMark = Color(hex: 0xB98CE0)
     static let sidebarTaskToShipMarkBackground = Color(hex: 0xB98CE0, alpha: 0.22)

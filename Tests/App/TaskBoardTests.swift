@@ -673,6 +673,72 @@ struct TaskBoardTests {
         #expect(TaskBoardPresentation.statusLine(waiting) == "Codex · waiting for \(other.title)")
     }
 
+    @Test func aQuestionWaitsInNeedsYouUntilTheTasksAgentStartsNewWork() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        // The coordinator finds the task's agent through the live sessions,
+        // as in the app.
+        fixture.coordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            closeController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: TerminalRuntimeRegistry(),
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil },
+                shouldBypassConfirmation: true
+            ),
+            exitController: nil,
+            sendText: { _, _ in true }
+        )
+        let task = try await startTask(fixture, text: "Which hostname option?")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        let start = Date()
+
+        // The agent marks its question while it works, then ends its turn.
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start)
+        _ = try fixture.coordinator.needsReply(taskID: task.id, question: "Pick a hostname option")
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(1))
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        #expect(try item().stage == .needsYou(.awaitingReply))
+        #expect(TaskBoardPresentation.statusLine(try item()) == "Asks: Pick a hostname option")
+
+        // Reading the turn does not answer it.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: start.addingTimeInterval(2))
+        #expect(try item().stage == .needsYou(.awaitingReply))
+
+        // Another agent in the task space does not answer it either.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        runtime.startSession(
+            sessionID: "helper", agent: .claude, panelID: UUID(), windowID: windowID, workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: start.addingTimeInterval(3)
+        )
+        runtime.updateStatus(sessionID: "helper", status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(3))
+        #expect(fixture.record(task.id)?.replyRequest != nil)
+        runtime.stopSession(sessionID: "helper", at: start.addingTimeInterval(4))
+
+        // The user's answer starts the agent's next turn and clears it.
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(5))
+        #expect(fixture.record(task.id)?.replyRequest == nil)
+        #expect(try item().stage == .running)
+
+        // A later ready mark replaces a question.
+        _ = try fixture.coordinator.needsReply(taskID: task.id, question: nil)
+        #expect(fixture.record(task.id)?.replyRequest?.question == nil)
+        _ = try fixture.coordinator.readyForReview(taskID: task.id)
+        #expect(fixture.record(task.id)?.replyRequest == nil)
+    }
+
     @Test func childrenListUnderTheTaskThatStartedThem() {
         func item(_ title: String, taskID: UUID, parent: UUID? = nil, stage: TaskStage) -> TaskBoardItem {
             let record = TaskRecord(
@@ -695,12 +761,16 @@ struct TaskBoardTests {
         let idleChild = item("composer-blank-line", taskID: UUID(), parent: parentID, stage: .idle)
 
         let sections = SidebarStatusSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
-        #expect(sections.running.map(\.item.title) == ["pricing-page", "task-inbox", "hotkey-capture", "ios-outbox"])
-        #expect(sections.running.map(\.isLinkedChild) == [false, false, true, true])
-        // Idle tasks list apart from Running. A child whose parent is in
-        // another group lists on its own.
-        #expect(sections.idle.map(\.item.title) == ["composer-blank-line", "coordinator-brainstorm"])
-        #expect(sections.idle.map(\.isLinkedChild) == [false, false])
+        // A family lists together in its most urgent group: the idle child
+        // stays under its running parent, dimmed, and is not counted there.
+        #expect(sections.running.map(\.item.title) == [
+            "pricing-page", "task-inbox", "composer-blank-line", "hotkey-capture", "ios-outbox",
+        ])
+        #expect(sections.running.map(\.isLinkedChild) == [false, false, true, true, true])
+        #expect(sections.running.map(\.isContext) == [false, false, true, false, false])
+        #expect(sections.count(.running) == 4)
+        #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
+        #expect(sections.count(.idle) == 1)
         let tasksView = TasksViewSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
         #expect(tasksView.idle.map(\.item.title) == ["coordinator-brainstorm", "composer-blank-line"])
         // The Tasks view lists Idle after Running and before To ship.
@@ -709,6 +779,148 @@ struct TaskBoardTests {
         let progress = TaskBoard.childProgress(of: parentID, items: [parent, firstChild, secondChild, mergedChild, other])
         #expect(progress?.merged == 1)
         #expect(progress?.total == 3)
+    }
+
+    private func statusItem(
+        _ title: String,
+        taskID: UUID = UUID(),
+        parent: UUID? = nil,
+        stage: TaskStage,
+        project: String = "toastty"
+    ) -> TaskBoardItem {
+        let record = TaskRecord(
+            id: taskID, createdAt: Date(), text: title, title: title, slug: title,
+            source: .cli, setup: .started, parentTaskID: parent
+        )
+        return TaskBoardItem(
+            id: .task(taskID), record: record, title: title, taskSpaceWorkspaceID: UUID(), projectWorkspaceID: nil,
+            projectTitle: project, stage: stage, agent: .idle, pullRequest: nil, pullRequestState: nil,
+            branch: nil, parentTaskID: parent, activityAt: Date()
+        )
+    }
+
+    /// The case from the report: an idle parent whose child waits for a
+    /// review lists with the child in Needs you, instead of apart in Idle.
+    @Test func aFamilyListsInTheGroupOfItsMostUrgentTask() {
+        let parentID = UUID()
+        let thumbnail = statusItem("thumbnail", stage: .needsYou(.review))
+        let child = statusItem("mcp-page-tools", parent: parentID, stage: .needsYou(.review), project: "emptyos")
+        let space = statusItem("task-space-after-ship", stage: .needsYou(.agentFinished))
+        let parent = statusItem("chatgpt-public-url", taskID: parentID, stage: .idle, project: "emptyos")
+        let brainstorm = statusItem("coordinator-brainstorm", stage: .idle)
+
+        // Newest activity first, as the board gives them.
+        let sections = SidebarStatusSections.make([thumbnail, child, space, parent, brainstorm])
+        #expect(sections.needsYou.map(\.item.title) == [
+            "thumbnail", "chatgpt-public-url", "mcp-page-tools", "task-space-after-ship",
+        ])
+        #expect(sections.needsYou.map(\.isLinkedChild) == [false, false, true, false])
+        #expect(sections.needsYou.map(\.isContext) == [false, true, false, false])
+        #expect(sections.count(.needsYou) == 3)
+        #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
+
+        // Once nothing in the family needs the user, it lists in Idle.
+        var answered = child
+        answered.stage = .idle
+        let calm = SidebarStatusSections.make([thumbnail, answered, space, parent, brainstorm])
+        #expect(calm.idle.map(\.item.title) == ["chatgpt-public-url", "mcp-page-tools", "coordinator-brainstorm"])
+        #expect(calm.idle.map(\.isContext) == [false, false, false])
+    }
+
+    /// Reading a child must not move it within its held family either.
+    @Test func aSelectedChildKeepsItsPlaceInItsFamily() {
+        let parentID = UUID()
+        let parent = statusItem("parent", taskID: parentID, stage: .idle)
+        let zulu = statusItem("zulu", parent: parentID, stage: .needsYou(.agentFinished))
+        let alpha = statusItem("alpha", parent: parentID, stage: .idle)
+        let before = SidebarStatusSections.make([zulu, parent, alpha])
+        #expect(before.needsYou.map(\.item.title) == ["parent", "alpha", "zulu"])
+
+        let pin = SidebarStatusSections.pin(previous: nil, selected: zulu.id, displayed: before.slots)
+        var read = zulu
+        read.stage = .idle
+        let held = SidebarStatusSections.make([alpha, parent, read], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["parent", "alpha", "zulu"])
+        #expect(held.needsYou.map(\.isContext) == [true, true, true])
+        #expect(held.idle.isEmpty)
+    }
+
+    @Test func everyTaskListsOnceWhateverItsParents() {
+        let aID = UUID(), bID = UUID(), cID = UUID(), loopA = UUID(), loopB = UUID()
+        let items = [
+            statusItem("a", taskID: aID, stage: .idle),
+            statusItem("b", taskID: bID, parent: aID, stage: .running),
+            // A grandchild lists on its own: one level only.
+            statusItem("c", taskID: cID, parent: bID, stage: .needsYou(.agentFinished)),
+            // A parent that is finished, or missing, leaves its child on its own.
+            statusItem("d", parent: UUID(), stage: .running),
+            statusItem("loop-a", taskID: loopA, parent: loopB, stage: .idle),
+            statusItem("loop-b", taskID: loopB, parent: loopA, stage: .idle),
+        ]
+        let sections = SidebarStatusSections.make(items)
+        let listed = (sections.needsYou + sections.running + sections.idle).map(\.item.title)
+        #expect(listed.sorted() == ["a", "b", "c", "d", "loop-a", "loop-b"])
+        #expect(sections.needsYou.map(\.item.title) == ["c"])
+        #expect(sections.running.map(\.item.title) == ["a", "b", "d"])
+    }
+
+    /// Selecting a task reads its turn. Its family keeps the group and slot
+    /// it had on screen until the selection moves, and moves at once only
+    /// when it becomes more urgent.
+    @Test func theSelectedTaskHoldsItsSlotUntilTheSelectionMoves() {
+        let first = statusItem("first", stage: .needsYou(.agentFinished))
+        let clicked = statusItem("clicked", stage: .needsYou(.agentFinished))
+        let last = statusItem("last", stage: .needsYou(.review))
+        let quiet = statusItem("quiet", stage: .idle)
+        let before = SidebarStatusSections.make([first, clicked, last, quiet])
+        #expect(before.needsYou.map(\.item.title) == ["first", "clicked", "last"])
+
+        let pin = SidebarStatusSections.pin(previous: nil, selected: clicked.id, displayed: before.slots)
+        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, slot: .init(group: .needsYou, above: [first.id])))
+        var read = clicked
+        read.stage = .idle
+        let held = SidebarStatusSections.make([first, read, last, quiet], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["first", "clicked", "last"])
+        // Dimmed: the user read it, and it no longer needs them.
+        #expect(held.needsYou.map(\.isContext) == [false, true, false])
+        // The count says what really needs the user.
+        #expect(held.count(.needsYou) == 2)
+        #expect(held.idle.map(\.item.title) == ["quiet"])
+        #expect(held.pin == pin)
+        // The same selection keeps the pin; another selection lets it go.
+        #expect(SidebarStatusSections.pin(previous: held.pin, selected: clicked.id, displayed: held.slots) == pin)
+        let released = SidebarStatusSections.make(
+            [first, read, last, quiet],
+            pin: SidebarStatusSections.pin(previous: held.pin, selected: first.id, displayed: held.slots)
+        )
+        #expect(released.needsYou.map(\.item.title) == ["first", "last"])
+        #expect(released.idle.map(\.item.title) == ["clicked", "quiet"])
+
+        // A selected idle task that starts to need the user moves at once,
+        // and holds in its new place from then on.
+        let quietPin = SidebarStatusSections.pin(previous: nil, selected: quiet.id, displayed: before.slots)
+        var asks = quiet
+        asks.stage = .needsYou(.agentNeedsInput)
+        let urgent = SidebarStatusSections.make([first, clicked, last, asks], pin: quietPin)
+        #expect(urgent.needsYou.map(\.item.title).contains("quiet"))
+        #expect(urgent.idle.isEmpty)
+        #expect(urgent.pin?.slot.group == .needsYou)
+
+        // Found on the mini: selecting another task releases the one held
+        // before it, which leaves the group at the same time. The newly
+        // selected task must not jump past the rows that were below it.
+        let parentID = UUID()
+        let parent = statusItem("parent", taskID: parentID, stage: .idle)
+        let child = statusItem("child", parent: parentID, stage: .needsYou(.review))
+        var answered = first
+        answered.stage = .idle
+        let previousPin = SidebarStatusSections.Pin(subject: first.id, slot: .init(group: .needsYou, above: []))
+        let shown = SidebarStatusSections.make([clicked, child, answered, parent], pin: previousPin)
+        #expect(shown.needsYou.map(\.item.title) == ["first", "clicked", "parent", "child"])
+        let next = SidebarStatusSections.pin(previous: shown.pin, selected: clicked.id, displayed: shown.slots)
+        let switched = SidebarStatusSections.make([child, answered, read, parent], pin: next)
+        #expect(switched.needsYou.map(\.item.title) == ["clicked", "parent", "child"])
+        #expect(switched.idle.map(\.item.title) == ["first"])
     }
 
     private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {

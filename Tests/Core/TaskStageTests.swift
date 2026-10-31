@@ -175,6 +175,33 @@ struct TaskStageTests {
     }
 
     @Test
+    func aQuestionWaitsForTheUsersReplyWhetherTheTurnIsReadOrNot() {
+        var asked = started()
+        asked.replyRequestedAt = date
+        let read = TaskLiveFacts(taskSpaceOpen: true, agent: .idle)
+        #expect(stage(asked, read) == .needsYou(.awaitingReply))
+        #expect(stage(asked, read).needsUser)
+        #expect(stage(asked, TaskLiveFacts(taskSpaceOpen: true, agent: .finished)) == .needsYou(.awaitingReply))
+        // After a relaunch the agent may be gone; the question still waits.
+        #expect(stage(asked, TaskLiveFacts(taskSpaceOpen: true, agent: .none)) == .needsYou(.awaitingReply))
+        // The question outranks a pull request or a ready mark: the reply
+        // comes before the review.
+        let review = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: openPR, hasPullRequestLink: true)
+        #expect(stage(asked, review) == .needsYou(.awaitingReply))
+        asked.readyForReviewAt = date
+        #expect(stage(asked, read) == .needsYou(.awaitingReply))
+        // Live agent states and a merge under way come first.
+        #expect(stage(asked, TaskLiveFacts(taskSpaceOpen: true, agent: .working)) == .running)
+        #expect(stage(asked, TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == .needsYou(.agentNeedsInput))
+        var merging = review
+        merging.merge = .checking
+        #expect(stage(asked, merging) == .running)
+        // Finished work ignores a question left behind.
+        asked.doneAt = date
+        #expect(stage(asked, read) == .done)
+    }
+
+    @Test
     func aClosedTaskSpaceWithUnfinishedWorkNeedsTheUser() {
         let result = stage(started(), TaskLiveFacts(taskSpaceOpen: false))
         #expect(result == .needsYou(.taskSpaceClosed))

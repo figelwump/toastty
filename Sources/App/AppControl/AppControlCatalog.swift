@@ -86,6 +86,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCancelMerge = "task.cancel-merge"
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
+    case taskNeedsReply = "task.needs-reply"
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
@@ -613,6 +614,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Mark a task's work, which has no pull request, ready for the user to review. The task waits in Needs you until the user marks it done. Without taskID, a task's agent marks its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
+            )
+        case .taskNeedsReply:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark that a task's agent is ending its turn with a question for the user. The task waits in Needs you, even after the user reads the turn, until an agent in its task space starts new work, usually because the user answered. Run it just before ending the turn. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "question", summary: "The question in a few words; the task's row shows it.", valueType: .string, required: false),
+                ]
             )
         case .taskMarkDone:
             return .init(

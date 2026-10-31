@@ -442,7 +442,7 @@ private struct SubspaceRailStatusIcon: View {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
         case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed,
-             .review where isDoneTogglePreviewed:
+             .question where isDoneTogglePreviewed, .review where isDoneTogglePreviewed:
             RoundedRectangle(cornerRadius: 2)
                 .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
@@ -477,6 +477,13 @@ private struct SubspaceRailStatusIcon: View {
                         .fill(ToastyTheme.sidebarTaskReviewMark)
                         .frame(width: 4.5, height: 4.5)
                 }
+        case .question:
+            // A tinted box with a question mark: the agent asked you something
+            // and waits for your reply.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskQuestionMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay { TaskQuestionGlyph() }
         case .toShip:
             RoundedRectangle(cornerRadius: 2)
                 .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
@@ -541,6 +548,14 @@ private final class SidebarTaskBoardSnapshot {
 private final class SubspaceOrderMemory {
     var displayedOrderByParentID: [UUID: [UUID]] = [:]
     var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
+}
+
+/// The Status segment's last drawn slots and the selected task's pin. Kept
+/// out of view state, like `SubspaceOrderMemory`, so recording them does not
+/// draw the sidebar again.
+private final class StatusOrderMemory {
+    var displayedSlots: [TaskBoardItem.Subject: SidebarStatusSections.Slot] = [:]
+    var pin: SidebarStatusSections.Pin?
 }
 
 /// Scroll target for a card's Subspaces group.
@@ -628,6 +643,7 @@ struct SidebarView: View {
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
+    @State private var statusOrderMemory = StatusOrderMemory()
     @State private var taskBoardSnapshot = SidebarTaskBoardSnapshot()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
@@ -1047,7 +1063,21 @@ struct SidebarView: View {
     /// The Status segment: Needs you, Running, Idle, To ship and Done.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let sections = SidebarStatusSections.make(taskBoardSnapshot.windowItems, releasable: taskBoard.canRelease)
+        let items = taskBoardSnapshot.windowItems
+        let selectedTask = selectedWorkspaceID.flatMap { workspaceID in
+            items.first { $0.taskSpaceWorkspaceID == workspaceID }?.id
+        }
+        let sections = SidebarStatusSections.make(
+            items,
+            releasable: taskBoard.canRelease,
+            pin: SidebarStatusSections.pin(
+                previous: statusOrderMemory.pin,
+                selected: selectedTask,
+                displayed: statusOrderMemory.displayedSlots
+            )
+        )
+        statusOrderMemory.pin = sections.pin
+        statusOrderMemory.displayedSlots = sections.slots
         return SidebarStatusSegment(
             sections: sections,
             isToShipExpanded: $isStatusToShipExpanded,
@@ -1084,6 +1114,12 @@ struct SidebarView: View {
             }
         }
         .padding(.top, 2)
+        .onDisappear {
+            // Slots from a segment that is not on screen would pin the next
+            // selection where the user no longer sees it.
+            statusOrderMemory.pin = nil
+            statusOrderMemory.displayedSlots = [:]
+        }
     }
 
     /// A merged task waiting for a release, under its project's card. Its
@@ -3669,8 +3705,11 @@ struct SidebarView: View {
             primaryAnnotationKey: workspace.primaryAnnotationKey,
             // While setup or the move into a worktree runs or has failed,
             // the row says so instead of what its sessions show.
-            summary: boardItem.flatMap { $0.stage.isBeforeStart ? TaskBoardPresentation.statusLine($0) : nil }
-                ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
+            summary: boardItem.flatMap { item in
+                // The agent's question replaces its last status line.
+                if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+                return item.stage.isBeforeStart ? TaskBoardPresentation.statusLine(item) : nil
+            } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
             spawningSessionID: workspace.spawningSessionID,
             spawnerName: spawner?.displayTitle,
             spawnerPanelID: spawner?.panelID,
@@ -3933,6 +3972,7 @@ struct SidebarView: View {
             if showsTally, tally.isEmpty == false {
                 HStack(spacing: 8) {
                     subspacesTallyItem(count: tally.ready, color: ToastyTheme.sessionReadyText)
+                    subspacesTallyItem(count: tally.question, color: ToastyTheme.sidebarTaskQuestionMark)
                     subspacesTallyItem(count: tally.needsApproval, color: ToastyTheme.sessionNeedsApprovalText)
                     subspacesTallyItem(count: tally.error, color: ToastyTheme.sessionErrorText)
                     subspacesTallyItem(count: tally.review, color: ToastyTheme.sidebarTaskReviewMark)
@@ -4449,7 +4489,7 @@ struct SidebarView: View {
         case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle, .review, .toShip, .done: return nil
+        case .working, .idle, .question, .review, .toShip, .done: return nil
         }
     }
 
@@ -4461,7 +4501,7 @@ struct SidebarView: View {
         switch status {
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .ready, .working, .idle, .review, .toShip, .done: return nil
+        case .ready, .working, .idle, .question, .review, .toShip, .done: return nil
         }
     }
 

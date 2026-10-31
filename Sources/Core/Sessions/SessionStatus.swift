@@ -93,6 +93,9 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     /// When the session last reported a status. Unlike `updatedAt`, file,
     /// panel, and background-activity changes leave it alone.
     public var statusUpdatedAt: Date?
+    /// When the agent itself last reported a status; see
+    /// `SessionRecord.agentStatusUpdatedAt`.
+    public var agentStatusUpdatedAt: Date?
     /// Start of the current turn, present only while the session's reported
     /// status is `.working`. A projected working state (waiting on children,
     /// resuming) has no turn of its own and leaves this `nil`.
@@ -121,6 +124,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         cwd: String?,
         updatedAt: Date,
         statusUpdatedAt: Date? = nil,
+        agentStatusUpdatedAt: Date? = nil,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
         isActive: Bool,
@@ -141,6 +145,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.cwd = cwd
         self.updatedAt = updatedAt
         self.statusUpdatedAt = statusUpdatedAt
+        self.agentStatusUpdatedAt = agentStatusUpdatedAt
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
         self.isActive = isActive

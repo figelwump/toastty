@@ -221,9 +221,9 @@ enum TaskBoard {
             releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs)
         )
         let dates = [
-            record.createdAt, record.readyForReviewAt, record.mergedAt, record.shippedAt,
-            record.archivedAt, record.doneAt,
-        ].compactMap { $0 } + statuses.compactMap(\.statusUpdatedAt)
+            record.createdAt, record.readyForReviewAt, record.replyRequest?.askedAt, record.mergedAt,
+            record.shippedAt, record.archivedAt, record.doneAt,
+        ].compactMap { $0 } + statuses.compactMap(Self.agentActivityAt)
         return TaskBoardItem(
             id: .task(record.id),
             record: record,
@@ -299,7 +299,7 @@ enum TaskBoard {
             ),
             releaseTagsConfigured: releaseTagsConfigured(root: project?.rootDirectory, inputs: inputs)
         )
-        let dates = statuses.compactMap(\.statusUpdatedAt) + [workspace.doneAt].compactMap { $0 }
+        let dates = statuses.compactMap(Self.agentActivityAt) + [workspace.doneAt].compactMap { $0 }
         return TaskBoardItem(
             id: .taskSpace(workspace.id),
             record: nil,
@@ -317,6 +317,12 @@ enum TaskBoard {
             merge: nil,
             activityAt: dates.max() ?? .distantPast
         )
+    }
+
+    /// When a session's agent last reported, for ordering: reading its turn
+    /// is not activity, so a task the user clicks keeps its place.
+    static func agentActivityAt(_ status: WorkspaceSessionStatus) -> Date? {
+        status.agentStatusUpdatedAt ?? status.statusUpdatedAt
     }
 
     static func pullRequestLink(_ workspace: WorkspaceState) -> WorkspacePullRequestLink? {

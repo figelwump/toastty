@@ -13,7 +13,9 @@ triage.
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
 out, and a task without a workspace waits in Needs you until you pick one.
-The agent's first message is the task text, followed by the attached files.
+The agent's first message is the task text, followed by the attached files
+and one line that tells the agent to run `toastty task needs-reply` before it
+ends a turn with a question.
 
 ## Quick entry
 
@@ -187,7 +189,7 @@ directory, one per root directory.
    selected, so your focus stays where it is.
 3. It starts the agent in that terminal. The agent's first message is the first
    prompt, then the task text exactly as written, then the paths of the
-   attached files. With `--fork`, the agent starts as a fork of the calling
+   attached files, then the `task needs-reply` line. With `--fork`, the agent starts as a fork of the calling
    session's conversation instead (see
    [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks)).
    The agent session is not workspace-scoped, so it can read
@@ -413,9 +415,11 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Archived | the task was closed without finishing |
 | Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
 | To ship | it merged, and its project has `release_tags` |
-| Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, an agent asked for input or stopped with an error, or its pull request is open and not a draft while no agent works on it |
+| Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
 | Running | an agent that works or waits on its sub-agents; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
+| Needs you | its agent ended a turn with a question and marked it with `task needs-reply`: "Asks: <question>". Reading the turn does not clear it. It clears when the task's agent starts its next turn, usually your answer, or when the agent runs `task ready-for-review` |
+| Needs you | its pull request is open and not a draft while no agent works on it, or its agent marked work without a pull request ready with `task ready-for-review` |
 | Needs you | its agent finished a turn you have not read yet: "Claude finished · waiting for you". Once you read the answer, or after a relaunch restores the agent, the task is Idle |
 | Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space |
 
@@ -435,8 +439,8 @@ Tasks view, gives one a record, so its history stays after it closes.
 
 ## The sidebar and the Tasks view
 
-`Cmd+Shift+A` includes open task spaces ready for review, even after you read
-the agent’s answer or its session exits. They follow unread panels and agents
+`Cmd+Shift+A` includes open task spaces ready for review or waiting for your
+reply, even after you read the agent’s answer or its session exits. They follow unread panels and agents
 that need input, and precede working agents in the cycle.
 
 The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
@@ -452,6 +456,14 @@ window.
   the footer counts To ship tasks instead.
 - **Status** lists task spaces by stage: Needs you, Running, Idle, To ship,
   and a Done count. Each row carries its project's name, except under To ship.
+  A task and the tasks it started list together, in the group of the most
+  urgent one: an idle parent whose child needs you lists in Needs you, dimmed,
+  with the child under it. Group counts include only the tasks whose own stage
+  is in that group, and a row listed in a group its own stage is not in is
+  dimmed. The selected task's family keeps its group and position until you
+  select another row, so reading a finished turn dims the row instead of
+  moving it from under the pointer; a task that starts to need you moves at
+  once.
   To ship starts collapsed to one line that names each project and its count.
   Click it to expand the group in place; the choice resets when the sidebar
   hides or the app quits. Expanded, each project has a header as in the Tasks
@@ -469,8 +481,8 @@ task whose task space is still open keeps its task space row and does not show
 a second time.
 
 Task space rows use square marks: green for a finished turn (filled while it
-is unread, when the Tasks view also shows the title in bold), blue for a pull
-request waiting for review, violet ↑ for a merge waiting for a release, a green
+is unread, when the Tasks view also shows the title in bold), amber ? for a
+question that waits for your reply, blue for a pull request waiting for review, violet ↑ for a merge waiting for a release, a green
 check for done, and a dashed box for a task that is starting.
 When an agent splits its work, the new tasks draw under the task that started
 them, and that task shows how many of them have merged.

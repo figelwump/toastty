@@ -28,6 +28,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
     public var statusUpdatedAt: Date?
+    /// When the agent itself last reported a status. Toastty's own changes,
+    /// such as collapsing a read `ready` to `idle`, move `statusUpdatedAt`
+    /// but not this. Runtime-only, like `statusUpdatedAt`.
+    public var agentStatusUpdatedAt: Date?
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     /// Provider work outside agents, such as background shells, that the
     /// session still waits on. Kept in the provider's reported order.
