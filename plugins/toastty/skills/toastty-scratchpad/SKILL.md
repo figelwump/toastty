@@ -36,6 +36,29 @@ A managed session can have several open Scratchpads in its workspace tab. List t
 
 The result contains `defaultDocumentID` and a `scratchpads` array. Each entry has a stable `documentID`, `panelID`, `title`, optional `purpose`, `revision`, `updatedAt`, and `isDefault`. Match the user's intended artifact by title and purpose, then use its `documentID` for each later publish, export, patch, or metadata update. Use the default only when the request clearly refers to it. Listing is metadata-only: it does not create, export, or focus a panel. Closed documents are not available to agent actions; reopening makes panel-targeted export available, and binding enables session-targeted actions.
 
+## Recover A Known Binding
+
+When the user asks to update an existing Scratchpad and it is absent from this session's list, recover its binding and export its current content before any loading screen or other publish. This applies even when other Scratchpads are bound. A session change does not require a replacement document.
+
+Use the exact `panelID` and `documentID` retained in the conversation or task handoff. If only the document ID is known, resolve this session's workspace and tab with `terminal.state --panel "$TOASTTY_PANEL_ID"`. Query `workspace.snapshot` with that explicit workspace ID and match `scratchpadDocumentID` only when `selectedTabID` matches the session's tab. Otherwise report the discovery limit. Query `panel.scratchpad.state` for the known or located panel and confirm `stateDocumentID` matches the intended document. Do not infer identity from a similar title, select another tab, or widen workspace scope to find it.
+
+Check `stateSessionID` before changing the binding:
+
+- This session: no rebind is needed. List again and require a session-targeted export of this `documentID` to succeed before writing; otherwise report the inconsistent binding.
+- Null: automatically rebind the known document.
+- Another session: check its exact ID in live `workspace.list` `activeSessions`. An idle session is still active. Absence proves inactivity only in a successful, unfiltered result with `callerIsScoped=false`; absence from scoped or window-filtered metadata is not proof. Do not widen scope to check. An active owner requires an explicit user handoff from that identified session. If its status remains unknown, do not take over.
+
+Rebind without another permission question only when the document is unbound, its previous owner is confirmed inactive, or the user explicitly handed it off from the identified active owner. Recheck panel state immediately before rebinding. If the document or owner changed, reassess instead of using the earlier decision:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.rebind \
+  --panel "<panel-id>" "sessionID=$TOASTTY_SESSION_ID"
+```
+
+The panel must be open in the same workspace tab as this managed session. Require `ok=true`, then list again and confirm that the same `documentID` is bound. Export that document, verify the returned `documentID`, and read its current HTML and revision before updating it. Use the returned revision for a patch or an `expectedRevision` content write; do not overwrite from an old export. Target the recovered `documentID` on every write: rebinding preserves an existing destination default. Keep all requested documents and other bindings intact. Do not use `createPolicy=new` or `additional` to work around a missing binding.
+
+Read-only inspection does not require rebinding: export a known open panel by `--panel` without `sessionID` and verify the returned document identity. The same-tab restriction applies to rebinding, not panel-targeted export. If the panel is closed or a required action is unavailable, report that specific limit. If identity or ownership cannot be established, ask the user to bind the intended Scratchpad from this session's terminal-header link menu or from the Scratchpad's binding menu, then list again. A closed panel must first be reopened. Do not silently publish a replacement.
+
 ## Read Existing Scratchpad
 
 When the user asks to read, inspect, review, summarize, or propose changes based on the current Scratchpad, do not publish a loading screen and do not replace Scratchpad content.
@@ -59,11 +82,11 @@ Select the intended open document from `panel.scratchpad.list`; do not scan work
   "panelID=<panel-id>"
 ```
 
-If no document is bound and the user identified an open unbound panel, use its known `panelID` for panel-targeted export. Otherwise ask the user to reopen the panel or bind it from the link menu in this session's terminal header; a closed document cannot be accessed through the agent API. If `panel.scratchpad.export` is unavailable in the running app, say so briefly and use the best available panel-targeted fallback rather than guessing silently.
+If the intended document is not listed, follow **Recover A Known Binding** for read-only export or recovery before a requested update.
 
 ## Open First
 
-When creating or replacing a visual Scratchpad artifact and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. List first when selecting an existing artifact. Use `--document-id` for the selected document; for a distinct artifact requested by the user, use `--additional` and save the returned `documentID` for later updates.
+When creating or replacing a visual Scratchpad artifact and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. For an existing artifact, first select it, recover its binding if needed, and export its current content under **Recover A Known Binding**. Use `--document-id` for that document on the loading screen and later updates; for a distinct artifact requested by the user, use `--additional` and save the returned `documentID` for later updates.
 
 The loading screen is intentionally minimal: a title (if known) and a subtle animated indicator. Do not pre-mock the structure of the final artifact. Pre-mocking biases the design toward the same look every time and flattens visual variety across runs.
 
@@ -263,7 +286,7 @@ In a Toastty-managed agent terminal, run:
 
 Read the returned `filePath` as the current Scratchpad HTML, then use that content as the source for the requested work. The response also includes `panelID`, `documentID`, `revision`, and `title` for diagnostics or follow-up state queries.
 
-If the list is empty, use a known open panel ID for panel-targeted export or ask the user to reopen the intended Scratchpad and bind it from this session's terminal-header link menu. Scratchpad-side rebind remains available.
+If the intended document is not listed, follow **Recover A Known Binding** for read-only export or recovery before a requested update.
 
 ## Publish
 
