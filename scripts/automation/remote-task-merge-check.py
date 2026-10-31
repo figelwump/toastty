@@ -350,8 +350,12 @@ def main():
         # Tasks view (mockups 13 B and 14e).
         action('window.sidebar.set-segment', windowID=window_id, segment='status')
         open_tasks_view()
-        require(run_tool(helper, 'exists', pid, f'sidebar.status.toShip.{project_title}.release', check=False).returncode == 0,
-                'The Status sidebar has no Release button for the project')
+        # The Status To ship group starts collapsed; its project headers,
+        # with Release, show once it is expanded.
+        press('sidebar.status.toShip')
+        wait_for('the Status sidebar\'s Release button',
+                 lambda: run_tool(helper, 'exists', pid, f'sidebar.status.toShip.{project_title}.release', check=False).returncode == 0,
+                 timeout=10, interval=0.5)
         capture('2-to-ship')
 
         # 2. Release from the To ship lane; a pushed tag ships both.
