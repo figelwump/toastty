@@ -653,6 +653,8 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .toShip), .toShip)
         XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .done), .done)
         XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .running), .ready)
+        // Setup runs before any agent reports, so a starting task shows work.
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .starting), .working)
         XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: true, stage: nil), .done)
         // A merge waiting for checks sets the done mark as the user's
         // acceptance; the task is still running, not done.
