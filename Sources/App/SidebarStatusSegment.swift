@@ -2,9 +2,9 @@ import CoreState
 import SwiftUI
 
 /// The Status segment's groups: Needs you, Running and Idle as rows, To
-/// ship as one line per project with its latest tasks under it, and Done as
-/// a count. Kept apart
-/// from the view so the grouping can be tested without hosting it.
+/// ship as one header per project with its latest tasks under it, and Done
+/// as a count. Kept apart from the view so the grouping can be tested
+/// without hosting it.
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {
         let item: TaskBoardItem
@@ -268,6 +268,15 @@ struct SidebarStatusSections: Equatable {
         guard let oldest = lane.oldestMergedAt else { return "" }
         return "oldest \(TaskAge.label(since: oldest, now: now))"
     }
+
+    /// The To ship header's label. Collapsed, it names each project and its
+    /// count, as the header's summary shows them.
+    func toShipLabel(isExpanded: Bool) -> String {
+        let count = toShip.reduce(0) { $0 + $1.count }
+        let label = "To ship, \(count) \(count == 1 ? "task" : "tasks"), \(isExpanded ? "expanded" : "collapsed")"
+        guard isExpanded == false else { return label }
+        return ([label] + toShip.map { "\($0.projectTitle) \($0.count)" }).joined(separator: ", ")
+    }
 }
 
 /// A project's most recently merged To ship tasks, which the sidebar lists
@@ -331,9 +340,11 @@ enum TaskAge {
 
 /// Draws `SidebarStatusSections`. Rows with an open task space come from
 /// the sidebar's own task space row, so they look and act the same as in a
-/// project card; the rest open the Tasks view.
+/// project card; the rest open the Tasks view. To ship starts collapsed to
+/// one line that names each project.
 struct SidebarStatusSegment<RowContent: View>: View {
     let sections: SidebarStatusSections
+    @Binding var isToShipExpanded: Bool
     /// Opens the Tasks view at a group.
     let openTasksGroup: (TaskStage.Group) -> Void
     var release: (UUID) -> Void = { _ in }
@@ -365,10 +376,12 @@ struct SidebarStatusSegment<RowContent: View>: View {
                 rows(sections.idle)
             }
             if sections.toShip.isEmpty == false {
-                header("To ship", count: sections.toShip.reduce(0) { $0 + $1.count })
-                ForEach(sections.toShip) { lane in
-                    laneRow(lane)
-                    laneTasks(lane)
+                toShipHeader
+                if isToShipExpanded {
+                    ForEach(sections.toShip) { lane in
+                        laneRow(lane)
+                        laneTasks(lane)
+                    }
                 }
             }
             if sections.doneCount > 0 {
@@ -410,8 +423,27 @@ struct SidebarStatusSegment<RowContent: View>: View {
         "Done, \(count) \(count == 1 ? "task" : "tasks"), opens the Tasks view"
     }
 
-    static func laneLabel(_ lane: SidebarStatusSections.Lane) -> String {
-        "\(lane.projectTitle), \(lane.count) \(lane.count == 1 ? "task" : "tasks") to ship"
+    static func laneLabel(_ lane: SidebarStatusSections.Lane, now: Date) -> String {
+        let label = "\(lane.projectTitle), \(lane.count) \(lane.count == 1 ? "task" : "tasks") to ship"
+        let detail = SidebarStatusSections.laneDetail(lane, now: now)
+        return detail.isEmpty ? label : "\(label), \(detail)"
+    }
+
+    /// Each project in violet with its count, as the expanded headers name
+    /// them.
+    static func toShipSummary(_ lanes: [SidebarStatusSections.Lane]) -> Text {
+        lanes.enumerated().reduce(Text(verbatim: "")) { summary, element in
+            let (index, lane) = element
+            let separator = index == 0
+                ? Text(verbatim: "")
+                : Text(verbatim: "  ·  ").foregroundStyle(ToastyTheme.sidebarSubspaceQuietMark)
+            return summary + separator
+                + Text(verbatim: lane.projectTitle).foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                + Text(verbatim: " \(lane.count)")
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+        }
+        .font(.system(size: 10.5, weight: .semibold))
     }
 
     private func rows(_ entries: [SidebarStatusSections.Entry]) -> some View {
@@ -449,16 +481,56 @@ struct SidebarStatusSegment<RowContent: View>: View {
         }
     }
 
+    /// "› TO SHIP 3", which expands and collapses the group in place.
+    /// Collapsed, it names each project and its count on the right.
+    private var toShipHeader: some View {
+        let label = sections.toShipLabel(isExpanded: isToShipExpanded)
+        return Button {
+            isToShipExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isToShipExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 9)
+                groupTitle("To ship", count: sections.toShip.reduce(0) { $0 + $1.count })
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                if isToShipExpanded == false {
+                    Self.toShipSummary(sections.toShip)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            .frame(minHeight: 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .help(isToShipExpanded ? "Hide the tasks to ship" : "Show the tasks to ship")
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("sidebar.status.toShip")
+        .background {
+            SidebarSemanticTextBridge(text: label)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// A project's header, drawn as in the Tasks view: its name and count in
+    /// violet, with Release on the right.
     private func laneRow(_ lane: SidebarStatusSections.Lane) -> some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(spacing: 8) {
             laneButton(lane)
             if let workspaceID = lane.releaseWorkspaceID {
                 TaskReleaseButton(title: "Release") { release(workspaceID) }
-                    .padding(.top, 4)
                     .padding(.trailing, 8)
                     .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle).release")
             }
         }
+        .padding(.top, 4)
     }
 
     /// The lane's latest tasks, under the lane's title.
@@ -473,54 +545,39 @@ struct SidebarStatusSegment<RowContent: View>: View {
                     SidebarShowMoreToShipButton(count: lane.recent.hidden.count) {
                         showMoreToShip(lane.recent.hidden.first?.id)
                     }
-                    .padding(.horizontal, 8)
+                    // Lines up with the task titles: the row's padding,
+                    // status mark and gap.
+                    .padding(.leading, 26)
+                    .padding(.trailing, 8)
                     .padding(.vertical, 3)
                     .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle).more")
                 }
             }
-            // Lines the tasks' marks up with the lane's title.
-            .padding(.leading, 18)
         }
     }
 
     private func laneButton(_ lane: SidebarStatusSections.Lane) -> some View {
-        Button {
+        let now = Date()
+        let detail = SidebarStatusSections.laneDetail(lane, now: now)
+        return Button {
             openTasksGroup(.toShip)
         } label: {
-            HStack(alignment: .top, spacing: 6) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
-                    .frame(width: 10, height: 10)
-                    .overlay {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 6.5, weight: .black))
-                            .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                    }
-                    .frame(width: 12, height: 17)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("\(lane.projectTitle) · \(lane.count) \(lane.count == 1 ? "task" : "tasks")")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                        .lineLimit(1)
-                        .frame(minHeight: 17, alignment: .leading)
-                    let detail = SidebarStatusSections.laneDetail(lane, now: Date())
-                    if detail.isEmpty == false {
-                        Text(detail)
-                            .font(ToastyTheme.fontWorkspaceSessionChip)
-                            .foregroundStyle(ToastyTheme.sidebarSummaryText)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
+            Text("\(lane.projectTitle) · \(lane.count) \(lane.count == 1 ? "task" : "tasks")")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: 17, alignment: .leading)
+                .padding(.vertical, 2)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
         }
         .buttonStyle(SidebarStatusRowButtonStyle())
-        .accessibilityLabel(Self.laneLabel(lane))
+        .help(detail.isEmpty ? "Show To ship in the Tasks view" : "Show To ship in the Tasks view (\(detail))")
+        .accessibilityLabel(Self.laneLabel(lane, now: now))
         .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle)")
         .background {
-            SidebarSemanticTextBridge(text: Self.laneLabel(lane))
+            SidebarSemanticTextBridge(text: Self.laneLabel(lane, now: now))
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }

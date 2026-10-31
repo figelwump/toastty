@@ -281,6 +281,12 @@ struct TaskCoordinationTests {
         let done = try watch(.done)
         #expect([review, merged, toShip, done].allSatisfy { outcome($0) == nil })
 
+        // The agent finishes the turn its launch started.
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        for kind in [SessionStatusKind.working, .idle] {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
+        }
+
         // A linked pull request and no working agent: it waits for review.
         let url = "https://github.com/example/toastty/pull/124"
         _ = fixture.store.send(.setWorkspaceAnnotation(

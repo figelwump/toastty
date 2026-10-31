@@ -7,6 +7,18 @@ struct QuickEntryPreset: Hashable, Codable, Sendable {
     var agent: String
     var model: String?
     var effort: String?
+
+    /// A model as the pill and the preset rows show it. A Claude ID drops
+    /// "claude-" and any snapshot date, and its version takes a dot:
+    /// claude-opus-5-5 shows as opus-5.5. Other IDs, such as gpt-6.1-sol,
+    /// are already short and show whole, as does the Model column.
+    static func shortModelName(_ model: String) -> String {
+        guard let match = model.wholeMatch(
+            of: #/claude-([a-z]+)-(\d+)(?:-(\d{1,2})(?!\d))?(?:-\d{8})?(.*)/#
+        ) else { return model }
+        let (_, family, major, minor, rest) = match.output
+        return "\(family)-\(major)\(minor.map { ".\($0)" } ?? "")\(rest)"
+    }
 }
 
 /// What the Agent picker offers for one profile in agents.toml.
@@ -351,7 +363,7 @@ final class QuickEntryPicker: ObservableObject {
         let presetRows = presets.map { listed -> Row in
             let (original, shown, section) = listed
             let name = names[shown.agent] ?? shown.agent
-            let title = [name, shown.model].compactMap { $0 }.joined(separator: " · ")
+            let title = [name, shown.model.map(QuickEntryPreset.shortModelName)].compactMap { $0 }.joined(separator: " · ")
             let acceptsEffort = profiles.first { $0.id == shown.agent }?.efforts.isEmpty == false
             return Row(
                 id: presetRowID(original),
@@ -359,7 +371,7 @@ final class QuickEntryPicker: ObservableObject {
                 title: title,
                 detail: acceptsEffort ? (shown.effort ?? "default") : nil,
                 action: .preset(shown),
-                searchText: "\(title) \(shown.effort ?? "") \(shown.agent)"
+                searchText: "\(title) \(shown.model ?? "") \(shown.effort ?? "") \(shown.agent)"
             )
         }
         let other = [
@@ -394,7 +406,7 @@ final class QuickEntryPicker: ObservableObject {
                 pairs.append(Row(
                     id: "model:\(profile.id)|\(model)",
                     section: "Models",
-                    title: "\(profile.displayName) · \(model)",
+                    title: "\(profile.displayName) · \(QuickEntryPreset.shortModelName(model))",
                     detail: effortHint,
                     action: profile.efforts.isEmpty
                         ? .preset(QuickEntryPreset(agent: profile.id, model: model))

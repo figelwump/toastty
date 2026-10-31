@@ -126,8 +126,9 @@ final class QuickEntryModel: ObservableObject {
         workspaceID.flatMap { id in workspaceOptions.first { $0.id == id.uuidString }?.title } ?? "None"
     }
 
-    /// `model · effort`. The model names its provider, so the profile's
-    /// name is added only when no model is chosen. A profile that runs
+    /// `model · effort`, with the model's short name, such as opus-5.5. The
+    /// model names its provider, so the profile's name is added only when no
+    /// model is chosen. A profile that runs
     /// another provider's command, such as a release profile wrapping
     /// Codex, takes no model, so it always shows its name.
     var agentTitle: String {
@@ -139,7 +140,7 @@ final class QuickEntryModel: ObservableObject {
     var agentTitleParts: (name: String, effort: String?) {
         guard let preset else { return ("None", nil) }
         let name = agentProfiles.first { $0.id == preset.agent }?.displayName ?? preset.agent
-        return (preset.model ?? name, preset.effort)
+        return (preset.model.map(QuickEntryPreset.shortModelName) ?? name, preset.effort)
     }
 
     func showError(_ message: String) {

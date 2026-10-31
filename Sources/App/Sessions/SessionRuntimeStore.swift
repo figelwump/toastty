@@ -165,6 +165,10 @@ final class SessionRuntimeStore: ObservableObject {
     private var backgroundActivityReaperTask: Task<Void, Never>?
     private var resumeGraceRepublishTask: Task<Void, Never>?
     private var resumeGraceRepublishExpiry: Date?
+    private let initialPromptTurnTimeoutNanoseconds: UInt64
+    /// Sessions launched with their first prompt whose agent has not
+    /// reported that turn yet, each with the timer that ends the wait.
+    private var initialPromptTurnTimeoutTasksBySessionID: [String: Task<Void, Never>] = [:]
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
     /// Teammate metadata outlives each active turn so a resumed teammate can
@@ -281,7 +285,8 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
         maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60,
         providerSessionNameEnvironment: [String: String] = ProcessInfo.processInfo.environment,
-        providerSessionNamePollIntervalNanoseconds: UInt64 = 2_000_000_000
+        providerSessionNamePollIntervalNanoseconds: UInt64 = 2_000_000_000,
+        initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
@@ -291,6 +296,7 @@ final class SessionRuntimeStore: ObservableObject {
         self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
         self.providerSessionNameEnvironment = providerSessionNameEnvironment
         self.providerSessionNamePollIntervalNanoseconds = providerSessionNamePollIntervalNanoseconds
+        self.initialPromptTurnTimeoutNanoseconds = initialPromptTurnTimeoutNanoseconds
     }
 
     func bind(store: AppStore) {
@@ -847,6 +853,44 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    /// A launch that carries the agent's first prompt starts that turn at
+    /// once, so the session shows working while the agent boots instead of
+    /// idle. Until the agent reports another status, an idle report does not
+    /// end the turn: pi and Grok report idle when they start, before they
+    /// read the prompt. An interrupt does end it. An agent that reports
+    /// nothing in time, for example because it stopped at a startup dialog,
+    /// falls back to idle.
+    func startInitialPromptTurn(sessionID: String, at now: Date) {
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Starting"),
+            at: now
+        )
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        initialPromptTurnTimeoutTasksBySessionID[sessionID]?.cancel()
+        let timeout = initialPromptTurnTimeoutNanoseconds
+        initialPromptTurnTimeoutTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            guard Task.isCancelled == false else { return }
+            self?.expireInitialPromptTurn(sessionID: sessionID)
+        }
+    }
+
+    private func expireInitialPromptTurn(sessionID: String) {
+        guard initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID) != nil,
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return }
+        ToasttyLog.info(
+            "Agent did not start its first prompt in time",
+            category: .terminal,
+            metadata: ["session_id": sessionID, "agent": record.agent.rawValue]
+        )
+        updateSynthesizedStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: Date())
+    }
+
+    private func endInitialPromptTurnWait(sessionID: String) {
+        initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID)?.cancel()
+    }
+
     private enum StatusUpdateOrigin {
         case provider
         case synthesized
@@ -874,6 +918,21 @@ final class SessionRuntimeStore: ObservableObject {
         codexHookEvent: CodexHookEvent?,
         at now: Date
     ) {
+        if initialPromptTurnTimeoutTasksBySessionID[sessionID] != nil {
+            guard status.kind != .idle else {
+                ToasttyLog.debug(
+                    "Kept the first prompt's turn working through an idle report",
+                    category: .terminal,
+                    metadata: ["session_id": sessionID, "status_update_source": statusUpdateSource]
+                )
+                return
+            }
+            // Only the agent's own report shows that its turn started; text
+            // seen on screen may be left over from before the launch.
+            if origin == .provider {
+                endInitialPromptTurnWait(sessionID: sessionID)
+            }
+        }
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
         let previousProjectedStatus = previousRecord.flatMap { record in
             sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
@@ -2999,7 +3058,9 @@ final class SessionRuntimeStore: ObservableObject {
         observation: CodexRootProgressObservation,
         at now: Date
     ) -> Bool {
-        applyCodexRootProgressObservation(
+        // A logged turn start or abort is the agent's own report of its turn.
+        endInitialPromptTurnWait(sessionID: sessionID)
+        return applyCodexRootProgressObservation(
             sessionID: sessionID,
             observation: observation,
             at: now
@@ -3123,6 +3184,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
+        endInitialPromptTurnWait(sessionID: sessionID)
         invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
@@ -5883,6 +5945,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         if record.agent == .codex,
            codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
+            endInitialPromptTurnWait(sessionID: record.sessionID)
             let interrupt: CodexRootProgressInterrupt = switch kind {
             case .escape:
                 .escape
@@ -5906,6 +5969,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        endInitialPromptTurnWait(sessionID: record.sessionID)
         updateSynthesizedStatus(
             sessionID: record.sessionID,
             status: Self.interruptedIdleStatus,

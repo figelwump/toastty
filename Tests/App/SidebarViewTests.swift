@@ -2368,6 +2368,129 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-status")
     }
 
+    func testStatusToShipStartsCollapsedAndExpandsUnderProjectHeaders() throws {
+        let now = Date()
+        let emptyosID = UUID()
+        let toasttyID = UUID()
+        let taskSpacePanelID = UUID()
+        let mcpTaskID = UUID()
+        var taskSpace = WorkspaceState(
+            id: UUID(),
+            title: "mcp-page-tools",
+            layoutTree: .slot(slotID: UUID(), panelID: taskSpacePanelID),
+            panels: [taskSpacePanelID: .terminal(TerminalPanelState(title: "mcp", shell: "zsh", cwd: "/repo/emptyos"))],
+            focusedPanelID: taskSpacePanelID,
+            annotations: ["github-pr": WorkspaceAnnotation(text: "PR #322", url: "https://github.com/example/emptyos/pull/322")],
+            parentWorkspaceID: emptyosID
+        )
+        // The task space belongs to the MCP task, so the board lists them as one item.
+        taskSpace.taskID = mcpTaskID
+        func merged(_ title: String, project: UUID, root: String, hoursAgo: Double, taskSpace: WorkspaceState? = nil) -> TaskRecord {
+            var record = TaskRecord(
+                id: taskSpace == nil ? UUID() : mcpTaskID,
+                createdAt: now.addingTimeInterval(-3 * 86_400),
+                text: title,
+                title: title,
+                slug: title,
+                source: .cli,
+                workspaceID: project,
+                projectRoot: root,
+                setup: .started
+            )
+            record.mergedAt = now.addingTimeInterval(-hoursAgo * 3_600 - 60)
+            if let taskSpace {
+                record.operation.taskSpace = .init(workspaceID: taskSpace.id, panelID: taskSpacePanelID)
+                // The board drops a merge recorded for another pull request.
+                record.pullRequestURL = taskSpace.annotations["github-pr"]?.url
+            }
+            return record
+        }
+        let workspaces = [
+            makeSinglePanelWorkspace(id: emptyosID, title: "emptyos"),
+            taskSpace,
+            makeSinglePanelWorkspace(id: toasttyID, title: "toastty"),
+        ]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: emptyosID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            taskRecords: [
+                merged("MCP page tools: private pages", project: emptyosID, root: "/repo/emptyos", hoursAgo: 9, taskSpace: taskSpace),
+                merged("Show archive button when done", project: toasttyID, root: "/repo/toastty", hoursAgo: 24),
+                merged("mini-scheduled-cleanup", project: toasttyID, root: "/repo/toastty", hoursAgo: 14),
+            ],
+            withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: ["/repo/emptyos", "/repo/toastty"].map {
+                TasksConfig.Workspace(path: $0, releaseTags: "v*", releasePrompt: "Release the merged tasks.")
+            })
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "mcp-agent",
+            agent: .codex,
+            panelID: taskSpacePanelID,
+            windowID: windowID,
+            workspaceID: taskSpace.id,
+            codexStatusTrackingSource: .externallyReported,
+            displayTitleOverride: "MCP page tools: private pages",
+            cwd: "/repo/emptyos",
+            repoRoot: "/repo/emptyos",
+            at: now
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "mcp-agent",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting for review"),
+            at: now
+        )
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Collapsed by default: one line names each project and its count.
+        var textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 3 tasks, collapsed, emptyos 1, toastty 2"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("emptyos, 1 task to ship") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show archive button when done") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("MCP page tools: private pages") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-to-ship-collapsed")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-status-to-ship-collapsed")
+
+        // Expanded: each project's header, with its tasks under it.
+        try clickSemanticText(prefix: "To ship, 3 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 3 tasks, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos, 1 task to ship, oldest 9h"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("toastty, 2 tasks to ship, oldest 1d"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Show archive button when done, ") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("mini-scheduled-cleanup, ") }, "\(textValues)")
+        // The header names the project, so the task space row does not.
+        let taskSpaceRow = try XCTUnwrap(textValues.first { $0.hasPrefix("MCP page tools: private pages, task space") }, "\(textValues)")
+        XCTAssertFalse(taskSpaceRow.contains("in emptyos"), taskSpaceRow)
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-to-ship-expanded")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-status-to-ship-expanded")
+
+        try clickSemanticText(prefix: "To ship, 3 tasks, expanded", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 3 tasks, collapsed, emptyos 1, toastty 2"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show archive button when done") }, "\(textValues)")
+    }
+
     func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
         let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
@@ -3759,7 +3882,8 @@ final class SidebarViewTests: XCTestCase {
         windowID: UUID,
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
         taskRecords: [TaskRecord]? = nil,
-        withTaskBoard: Bool = false
+        withTaskBoard: Bool = false,
+        tasksConfig: TasksConfig = .empty
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -3772,7 +3896,7 @@ final class SidebarViewTests: XCTestCase {
                 records: recordStore,
                 store: store,
                 launcher: nil,
-                configLoader: { .empty },
+                configLoader: { tasksConfig },
                 attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
                 hasActiveSession: { _ in false },
                 grantScope: { _, _ in }

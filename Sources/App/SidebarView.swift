@@ -633,6 +633,10 @@ struct SidebarView: View {
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var expandedSessionChildrenBySessionID: [String: Bool] = [:]
     @State private var collapsedSubspaceGroupParentIDs: Set<UUID> = []
+    /// Status starts with To ship collapsed. Like a collapsed Subspaces
+    /// group, the choice is not saved: it resets when the sidebar hides or
+    /// the app quits.
+    @State private var isStatusToShipExpanded = false
     /// Spawning session whose subspaces the group shows, per parent workspace.
     @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
     /// Row order captured when the pointer entered a group, so rows hold
@@ -1076,6 +1080,7 @@ struct SidebarView: View {
         statusOrderMemory.displayedSlots = sections.slots
         return SidebarStatusSegment(
             sections: sections,
+            isToShipExpanded: $isStatusToShipExpanded,
             openTasksGroup: { group in openTasksView(selecting: nil, revealing: group) },
             release: { workspaceID in
                 if let coordinator = taskBoard.coordinator {
@@ -1091,7 +1096,9 @@ struct SidebarView: View {
                         workspace: workspace,
                         spawner: nil,
                         windowWorkspaceIDs: windowWorkspaceIDs,
-                        projectTag: entry.item.projectTitle,
+                        // A To ship row sits under its project's header,
+                        // which already names the project.
+                        projectTag: entry.item.stage == .toShip ? nil : entry.item.projectTitle,
                         isLinkedChild: entry.isLinkedChild
                     ),
                     parentWorkspaceID: workspace.parentWorkspaceID ?? workspace.id,
