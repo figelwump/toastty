@@ -435,7 +435,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
                 environment: validatedEnvironment,
-                parentSessionID: parentSessionID ?? forkFromSessionID
+                parentSessionID: parentSessionID ?? forkFromSessionID,
+                startsWithPrompt: try normalizedInitialPrompt(initialPrompt) != nil
             )
         )
     }

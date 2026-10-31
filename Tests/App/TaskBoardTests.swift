@@ -120,7 +120,8 @@ struct TaskBoardTests {
         let tracked = try #require(items.first { $0.id == .task(task.id) })
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         #expect(tracked.taskSpaceWorkspaceID == taskSpace)
-        #expect(tracked.stage.group == .idle)
+        // The agent launched with its first prompt, so its turn has begun.
+        #expect(tracked.stage.group == .running)
         // A task space with a record is listed once, as its task.
         #expect(items.contains { $0.id == .taskSpace(taskSpace) } == false)
 
@@ -165,9 +166,11 @@ struct TaskBoardTests {
         // A tracked task explicitly ready for review, with its answer read.
         let task = try await startTask(fixture, text: "Review the fix")
         let trackedPanelID = try #require(task.operation.taskSpace?.panelID)
-        runtime.updateStatus(
-            sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
-        )
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
         try fixture.coordinator.readyForReview(taskID: task.id)
 
         // An older task space with a linked PR and no live agent also needs review.
@@ -613,8 +616,9 @@ struct TaskBoardTests {
         let panel = try #require(task.operation.taskSpace?.panelID)
         func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
 
-        // Started but no turn finished yet: the agent sits at its prompt.
-        #expect(try item().stage == .idle)
+        // The agent launched with its first prompt: that turn has begun even
+        // before the agent reports it.
+        #expect(try item().stage == .running)
 
         fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
         #expect(try item().stage == .running)

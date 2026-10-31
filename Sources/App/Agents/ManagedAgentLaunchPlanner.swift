@@ -498,11 +498,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             launchReason: launchReason,
             at: launchStart
         )
-        sessionRuntimeStore.updateStatus(
-            sessionID: sessionID,
-            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
-            at: launchStart
-        )
+        // Only an agent that reports its own status can confirm the turn its
+        // first prompt starts. Without that, the terminal's program status
+        // shows what runs instead.
+        if request.startsWithPrompt, preparedLaunch.allowsProgramStatusFallback == false {
+            sessionRuntimeStore.startInitialPromptTurn(sessionID: sessionID, at: launchStart)
+        } else {
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+                at: launchStart
+            )
+        }
         if preparedLaunch.allowsProgramStatusFallback {
             sessionRuntimeStore.allowProgramStatusFallback(sessionID: sessionID)
         }
