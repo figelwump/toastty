@@ -19,8 +19,8 @@ task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - "Show 2 more" in either segment opens the Tasks view with the newest task
   the sidebar did not show selected;
 - a To ship row whose task space has closed opens the Tasks view with its
-  task selected; the newest task's row opens its task space, which stays
-  open while the task waits for a release;
+  task selected; the newest task's row opens its task space, which is still
+  open because the task has no worktree to clean up;
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count.
 Captures of each step and remote-sidebar-to-ship-check.json go to the

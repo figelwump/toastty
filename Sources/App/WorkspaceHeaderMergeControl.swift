@@ -93,18 +93,44 @@ struct WorkspaceHeaderMergeControl: View {
             .accessibilityIdentifier("topbar.workspace.merge.cleanup-failed")
 
         case .done:
-            HStack(spacing: 3) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .bold))
-                titleText
+            if isTask {
+                // A task space that stays open after its task merged or was
+                // marked done can still be archived, which also removes its
+                // worktree.
+                Menu {
+                    Button("Archive Task…", action: archiveTask)
+                } label: {
+                    doneLabel(showsChevron: true)
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                // Vertical only, so a long pull request label still truncates.
+                .fixedSize(horizontal: false, vertical: true)
+                .help("Archive the task to close its task space and remove its worktree")
+                .accessibilityLabel(presentation.title)
+                .accessibilityIdentifier("topbar.workspace.merge.done")
+            } else {
+                doneLabel(showsChevron: false)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(presentation.title)
+                    .accessibilityIdentifier("topbar.workspace.merge.done")
             }
-            .font(ToastyTheme.fontWorkspaceMergeProgress)
-            .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark)
-            .frame(height: ToastyTheme.workspaceMergeControlHeight)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(presentation.title)
-            .accessibilityIdentifier("topbar.workspace.merge.done")
         }
+    }
+
+    private func doneLabel(showsChevron: Bool) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 8, weight: .bold))
+            titleText
+            if showsChevron {
+                chevron
+            }
+        }
+        .font(ToastyTheme.fontWorkspaceMergeProgress)
+        .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark)
+        .frame(height: ToastyTheme.workspaceMergeControlHeight)
     }
 
     @ViewBuilder

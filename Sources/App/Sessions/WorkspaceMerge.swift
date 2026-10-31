@@ -44,13 +44,15 @@ enum WorkspaceMergePresentation: Equatable {
     /// The done mark records a finished merge, and only a subspace can hold
     /// one, so a top-level workspace gets no button. `isCheckingMerge` is a
     /// task whose agent checks the pull request before it merges.
-    /// `pullRequestState` is GitHub's last answer; without one the button
-    /// offers Merge.
+    /// `isTaskMerged` is a task whose merge is recorded, which shows as done
+    /// like the done mark. `pullRequestState` is GitHub's last answer;
+    /// without one the button offers Merge.
     static func make(
         workspace: WorkspaceState,
         request: WorkspaceMergeRequest?,
         mode: WorkspaceMergeMode = .mergeAndCleanUp,
         isCheckingMerge: Bool = false,
+        isTaskMerged: Bool = false,
         pullRequestState: TaskPullRequestState? = nil
     ) -> Self? {
         guard workspace.parentWorkspaceID != nil,
@@ -77,7 +79,10 @@ enum WorkspaceMergePresentation: Equatable {
         if isCheckingMerge {
             return .merging(pullRequest: pullRequest)
         }
-        if workspace.doneAt != nil {
+        // A task's merge stays recorded while its task space is open: the
+        // agent was working when GitHub merged it, the cleanup stopped, or
+        // the user kept the task space.
+        if workspace.doneAt != nil || isTaskMerged {
             return .done(pullRequest: pullRequest)
         }
         return .ready(pullRequest: pullRequest, mode: mode, blocker: pullRequestState?.mergeBlocker)
@@ -245,7 +250,8 @@ struct WorkspaceMergeController {
               case .ready(let pullRequest, _, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
-                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspaceID)
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspaceID),
+                isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspaceID)
               ),
               let link = WorkspaceMergePresentation.pullRequestLink(in: workspace) else {
             return nil

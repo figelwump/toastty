@@ -228,7 +228,7 @@ struct TaskStageTests {
 
     @Test
     func finishedStagesLeaveTheSidebar() {
-        // A merged task waiting for a release keeps its task space open.
+        // A merged task waiting for a release is not finished yet.
         #expect(TaskStage.toShip.isFinished == false)
         #expect(TaskStage.done.isFinished)
         #expect(TaskStage.archived.isFinished)

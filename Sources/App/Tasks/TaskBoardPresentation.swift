@@ -127,7 +127,7 @@ enum TaskBoardPresentation {
 
         var help: String {
             switch self {
-            case .merge: "The task's agent checks the pull request, then merges it; Toastty then closes the task space and removes its worktree, or keeps them until the release ships when the project has release tags"
+            case .merge: "The task's agent checks the pull request, then merges it; Toastty then closes the task space and removes its worktree"
             case .mergeWithoutChecks: "Merge the pull request now, without the agent's checks"
             case .cancelMerge: "Stop the merge: the agent's check, or Toastty's wait for GitHub's checks"
             case .markDone: "Finish the task without a merge"

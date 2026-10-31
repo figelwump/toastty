@@ -14,12 +14,11 @@ request per task and merges by pushing the accepted commit to origin's main.
 Through the real UI and CLI it checks that:
 - Merge in the Tasks view sends the project's merge_prompt to the task's
   agent, which runs `task merge` mid-turn; Toastty merges at the checked
-  commit; the task is To ship and keeps its task space and worktree;
+  commit, and once the agent's turn ends closes the task space, removes the
+  worktree and deletes both branches; the task is To ship;
 - Release… on the To ship lane starts a release task in a worktree on no
   branch at origin's main; a tag pushed to origin ships the task and the
-  release; the task's task space closes, its worktree goes and both its
-  branches are deleted, and the release's task space and worktree are
-  cleaned up;
+  release, and the release's task space and worktree are cleaned up;
 - `task archive` refuses uncommitted changes, then with --discard-changes
   removes the worktree and keeps a branch with unpushed commits;
 - Merge Without Checks waits for a pending check, and Cancel Merge ends the
@@ -335,17 +334,18 @@ def main():
         step('agent ran task merge', merge=task(a['taskID'])['merge'])
         wait_for('origin merged A', lambda: gh_pr(7)['state'] == 'MERGED', timeout=120, interval=1)
         require(git('rev-parse', 'main', cwd=origin) == a_head, 'origin main is not the accepted commit')
-        # To ship: the merge is recorded, and the task space and worktree
-        # stay until the release ships.
-        merged = wait_for('A merged', lambda: (lambda r: r if r.get('mergedAt') and r.get('merge') is None else None)(task(a['taskID'])),
+        # To ship: the merge is recorded, and the merge's cleanup closes the
+        # task space, removes the worktree and deletes both branches.
+        merged = wait_for('A cleaned up', lambda: (lambda r: r if (r.get('cleanup') or {}).get('finishedAt') else None)(task(a['taskID'])),
                           timeout=300, interval=2)
         require(merged['stage']['group'] == 'toShip', f'A is not To ship: {merged["stage"]}')
         require(merged['mergeCommit'] == a_head and merged['mergeRequestedAt'], f'A lacks its merge: {merged}')
-        require(merged.get('cleanup') is None, f'A started a cleanup before its release: {merged.get("cleanup")}')
         open_workspaces = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces']]
-        require(a['setup']['taskSpaceWorkspaceID'] in open_workspaces, 'A\'s task space closed before its release')
-        require(Path(a_worktree).exists(), 'A\'s worktree is gone before its release')
-        step('A merged and kept for the release', stage=merged['stage'])
+        require(a['setup']['taskSpaceWorkspaceID'] not in open_workspaces, 'A\'s task space is still open')
+        require(not Path(a_worktree).exists(), 'A\'s worktree is still there')
+        require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
+        require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
+        step('A merged and cleaned up', cleanup=merged['cleanup'])
         # Both places offer Release for the lane: the Status sidebar and the
         # Tasks view (mockups 13 B and 14e).
         action('window.sidebar.set-segment', windowID=window_id, segment='status')
@@ -373,14 +373,6 @@ def main():
         shipped = wait_for('A shipped', checking_releases(lambda: (lambda r: r if r.get('releaseTag') else None)(task(a['taskID']))),
                            timeout=120, interval=3)
         require(shipped['releaseTag'] == 'v1.0' and shipped['stage']['group'] == 'done', f'A did not ship: {shipped}')
-        cleaned = wait_for('A cleaned up', checking_releases(lambda: (lambda r: r if (r.get('cleanup') or {}).get('finishedAt') else None)(
-            task(a['taskID']))), timeout=300, interval=5)
-        open_workspaces = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces']]
-        require(a['setup']['taskSpaceWorkspaceID'] not in open_workspaces, 'A\'s task space is still open')
-        require(not Path(a_worktree).exists(), 'A\'s worktree is still there')
-        require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
-        require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
-        step('A cleaned up after shipping', cleanup=cleaned['cleanup'])
         released = wait_for('the release cleaned up', checking_releases(lambda: (lambda r: r if (r.get('cleanup') or {}).get('finishedAt') else None)(
             task(release['taskID']))), timeout=300, interval=5)
         require(not Path(release_worktree).exists(), 'The release worktree is still there')
