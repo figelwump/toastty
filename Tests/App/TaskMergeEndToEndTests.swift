@@ -106,6 +106,83 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    @Test(arguments: [false, true])
+    func anAdoptedTaskClosesOnlyAfterItsWorktreeIsGone(worktreeAlreadyRemoved: Bool) async throws {
+        try await withScenario(adopted: true) { scenario in
+            scenario.config.workspaces = [TasksConfig.Workspace(path: scenario.repo, releaseTags: "v*")]
+            scenario.board.reloadConfig()
+            #expect(scenario.record?.source == .adopted)
+            #expect(scenario.record?.worktree == nil)
+            if worktreeAlreadyRemoved {
+                try scenario.git(["worktree", "remove", scenario.worktree], in: scenario.repo)
+                // A restored pane falls back outside the repository when
+                // its saved working directory has gone away.
+                scenario.store.send(.updateTerminalPanelMetadata(
+                    panelID: scenario.taskPanelID, title: nil,
+                    cwd: (scenario.repo as NSString).deletingLastPathComponent
+                ))
+            }
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+
+            if worktreeAlreadyRemoved == false {
+                await scenario.waitUntil("the adopted task's checkout is kept for review") {
+                    if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                    return false
+                }
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+                #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+                #expect(scenario.boardItem?.stage.group == .needsYou)
+                // A retry must preserve the same restriction.
+                try scenario.tasks.retryCleanup(taskID: scenario.taskID)
+                await scenario.waitUntil("the retry also keeps the checkout") {
+                    if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                    return false
+                }
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+                #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID)?.requiresAbsentWorktree == true)
+                // New metadata must not turn a saved workspace-only cleanup
+                // into permission to remove a checkout on retry.
+                try scenario.tasks.records.save(id: scenario.taskID) {
+                    $0.operation.worktree = TaskOperation.Worktree(
+                        path: scenario.worktree, branch: "fix/task-7", checkoutRoot: scenario.repo, added: true
+                    )
+                }
+                try scenario.tasks.retryCleanup(taskID: scenario.taskID)
+                await scenario.waitUntil("the saved cleanup keeps its absent-only restriction") {
+                    if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                    return false
+                }
+                #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+                #expect(try scenario.git(["rev-parse", "fix/task-7"], in: scenario.repo) == scenario.head)
+                return
+            }
+            await scenario.waitUntil("the adopted task's cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(scenario.boardItem?.stage == .toShip)
+            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
+            if worktreeAlreadyRemoved {
+                // Workspace-only cleanup does not delete branch references.
+                #expect(try scenario.git(["rev-parse", "fix/task-7"], in: scenario.repo) == scenario.head)
+            }
+        }
+    }
+
+    @Test
+    func aNewTaskWithoutAWorktreeIsNotAutomaticallyClosed() async throws {
+        try await withScenario { scenario in
+            try scenario.tasks.records.save(id: scenario.taskID) { $0.operation.worktree = nil }
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(scenario.record?.cleanup == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+        }
+    }
+
     @Test
     func aPushAfterTheChecksIsNotMerged() async throws {
         try await withScenario { scenario in
@@ -426,7 +503,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     /// of its base branch, its task space open with the pull request linked, wired the
     /// way the app wires it.
     private func withScenario(
-        checksPending: Bool = false, baseBranch: String = "main", _ body: (Scenario) async throws -> Void
+        checksPending: Bool = false, baseBranch: String = "main", adopted: Bool = false,
+        _ body: (Scenario) async throws -> Void
     ) async throws {
         let root = URL(filePath: NSTemporaryDirectory())
             .appendingPathComponent("toastty-task-merge-e2e-\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -504,6 +582,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         let taskSpaceID = try #require(Set(store.state.workspacesByID.keys).subtracting(existing).first)
         store.send(.setWorkspaceParent(workspaceID: taskSpaceID, parentWorkspaceID: parentWorkspaceID, spawningSessionID: nil))
         let taskPanelID = try #require(store.state.workspacesByID[taskSpaceID]?.focusedPanelID)
+        store.send(.setWorkspaceRootDirectory(workspaceID: parentWorkspaceID, rootDirectory: repo))
         store.send(.updateTerminalPanelMetadata(panelID: taskPanelID, title: nil, cwd: worktree))
         store.send(.setWorkspaceAnnotation(
             workspaceID: taskSpaceID,
@@ -574,9 +653,13 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
                 worktree: TaskOperation.Worktree(path: worktree, branch: "fix/task-7", checkoutRoot: repo, added: true)
             )
         )
-        try scenario.tasks.records.insert(record)
-        scenario.taskID = record.id
-        store.send(.setWorkspaceTaskID(workspaceID: taskSpaceID, taskID: record.id))
+        if adopted {
+            scenario.taskID = try scenario.tasks.adopt(workspaceID: taskSpaceID).id
+        } else {
+            try scenario.tasks.records.insert(record)
+            scenario.taskID = record.id
+            store.send(.setWorkspaceTaskID(workspaceID: taskSpaceID, taskID: record.id))
+        }
 
         #expect(FileManager.default.isExecutableFile(atPath: cliPath))
         try await body(scenario)

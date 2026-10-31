@@ -28,7 +28,7 @@ struct WorkspaceMergeRequestTests {
     }
 
     @Test
-    func aRunningScriptKeepsItsRequestUntilItReportsBack() {
+    func aRunningScriptKeepsItsRequestUntilItReportsBack() throws {
         for running in [with(.merging(thenCleanUp: true)), with(.cleaningUp), with(.closing)] {
             #expect(running.reconciled(workspaceExists: false, isDone: false, pullRequest: nil) == running)
         }
@@ -39,6 +39,14 @@ struct WorkspaceMergeRequestTests {
         #expect(with(.failed(reason: "x")).persisted == with(.failed(reason: "x")))
         let waiting = with(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: true))
         #expect(waiting.persisted == waiting)
+        // Restarting an adopted task's interrupted cleanup must not permit
+        // deletion of a checkout discovered only by its branch name.
+        var restricted = with(.cleaningUp)
+        restricted.requiresAbsentWorktree = true
+        let saved = try JSONEncoder().encode(#require(restricted.persisted))
+        let restored = try JSONDecoder().decode(WorkspaceMergeRequest.self, from: saved)
+        #expect(restored.phase == .awaitingMerge)
+        #expect(restored.requiresAbsentWorktree == true)
     }
 
     @Test

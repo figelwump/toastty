@@ -584,6 +584,13 @@ repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved
 documents or terminals in another worktree. A recreated directory or a remaining
 Git worktree registration stops recovery; Toastty does not remove either one.
+
+This includes older task spaces tracked with `task adopt`. Without a saved
+checkout path, cleanup requires the worktree to be gone; an existing checkout
+stays for review. Toastty closes only the idle space with one exact PR URL chip.
+In that case, it keeps every branch and leaves spaces with agents, running commands, unsaved
+documents, or terminals in another worktree open. The primary checkout is
+never removed.
 While a merged task's task space stays open, its header no longer offers Merge:
 it shows **Done · PR #N**, with **Archive Task…** in its menu, or **Cleanup
 Stopped** while a stopped cleanup waits for you.
