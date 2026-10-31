@@ -28,6 +28,8 @@ ACTION is one of:
             repository allows: merge commit, squash, then rebase.
   clean-up  After the PR merged: closes the workspace, removes the worktree, and
             deletes the local and remote branch. The workspace must be marked done.
+            If the worktree is already absent, closes only an idle workspace
+            with one exact PR URL chip and keeps all branches.
             A detached task checkout must have one exact PR URL chip and be at
             the PR head or GitHub's merge commit. Merge and close still require
             the PR branch at its head.
@@ -37,6 +39,8 @@ ACTION is one of:
             changes, so no work exists only locally.
 
 --pr-url must be the PR's URL, so a number from another repository is refused.
+--expect-absent-worktree, with clean-up, permits only workspace closure after
+the worktree is gone; any checkout found by branch name is left untouched.
 --workspace is the one Toastty workspace clean-up and close may close. They skip,
 changing nothing, when that workspace is not the one whose terminals are in the
 worktree (or whose github-pr chip names the PR), when it has unsaved documents,
@@ -369,11 +373,11 @@ def match_workspaces(workspaces: list[dict], ctx: Context) -> list[Workspace]:
         return [a for a in workspace.get("annotations", []) if a.get("key") == "github-pr"]
 
     pr_url = re.compile(rf"github\.com/{re.escape(ctx.repo_slug)}/pull/{ctx.pr['number']}/?$", re.IGNORECASE)
-    levels = [
-        lambda w: any(inside(real(cwd), ctx.worktree.path) for cwd in w.get("terminalCwds", [])),
-        lambda w: any(pr_url.search(a.get("url") or "") for a in chips(w)),
-    ]
-    if ctx.worktree.branch is None:
+    levels = [lambda w: any(pr_url.search(a.get("url") or "") for a in chips(w))]
+    if ctx.worktree is not None:
+        levels.insert(0, lambda w: any(inside(real(cwd), ctx.worktree.path)
+                                     for cwd in w.get("terminalCwds", [])))
+    if ctx.worktree is not None and ctx.worktree.branch is None:
         # load() associates this detached worktree with the clicked checkout.
         # The exact PR chip is required separately below. Count chip matches
         # elsewhere too, rather than hiding ambiguity behind a terminal match.
@@ -405,16 +409,26 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
     found = candidates[0] if candidates else None
     if found is None or found.workspace_id != ctx.workspace_id:
         return None, f"the matching workspace is not {ctx.workspace_id[:8]} (found {found.label if found else 'none'})"
-    if ctx.worktree.branch is None:
+    if ctx.worktree is None or ctx.worktree.branch is None:
         expected_url = (ctx.pr.get("url") or "").rstrip("/").lower()
         if (len(found.chips) != 1 or
                 (found.chips[0].get("url") or "").rstrip("/").lower() != expected_url):
-            return None, f"{found.label} needs exactly one github-pr chip with this PR's exact URL for detached cleanup"
+            return None, f"{found.label} needs exactly one github-pr chip with this PR's exact URL for cleanup"
     if require_done and not found.done:
         return None, f"{found.label} is no longer marked done"
     if found.unsaved_documents:
         return None, f"{found.label} has unsaved document changes"
-    if any(inside(cwd, other) for cwd in found.cwds for other in ctx.other_worktrees):
+    other_worktrees = ctx.other_worktrees
+    if ctx.worktree is None:
+        if found.session_agents or found.busy_terminals:
+            return None, f"{found.label} still has agent sessions or running commands"
+        # Reread on each check: a branch may have gained a checkout while
+        # the workspace list was being queried. Never remove it on this path.
+        worktrees = list_worktrees(ctx.repo)
+        if any(w.branch == ctx.pr["headRefName"] for w in worktrees):
+            return None, "the PR's worktree reappeared; workspace kept"
+        other_worktrees = [w.path for w in worktrees]
+    if any(inside(cwd, other) for cwd in found.cwds for other in other_worktrees):
         return None, f"{found.label} also has a terminal in another worktree"
     for chip in found.chips:
         match = PR_URL.search(chip.get("url") or "")
@@ -434,7 +448,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     if not close_pr and pr["state"] != "MERGED":
         raise Refusal(f"PR #{number} has not merged")
     worktree = ctx.worktree
-    if worktree is None:
+    if worktree is None and close_pr:
         raise Refusal(f"no worktree has the PR's branch {pr['headRefName']}")
     head, branch = pr["headRefOid"], pr["headRefName"]
     # A detached release checkout can be at the PR head or the commit GitHub
@@ -442,7 +456,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     # branch deletion below still compares only against the PR head.
     cleanup_head = head
     head_label = "PR head"
-    if worktree.branch is None:
+    if worktree is not None and worktree.branch is None:
         merge_head = (pr.get("mergeCommit") or {}).get("oid")
         if close_pr or worktree.head not in {head, merge_head}:
             raise Refusal("the detached worktree HEAD is neither the PR head nor its merge commit")
@@ -451,9 +465,9 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     workspace, problem = workspace_problem(ctx, require_done=not close_pr)
     if problem:
         raise Refusal(problem)
-    if worktree.locked:
+    if worktree is not None and worktree.locked:
         raise Refusal("the worktree is locked")
-    problem = worktree_problem(worktree, cleanup_head, head_label)
+    problem = worktree_problem(worktree, cleanup_head, head_label) if worktree is not None else None
     if problem:
         raise Refusal(problem)
     if close_pr:
@@ -487,7 +501,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
         problem = str(refusal)
     if problem:
         return stop(f"{problem}; workspace kept")
-    problem = worktree_problem(worktree, cleanup_head, head_label)
+    problem = worktree_problem(worktree, cleanup_head, head_label) if worktree is not None else None
     if problem:
         return stop(f"{problem}; workspace kept")
     # requireDone makes Toastty refuse in the same step as the close if new
@@ -503,6 +517,8 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
         return stop(f"could not close {workspace.label}: {output}")
     ended = workspace.ended_by_close()
     done.append(f"closed {workspace.label}" + (f", ending {ended}" if ended else ""))
+    if worktree is None:
+        return "cleaned", "; ".join(done + ["worktree already absent; kept all branches"])
     if ended:
         time.sleep(CLOSE_GRACE_SECONDS)
     problem = worktree_problem(worktree, cleanup_head, head_label)
@@ -610,6 +626,10 @@ def load(options: argparse.Namespace) -> Context:
                          and w.path == checkout), None)
         if detached is not None:
             worktree = detached
+    if options.action == "clean-up" and worktree is not None and worktree.path == repo:
+        raise Refusal("the primary checkout cannot be cleaned up")
+    if options.expect_absent_worktree and worktree is not None:
+        raise Refusal("the PR still has a worktree; the adopted task has no saved checkout, so nothing was removed")
     return Context(
         repo=repo, repo_slug=repo_info["nameWithOwner"], default_branch=repo_info["defaultBranchRef"]["name"],
         repo_info=repo_info, pr=pr, worktree=worktree,
@@ -628,6 +648,8 @@ def main() -> None:
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
     parser.add_argument("--base", help="with --head: the target branch from the earlier waiting report")
     parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
+    parser.add_argument("--expect-absent-worktree", action="store_true",
+                        help="with clean-up: close only the workspace, and refuse if a worktree still exists")
     options = parser.parse_args()
     if options.head and options.action != "merge":
         parser.error("--head is only for merge")
@@ -635,6 +657,8 @@ def main() -> None:
         parser.error("--base is only for a merge with --head")
     if options.expect_head and (options.action != "merge" or options.head):
         parser.error("--expect-head is only for a merge without --head")
+    if options.expect_absent_worktree and options.action != "clean-up":
+        parser.error("--expect-absent-worktree is only for clean-up")
     report: dict = {}
     try:
         ctx = load(options)

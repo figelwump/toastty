@@ -293,10 +293,16 @@ final class WorkspaceMergeCoordinator {
     /// Merge and Clean does. The script still refuses a worktree that is
     /// not clean at the pull request head, and the refusal shows as a
     /// stopped cleanup.
-    func cleanUpAfterMerge(workspaceID: UUID, pullRequest: WorkspacePullRequestLink, repoPath: String) {
+    func cleanUpAfterMerge(
+        workspaceID: UUID, pullRequest: WorkspacePullRequestLink, repoPath: String,
+        requiresAbsentWorktree: Bool = false
+    ) {
         guard requests[workspaceID] == nil, let store else { return }
         store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
-        update(workspaceID, WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .awaitingMerge))
+        update(workspaceID, WorkspaceMergeRequest(
+            pullRequest: pullRequest, repoPath: repoPath, phase: .awaitingMerge,
+            requiresAbsentWorktree: requiresAbsentWorktree ? true : nil
+        ))
     }
 
     func request(workspaceID: UUID) -> WorkspaceMergeRequest? {
@@ -635,7 +641,10 @@ final class WorkspaceMergeCoordinator {
         running.phase = .cleaningUp
         update(workspaceID, running)
 
-        let outcome = await runScript("clean-up", workspaceID: workspaceID, request: request)
+        let outcome = await runScript(
+            "clean-up", workspaceID: workspaceID, request: request,
+            extraArguments: request.requiresAbsentWorktree == true ? ["--expect-absent-worktree"] : []
+        )
         let workspaceClosed = store?.state.workspacesByID[workspaceID] == nil
         let pullRequest = "PR #\(request.pullRequest.number)"
         if outcome.status == "cleaned" {

@@ -24,10 +24,9 @@ task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - with two To ship tasks and three done, the card shows both rows with no
   "Show N more", and the footer keeps the Done count.
 Captures of each step and remote-sidebar-to-ship-check.json go to the
-artifacts directory. `automation.capture_screenshot` needs automation mode,
-which this check does not use, so captures come only from an evidence build
-that allows it with a `path` outside automation mode; elsewhere a missing
-capture is recorded, not failed.
+artifacts directory. The private instance uses automation mode without a
+fixture so its built-in capture can render the live window without Screen
+Recording access for the remote shell.
 """
 
 import importlib.util
@@ -112,6 +111,9 @@ def main():
         TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
         TOASTTY_RUNTIME_LABEL='remote-sidebar-to-ship-check',
         TOASTTY_SOCKET_PATH=socket_path,
+        TOASTTY_AUTOMATION='1',
+        TOASTTY_RUN_ID='sidebar-to-ship',
+        TOASTTY_ARTIFACTS_DIR=str(artifacts),
         HOME=str(user_home),
         CFFIXED_USER_HOME=str(user_home),
         ZDOTDIR=str(zdotdir),
@@ -225,6 +227,10 @@ def main():
         evidence['mergedAt'] = {title: cli_json('task', 'get', tasks[title]).get('mergedAt') for title in TITLES}
         # Keep the newest task's task space open, with its agent quiet.
         kept = cli_json('task', 'get', tasks[TITLES[-1]])['setup']['taskSpaceWorkspaceID']
+        kept_session = cli_json('task', 'get', tasks[TITLES[-1]])['setup']['sessionID']
+        cli_json('session', 'status', '--session', kept_session, '--kind', 'ready', '--summary', 'Done')
+        wait_for('the kept agent to finish its turn', lambda:
+                 cli_json('task', 'get', tasks[TITLES[-1]])['agentState']['state'] != 'busy')
         kept_title = next(w['title'] for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == kept)
         open_spaces = [w['workspaceID'] for w in instance.query('workspace.list')['workspaces']
                        if w['workspaceID'] not in (workspace_id, kept)]
@@ -253,6 +259,7 @@ def main():
 
         # 2. Status: the same rows under the project's To ship line.
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
+        run_tool(driver, 'press-label', pid, 'To ship, 5 tasks, collapsed')
         wait_for('the Status rows', lambda: sidebar_rows()[:3] == newest[:3])
         rows = sidebar_rows()
         step('status rows', rows=rows)
