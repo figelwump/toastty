@@ -218,6 +218,90 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     }
 
     @Test
+    func cleanupRecoversARecordedTaskWhoseWorktreeIsAlreadyGone() async throws {
+        try await withScenario { scenario in
+            let primaryHead = try scenario.git(["rev-parse", "HEAD"], in: scenario.repo)
+            try scenario.git(["worktree", "remove", scenario.worktree], in: scenario.repo)
+            // Restoring a terminal whose directory disappeared starts it in
+            // the existing parent directory, outside any repository.
+            scenario.store.send(.updateTerminalPanelMetadata(
+                panelID: scenario.taskPanelID, title: nil,
+                cwd: URL(filePath: scenario.repo).deletingLastPathComponent().path
+            ))
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+
+            await scenario.waitUntil("cleanup recovers the missing worktree") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.boardItem?.stage == .done)
+            #expect(try scenario.git(["branch", "--list", "fix/task-7"], in: scenario.repo).isEmpty)
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", "fix/task-7"], in: scenario.repo).isEmpty)
+            #expect(try scenario.git(["rev-parse", "HEAD"], in: scenario.repo) == primaryHead)
+            #expect(try scenario.git(["status", "--porcelain"], in: scenario.repo).isEmpty)
+            #expect(try scenario.git(["worktree", "list", "--porcelain"], in: scenario.repo).contains(scenario.repo))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func stoppedCleanupCanRetryAfterExternalRemovalOfItsWorktreeAndBranches(removeBranches: Bool) async throws {
+        try await withScenario { scenario in
+            let notes = URL(filePath: scenario.worktree).appending(path: "notes.txt")
+            try Data("draft".utf8).write(to: notes)
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            await scenario.waitUntil("local work stops cleanup") {
+                if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                return false
+            }
+            try FileManager.default.removeItem(at: notes)
+            try scenario.git(["worktree", "remove", scenario.worktree], in: scenario.repo)
+            if removeBranches {
+                try scenario.git(["branch", "-D", "fix/task-7"], in: scenario.repo)
+                try scenario.git(["push", "-q", "origin", "--delete", "fix/task-7"], in: scenario.repo)
+            }
+            scenario.store.send(.updateTerminalPanelMetadata(
+                panelID: scenario.taskPanelID, title: nil,
+                cwd: URL(filePath: scenario.repo).deletingLastPathComponent().path
+            ))
+
+            // The stopped request still names the now-missing worktree as
+            // its repository. Retry must resolve the recorded checkout.
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID)?.repoPath == scenario.worktree)
+            try scenario.tasks.retryCleanup(taskID: scenario.taskID)
+            await scenario.waitUntil("the old cleanup request recovers") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.boardItem?.stage == .done)
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", "fix/task-7"], in: scenario.repo).isEmpty)
+        }
+    }
+
+    @Test
+    func cleanupKeepsARecreatedDirectoryAndItsTaskSpace() async throws {
+        try await withScenario { scenario in
+            try scenario.git(["worktree", "remove", scenario.worktree], in: scenario.repo)
+            try FileManager.default.createDirectory(atPath: scenario.worktree, withIntermediateDirectories: true)
+            let notes = URL(filePath: scenario.worktree).appending(path: "notes.txt")
+            try Data("new work".utf8).write(to: notes)
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            await scenario.waitUntil("cleanup refuses the recreated directory") {
+                if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                return false
+            }
+            guard case .needsYou(.cleanupStopped(let reason))? = scenario.boardItem?.stage else {
+                Issue.record("Expected cleanup to stop for a recreated directory")
+                return
+            }
+            #expect(reason.contains("path exists"))
+            #expect(try Data(contentsOf: notes) == Data("new work".utf8))
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", "fix/task-7"], in: scenario.repo).isEmpty == false)
+        }
+    }
+
+    @Test
     func aMergeOnGitHubWhileTheAgentWorksWaitsForTheUser() async throws {
         try await withScenario { scenario in
             scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
@@ -397,6 +481,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
           "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; else echo '\(try json(pullRequest))'; fi ;;
+          "pr list") echo '[]' ;;
           "api --method") [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;
         esac

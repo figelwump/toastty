@@ -346,6 +346,9 @@ extension TaskCoordinator {
         let repoPath: String
         if let worktree = record.worktree, isDirectory(worktree.path) {
             repoPath = worktree.path
+        } else if afterMerge, let worktree = record.worktree, worktree.isDetached == false,
+                  isDirectory(worktree.checkoutRoot) {
+            repoPath = worktree.checkoutRoot
         } else if let directory = Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) {
             repoPath = directory
         } else {
