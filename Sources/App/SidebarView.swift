@@ -516,17 +516,45 @@ struct SessionStatusBadge: View {
     var label: String? = nil
 
     var body: some View {
-        Text(label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
+        SidebarStatusPill(
+            text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind),
+            foreground: ToastyTheme.sessionStatusTextColor(for: kind),
+            background: ToastyTheme.sessionStatusBackgroundColor(for: kind)
+        )
+    }
+}
+
+/// The filled pill on a row's first line: the session status badge, and the
+/// task-row `question` pill, which has no session status kind.
+struct SidebarStatusPill: View {
+    let text: String
+    let foreground: Color
+    let background: Color
+
+    var body: some View {
+        Text(text)
             .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .foregroundStyle(foreground)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(
-                ToastyTheme.sessionStatusBackgroundColor(for: kind),
-                in: RoundedRectangle(cornerRadius: 4)
-            )
+            .background(background, in: RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+/// The row is one accessibility element and carries the spoken wording, so a
+/// pill's shortened text is otherwise invisible to AppKit inspectors and
+/// host-based tests.
+private struct SidebarStatusPillSemanticText: ViewModifier {
+    let text: String
+
+    func body(content: Content) -> some View {
+        content.background {
+            SidebarSemanticTextBridge(text: text)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -3158,15 +3186,23 @@ struct SidebarView: View {
 
     private func sessionStatusChip(kind: SessionStatusKind, label: String? = nil) -> some View {
         SessionStatusBadge(kind: kind, label: label)
-            .background {
-                // The row is one accessibility element and carries the spoken
-                // wording, so the badge's shortened text is otherwise
-                // invisible to AppKit inspectors and host-based tests.
-                SidebarSemanticTextBridge(text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-            }
+            .modifier(SidebarStatusPillSemanticText(
+                text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind)
+            ))
     }
+
+    /// A task row whose agent waits for the user's reply. Same colors as the
+    /// rail's question box.
+    private func taskQuestionChip() -> some View {
+        SidebarStatusPill(
+            text: Self.taskQuestionChipLabel,
+            foreground: ToastyTheme.sidebarTaskQuestionMark,
+            background: ToastyTheme.sidebarTaskQuestionMarkBackground
+        )
+        .modifier(SidebarStatusPillSemanticText(text: Self.taskQuestionChipLabel))
+    }
+
+    static let taskQuestionChipLabel = "question"
 
     static func sessionWaitingChip() -> some View {
         Text("waiting")
@@ -4083,6 +4119,8 @@ struct SidebarView: View {
             HStack(spacing: 6) {
                 if let chipKind = Self.subspaceStatusChipKind(row.status) {
                     sessionStatusChip(kind: chipKind)
+                } else if row.status == .question {
+                    taskQuestionChip()
                 }
                 if showsWaitingChip {
                     Self.sessionWaitingChip()
@@ -4497,6 +4535,7 @@ struct SidebarView: View {
 
     /// Ready gets no chip: the rail dot, the header tally, and the sort order
     /// already show it, and the chip would squeeze the title next to an annotation chip.
+    /// Question has no session kind; `subspaceRowTitleLine` draws its pill.
     private static func subspaceStatusChipKind(
         _ status: SidebarSubspacePresentation.RowStatus
     ) -> SessionStatusKind? {
