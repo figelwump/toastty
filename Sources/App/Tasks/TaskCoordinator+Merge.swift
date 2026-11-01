@@ -351,6 +351,9 @@ extension TaskCoordinator {
         let repoPath: String
         if let worktree = record.worktree, isDirectory(worktree.path) {
             repoPath = worktree.path
+        } else if afterMerge, let worktree = record.worktree, worktree.isDetached == false,
+                  isDirectory(worktree.checkoutRoot) {
+            repoPath = worktree.checkoutRoot
         } else if afterMerge, let root = record.projectRoot, isDirectory(root) {
             // A restored pane can fall back outside Git after its worktree
             // was removed. The script resolves the PR's checkout from here.

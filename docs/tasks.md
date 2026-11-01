@@ -579,10 +579,16 @@ A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
 its task space when no agent there is working and the worktree is clean at the
 merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+If the recorded worktree was already removed, Clean Up uses the task's recorded
+repository to close the remaining task space and check its branches. The task
+space must have one exact PR link, remain marked done, and have no unsaved
+documents or terminals in another worktree. A recreated directory or a remaining
+Git worktree registration stops recovery; Toastty does not remove either one.
+
 This includes older task spaces tracked with `task adopt`. Without a saved
 checkout path, cleanup requires the worktree to be gone; an existing checkout
 stays for review. Toastty closes only the idle space with one exact PR URL chip.
-It keeps every branch and leaves spaces with agents, running commands, unsaved
+In that case, it keeps every branch and leaves spaces with agents, running commands, unsaved
 documents, or terminals in another worktree open. The primary checkout is
 never removed.
 While a merged task's task space stays open, its header no longer offers Merge:

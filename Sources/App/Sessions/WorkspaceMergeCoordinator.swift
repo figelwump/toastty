@@ -291,8 +291,9 @@ final class WorkspaceMergeCoordinator {
     /// Cleans up after a merge that happened on GitHub, which is the user's
     /// acceptance: marks the workspace done and waits for the merge as a
     /// Merge and Clean does. The script still refuses a worktree that is
-    /// not clean at the pull request head, and the refusal shows as a
-    /// stopped cleanup.
+    /// not clean at the pull request head. An adopted task without saved
+    /// checkout metadata requires the worktree to be absent. A refusal
+    /// shows as a stopped cleanup.
     func cleanUpAfterMerge(
         workspaceID: UUID, pullRequest: WorkspacePullRequestLink, repoPath: String,
         requiresAbsentWorktree: Bool = false
@@ -557,9 +558,13 @@ final class WorkspaceMergeCoordinator {
         guard request.phase == .awaitingMerge else { return false }
         let number = request.pullRequest.number
         let askedAt = Date()
+        guard let context = cleanupContext(workspaceID: workspaceID, request: request) else {
+            fail(workspaceID, request, "The task's recorded worktree metadata is unavailable. Cleanup stopped.")
+            return false
+        }
         let result = await runner.run(
             arguments: ["gh", "pr", "view", request.pullRequest.url, "--json", PullRequestStateCache.viewFields],
-            directory: request.repoPath,
+            directory: context.directory,
             timeout: Self.pullRequestCheckTimeout
         )
         let state = PullRequestStateCache.state(from: result)
@@ -635,6 +640,20 @@ final class WorkspaceMergeCoordinator {
 
     // MARK: - Cleanup and close
 
+    /// Resolve from the task record on each attempt. A saved request may
+    /// still name a worktree removed since the request stopped or was saved.
+    private func cleanupContext(
+        workspaceID: UUID, request: WorkspaceMergeRequest
+    ) -> (directory: String, arguments: [String])? {
+        guard let taskID = store?.state.workspacesByID[workspaceID]?.taskID else { return (request.repoPath, []) }
+        guard let record = sessionRuntimeStore?.taskCoordinator?.records.record(id: taskID),
+              record.taskSpaceWorkspaceID == workspaceID else { return nil }
+        guard request.requiresAbsentWorktree != true || record.worktree == nil else { return nil }
+        guard let worktree = record.worktree,
+              worktree.isDetached == false else { return (request.repoPath, []) }
+        return (worktree.checkoutRoot, ["--worktree", worktree.path, "--worktree-branch", worktree.branch])
+    }
+
     private func runCleanup(workspaceID: UUID, request: WorkspaceMergeRequest) async {
         let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "the workspace"
         var running = request
@@ -696,15 +715,21 @@ final class WorkspaceMergeCoordinator {
         if let scriptPath, FileManager.default.fileExists(atPath: scriptPath) {
             scriptWorkspaceIDs.insert(workspaceID)
             defer { scriptWorkspaceIDs.remove(workspaceID) }
+            let context = action == "clean-up"
+                ? cleanupContext(workspaceID: workspaceID, request: request)
+                : (directory: request.repoPath, arguments: [String]())
+            guard let context else {
+                return ScriptOutcome(status: nil, detail: "The task's recorded worktree metadata is unavailable. Cleanup stopped.")
+            }
             let result = await runner.run(
                 arguments: [
                     "python3", scriptPath, action,
                     "--pr", String(request.pullRequest.number),
                     "--pr-url", request.pullRequest.url,
                     "--workspace", workspaceID.uuidString,
-                    "--repo", request.repoPath,
-                ] + extraArguments,
-                directory: request.repoPath,
+                    "--repo", context.directory,
+                ] + context.arguments + extraArguments,
+                directory: context.directory,
                 timeout: Self.scriptTimeout
             )
             outcome = Self.scriptOutcome(from: result)

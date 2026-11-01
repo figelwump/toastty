@@ -90,6 +90,8 @@ if "workspace.list" in args:
     # "later_workspaces" replaces the list after the first read, as if the user
     # changed a workspace while the script was running.
     if earlier_lists:
+        for path in state.get("recreate_on_later_list", []):
+            os.makedirs(path, exist_ok=True)
         for path, head in state.get("head_on_later_list", {}).items():
             subprocess.run(["git", "checkout", "--quiet", "--detach", head], cwd=path, check=True)
         if "worktree_on_later_list" in state:
@@ -114,6 +116,8 @@ elif "workspace.close" in args:
         subprocess.run(["git", "checkout", "--quiet", "--detach", head], cwd=path, check=True)
     for path, branch in state.get("branch_on_close", {}).items():
         subprocess.run(["git", "checkout", "--quiet", branch], cwd=path, check=True)
+    for path in state.get("recreate_on_close", []):
+        os.makedirs(path)
     print(json.dumps({"ok": True, "result": {}}))
 else:
     sys.exit(f"unexpected toastty call: {args}")
@@ -193,7 +197,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         return branch, path
 
     def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None,
-                   accepted_base="main", expect_absent_worktree=False):
+                   accepted_base="main", worktree=None, worktree_branch=None, expect_absent_worktree=False):
         """Runs the script as Toastty does, from the workspace's checkout: the
         task's worktree unless `repo` says otherwise. `head` is a waiting
         merge's accepted commit; `expect_head` the commit a merge skill checked."""
@@ -206,6 +210,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
              *(["--head", head] if head else []),
              *(["--base", accepted_base] if head and accepted_base else []),
              *(["--expect-head", expect_head] if expect_head else []),
+             *(["--worktree", str(worktree), "--worktree-branch", worktree_branch or f"task-{number}"]
+               if worktree else []),
              *(["--expect-absent-worktree"] if expect_absent_worktree else [])],
             env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -478,7 +484,193 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertFalse(self.remote_has(branch))
         self.assertEqual(len(self.closed()), 1)
 
-    def removed_task(self, number=1):
+    def removed_task(self, number):
+        branch, path = self.task(number)
+        self.git("worktree", "remove", str(path))
+        self.workspaces[-1]["terminalCwds"] = [str(self.root)]
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
+        return branch, path
+
+    def test_cleanup_recovers_an_absent_worktree_and_branches(self):
+        for number, remove_branches in ((1, False), (2, True)):
+            with self.subTest(remove_branches=remove_branches):
+                branch, path = self.removed_task(number)
+                if number == 1:
+                    # Recorded cleanup can end idle sessions and commands,
+                    # as cleanup of a live task worktree already does.
+                    self.workspaces[-1]["activeSessions"] = [{"agent": "codex"}]
+                    self.workspaces[-1]["busyTerminalCount"] = 1
+                if remove_branches:
+                    self.git("branch", "-D", branch)
+                    self.git("push", "-q", "origin", "--delete", branch)
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "cleaned", result)
+                self.assertIn("worktree already absent", result["detail"])
+                if number == 1:
+                    self.assertIn("ending 1 agent session", result["detail"])
+                self.assertFalse(path.exists())
+                self.assertEqual(self.git("branch", "--list", branch), "")
+                self.assertFalse(self.remote_has(branch))
+        self.assertEqual(len(self.closed()), 2)
+
+    def test_missing_worktree_recovery_requires_the_recorded_path_to_stay_absent(self):
+        branch, path = self.removed_task(1)
+        path.mkdir()
+        (path / "notes.txt").write_text("new work")
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertTrue((path / "notes.txt").exists())
+        (path / "notes.txt").unlink()
+        path.rmdir()
+        path.symlink_to(self.root / "missing-target", target_is_directory=True)
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertTrue(path.is_symlink())
+        self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
+    def test_missing_worktree_recovery_preserves_workspace_guards(self):
+        for number, problem in enumerate(("no chip", "wrong chip", "duplicate", "unsaved", "not done", "other worktree"), 1):
+            with self.subTest(problem=problem):
+                branch, path = self.removed_task(number)
+                workspace = self.workspaces[-1]
+                if problem == "no chip":
+                    workspace["annotations"] = []
+                elif problem == "wrong chip":
+                    workspace["annotations"][0]["url"] += "/files"
+                elif problem == "duplicate":
+                    self.workspaces.append(dict(workspace, workspaceID=workspace_id(99)))
+                elif problem == "unsaved":
+                    workspace["unsavedDocumentCount"] = 1
+                elif problem == "not done":
+                    workspace["done"] = False
+                else:
+                    workspace["terminalCwds"].append(str(self.repo))
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "skipped", result)
+                self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
+    def test_missing_worktree_recovery_rereads_documents_and_done_mark(self):
+        for number, change in ((1, "documents"), (2, "done")):
+            with self.subTest(change=change):
+                _, path = self.removed_task(number)
+                if change == "documents":
+                    self.extra_state["later_workspaces"] = [dict(self.workspaces[-1], unsavedDocumentCount=1)]
+                else:
+                    self.extra_state = {"undone_at_close": [workspace_id(number)]}
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "stopped", result)
+
+    def test_missing_worktree_recovery_keeps_a_recreated_path(self):
+        for number, when in ((1, "on_later_list"), (2, "on_close")):
+            with self.subTest(when=when):
+                branch, path = self.removed_task(number)
+                self.extra_state = {"recreate_" + when: [str(path)]}
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "stopped" if number == 1 else "partial", result)
+                self.assertTrue(path.is_dir())
+                self.assertTrue(self.remote_has(branch))
+                self.assertNotEqual(self.git("branch", "--list", branch), "")
+
+    def test_missing_worktree_recovery_keeps_registered_worktrees(self):
+        for number, locked in ((1, False), (2, True)):
+            with self.subTest(locked=locked):
+                branch, path = self.task(number)
+                self.workspaces[-1]["annotations"] = [
+                    {"key": "github-pr", "url": self.prs[-1]["url"]}]
+                if locked:
+                    self.git("worktree", "lock", str(path))
+                shutil.rmtree(path)
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "skipped", result)
+                self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
+    def test_missing_worktree_recovery_keeps_a_branch_checked_out_elsewhere(self):
+        branch, path = self.removed_task(1)
+        other = self.root / "new-task"
+        self.git("worktree", "add", "-q", str(other), branch)
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "partial", result)
+        self.assertIn("checked out", result["detail"])
+        self.assertTrue(other.exists())
+        self.assertTrue(self.remote_has(branch))
+
+    def test_missing_worktree_recovery_rechecks_other_terminal_checkouts(self):
+        branch, path = self.removed_task(1)
+        other = self.root / "later-checkout"
+        self.git("branch", "other-work")
+        self.workspaces[0]["terminalCwds"] = [str(other)]
+        self.extra_state["worktree_on_later_list"] = [str(self.repo), "other-work", str(other)]
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "stopped", result)
+        self.assertIn("terminal in another worktree", result["detail"])
+        self.assertTrue(other.exists())
+        self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
+    def test_missing_worktree_recovery_keeps_moved_or_shared_branches(self):
+        for number, shared in ((1, False), (2, True)):
+            with self.subTest(shared=shared):
+                branch, path = self.removed_task(number)
+                if shared:
+                    self.extra_state["pr_list_response"] = [
+                        {"number": 99, "headRefName": branch, "isCrossRepository": False}]
+                else:
+                    unpublished = self.commit(self.repo, "unpublished work")
+                    self.git("update-ref", f"refs/heads/{branch}", unpublished)
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "partial", result)
+                self.assertEqual(self.remote_has(branch), shared)
+                self.assertNotEqual(self.git("branch", "--list", branch), "")
+
+    def test_cleanup_checks_recorded_branch_and_exact_registered_path(self):
+        branch, path = self.task(1)
+        result = self.run_script("clean-up", 1, worktree=path, worktree_branch="another-branch")
+        self.assertEqual(result["status"], "skipped", result)
+        self.git("checkout", "-q", "-b", "another-branch", cwd=path)
+        result = self.run_script("clean-up", 1, worktree=path)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertTrue(path.exists())
+        self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
+    def test_cleanup_recorded_path_preserves_detached_cleanup(self):
+        for number, at_merge in ((1, False), (2, True)):
+            with self.subTest(at_merge=at_merge):
+                _, path = self.detached_task(number, at_merge=at_merge)
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
+                self.assertEqual(result["status"], "cleaned", result)
+                self.assertFalse(path.exists())
+
+    def test_cleanup_can_use_a_detached_primary_checkout_without_removing_it(self):
+        _, path = self.task(1)
+        self.git("checkout", "-q", "--detach")
+        primary_head = self.git("rev-parse", "HEAD")
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "cleaned", result)
+        self.assertTrue(self.repo.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD"), primary_head)
+        self.assertIn(str(self.repo), self.git("worktree", "list", "--porcelain"))
+
+    def test_recorded_worktree_flags_require_both_values_and_cleanup(self):
+        self.task(1)
+        for action, flags in (("merge", ["--worktree", "/missing", "--worktree-branch", "task-1"]),
+                              ("close", ["--worktree", "/missing", "--worktree-branch", "task-1"]),
+                              ("clean-up", ["--worktree", "/missing"]),
+                              ("clean-up", ["--worktree", "/missing", "--worktree-branch", "task-1",
+                                            "--expect-absent-worktree"]),
+                              ("clean-up", ["--worktree", "", "--worktree-branch", ""])):
+            with self.subTest(action=action, flags=flags):
+                result = subprocess.run([sys.executable, str(SCRIPT), action, "--pr", "1",
+                    "--pr-url", self.prs[-1]["url"], "--workspace", workspace_id(1), "--repo", str(self.repo), *flags],
+                    capture_output=True, text=True, env=self.env)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.closed(), [])
+
+    def removed_legacy_task(self, number=1):
         """A restored, idle space whose worktree was removed elsewhere."""
         branch, path = self.task(number)
         self.workspaces[-1]["annotations"] = [{"key": "github-pr", "url": self.prs[-1]["url"]}]
@@ -488,7 +680,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         return branch, path
 
     def test_cleanup_closes_an_idle_space_after_its_worktree_was_removed(self):
-        branch, _ = self.removed_task()
+        branch, _ = self.removed_legacy_task()
         # The branch can have new work; workspace-only cleanup must keep it.
         self.git("update-ref", f"refs/heads/{branch}", "main")
         result = self.run_script("clean-up", 1, repo=self.repo, expect_absent_worktree=True)
@@ -499,7 +691,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertTrue(self.remote_has(branch))
 
     def test_cleanup_without_a_worktree_preserves_spaces_with_work_or_uncertain_identity(self):
-        self.removed_task()
+        self.removed_legacy_task()
         original = self.workspaces[0]
         for changes in (
             {"done": False}, {"unsavedDocumentCount": 1}, {"busyTerminalCount": 1},
@@ -519,14 +711,14 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.closed(), [])
 
     def test_cleanup_without_a_worktree_requires_an_unambiguous_exact_workspace(self):
-        self.removed_task()
+        self.removed_legacy_task()
         self.assertEqual(self.run_script("clean-up", 1, repo=self.repo, workspace=workspace_id(99))["status"], "skipped")
         self.workspaces.append(dict(self.workspaces[0], workspaceID=workspace_id(2)))
         self.assertEqual(self.run_script("clean-up", 1, repo=self.repo)["status"], "skipped")
         self.assertEqual(self.closed(), [])
 
     def test_cleanup_without_a_worktree_rechecks_before_closing(self):
-        self.removed_task()
+        self.removed_legacy_task()
         for changes in ({"unsavedDocumentCount": 1}, {"busyTerminalCount": 1},
                         {"annotations": []}, {"terminalCwds": [str(self.repo)]}):
             with self.subTest(changes=changes):
@@ -537,14 +729,14 @@ class WorkspacePullRequestTests(unittest.TestCase):
                 self.assertEqual(self.closed(), [])
 
     def test_cleanup_without_a_worktree_still_requires_done_at_close(self):
-        self.removed_task()
+        self.removed_legacy_task()
         self.extra_state["undone_at_close"] = [workspace_id(1)]
         result = self.run_script("clean-up", 1, repo=self.repo)
         self.assertEqual(result["status"], "stopped", result)
         self.assertIn("no longer marked done", result["detail"])
 
     def test_cleanup_without_a_worktree_keeps_a_checkout_that_reappears(self):
-        branch, path = self.removed_task()
+        branch, path = self.removed_legacy_task()
         self.extra_state["worktree_on_later_list"] = [str(self.repo), branch, str(path)]
         result = self.run_script("clean-up", 1, repo=self.repo)
         self.assertEqual(result["status"], "stopped", result)
@@ -553,7 +745,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.closed(), [])
 
     def test_cleanup_never_removes_the_primary_checkout_on_the_pr_branch(self):
-        branch, _ = self.removed_task()
+        branch, _ = self.removed_legacy_task()
         self.git("checkout", "--quiet", branch)
         result = self.run_script("clean-up", 1, repo=self.repo)
         self.assertEqual(result["status"], "skipped", result)
@@ -562,7 +754,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.closed(), [])
 
     def test_cleanup_without_a_worktree_never_closes_an_unmerged_task(self):
-        self.removed_task()
+        self.removed_legacy_task()
         self.prs[0]["state"] = "OPEN"
         self.assertEqual(self.run_script("clean-up", 1, repo=self.repo)["status"], "skipped")
         self.assertEqual(self.closed(), [])
