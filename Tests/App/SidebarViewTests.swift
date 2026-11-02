@@ -3196,39 +3196,117 @@ final class SidebarViewTests: XCTestCase {
         ])
     }
 
-    func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
-        let (harness, ids) = try makeSubspacesHarness()
+    func testNextUnreadJumpsKeepTheSelectedTaskBeforeRemainingUnreadTasks() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 2)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
         let rootView = harness.hostingView
-
-        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
-            preferredWindowID: harness.windowID,
-            sessionRuntimeStore: harness.sessionRuntimeStore
-        ))
+        let now = Date()
+        let extraIDs = try (1...2).map { number in
+            try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space \(number)" }?.id)
+        }
+        let targets = [ids.readyUnreadID] + extraIDs
+        let sessionIDs = ["ready-agent", "extra-0", "extra-1"]
+        let titles = ["launch-checklist", "Task space 1", "Task space 2"]
+        for (index, workspaceID) in targets.enumerated() {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionIDs[index], status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: now.addingTimeInterval(Double(3 - index))
+            )
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID)))
+        }
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(Array(try subspaceRowOrder(in: rootView, additionalTitles: Array(titles.dropFirst())).prefix(3)), titles)
 
-        // The jump read launch-checklist, which now belongs at the top of
-        // the idle group; it stays where the jump found it while selected.
-        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
-        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, task space, ready") })
-        XCTAssertEqual(
-            try subspaceRowOrder(in: rootView),
-            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
-        )
+        for (index, workspaceID) in targets.enumerated() {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID,
+                sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), workspaceID)
+            let workspace = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID])
+            XCTAssertTrue(workspace.unreadPanelIDs.isEmpty)
+            XCTAssertFalse(renderedTextValues(in: rootView).contains {
+                $0.hasPrefix("\(titles[index]), task space, ready")
+            })
+            // A read task stays ahead of the unread tasks that were below it.
+            // Releasing the previous task must not move those tasks above it.
+            XCTAssertEqual(Array(try subspaceRowOrder(in: rootView, additionalTitles: Array(titles.dropFirst())).prefix(3 - index)), Array(titles.suffix(3 - index)))
+            try writeSidebarEvidence(rootView, name: "projects-next-unread-\(index + 1)")
+            try attachSidebarRender(rootView, name: "projects-next-unread-\(index + 1)")
+        }
+
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
 
         harness.store.selectWorkspace(
-            windowID: harness.windowID,
-            workspaceID: ids.parentID,
+            windowID: harness.windowID, workspaceID: ids.parentID,
             preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
         )
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
-        // Releasing the pin puts the most recently idle subspace first in
-        // its group, ahead of the idle workspace created before it.
-        XCTAssertEqual(
-            try subspaceRowOrder(in: rootView),
-            ["qa-mobile-navigation", "qa-update-visitor-fixture", "launch-checklist", "qa-private-app-verification"]
-        )
+        // Leaving the task group releases the held row. Attention and working
+        // rows lead again, with the read tasks in the idle group.
+        XCTAssertEqual(Array(try subspaceRowOrder(in: rootView, additionalTitles: Array(titles.dropFirst())).prefix(2)), [
+            "qa-mobile-navigation", "qa-update-visitor-fixture",
+        ])
+    }
+
+    func testNextUnreadFromParentToChildKeepsTheFamilyAboveRemainingUnreadTasks() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        let parentTaskID = UUID()
+        let now = Date()
+        for (workspaceID, taskID, parentID, title) in [
+            (ids.readyUnreadID, parentTaskID, nil as UUID?, "launch-checklist"),
+            (ids.approvalID, UUID(), parentTaskID, "qa-mobile-navigation"),
+        ] {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            try coordinator.records.insert(TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: title, source: .cli,
+                resolved: TaskFields(agent: "codex"), workspaceID: ids.parentID, setup: .started,
+                parentTaskID: parentID, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            ))
+            XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: taskID)))
+        }
+        let otherID = try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space 1" }?.id)
+        let targets = [ids.readyUnreadID, ids.approvalID, otherID]
+        for (index, sessionID) in ["ready-agent", "approval-agent", "extra-0"].enumerated() {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: now.addingTimeInterval(Double(3 - index))
+            )
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[targets[index]]?.focusedPanelID)
+            XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: targets[index], panelID: panelID)))
+        }
+        pumpMainRunLoop(duration: 0.6)
+        // Task-board rows use the agent's display title unless the user named them.
+        let titles = ["Checklist", "Fix nav drawer focus", "Review task 1"]
+        for (index, workspaceID) in targets.prefix(2).enumerated() {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), workspaceID)
+            XCTAssertEqual(Array(try subspaceRowOrder(in: harness.hostingView, titles: titles).prefix(3)), [
+                "Checklist", "Fix nav drawer focus", "Review task 1",
+            ])
+            try attachSidebarRender(harness.hostingView, name: "projects-unread-family-\(index + 1)")
+        }
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), otherID)
+        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView, titles: titles).first, "Review task 1")
     }
 
     func testNextActiveUsesPinnedSubspaceOrderDisplayedBySidebar() throws {
@@ -3391,9 +3469,12 @@ final class SidebarViewTests: XCTestCase {
     }
 
     /// The harness's subspace row titles in on-screen order, top first.
-    private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
-        let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
-        let rowFrames = try titles.map { title in
+    private func subspaceRowOrder(
+        in rootView: NSView,
+        additionalTitles: [String] = [],
+        titles: [String] = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
+    ) throws -> [String] {
+        let rowFrames = try (titles + additionalTitles).map { title in
             (title, try semanticTextFrame(in: rootView, prefix: "\(title), task space"))
         }
         let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")

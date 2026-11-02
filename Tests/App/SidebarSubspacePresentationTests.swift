@@ -6,6 +6,7 @@ import XCTest
 final class SidebarSubspacePresentationTests: XCTestCase {
     private func row(
         _ name: String,
+        id: UUID = UUID(),
         status: SidebarSubspacePresentation.RowStatus,
         spawner: String? = "spawner-a",
         index: Int,
@@ -13,7 +14,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         doneAt: Date? = nil
     ) -> SidebarSubspacePresentation.Row {
         SidebarSubspacePresentation.Row(
-            id: UUID(),
+            id: id,
             title: name,
             status: status,
             doneAt: doneAt,
@@ -310,7 +311,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                        ["new-activity", "new-mark", "old"])
     }
 
-    func testRecentlyIdleSubspaceLeadsIdleGroupAndKeepsHoverAndSelectionPosition() {
+    func testRecentlyIdleSubspaceLeadsIdleGroupAndKeepsHoverOrder() {
         typealias Presentation = SidebarSubspacePresentation
         let older = row("older", status: .idle, index: 0, sessions: [session(reportedAt: 10)])
         let selected = row("selected", status: .idle, index: 1, sessions: [session(reportedAt: 20)])
@@ -321,12 +322,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(
             Presentation.orderedRows(sorted, frozenOrder: before).map(\.id), before
         )
-        let pin = Presentation.pin(
-            previous: nil, selectedRowID: newest.id, displayedOrder: before,
-            unpinnedOrder: sorted.map(\.id)
-        )
-        XCTAssertEqual(Presentation.applyingPin(pin, to: sorted).map(\.id), [selected.id, older.id, newest.id])
-        XCTAssertEqual(Presentation.applyingPin(nil, to: sorted).map(\.id), [newest.id, selected.id, older.id])
     }
 
     func testRuntimeProgressMetadataAndReadTransitionsDriveSubspaceActivityOrder() throws {
@@ -440,13 +435,13 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
-    func testSelectedRowKeepsTheSlotItWasFoundInUntilTheSelectionMoves() {
+    func testReadingKeepsTheSelectedRowsSortValuesUntilSelectionMoves() {
         typealias Presentation = SidebarSubspacePresentation
         let a = row("a", status: .ready, index: 2)
         let b = row("b", status: .ready, index: 3)
         let w = row("w", status: .working, index: 0)
         let i = row("i", status: .idle, index: 1)
-        let shownBeforeSelection = [a.id, b.id, w.id, i.id]
+        let shownBeforeSelection = [a, b, w, i]
         func read(_ row: Presentation.Row) -> Presentation.Row {
             Presentation.Row(
                 id: row.id, title: row.title, status: .idle, annotations: [:], summary: nil,
@@ -458,30 +453,30 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             _ rows: [Presentation.Row],
             previous: Presentation.Pin?,
             selected: UUID,
-            shown: [UUID]
+            shown: [Presentation.Row]
         ) -> (pin: Presentation.Pin?, titles: [String]) {
             let unpinned = Presentation.sortedRows(rows)
             let pin = Presentation.pin(
                 previous: previous,
                 selectedRowID: selected,
-                displayedOrder: shown,
-                unpinnedOrder: unpinned.map(\.id)
+                displayedKeys: Dictionary(uniqueKeysWithValues: shown.map { ($0.id, $0.sortKey) }),
+                rows: unpinned
             )
-            return (pin, Presentation.applyingPin(pin, to: unpinned).map(\.title))
+            return (pin, Presentation.sortedRows(unpinned, pin: pin).map(\.title))
         }
 
         // Selecting a reads it, but it stays first instead of sorting last.
         let first = order([read(a), b, w, i], previous: nil, selected: a.id, shown: shownBeforeSelection)
         XCTAssertEqual(first.titles, ["a", "b", "w", "i"])
 
-        // Moving to b: b holds its slot and a settles among the idle rows.
+        // Moving to b: it stays ahead of working rows as a settles among idle rows.
         let second = order([read(a), read(b), w, i], previous: first.pin, selected: b.id, shown: shownBeforeSelection)
-        XCTAssertEqual(second.pin, Presentation.Pin(rowID: b.id, index: 1))
-        XCTAssertEqual(second.titles, ["w", "b", "i", "a"])
+        XCTAssertEqual(second.pin, Presentation.Pin(rowID: b.id, keys: [b.id: b.sortKey]))
+        XCTAssertEqual(second.titles, ["b", "w", "i", "a"])
 
         // A filter that hides b keeps its pin for when the filter clears.
         XCTAssertEqual(
-            Presentation.pin(previous: second.pin, selectedRowID: b.id, displayedOrder: [w.id, i.id], unpinnedOrder: [w.id, i.id]),
+            Presentation.pin(previous: second.pin, selectedRowID: b.id, displayedKeys: [:], rows: [read(a), read(b), w, i]),
             second.pin
         )
 
@@ -489,6 +484,68 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         let left = order([read(a), read(b), w, i], previous: second.pin, selected: UUID(), shown: [])
         XCTAssertNil(left.pin)
         XCTAssertEqual(left.titles, ["w", "i", "a", "b"])
+    }
+
+    func testReadRowKeepsItsActivityOrderAndAllowsNewUnreadRowsAboveIt() throws {
+        typealias P = SidebarSubspacePresentation
+        let first = row("first", status: .ready, index: 0, sessions: [session(.ready, reportedAt: 20, unread: true)])
+        let second = row("second", status: .ready, index: 1, sessions: [session(.ready, reportedAt: 10, unread: true)])
+        let read = row("first", id: first.id, status: .idle, index: 0, sessions: [session(reportedAt: 90)])
+        let arrived = row("new", status: .ready, index: 2, sessions: [session(.ready, reportedAt: 30, unread: true)])
+        let keys = Dictionary(uniqueKeysWithValues: [first, second].map { ($0.id, $0.sortKey) })
+        let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: first.id, displayedKeys: keys, rows: [read, second, arrived]))
+        let ordered = P.sortedRows([read, second, arrived], pin: pin)
+        XCTAssertEqual(ordered.map(\.title), ["new", "first", "second"])
+        XCTAssertEqual(ordered[1].status, .idle, "Retained sorting values must not restore unread styling")
+        XCTAssertEqual(ordered[1].latestActivityAt, Date(timeIntervalSince1970: 90))
+        XCTAssertEqual(P.sortedRows([read, second, arrived]).map(\.title), ["new", "second", "first"])
+        XCTAssertNil(P.pin(previous: pin, selectedRowID: nil, displayedKeys: keys, rows: [read, second]))
+    }
+
+    func testSelectedRowRetainsMoreUrgentWorkAfterItBecomesQuiet() throws {
+        typealias P = SidebarSubspacePresentation
+        let working = row("selected", status: .working, index: 0)
+        let initial = try XCTUnwrap(P.pin(previous: nil, selectedRowID: working.id, displayedKeys: [:], rows: [working]))
+        let approval = row("selected", id: working.id, status: .needsApproval, index: 0)
+        let promoted = try XCTUnwrap(P.pin(previous: initial, selectedRowID: working.id, displayedKeys: [:], rows: [approval]))
+        let quiet = row("selected", id: working.id, status: .idle, index: 0)
+        let retained = try XCTUnwrap(P.pin(previous: promoted, selectedRowID: working.id, displayedKeys: [:], rows: [quiet]))
+        let unread = row("unread", status: .ready, index: 1)
+        let peer = row("working", status: .working, index: 2)
+        XCTAssertEqual(P.sortedRows([peer, quiet, unread], pin: retained).map(\.title), ["unread", "selected", "working"])
+        XCTAssertEqual(P.sortedRows([peer, quiet, unread]).map(\.title), ["unread", "working", "selected"])
+    }
+
+    func testSelectedChildKeepsItsSiblingOrderThroughReadFilterAndHover() throws {
+        typealias P = SidebarSubspacePresentation
+        let parent = row("parent", status: .idle, index: 0)
+        var child = row("child", status: .ready, index: 2)
+        child.linkedParentID = parent.id
+        var sibling = row("sibling", status: .ready, index: 3)
+        sibling.linkedParentID = parent.id
+        let other = row("other", status: .working, index: 1)
+        let before = [other, parent, child, sibling]
+        var read = row("child", id: child.id, status: .idle, index: 2)
+        read.linkedParentID = parent.id
+        let rows = [parent, read, sibling, other]
+        let keys = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0.sortKey) })
+        let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: child.id, displayedKeys: keys, rows: rows))
+        XCTAssertEqual(P.groupingLinkedChildren(P.sortedRows(rows, pin: pin)).map(\.title), before.map(\.title))
+        let hidden = P.pin(previous: pin, selectedRowID: child.id, displayedKeys: [:], rows: rows)
+        XCTAssertEqual(hidden, pin)
+        let frozen = [parent, child, sibling, other].map(\.id)
+        XCTAssertEqual(P.groupingLinkedChildren(P.orderedRows(rows, frozenOrder: frozen, pin: pin)).map(\.id), frozen)
+        XCTAssertEqual(P.groupingLinkedChildren(P.orderedRows(rows, frozenOrder: nil, pin: hidden)).map(\.title), before.map(\.title))
+    }
+
+    func testRetainedSortValuesUseTheCurrentWorkspaceOrderForTies() throws {
+        typealias P = SidebarSubspacePresentation
+        let selected = row("selected", status: .working, index: 1)
+        let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: selected.id, displayedKeys: [:], rows: [selected]))
+        let moved = row("selected", id: selected.id, status: .working, index: 0)
+        let peer = row("peer", status: .working, index: 1)
+        XCTAssertEqual(P.sortedRows([peer, moved], pin: pin).map(\.title), ["selected", "peer"])
+        XCTAssertNil(P.pin(previous: pin, selectedRowID: selected.id, displayedKeys: [:], rows: [peer]))
     }
 
     func testSpawnerChipCountsToneAndFilterState() {

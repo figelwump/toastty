@@ -574,7 +574,7 @@ private final class SidebarTaskBoardSnapshot {
 
 @MainActor
 private final class SubspaceOrderMemory {
-    var displayedOrderByParentID: [UUID: [UUID]] = [:]
+    var displayedKeysByParentID: [UUID: [UUID: SidebarSubspacePresentation.SortKey]] = [:]
     var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
 }
 
@@ -3816,18 +3816,16 @@ struct SidebarView: View {
         let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID]
         let isExpanded = collapsedSubspaceGroupParentIDs.contains(parentWorkspaceID) == false
         let filteredRows = SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: filterSessionID)
-        let unpinnedRows = SidebarSubspacePresentation.orderedRows(
-            filteredRows,
-            frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID]
-        )
         let pin = SidebarSubspacePresentation.pin(
             previous: subspaceOrderMemory.pinByParentID[parentWorkspaceID],
             selectedRowID: selectedWorkspaceID,
-            displayedOrder: subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID],
-            unpinnedOrder: unpinnedRows.map(\.id)
+            displayedKeys: subspaceOrderMemory.displayedKeysByParentID[parentWorkspaceID] ?? [:],
+            rows: rows
         )
         let orderedRows = SidebarSubspacePresentation.groupingLinkedChildren(
-            SidebarSubspacePresentation.applyingPin(pin, to: unpinnedRows)
+            SidebarSubspacePresentation.orderedRows(
+                filteredRows, frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID], pin: pin
+            )
         )
         let tally = SidebarSubspacePresentation.tally(rows)
         let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
@@ -3838,7 +3836,9 @@ struct SidebarView: View {
         }
         let orderedRowIDs = orderedRows.map(\.id)
         subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
-        subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID] = orderedRowIDs
+        subspaceOrderMemory.displayedKeysByParentID[parentWorkspaceID] = Dictionary(rows.map {
+            ($0.id, SidebarSubspacePresentation.sortKey(for: $0, pin: pin))
+        }, uniquingKeysWith: { first, _ in first })
         store.recordSidebarSubspaceOrder(orderedRowIDs, parentWorkspaceID: parentWorkspaceID)
 
         return VStack(alignment: .leading, spacing: 3) {
@@ -4648,7 +4648,7 @@ struct SidebarView: View {
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
         frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }
-        subspaceOrderMemory.displayedOrderByParentID = subspaceOrderMemory.displayedOrderByParentID
+        subspaceOrderMemory.displayedKeysByParentID = subspaceOrderMemory.displayedKeysByParentID
             .filter { parentIDs.contains($0.key) }
         subspaceOrderMemory.pinByParentID = subspaceOrderMemory.pinByParentID.filter { parentIDs.contains($0.key) }
     }
