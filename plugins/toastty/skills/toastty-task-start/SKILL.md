@@ -73,7 +73,12 @@ each part its own task:
 - Tell each new task how to report back: `toastty task send <this task's ID>
   "<message>"`. `toastty task get`, with no ID, shows this task and its
   `taskID`. Task IDs keep working after a relaunch; panel and session IDs do
-  not.
+  not. The message must include the paths of the new task's verification
+  report and evidence files, such as screenshots and test output.
+- When this task owns the user's request, check the new task's evidence
+  yourself. Then publish the verification report, with its proof, in this
+  task's Scratchpad before you report to the user. A new task's summary is not
+  proof.
 
 ## Wait for other tasks
 
