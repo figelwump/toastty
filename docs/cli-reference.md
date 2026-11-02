@@ -318,9 +318,13 @@ status update and the time they were marked done. Ready, needs approval, and
 error task spaces sort by the latest update from a session that sets that row's
 status; updates from sessions in other states do not move the row. Equal or
 missing times use workspace order; rows with no time follow rows with a time.
-Hovering over the list holds its order, and the selected row keeps its slot
-until selection changes. The spawning session's row shows a ⑂ chip that filters
-the group to its task spaces. Nesting stays one level deep, so a parent that is
+Hovering over the list holds its order. Reading the selected task keeps its
+previous status and activity values for sorting until selection changes; its
+appearance still shows that it was read. Its parent keeps its sorting values too
+when needed to hold a selected child in place. Other tasks sort normally. A
+selected task can move earlier for more urgent work and holds that priority until
+selection changes. Ties always use the current workspace order. The spawning
+session's row shows a ⑂ chip that filters the group to its task spaces. Nesting stays one level deep, so a parent that is
 itself a task space resolves to its root. Closing a parent keeps its
 task spaces open as top-level workspaces.
 

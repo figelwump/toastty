@@ -129,6 +129,10 @@ enum SidebarSubspacePresentation {
             }
         }
 
+        var sortKey: SortKey {
+            SortKey(status: status, activityAt: sortActivityAt ?? .distantPast)
+        }
+
         /// A subspace is waiting only when none of its working sessions is
         /// actively making progress. Attention and unread ready states win.
         var isWaiting: Bool {
@@ -149,10 +153,22 @@ enum SidebarSubspacePresentation {
         }
     }
 
-    /// The slot the selected row holds while it stays selected.
+    /// The same ordering for live rows and the selected row's retained values.
+    struct SortKey: Comparable, Sendable {
+        let status: RowStatus
+        let activityAt: Date
+
+        static func < (lhs: SortKey, rhs: SortKey) -> Bool {
+            if lhs.status != rhs.status { return lhs.status < rhs.status }
+            return lhs.activityAt > rhs.activityAt
+        }
+    }
+
+    /// Reading changes the row's appearance, but not these sorting values
+    /// until selection moves. New work can still move the row earlier.
     struct Pin: Equatable, Sendable {
         let rowID: UUID
-        let index: Int
+        let keys: [UUID: SortKey]
     }
 
     struct Tally: Equatable, Sendable {
@@ -287,25 +303,24 @@ enum SidebarSubspacePresentation {
         }
     }
 
-    static func sortedRows(_ rows: [Row]) -> [Row] {
+    static func sortedRows(_ rows: [Row], pin: Pin? = nil) -> [Row] {
         rows.sorted { lhs, rhs in
-            if lhs.status != rhs.status {
-                return lhs.status < rhs.status
-            }
-            let lhsActivityAt = lhs.sortActivityAt ?? .distantPast
-            let rhsActivityAt = rhs.sortActivityAt ?? .distantPast
-            if lhsActivityAt != rhsActivityAt {
-                return lhsActivityAt > rhsActivityAt
-            }
-            return lhs.creationIndex < rhs.creationIndex
+            let lhsKey = sortKey(for: lhs, pin: pin)
+            let rhsKey = sortKey(for: rhs, pin: pin)
+            return lhsKey != rhsKey ? lhsKey < rhsKey : lhs.creationIndex < rhs.creationIndex
         }
+    }
+
+    static func sortKey(for row: Row, pin: Pin?) -> SortKey {
+        let retained = pin?.keys[row.id] ?? row.sortKey
+        return row.status < retained.status ? row.sortKey : retained
     }
 
     /// Keeps the order the user was looking at while the pointer is over the
     /// list, so a row cannot slide away as they aim at it. Rows that appeared
     /// since the freeze follow in sorted order.
-    static func orderedRows(_ rows: [Row], frozenOrder: [UUID]?) -> [Row] {
-        let sorted = sortedRows(rows)
+    static func orderedRows(_ rows: [Row], frozenOrder: [UUID]?, pin: Pin? = nil) -> [Row] {
+        let sorted = sortedRows(rows, pin: pin)
         guard let frozenOrder else { return sorted }
         let rowsByID = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0) })
         var result = frozenOrder.compactMap { rowsByID[$0] }
@@ -314,36 +329,33 @@ enum SidebarSubspacePresentation {
         return result
     }
 
-    /// Selecting a row reads it, which would sort a ready row away from
-    /// where the user found it, most visibly after a Next Unread jump. So
-    /// the selected row keeps the slot it had in `displayedOrder`, the order
-    /// on screen before the selection changed, until the selection moves.
-    /// The pin survives a filter that hides the row for a while.
+    /// A select-and-read mutation has already changed the live row by the
+    /// next render. Take its sorting values from the previous render. When
+    /// selection moves, the previous task sorts normally again. Resolve
+    /// against all rows so filtering does not discard the retained values.
     static func pin(
         previous: Pin?,
         selectedRowID: UUID?,
-        displayedOrder: [UUID]?,
-        unpinnedOrder: [UUID]
+        displayedKeys: [UUID: SortKey],
+        rows: [Row]
     ) -> Pin? {
-        guard let selectedRowID else { return nil }
-        if let previous, previous.rowID == selectedRowID {
-            return previous
+        guard let selectedRowID, rows.contains(where: { $0.id == selectedRowID }) else { return nil }
+        var retainedIDs = Set([selectedRowID])
+        // Grouping draws a child under its parent. Retain that parent's
+        // displayed values too, or releasing a previously selected parent
+        // would pull the newly selected child down with it.
+        if let child = groupingLinkedChildren(rows).first(where: { $0.id == selectedRowID }),
+           child.isLinkedChild, let parentID = child.linkedParentID {
+            retainedIDs.insert(parentID)
         }
-        guard let unpinnedIndex = unpinnedOrder.firstIndex(of: selectedRowID) else {
-            return nil
-        }
-        let index = displayedOrder?.firstIndex(of: selectedRowID) ?? unpinnedIndex
-        return Pin(rowID: selectedRowID, index: index)
-    }
-
-    static func applyingPin(_ pin: Pin?, to rows: [Row]) -> [Row] {
-        guard let pin, let currentIndex = rows.firstIndex(where: { $0.id == pin.rowID }) else {
-            return rows
-        }
-        var result = rows
-        let row = result.remove(at: currentIndex)
-        result.insert(row, at: min(pin.index, result.count))
-        return result
+        let previousKeys = previous?.rowID == selectedRowID ? previous?.keys : nil
+        let keys = Dictionary(rows.filter { retainedIDs.contains($0.id) }.map { row in
+            let retained = previousKeys?[row.id] ?? displayedKeys[row.id] ?? row.sortKey
+            // A read collapse can update activity time without changing a
+            // review or question status. Only a more urgent status moves it.
+            return (row.id, row.status < retained.status ? row.sortKey : retained)
+        }, uniquingKeysWith: { first, _ in first })
+        return Pin(rowID: selectedRowID, keys: keys)
     }
 
     /// Draws each linked child right under the task that started it, in
