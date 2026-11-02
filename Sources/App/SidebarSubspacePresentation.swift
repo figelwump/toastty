@@ -312,7 +312,8 @@ enum SidebarSubspacePresentation {
     }
 
     static func sortKey(for row: Row, pin: Pin?) -> SortKey {
-        min(pin?.keys[row.id] ?? row.sortKey, row.sortKey)
+        let retained = pin?.keys[row.id] ?? row.sortKey
+        return row.status < retained.status ? row.sortKey : retained
     }
 
     /// Keeps the order the user was looking at while the pointer is over the
@@ -349,7 +350,10 @@ enum SidebarSubspacePresentation {
         }
         let previousKeys = previous?.rowID == selectedRowID ? previous?.keys : nil
         let keys = Dictionary(rows.filter { retainedIDs.contains($0.id) }.map { row in
-            (row.id, min(previousKeys?[row.id] ?? displayedKeys[row.id] ?? row.sortKey, row.sortKey))
+            let retained = previousKeys?[row.id] ?? displayedKeys[row.id] ?? row.sortKey
+            // A read collapse can update activity time without changing a
+            // review or question status. Only a more urgent status moves it.
+            return (row.id, row.status < retained.status ? row.sortKey : retained)
         }, uniquingKeysWith: { first, _ in first })
         return Pin(rowID: selectedRowID, keys: keys)
     }
