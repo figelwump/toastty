@@ -2294,6 +2294,16 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains {
             $0.hasPrefix("Hostname options, task space, waiting for your reply") && $0.contains("Asks: Pick a hostname option")
         }, "\(textValues)")
+        // Only the question row shows the question pill, on its title line.
+        XCTAssertEqual(textValues.filter { $0 == "question" }.count, 1, "\(textValues)")
+        // Row labels are zero-size and centered in their rows.
+        let questionRow = try semanticTextFrame(in: root, prefix: "Hostname options, task space")
+        let nextRow = try semanticTextFrame(in: root, prefix: "Public URL warning, task space")
+        let questionPill = try semanticTextFrame(in: root, text: "question", shape: "the question row")
+        XCTAssertLessThan(
+            abs(questionPill.midY - questionRow.midY), abs(questionPill.midY - nextRow.midY),
+            "The pill should sit in the question row: \(questionPill), rows \(questionRow) \(nextRow)"
+        )
         try writeSidebarEvidence(root, name: "status-1-before-click")
         try attachSidebarRender(root, name: "status-1-before-click")
 
