@@ -719,8 +719,8 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        // Tasks with a pull request use Merge. Tasks without one can be
-        // archived without waiting for the agent to report completion.
+        // Tasks with a pull request keep their merge controls. Tasks without
+        // one offer completion only while their derived stage is ready.
         if store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
            let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
@@ -753,10 +753,16 @@ struct WorkspaceView: View {
                   let taskID = workspace.taskID,
                   let coordinator = sessionRuntimeStore.taskCoordinator,
                   coordinator.records.record(id: taskID) != nil {
-            // Like Merge, Archive uses the subtitle slot. Sidebar and tab
-            // dots continue to show unread replies.
-            WorkspaceHeaderArchiveControl {
-                TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            if let board = coordinator.board {
+                WorkspaceHeaderTaskControl(
+                    board: board,
+                    coordinator: coordinator,
+                    taskID: taskID
+                )
+            } else {
+                WorkspaceHeaderArchiveControl {
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
             }
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show

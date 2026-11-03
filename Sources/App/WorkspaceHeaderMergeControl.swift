@@ -239,7 +239,46 @@ struct WorkspaceHeaderMergeControl: View {
     }
 }
 
-/// A task without a pull request still needs a way to close its task space.
+/// Observes the board so a readiness or reply change updates the header even
+/// when the workspace itself has not changed.
+struct WorkspaceHeaderTaskControl: View {
+    @ObservedObject var board: TaskBoardStore
+    let coordinator: TaskCoordinator
+    let taskID: UUID
+
+    private var isReadyForReview: Bool {
+        board.items().first(where: { $0.id == .task(taskID) })?.stage == .needsYou(.readyForReview)
+    }
+
+    var body: some View {
+        if isReadyForReview {
+            Button {
+                // Recheck the current board before accepting the result.
+                guard isReadyForReview else { return }
+                TaskActions.perform("Unable to Complete Task") {
+                    try TaskActions.run(.markDone, taskID: taskID, coordinator: coordinator)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .accessibilityHidden(true)
+                    Text("Complete Task")
+                        .lineLimit(1)
+                }
+            }
+            .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .all))
+            .help("Mark this task done and keep its conversation and workspace")
+            .accessibilityIdentifier("topbar.workspace.complete-task")
+        } else {
+            WorkspaceHeaderArchiveControl {
+                TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            }
+        }
+    }
+}
+
+/// A task without a pull request can stop without accepting the result.
 struct WorkspaceHeaderArchiveControl: View {
     let archive: () -> Void
 
