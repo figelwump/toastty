@@ -14,6 +14,7 @@ final class WorkspaceViewTests: XCTestCase {
         let store: AppStore
         let sessionRuntimeStore: SessionRuntimeStore
         let taskCoordinator: TaskCoordinator?
+        let taskBoard: TaskBoardStore?
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let terminalRuntimeRegistry: TerminalRuntimeRegistry
         let hostingView: NSView
@@ -1715,10 +1716,10 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
-    /// A task with no worktree or PR can be archived before or after an
-    /// explicit completion signal. Cancel in the real dialog preserves it.
+    /// The real header completes a review-ready task without closing its
+    /// workspace. Other stages keep the archive confirmation and cancellation.
     @MainActor
-    func testTaskWithoutPullRequestHeaderOffersArchiveAndCancelPreservesTask() throws {
+    func testTaskWithoutPullRequestHeaderCompletesReadyTaskAndOtherwiseCancelsArchive() throws {
         let task = TaskRecord(
             createdAt: Date(), text: "Investigate a question", title: "Investigate a question",
             slug: "investigate-question", source: .quickEntry
@@ -1743,9 +1744,65 @@ final class WorkspaceViewTests: XCTestCase {
         let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
         let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
 
-        for state in ["idle", "ready", "done"] {
-            if state == "ready" { _ = try coordinator.readyForReview(taskID: task.id) }
-            if state == "done" { _ = try coordinator.markDone(taskID: task.id) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        let runtime = harness.sessionRuntimeStore
+        let sessionID = "header-task-agent"
+        runtime.startSession(
+            sessionID: sessionID, agent: .codex, panelID: harness.panelID,
+            windowID: harness.windowID, workspaceID: harness.workspaceID,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        func stage() throws -> TaskStage {
+            try XCTUnwrap(board.items().first { $0.id == .task(task.id) }).stage
+        }
+        let panelsBefore = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID]).panels
+        for state in ["idle", "working", "needs-input", "reply", "done"] {
+            if state == "working" || state == "needs-input" {
+                runtime.updateStatus(
+                    sessionID: sessionID,
+                    status: SessionStatus(kind: state == "working" ? .working : .needsApproval, summary: state),
+                    at: Date()
+                )
+                // Mark ready during the active turn to retain a stale signal.
+                _ = try coordinator.readyForReview(taskID: task.id)
+                XCTAssertNotNil(coordinator.records.record(id: task.id)?.readyForReviewAt)
+                XCTAssertEqual(try stage(), state == "working" ? .running : .needsYou(.agentNeedsInput))
+            }
+            if state == "reply" {
+                runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Waiting"), at: Date())
+                _ = try coordinator.needsReply(taskID: task.id, question: "Which option?")
+                XCTAssertNotNil(coordinator.records.record(id: task.id)?.readyForReviewAt)
+                XCTAssertEqual(try stage(), .needsYou(.awaitingReply))
+            }
+            if state == "done" {
+                _ = try coordinator.readyForReview(taskID: task.id)
+                pumpMainRunLoop(duration: 0.05)
+                XCTAssertEqual(try stage(), .needsYou(.readyForReview))
+                try writeTopBarEvidence(harness, name: "topbar-task-complete-ready")
+                let retainedWork = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try FileManager.default.createDirectory(at: retainedWork, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: retainedWork) }
+                let note = retainedWork.appendingPathComponent("answer.txt")
+                try Data("Keep the result".utf8).write(to: note)
+                coordinator.records.update(id: task.id) {
+                    $0.operation.worktree = .init(
+                        path: retainedWork.path, branch: "test/header", checkoutRoot: retainedWork.path, added: true
+                    )
+                }
+                try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+                pumpMainRunLoop(duration: 0.05)
+                XCTAssertNotNil(coordinator.records.record(id: task.id)?.doneAt)
+                XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID]?.doneAt)
+                XCTAssertEqual(try stage(), .done)
+                XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
+                XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.panels, panelsBefore)
+                XCTAssertEqual(coordinator.records.record(id: task.id)?.taskSpaceWorkspaceID, harness.workspaceID)
+                XCTAssertEqual(runtime.sessionRegistry.activeSession(for: harness.panelID)?.sessionID, sessionID)
+                XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "Keep the result")
+                XCTAssertEqual(coordinator.records.record(id: task.id)?.worktree?.path, retainedWork.path)
+                // The archive cancellation below uses the original no-worktree fixture.
+                coordinator.records.update(id: task.id) { $0.operation.worktree = nil }
+            }
             pumpMainRunLoop(duration: 0.05)
             try writeTopBarEvidence(harness, name: "topbar-task-archive-\(state)")
 
@@ -3120,6 +3177,15 @@ final class WorkspaceViewTests: XCTestCase {
             sessionRuntimeStore.taskCoordinator = taskCoordinator
             _ = store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: taskRecord.id))
         }
+        let taskBoard = taskCoordinator.map { coordinator in
+            let board = TaskBoardStore(
+                coordinator: coordinator, store: store, sessionRuntimeStore: sessionRuntimeStore,
+                pullRequests: pullRequestStateCache ?? PullRequestStateCache(runner: OfflinePullRequestRunner()),
+                refreshInterval: nil, releaseCheckInterval: nil
+            )
+            coordinator.board = board
+            return board
+        }
         let agentCatalogStore = AgentCatalogStore(homeDirectoryPath: tempHomeDirectory.path)
         let terminalProfileStore = TerminalProfileStore(
             homeDirectoryPath: tempHomeDirectory.path,
@@ -3180,6 +3246,7 @@ final class WorkspaceViewTests: XCTestCase {
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             terminalRuntimeRegistry: registry,
             hostingView: hostingView,
