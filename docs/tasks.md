@@ -645,10 +645,14 @@ ready-for-review`, and the task waits in Needs you. **Mark Done**, or
 A task that split its work into child tasks needs neither: it finishes when
 its children finish. See [Split work into new tasks](#split-work-into-new-tasks).
 
-The header of a task space without a pull request offers **Archive Task…**.
-It is available before and after the agent reports completion, including for
-a task already marked done. It opens the archive confirmation and uses the
-same checks as [Archive a task](#archive-a-task).
+The header of a task space without a pull request offers a green **Complete
+Task** button when its current stage is Ready for review. It marks the task
+Done and keeps its conversation, workspace, and worktree. Active work or a
+reply request takes priority over an earlier ready mark.
+
+At other stages, including Done, the header offers **Archive Task…**. It opens
+the archive confirmation and uses the same checks as
+[Archive a task](#archive-a-task). Archive also stays available in the task menu.
 
 A task that has no worktree and no pull request often answers in place. When
 you close its task space, Toastty asks what happens to the task:

@@ -535,9 +535,12 @@ project sets `merge = "direct"`, Toastty always cleans up after the merge, and
 the arrow menu offers **Merge Without Checks** and **Archive Task…** instead of
 the modes below. See [Tasks](tasks.md#merge-a-task).
 
-Without a pull request, the task header offers **Archive Task…** instead.
-The agent does not need to mark the task ready first. Archiving asks for
-confirmation and keeps the existing checks for unsaved work.
+Without a pull request, a task that is Ready for review offers a green
+**Complete Task** button. It marks the task Done and keeps its conversation,
+workspace, and worktree. Active work or a reply request takes priority over
+an earlier ready mark. At other stages, the header offers **Archive Task…**.
+Archive remains available in the task menu. Archiving asks for confirmation
+and keeps the existing checks for unsaved work.
 
 For other subspaces, the Merge button, its context menu items, and
 `Option+Shift+M` are off by default. To turn them on, run
