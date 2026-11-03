@@ -468,10 +468,14 @@ window.
 
 - **Projects** is the workspace list. A task space whose task is To ship or
   Done leaves its card's task space list unless an agent in it is working or
-  waiting for you. After the card's task spaces, the project's 3 most recently
-  merged To ship tasks show as rows. A footer line after them has **Show N more** when the
-  project has more To ship tasks, and the Done count. Without To ship rows,
-  the footer counts To ship tasks instead.
+  waiting for you. After the card's task spaces, a To ship line with the
+  purple To ship mark lists the project's other To ship tasks, with the Done
+  count on its right. Like
+  Status, it starts collapsed; click it to expand it in place, and the choice
+  resets when the sidebar hides or the app quits. Expanded, the 3 most
+  recently merged To ship tasks show as rows, then **Show N more** when the
+  project has more. When every To ship task shows as a task space row, the
+  footer counts To ship tasks instead.
 - **Status** lists task spaces by stage: Needs you, Running, Idle, To ship,
   and a Done count. Each row carries its project's name, except under To ship.
   A task and the tasks it started list together, in the group of the most

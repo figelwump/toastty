@@ -665,6 +665,9 @@ struct SidebarView: View {
     /// group, the choice is not saved: it resets when the sidebar hides or
     /// the app quits.
     @State private var isStatusToShipExpanded = false
+    /// Project cards whose To ship group is expanded. Like Status, each card
+    /// starts collapsed and the choice is not saved.
+    @State private var expandedToShipProjectIDs: Set<UUID> = []
     /// Spawning session whose subspaces the group shows, per parent workspace.
     @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
     /// Row order captured when the pointer entered a group, so rows hold
@@ -1215,56 +1218,98 @@ struct SidebarView: View {
     }
 
     /// Under a project card: the tasks that left it because they finished.
-    /// The latest To ship tasks show as rows, then one line with "Show N
-    /// more" and the Done count. Without To ship rows, the line counts To
-    /// ship instead, as for a To ship task whose task space row shows.
+    /// The To ship tasks list under "› TO SHIP N", which starts collapsed as
+    /// in the Status segment, with the Done count on the same line. Expanded,
+    /// the latest To ship tasks show as rows, then "Show N more". When every
+    /// To ship task shows as a task space row, the line counts them instead.
     @ViewBuilder
     private func finishedTasksFooter(projectWorkspaceID: UUID, shownTaskSpaceIDs: Set<UUID>) -> some View {
         if taskBoard.isEnabled {
             let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
             let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
-            let toShip = recent.shown.isEmpty ? items.filter { $0.stage == .toShip }.count : 0
+            let listed = recent.shown.count + recent.hidden.count
+            let toShip = listed == 0 ? items.filter { $0.stage == .toShip }.count : 0
             let done = items.filter { $0.stage == .done }.count
-            if recent.shown.isEmpty == false || toShip > 0 || done > 0 {
-                VStack(alignment: .leading, spacing: 4) {
-                    if recent.shown.isEmpty == false {
+            if listed > 0 {
+                VStack(alignment: .leading, spacing: 3) {
+                    // The toggle takes the width the Done count leaves.
+                    HStack(spacing: 12) {
+                        cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
+                        if done > 0 {
+                            finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
+                                .font(ToastyTheme.fontWorkspaceSessionChip)
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    if expandedToShipProjectIDs.contains(projectWorkspaceID) {
                         VStack(alignment: .leading, spacing: 1) {
                             ForEach(recent.shown) { item in
                                 toShipTaskRow(item)
                             }
-                        }
-                        .padding(.horizontal, 10)
-                    }
-                    if recent.hidden.isEmpty == false || toShip > 0 || done > 0 {
-                        // Each count opens the Tasks view at its own group.
-                        HStack(spacing: 12) {
                             if let firstHidden = recent.hidden.first {
                                 SidebarShowMoreToShipButton(count: recent.hidden.count) {
                                     openTasksView(selecting: firstHidden.id, revealing: .toShip)
                                 }
+                                // Lines up with the task titles: the row's
+                                // padding, status mark and gap.
+                                .padding(.leading, 8 + Self.sessionStatusRailWidth + Self.sessionStatusRailGap)
+                                .padding(.vertical, 3)
                                 .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
                             }
-                            if toShip > 0 {
-                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
-                                    Label("To ship \(toShip)", systemImage: "arrow.up.square")
-                                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                                }
-                            }
-                            if done > 0 {
-                                finishedTasksButton(.done, count: done, projectWorkspaceID: projectWorkspaceID) {
-                                    Label("Done \(done)", systemImage: "checkmark.square")
-                                        .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
-                                }
-                            }
-                            Spacer(minLength: 0)
                         }
-                        .font(ToastyTheme.fontWorkspaceSessionChip)
-                        .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 18)
+                        .padding(.horizontal, 10)
                     }
                 }
                 .padding(.bottom, 10)
+            } else if toShip > 0 || done > 0 {
+                // Each count opens the Tasks view at its own group.
+                HStack(spacing: 12) {
+                    if toShip > 0 {
+                        finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                            Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                        }
+                    }
+                    if done > 0 {
+                        finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .labelStyle(.titleAndIcon)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 10)
             }
+        }
+    }
+
+    /// "› TO SHIP N" under a project card, lined up with the card's
+    /// "TASK SPACES" toggle.
+    private func cardToShipToggle(count: Int, projectWorkspaceID: UUID) -> some View {
+        let isExpanded = Binding(
+            get: { expandedToShipProjectIDs.contains(projectWorkspaceID) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedToShipProjectIDs.insert(projectWorkspaceID)
+                } else {
+                    expandedToShipProjectIDs.remove(projectWorkspaceID)
+                }
+            }
+        )
+        return SidebarToShipGroupToggle(
+            count: count,
+            isExpanded: isExpanded,
+            showsMark: true,
+            accessibilityText: SidebarToShipGroupToggle.label(count: count, isExpanded: isExpanded.wrappedValue)
+        )
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipToggle.\(projectWorkspaceID.uuidString)")
+    }
+
+    private func finishedTasksDoneButton(count: Int, projectWorkspaceID: UUID) -> some View {
+        finishedTasksButton(.done, count: count, projectWorkspaceID: projectWorkspaceID) {
+            Label("Done \(count)", systemImage: "checkmark.square")
+                .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
         }
     }
 

@@ -12,17 +12,18 @@ remote-task-context-menu-check.py does, with a fake agent, a tasks.toml with
 reports each task's pull request merged. It merges five tasks one at a time,
 so their merge times differ, and closes every task space but the newest
 task's, whose agent is quiet. Through the UI and the CLI it checks that:
-- the project card shows the three newest merges as rows, newest first, then
-  "Show 2 more", including the task whose quiet task space left the card; the
-  Status segment shows the same tasks under the project's To ship line, the
-  newest as its task space row;
+- the project card's To ship line starts collapsed, with no rows; expanded,
+  it shows the three newest merges as rows, newest first, then "Show 2 more",
+  including the task whose quiet task space left the card; the Status segment
+  shows the same tasks under the project's To ship line, the newest as its
+  task space row;
 - "Show 2 more" in either segment opens the Tasks view with the newest task
   the sidebar did not show selected;
 - a To ship row whose task space has closed opens the Tasks view with its
   task selected; the newest task's row opens its task space, which is still
   open because the task has no worktree to clean up;
-- with two To ship tasks and three done, the card shows both rows with no
-  "Show N more", and the footer keeps the Done count.
+- with two To ship tasks and three done, the expanded card shows both rows
+  with no "Show N more", and the To ship line keeps the Done count.
 Captures of each step and remote-sidebar-to-ship-check.json go to the
 artifacts directory. The private instance uses automation mode without a
 fixture so its built-in capture can render the live window without Screen
@@ -238,9 +239,14 @@ def main():
             cli_json('action', 'run', 'workspace.close', '--workspace', workspace)
         step('merged', closedTaskSpaces=len(open_spaces), keptTaskSpace=kept)
 
-        # 1. Projects: three rows, newest first, then "Show 2 more".
+        # 1. Projects: the To ship line starts collapsed. Expanded, three
+        # rows, newest first, then "Show 2 more".
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
         newest = list(reversed(TITLES))
+        wait_for('the collapsed To ship line', lambda: 'To ship, 5 tasks, collapsed' in labels())
+        require(sidebar_rows() == [], f'The collapsed card should show no rows: {sidebar_rows()}')
+        capture('projects-to-ship-collapsed')
+        run_tool(driver, 'press-label', pid, 'To ship, 5 tasks, collapsed')
         wait_for('the card rows', lambda: sidebar_rows()[:3] == newest[:3])
         rows = sidebar_rows()
         step('projects rows', rows=rows)
@@ -277,9 +283,11 @@ def main():
         step('status rows with two', rows=sidebar_rows())
         capture('status-two-to-ship')
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
+        # The card keeps the expanded state from step 1.
         wait_for('two card rows', lambda: sidebar_rows() == newest[:2])
+        require('To ship, 2 tasks, expanded' in labels(), f'The card should stay expanded: {labels()}')
         done_label = 'Finished tasks: 3 done. Opens the Tasks view.'
-        require(done_label in labels(), f'The footer should keep the Done count: {labels()}')
+        require(done_label in labels(), f'The To ship line should keep the Done count: {labels()}')
         step('projects rows with two', rows=sidebar_rows(), doneCount=True)
         capture('projects-two-to-ship')
 
