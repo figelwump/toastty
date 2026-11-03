@@ -272,8 +272,7 @@ struct SidebarStatusSections: Equatable {
     /// The To ship header's label. Collapsed, it names each project and its
     /// count, as the header's summary shows them.
     func toShipLabel(isExpanded: Bool) -> String {
-        let count = toShip.reduce(0) { $0 + $1.count }
-        let label = "To ship, \(count) \(count == 1 ? "task" : "tasks"), \(isExpanded ? "expanded" : "collapsed")"
+        let label = SidebarToShipGroupToggle.label(count: toShip.reduce(0) { $0 + $1.count }, isExpanded: isExpanded)
         guard isExpanded == false else { return label }
         return ([label] + toShip.map { "\($0.projectTitle) \($0.count)" }).joined(separator: ", ")
     }
@@ -392,7 +391,7 @@ struct SidebarStatusSegment<RowContent: View>: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .bold))
                             .frame(width: 9)
-                        groupTitle("Done", count: sections.doneCount)
+                        SidebarGroupTitle(title: "Done", count: sections.doneCount)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(ToastyTheme.sidebarChildContextText)
@@ -457,7 +456,7 @@ struct SidebarStatusSegment<RowContent: View>: View {
     }
 
     private func header(_ title: String, count: Int, isHot: Bool = false) -> some View {
-        groupTitle(title, count: count)
+        SidebarGroupTitle(title: title, count: count)
             .foregroundStyle(isHot ? Color(hex: 0xF2C46B) : ToastyTheme.sidebarChildContextText)
             .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
             .padding(.horizontal, 8)
@@ -470,53 +469,18 @@ struct SidebarStatusSegment<RowContent: View>: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func groupTitle(_ title: String, count: Int) -> some View {
-        HStack(spacing: 5) {
-            Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                .tracking(0.8)
-            Text("\(count)")
-                .font(ToastyTheme.fontWorkspaceAgentCount)
-                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-        }
-    }
-
-    /// "› TO SHIP 3", which expands and collapses the group in place.
-    /// Collapsed, it names each project and its count on the right.
+    /// "› TO SHIP 3". Collapsed, it names each project and its count on the
+    /// right.
     private var toShipHeader: some View {
-        let label = sections.toShipLabel(isExpanded: isToShipExpanded)
-        return Button {
-            isToShipExpanded.toggle()
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: isToShipExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .frame(width: 9)
-                groupTitle("To ship", count: sections.toShip.reduce(0) { $0 + $1.count })
-                    .layoutPriority(1)
-                Spacer(minLength: 8)
-                if isToShipExpanded == false {
-                    Self.toShipSummary(sections.toShip)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .foregroundStyle(ToastyTheme.sidebarChildContextText)
-            .frame(minHeight: 16)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        SidebarToShipGroupToggle(
+            count: sections.toShip.reduce(0) { $0 + $1.count },
+            isExpanded: $isToShipExpanded,
+            summary: Self.toShipSummary(sections.toShip),
+            accessibilityText: sections.toShipLabel(isExpanded: isToShipExpanded)
+        )
         .padding(.horizontal, 8)
         .padding(.top, 8)
-        .help(isToShipExpanded ? "Hide the tasks to ship" : "Show the tasks to ship")
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("sidebar.status.toShip")
-        .background {
-            SidebarSemanticTextBridge(text: label)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-        }
     }
 
     /// A project's header, drawn as in the Tasks view: its name and count in
@@ -641,6 +605,70 @@ struct SidebarTaskRecordRow: View {
         .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+    }
+}
+
+/// A sidebar group's title: "TO SHIP 3".
+struct SidebarGroupTitle: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title.uppercased())
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
+            Text("\(count)")
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+        }
+    }
+}
+
+/// "› TO SHIP 3", which expands and collapses a To ship group in place: the
+/// Status segment's group, and the one under each project card. While
+/// collapsed, `summary` shows on the right.
+struct SidebarToShipGroupToggle: View {
+    let count: Int
+    @Binding var isExpanded: Bool
+    var summary: Text?
+    /// What the toggle says; starts with `label(count:isExpanded:)`.
+    let accessibilityText: String
+
+    static func label(count: Int, isExpanded: Bool) -> String {
+        "To ship, \(count) \(count == 1 ? "task" : "tasks"), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    var body: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 9)
+                SidebarGroupTitle(title: "To ship", count: count)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                if isExpanded == false, let summary {
+                    summary
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            .frame(minHeight: 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Hide the tasks to ship" : "Show the tasks to ship")
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(.isHeader)
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 

@@ -2501,6 +2501,109 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Show archive button when done") }, "\(textValues)")
     }
 
+    func testProjectCardToShipStartsCollapsedWithTheDoneCountAndExpandsInPlace() throws {
+        let now = Date()
+        let emptyosID = UUID()
+        let toasttyID = UUID()
+        func record(_ title: String, project: UUID, root: String, hoursAgo: Double, done: Bool = false) -> TaskRecord {
+            var record = TaskRecord(
+                createdAt: now.addingTimeInterval(-3 * 86_400),
+                text: title,
+                title: title,
+                slug: title,
+                source: .cli,
+                workspaceID: project,
+                projectRoot: root,
+                setup: .started
+            )
+            record.mergedAt = now.addingTimeInterval(-hoursAgo * 3_600 - 60)
+            if done {
+                record.doneAt = record.mergedAt
+            }
+            return record
+        }
+        let workspaces = [
+            makeSinglePanelWorkspace(id: emptyosID, title: "emptyos"),
+            makeSinglePanelWorkspace(id: toasttyID, title: "toastty"),
+        ]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: emptyosID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            taskRecords: [
+                record("Home setup wizard", project: emptyosID, root: "/repo/emptyos", hoursAgo: 1),
+                record("Signup pages onboarding copy", project: emptyosID, root: "/repo/emptyos", hoursAgo: 2),
+                record("Docs onboarding fixes", project: emptyosID, root: "/repo/emptyos", hoursAgo: 3),
+                record("Pricing page draft", project: emptyosID, root: "/repo/emptyos", hoursAgo: 4),
+                record("Old billing fix", project: emptyosID, root: "/repo/emptyos", hoursAgo: 30, done: true),
+                record("Question state pill badge", project: toasttyID, root: "/repo/toastty", hoursAgo: 5),
+            ],
+            withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: ["/repo/emptyos", "/repo/toastty"].map {
+                TasksConfig.Workspace(path: $0, releaseTags: "v*", releasePrompt: "Release the merged tasks.")
+            })
+        )
+        defer { harness.window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Collapsed by default: one line per card, with the Done count on it.
+        var textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("To ship, 1 task, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Home setup wizard") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show 1 more") }, "\(textValues)")
+        let toggle = try semanticTextFrame(in: harness.hostingView, prefix: "To ship, 4 tasks, collapsed")
+        let doneCount = try semanticTextFrame(in: harness.hostingView, prefix: "Finished tasks: 1 done.")
+        XCTAssertLessThan(abs(toggle.midY - doneCount.midY), 6, "Done should share the To ship line: \(toggle) \(doneCount)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-projects-to-ship-collapsed")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-projects-to-ship-collapsed")
+
+        // Expanded: the three newest merges, then "Show 1 more". The other
+        // card stays collapsed.
+        try clickSemanticText(prefix: "To ship, 4 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("To ship, 1 task, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Show 1 more task to ship in the Tasks view"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Pricing page draft") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Question state pill badge") }, "\(textValues)")
+        let rows = try ["Home setup wizard, ", "Signup pages onboarding copy, ", "Docs onboarding fixes, "].map {
+            try semanticTextFrame(in: harness.hostingView, prefix: $0)
+        }
+        let showMore = try semanticTextFrame(in: harness.hostingView, prefix: "Show 1 more")
+        // Top to bottom, measured from the Tasks row at the sidebar's top,
+        // whichever way the view's y axis runs.
+        let top = try semanticTextFrame(in: harness.hostingView, text: "Tasks", shape: "the Tasks row")
+        let lines = ([toggle] + rows + [showMore]).map { abs($0.midY - top.midY) }
+        XCTAssertEqual(lines, lines.sorted(), "Expected the To ship line, rows newest first, then Show 1 more: \(lines)")
+        XCTAssertEqual(Set(lines).count, lines.count, "Each line should have its own row: \(lines)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-projects-to-ship-expanded")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-projects-to-ship-expanded")
+
+        try clickSemanticText(prefix: "To ship, 4 tasks, expanded", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, collapsed"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Home setup wizard") }, "\(textValues)")
+    }
+
     func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
         let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
