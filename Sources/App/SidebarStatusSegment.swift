@@ -632,6 +632,9 @@ struct SidebarToShipGroupToggle: View {
     let count: Int
     @Binding var isExpanded: Bool
     var summary: Text?
+    /// Shows the purple To ship mark before the title. A project card uses
+    /// it because its line has no purple project summary.
+    var showsMark = false
     /// What the toggle says; starts with `label(count:isExpanded:)`.
     let accessibilityText: String
 
@@ -647,6 +650,12 @@ struct SidebarToShipGroupToggle: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 8, weight: .bold))
                     .frame(width: 9)
+                if showsMark {
+                    // The same mark as the card's old "To ship N" count.
+                    Image(systemName: "arrow.up.square")
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                }
                 SidebarGroupTitle(title: "To ship", count: count)
                     .layoutPriority(1)
                 Spacer(minLength: 8)

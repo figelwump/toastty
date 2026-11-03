@@ -1300,6 +1300,7 @@ struct SidebarView: View {
         return SidebarToShipGroupToggle(
             count: count,
             isExpanded: isExpanded,
+            showsMark: true,
             accessibilityText: SidebarToShipGroupToggle.label(count: count, isExpanded: isExpanded.wrappedValue)
         )
         .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipToggle.\(projectWorkspaceID.uuidString)")

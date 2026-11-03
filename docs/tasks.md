@@ -450,8 +450,9 @@ window.
 
 - **Projects** is the workspace list. A task space whose task is To ship or
   Done leaves its card's task space list unless an agent in it is working or
-  waiting for you. After the card's task spaces, a To ship line lists the
-  project's other To ship tasks, with the Done count on its right. Like
+  waiting for you. After the card's task spaces, a To ship line with the
+  purple To ship mark lists the project's other To ship tasks, with the Done
+  count on its right. Like
   Status, it starts collapsed; click it to expand it in place, and the choice
   resets when the sidebar hides or the app quits. Expanded, the 3 most
   recently merged To ship tasks show as rows, then **Show N more** when the
