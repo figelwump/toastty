@@ -286,7 +286,7 @@ extension AppControlExecutor {
     private func liveTaskSnapshot(
         _ record: TaskRecord,
         coordinator: TaskCoordinator,
-        stage: TaskStage?,
+        stage: TaskStageSnapshot?,
         includeReply: Bool
     ) -> [String: AutomationJSONValue] {
         var snapshot = Self.taskSnapshot(record, stage: stage)
@@ -533,15 +533,22 @@ extension AppControlExecutor {
         }
     }
 
-    private static func stagesByTaskID(_ board: TaskBoardStore?) -> [UUID: TaskStage] {
+    private static func stagesByTaskID(_ board: TaskBoardStore?) -> [UUID: TaskStageSnapshot] {
         guard let board else { return [:] }
-        return Dictionary(board.items().compactMap { item in item.taskID.map { ($0, item.stage) } }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(board.items().compactMap { item in
+            item.taskID.map { ($0, TaskStageSnapshot(stage: item.stage, finishedThroughChildren: item.finishedThroughChildren)) }
+        }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// `stage` as `{group, attention?, reason?}`: the group the Tasks view
-    /// lists the task in, and why it needs the user.
-    static func stageSnapshot(_ stage: TaskStage) -> [String: AutomationJSONValue] {
+    /// `stage` as `{group, attention?, reason?, finishedThroughChildren?}`:
+    /// the group the Tasks view lists the task in, why it needs the user,
+    /// and whether it reached To ship or Done through its child tasks.
+    static func stageSnapshot(_ snapshot: TaskStageSnapshot) -> [String: AutomationJSONValue] {
+        let stage = snapshot.stage
         var result: [String: AutomationJSONValue] = ["group": .string("\(stage.group)"), "needsUser": .bool(stage.needsUser)]
+        if snapshot.finishedThroughChildren {
+            result["finishedThroughChildren"] = .bool(true)
+        }
         if case .needsYou(let attention) = stage {
             switch attention {
             case .pickWorkspace(let reason):
@@ -568,7 +575,7 @@ extension AppControlExecutor {
         return result
     }
 
-    static func taskSnapshot(_ record: TaskRecord, stage: TaskStage? = nil) -> [String: AutomationJSONValue] {
+    static func taskSnapshot(_ record: TaskRecord, stage: TaskStageSnapshot? = nil) -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         func date(_ value: Date?) -> AutomationJSONValue { optional(value.map { ISO8601DateFormatter().string(from: $0) }) }
         var setup: [String: AutomationJSONValue]
@@ -721,4 +728,11 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
             throw AutomationSocketError.invalidPayload("\(key) must be true or false")
         }
     }
+}
+
+/// A task's stage as `task get` and `task list` report it.
+struct TaskStageSnapshot: Equatable {
+    var stage: TaskStage
+    /// The task reached To ship or Done because its child tasks finished.
+    var finishedThroughChildren = false
 }

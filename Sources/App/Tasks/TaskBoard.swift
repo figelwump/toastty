@@ -19,6 +19,9 @@ struct TaskBoardItem: Identifiable, Equatable {
     var projectWorkspaceID: UUID?
     var projectTitle: String?
     var stage: TaskStage
+    /// The task has no pull request of its own and reached To ship or Done
+    /// because its child tasks finished: it has no merge to release.
+    var finishedThroughChildren = false
     var agent: TaskAgentActivity
     /// A finished turn the user has not looked at yet, as the sidebar marks.
     var hasUnreadTurn = false
@@ -34,6 +37,12 @@ struct TaskBoardItem: Identifiable, Equatable {
     var activityAt: Date
 
     var taskID: UUID? { record?.id }
+
+    /// Whether the task's work merged: its own pull request, or for a task
+    /// that finished through its child tasks, theirs.
+    var hasMerged: Bool {
+        record?.mergedAt != nil || pullRequestState?.state == .merged || finishedThroughChildren
+    }
 }
 
 /// Builds the board from what Toastty already holds: task records, the
@@ -56,9 +65,8 @@ enum TaskBoard {
     static func items(_ inputs: Inputs) -> [TaskBoardItem] {
         let state = inputs.state
         let recordsByID = Dictionary(inputs.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var items = inputs.records.map { record in
-            item(for: record, inputs: inputs)
-        }
+        let builder = ItemBuilder(inputs: inputs)
+        var items = inputs.records.map(builder.item(for:))
         // Task spaces without a record, and those whose record is gone.
         for (workspaceID, parentID) in state.subspaceParentIDsByWorkspaceID() {
             guard let workspace = state.workspacesByID[workspaceID] else { continue }
@@ -91,9 +99,53 @@ enum TaskBoard {
     /// The item for one open task space: its task's, or a watched one's.
     static func item(taskSpace workspace: WorkspaceState, record: TaskRecord?, inputs: Inputs) -> TaskBoardItem {
         if let record {
-            return item(for: record, inputs: inputs)
+            return ItemBuilder(inputs: inputs).item(for: record)
         }
         return observedItem(workspace: workspace, parentID: workspace.parentWorkspaceID ?? workspace.id, inputs: inputs)
+    }
+
+    /// Builds each record's item once. A task that coordinates child tasks
+    /// finishes through them, so its item can need theirs first: `items`
+    /// and the single item of a task space both build children here, and so
+    /// agree on every stage.
+    @MainActor
+    private final class ItemBuilder {
+        private let inputs: Inputs
+        private var built: [UUID: TaskBoardItem] = [:]
+
+        init(inputs: Inputs) {
+            self.inputs = inputs
+        }
+
+        func item(for record: TaskRecord) -> TaskBoardItem {
+            if let item = built[record.id] { return item }
+            let item = TaskBoard.item(for: record, inputs: inputs) { [unowned self] in childrenOutcome(of: record) }
+            built[record.id] = item
+            return item
+        }
+
+        /// `nil` for a task without children or with one still open. A task
+        /// whose parents lead back to itself, which no command makes, never
+        /// finishes through its children, whatever order the records are in.
+        private func childrenOutcome(of record: TaskRecord) -> TaskChildrenOutcome? {
+            let children = inputs.records.filter { $0.parentTaskID == record.id && $0.id != record.id }
+            guard children.isEmpty == false, isInParentLoop(record) == false else { return nil }
+            return TaskChildrenOutcome(children: children.map { child in
+                let item = item(for: child)
+                return (item.stage, item.hasMerged)
+            })
+        }
+
+        private func isInParentLoop(_ record: TaskRecord) -> Bool {
+            var seen: Set<UUID> = [record.id]
+            var next = record.parentTaskID
+            while let id = next {
+                if seen.contains(id) { return id == record.id }
+                seen.insert(id)
+                next = inputs.records.first { $0.id == id }?.parentTaskID
+            }
+            return false
+        }
     }
 
     /// Children first appear under the task that started them, so a parent
@@ -176,7 +228,7 @@ enum TaskBoard {
         }.first
     }
 
-    private static func item(for record: TaskRecord, inputs: Inputs) -> TaskBoardItem {
+    private static func item(for record: TaskRecord, inputs: Inputs, children: () -> TaskChildrenOutcome?) -> TaskBoardItem {
         let state = inputs.state
         let waitingOn = waitingOnTitle(record, records: inputs.records)
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { state.workspacesByID[$0] == nil ? nil : $0 }
@@ -207,7 +259,7 @@ enum TaskBoard {
             agent: agent,
             statuses: statuses
         )
-        let stage = TaskStage.derive(
+        let derived = TaskStage.derivation(
             facts,
             live: TaskLiveFacts(
                 taskSpaceOpen: taskSpace != nil,
@@ -218,7 +270,8 @@ enum TaskBoard {
                 cleanupProblem: cleanupProblem,
                 waitsOnTask: waitingOn != nil
             ),
-            releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs)
+            releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs),
+            children: children
         )
         let dates = [
             record.createdAt, record.readyForReviewAt, record.replyRequest?.askedAt, record.mergedAt,
@@ -231,7 +284,8 @@ enum TaskBoard {
             taskSpaceWorkspaceID: taskSpaceID,
             projectWorkspaceID: project?.id,
             projectTitle: project?.title ?? root.map { ($0 as NSString).lastPathComponent },
-            stage: stage,
+            stage: derived.stage,
+            finishedThroughChildren: derived.finishedThroughChildren,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
             waitingOnTitle: waitingOn,
@@ -476,14 +530,18 @@ final class TaskBoardStore: ObservableObject {
     }
 
     /// The item for one open task space, given the statuses the caller
-    /// already read. `nil` when the task system is off.
+    /// already read. `nil` when the task system is off. A task that
+    /// coordinates child tasks reads their task spaces' statuses too, since
+    /// its stage follows theirs.
     func item(taskSpace workspace: WorkspaceState, statuses: [WorkspaceSessionStatus]) -> TaskBoardItem? {
         guard let coordinator, let store else { return nil }
         let record = workspace.taskID.flatMap(coordinator.records.record(id:))
         return TaskBoard.item(taskSpace: workspace, record: record, inputs: TaskBoard.Inputs(
             state: store.state,
-            records: [],
-            statuses: { _ in statuses },
+            records: coordinator.records.records,
+            statuses: { [weak sessionRuntimeStore] workspaceID in
+                workspaceID == workspace.id ? statuses : sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? []
+            },
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),

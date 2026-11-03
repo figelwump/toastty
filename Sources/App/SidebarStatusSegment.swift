@@ -157,13 +157,20 @@ struct SidebarStatusSections: Equatable {
                 projectTitle: lane.first?.projectTitle ?? "Other",
                 count: lane.count,
                 oldestMergedAt: lane.compactMap { $0.record?.mergedAt }.min(),
-                releaseWorkspaceID: lane.first(where: releasable)?.projectWorkspaceID,
+                releaseWorkspaceID: releaseWorkspaceID(lane, releasable: releasable),
                 recent: SidebarRecentToShip.make(lane)
             )
         }
         .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
         sections.doneCount = items.filter { $0.stage == .done }.count
         return sections
+    }
+
+    /// The project workspace a lane's Release starts in. Only a task with a
+    /// merge of its own offers it: a task that is To ship through its child
+    /// tasks, which may be in other projects, has nothing to release.
+    static func releaseWorkspaceID(_ lane: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool) -> UUID? {
+        lane.first { $0.finishedThroughChildren == false && releasable($0) }?.projectWorkspaceID
     }
 
     private static func locate(

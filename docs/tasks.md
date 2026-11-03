@@ -273,6 +273,14 @@ Setup makes the worktree before the task space, so the task space's terminal
 and the agent both start in it. The agent's first message names the worktree
 and branch, then gives the prompt and the task text.
 
+A task created from another task's agent records that task as its parent. A
+parent that has no pull request and no worktree of its own finishes when its
+child tasks finish: once each child is To ship, Done or Archived and at least
+one merged, the parent moves to To ship or Done after you read its last turn.
+You do not mark it done or archive it. A parent agent that still has work to
+do after the children merge keeps its task open with `task needs-reply` or
+`task ready-for-review`. See [Stages](#stages).
+
 ### Fork the conversation into new tasks
 
 A fresh agent knows only what its prompt tells it. When the work took shape in
@@ -362,7 +370,9 @@ The stage conditions follow the [stages](#stages), in the order
 the task moves past it, so a watch fires even when the task skips a stage. For
 example, a merged task also meets `ready-for-review`, and a merge in a project
 without `release_tags`, which goes straight to Done, also meets `to-ship`. A
-task marked done by hand meets only `ready-for-review` and `done`. The message
+task marked done by hand meets only `ready-for-review` and `done`. A task
+that finishes through its child tasks counts as merged with them: in To ship it
+meets `ready-for-review`, `merged` and `to-ship`, and in Done all four. The message
 names the stage the task reached, which can be later than the one you watched
 for. Toastty checks about once a second, so a stage that the task enters and
 leaves again within that time can be missed; `ready-for-review` also ends while
@@ -421,7 +431,15 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Needs you | its agent ended a turn with a question and marked it with `task needs-reply`: "Asks: <question>". Reading the turn does not clear it. It clears when the task's agent starts its next turn, usually your answer, or when the agent runs `task ready-for-review` |
 | Needs you | its pull request is open and not a draft while no agent works on it, or its agent marked work without a pull request ready with `task ready-for-review` |
 | Needs you | its agent finished a turn you have not read yet: "Claude finished · waiting for you". Once you read the answer, or after a relaunch restores the agent, the task is Idle |
+| To ship or Done | it has no pull request and no worktree of its own, it started child tasks, and they all finished: each child is To ship, Done or Archived, and at least one merged. It is To ship while a child waits for a release, shown as "Child tasks merged · waiting for a release", and Done once every child that is not archived is Done. This also applies after its task space closed, unless it still waits for a reply or a review |
 | Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space |
+
+A parent that finishes through its child tasks stores nothing: its stage
+follows theirs. A new child that is not finished moves it back to Idle, and its
+agent's next turn moves it to Running. Its task space stays open, and Projects
+hides it as for any To ship or Done task. Children that were archived, or
+marked done without a merge, do not finish a parent alone; it stays Idle, and
+you decide.
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about it every two minutes while the task is open, when an agent's
@@ -463,7 +481,9 @@ window.
   dimmed. The selected task's family keeps its group and position until you
   select another row, so reading a finished turn dims the row instead of
   moving it from under the pointer; a task that starts to need you moves at
-  once.
+  once. A parent without a pull request moves to To ship or Done when its
+  children finish, so the whole family leaves Idle. A parent in To ship counts
+  in its project's To ship line with its children.
   To ship starts collapsed to one line that names each project and its count.
   Click it to expand the group in place; the choice resets when the sidebar
   hides or the app quits. Expanded, each project has a header as in the Tasks
@@ -622,6 +642,9 @@ For work that has no pull request, the agent runs `toastty task
 ready-for-review`, and the task waits in Needs you. **Mark Done**, or
 `toastty task mark-done`, finishes it.
 
+A task that split its work into child tasks needs neither: it finishes when
+its children finish. See [Split work into new tasks](#split-work-into-new-tasks).
+
 The header of a task space without a pull request offers **Archive Task…**.
 It is available before and after the agent reports completion, including for
 a task already marked done. It opens the archive confirmation and uses the
@@ -657,7 +680,9 @@ branch, and starts the release agent in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The
 agent's first message starts with `Use the <release_skill> skill.` when a
 release skill is set, then `release_prompt` if one is set, then the list of
-tasks waiting to ship. `toastty task release` does the
+tasks waiting to ship. A parent that is To ship only through its child tasks
+has no merge of its own, so the list names its children, not the parent. A
+To ship line that holds only such a parent offers no **Release…**. `toastty task release` does the
 same from the CLI, and **Release <project>…** in the command palette does it
 for an open project even when its To ship list is empty.
 
@@ -665,7 +690,8 @@ Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
 release made outside Toastty counts too. When a tag contains a task's merge
 commit, the task is Done, and the Tasks view shows the tag. The release adds
-no cleanup for the task: its merge already ran it. A shipped release task
+no cleanup for the task: its merge already ran it. A parent whose children
+shipped becomes Done with them. A shipped release task
 closes its task space and removes its worktree once its agent is at rest,
 unless the worktree's commit is on no remote branch or tag.
 

@@ -552,4 +552,67 @@ extension TaskAppControlTests {
             #expect(message == "segment must be projects or status")
         }
     }
+
+    private struct OfflineGitHub: WorkspaceMergeCommandRunning {
+        func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+            WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+        }
+    }
+
+    /// A task that finished through its child tasks reports it in `stage`,
+    /// and a poll lists it as changed when only a child's record changed.
+    @Test func aParentsStageFollowsItsChildrenInGetAndList() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        // The coordinator holds its board weakly.
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: OfflineGitHub()),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        func insert(_ title: String, parent: UUID? = nil) throws -> TaskRecord {
+            let record = TaskRecord(
+                createdAt: Date(), text: title, title: title, slug: title, source: .cli,
+                workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot, setup: .started, parentTaskID: parent
+            )
+            try fixture.coordinator.records.insert(record)
+            return record
+        }
+        let parent = try insert("coordinate-signup")
+        let child = try insert("fix-signup", parent: parent.id)
+        func parentStage() throws -> AutomationJSONValue? {
+            try executor.runQuery(id: "task.get", args: ["taskID": .string(parent.id.uuidString)])["stage"]
+        }
+        #expect(try parentStage() == .object(["group": .string("idle"), "needsUser": .bool(false)]))
+        let first = try executor.runQuery(id: "task.list", args: [:])
+        guard case .string(let cursor)? = first["cursor"] else {
+            Issue.record("task.list has no cursor: \(first)")
+            return
+        }
+
+        _ = fixture.coordinator.records.update(id: child.id) {
+            $0.mergedAt = Date()
+            $0.mergeCommit = "abc123"
+        }
+        let finished = AutomationJSONValue.object([
+            "group": .string("done"), "needsUser": .bool(false), "finishedThroughChildren": .bool(true),
+        ])
+        #expect(try parentStage() == finished)
+        #expect(fixture.record(parent.id)?.doneAt == nil)
+        let changed = try executor.runQuery(id: "task.list", args: ["changedSince": .string(cursor)])
+        guard case .array(let tasks)? = changed["tasks"] else {
+            Issue.record("task.list has no tasks: \(changed)")
+            return
+        }
+        let byID = Dictionary(uniqueKeysWithValues: tasks.compactMap { task -> (String, AutomationJSONValue?)? in
+            guard case .object(let object) = task, case .string(let id)? = object["taskID"] else { return nil }
+            return (id, object["stage"])
+        })
+        #expect(Set(byID.keys) == [parent.id.uuidString, child.id.uuidString])
+        #expect(byID[parent.id.uuidString] == finished)
+    }
 }

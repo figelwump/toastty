@@ -5,6 +5,8 @@ import Foundation
 /// order and the first match wins: a stopped cleanup, Archived, Done, To
 /// ship, Needs you, Starting, Running, Idle. Needs you comes before
 /// Starting, so a task whose setup failed counts toward the Needs you badge.
+/// A task that coordinates child tasks then finishes through them instead
+/// of resting at Idle; see `derivation(_:live:releaseTagsConfigured:)`.
 public enum TaskStage: Equatable, Sendable {
     /// Setup, triage, or a move into a worktree is under way. Lists show it
     /// with Running.
@@ -111,6 +113,46 @@ public enum TaskStage: Equatable, Sendable {
     }
 
     public static func derive(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
+        derivation(facts, live: live, releaseTagsConfigured: releaseTagsConfigured).stage
+    }
+
+    /// The stage, and whether the task reached it through its child tasks.
+    /// A task that splits its work into child tasks and has no pull request
+    /// or worktree of its own finishes when they do: To ship while a child
+    /// waits for a release, Done once every child that is not archived is
+    /// Done. Only a task that would otherwise be Idle moves this way, so a
+    /// task whose agent works, waits for the user, or marked it ready for
+    /// review stays where it is. `children` is asked only for such a task.
+    public static func derivation(
+        _ facts: TaskStageFacts,
+        live: TaskLiveFacts,
+        releaseTagsConfigured: Bool,
+        children: () -> TaskChildrenOutcome? = { nil }
+    ) -> (stage: TaskStage, finishedThroughChildren: Bool) {
+        let own = ownStage(facts, live: live, releaseTagsConfigured: releaseTagsConfigured)
+        guard facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil else {
+            return (own, false)
+        }
+        switch own {
+        case .idle:
+            break
+        case .needsYou(.taskSpaceClosed):
+            // Closing the task space is how the user puts a conversation
+            // away, so it does not hold a finished task back. What the task
+            // still waits for, such as a reply, does.
+            var open = live
+            open.taskSpaceOpen = true
+            guard ownStage(facts, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
+                return (own, false)
+            }
+        case .starting, .needsYou, .running, .toShip, .done, .archived:
+            return (own, false)
+        }
+        guard let outcome = children() else { return (own, false) }
+        return (outcome.stage, true)
+    }
+
+    private static func ownStage(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
         // A cleanup that stopped leaves a task space or a worktree behind,
         // whatever the task's stage would be without it.
         if let problem = live.cleanupProblem ?? facts.cleanupProblem {
@@ -199,6 +241,8 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var startWork: TaskStartWorkState?
     /// Whether setup made a task space, which may have closed since.
     public var hasTaskSpace: Bool
+    /// Whether the task has, or is making, a worktree of its own.
+    public var hasWorktree: Bool
     public var readyForReviewAt: Date?
     /// When the agent marked that it waits for the user's reply.
     public var replyRequestedAt: Date?
@@ -213,6 +257,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         setup: TaskSetupState,
         startWork: TaskStartWorkState? = nil,
         hasTaskSpace: Bool,
+        hasWorktree: Bool = false,
         readyForReviewAt: Date? = nil,
         replyRequestedAt: Date? = nil,
         mergedAt: Date? = nil,
@@ -224,6 +269,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.setup = setup
         self.startWork = startWork
         self.hasTaskSpace = hasTaskSpace
+        self.hasWorktree = hasWorktree
         self.readyForReviewAt = readyForReviewAt
         self.replyRequestedAt = replyRequestedAt
         self.mergedAt = mergedAt
@@ -238,6 +284,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             setup: record.setup,
             startWork: record.startWork?.state,
             hasTaskSpace: record.operation.taskSpace != nil,
+            hasWorktree: record.operation.worktree != nil,
             readyForReviewAt: record.readyForReviewAt,
             replyRequestedAt: record.replyRequest?.askedAt,
             mergedAt: record.mergedAt,
@@ -345,5 +392,44 @@ public struct TaskLiveFacts: Equatable, Sendable {
         self.merge = merge
         self.cleanupProblem = cleanupProblem
         self.waitsOnTask = waitsOnTask
+    }
+}
+
+/// Where a task's child tasks stand once every one of them is To ship,
+/// Done or Archived and at least one merged. Archived children were closed
+/// without finishing, and a child marked Done without a merge may not have
+/// changed anything, so neither alone finishes the parent.
+public enum TaskChildrenOutcome: Equatable, Sendable {
+    /// A child waits for a release.
+    case toShip
+    /// Every child that is not archived is Done.
+    case done
+
+    /// `merged` is whether the child's work merged: through its own pull
+    /// request, or through its own child tasks. `nil` while a child is
+    /// still open, or when none merged.
+    public init?(children: [(stage: TaskStage, merged: Bool)]) {
+        var anyMerged = false
+        var waitsToShip = false
+        for child in children {
+            switch child.stage {
+            case .toShip:
+                waitsToShip = true
+            case .done, .archived:
+                break
+            case .starting, .needsYou, .running, .idle:
+                return nil
+            }
+            if child.merged, child.stage != .archived { anyMerged = true }
+        }
+        guard anyMerged else { return nil }
+        self = waitsToShip ? .toShip : .done
+    }
+
+    public var stage: TaskStage {
+        switch self {
+        case .toShip: .toShip
+        case .done: .done
+        }
     }
 }

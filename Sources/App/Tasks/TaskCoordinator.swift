@@ -804,17 +804,30 @@ final class TaskCoordinator {
     func removeExpiredAttachments() {
         guard let config = try? configLoader() else { return }
         let date = now()
+        // A task that is Done through its child tasks shows it only on the
+        // board, which is built once and only when a parent task needs it.
+        var doneThroughChildren: Set<UUID>?
+        func isDoneThroughChildren(_ record: TaskRecord) -> Bool {
+            guard records.records.contains(where: { $0.parentTaskID == record.id }) else { return false }
+            if doneThroughChildren == nil {
+                doneThroughChildren = Set((board?.items() ?? []).filter { $0.finishedThroughChildren && $0.stage == .done }.compactMap(\.taskID))
+            }
+            return doneThroughChildren?.contains(record.id) == true
+        }
         for record in records.records {
             let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
             let releaseTagsConfigured = record.projectRoot.flatMap {
                 config.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
             } != nil
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
+            let hasFiles = fileManager.fileExists(atPath: directoryURL.path)
             let step = TaskAttachmentRetention.step(
                 record,
-                hasFiles: fileManager.fileExists(atPath: directoryURL.path),
+                hasFiles: hasFiles,
                 releaseTagsConfigured: releaseTagsConfigured,
                 taskSpaceOpen: taskSpaceOpen,
+                doneThroughChildren: hasFiles && taskSpaceOpen == false && record.attachmentsRemovedAt == nil
+                    && isDoneThroughChildren(record),
                 now: date
             )
             switch step {

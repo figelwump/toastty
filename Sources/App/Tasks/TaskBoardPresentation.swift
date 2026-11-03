@@ -69,7 +69,7 @@ enum TaskBoardPresentation {
             }
         case .idle:
             return item.agent == TaskAgentActivity.none ? "No agent running" : "\(agentName(item)) · idle"
-        case .toShip: return "Merged · waiting for a release"
+        case .toShip: return item.finishedThroughChildren ? "Child tasks merged · waiting for a release" : "Merged · waiting for a release"
         case .done: return item.record?.shippedAt != nil ? "Shipped" : "Done"
         case .archived: return "Archived"
         }
@@ -104,8 +104,10 @@ enum TaskBoardPresentation {
             }
         case .running: return ("Running", statusLine(item))
         case .idle: return ("Idle", statusLine(item))
-        case .toShip: return ("To ship", "merged, waiting for a release tag")
+        case .toShip:
+            return ("To ship", item.finishedThroughChildren ? "child tasks merged, waiting for a release tag" : "merged, waiting for a release tag")
         case .done:
+            if item.finishedThroughChildren { return ("Done", "child tasks finished") }
             if let tag = item.record?.releaseTag { return ("Done", "shipped in \(tag)") }
             return ("Done", item.record?.mergedAt != nil || item.pullRequestState?.state == .merged ? "merged" : "marked done")
         case .archived: return ("Archived", "closed without finishing")

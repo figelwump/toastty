@@ -224,7 +224,7 @@ final class CommandPaletteTaskActions {
         guard options.isEmpty == false else { return [] }
         // The tasks Release would list, counted from one board snapshot.
         var toShipCounts: [String: Int] = [:]
-        for item in board.items() where item.stage == .toShip {
+        for item in board.items() where item.stage == .toShip && item.finishedThroughChildren == false {
             guard let record = item.record, record.release == nil, let projectRoot = record.projectRoot else { continue }
             toShipCounts[TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: home), default: 0] += 1
         }
