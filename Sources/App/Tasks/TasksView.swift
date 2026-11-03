@@ -37,7 +37,7 @@ struct TasksViewSections: Equatable {
                     id: key,
                     projectTitle: entries.first?.item.projectTitle ?? "Other",
                     entries: entries,
-                    releaseWorkspaceID: entries.map(\.item).first(where: releasable)?.projectWorkspaceID
+                    releaseWorkspaceID: SidebarStatusSections.releaseWorkspaceID(entries.map(\.item), releasable: releasable)
                 )
             }
             .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }

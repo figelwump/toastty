@@ -70,6 +70,10 @@ each part its own task:
 - Each call returns a task ID while setup continues. Check one with
   `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
 - The new tasks record this one as their parent. Coordinate them from here.
+- Do not mark this task Done or ready for review when its work is in the new
+  tasks: Toastty finishes it when they finish and at least one merged. If this
+  task still owns work after they merge, run `task needs-reply` or
+  `task ready-for-review` to keep it open.
 - Tell each new task how to report back: `toastty task send <this task's ID>
   "<message>"`. `toastty task get`, with no ID, shows this task and its
   `taskID`. Task IDs keep working after a relaunch; panel and session IDs do

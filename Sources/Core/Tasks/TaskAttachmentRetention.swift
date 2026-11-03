@@ -42,16 +42,19 @@ public enum TaskAttachmentRetention {
     /// `hasFiles` is whether the task's attachments folder exists; a record
     /// rebuilt from its task space can have a folder but no file list.
     /// An open task space keeps the files, because its agent may still
-    /// read them.
+    /// read them. `doneThroughChildren` is whether the task is Done because
+    /// its child tasks finished, which its record does not show.
     public static func step(
         _ record: TaskRecord,
         hasFiles: Bool,
         releaseTagsConfigured: Bool,
         taskSpaceOpen: Bool,
+        doneThroughChildren: Bool = false,
         now: Date
     ) -> Step {
         guard hasFiles, record.attachmentsRemovedAt == nil else { return .none }
-        guard taskSpaceOpen == false, isFinished(record, releaseTagsConfigured: releaseTagsConfigured) else {
+        let finished = doneThroughChildren || isFinished(record, releaseTagsConfigured: releaseTagsConfigured)
+        guard taskSpaceOpen == false, finished else {
             return record.attachmentsFinishedSeenAt == nil ? .none : .resetClock
         }
         guard let seenAt = record.attachmentsFinishedSeenAt else { return .startClock }

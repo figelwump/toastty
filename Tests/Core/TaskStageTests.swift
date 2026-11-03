@@ -208,6 +208,110 @@ struct TaskStageTests {
         #expect(result.group == .needsYou)
     }
 
+    // MARK: - Tasks that coordinate child tasks
+
+    /// A child's stage, merged unless it is archived or marked done.
+    private func child(_ stage: TaskStage, merged: Bool? = nil) -> (stage: TaskStage, merged: Bool) {
+        (stage, merged ?? (stage == .toShip || stage == .done))
+    }
+
+    private func parent(
+        _ children: [(stage: TaskStage, merged: Bool)],
+        _ live: TaskLiveFacts = TaskLiveFacts(taskSpaceOpen: true, agent: .idle),
+        facts: TaskStageFacts? = nil
+    ) -> (stage: TaskStage, finishedThroughChildren: Bool) {
+        TaskStage.derivation(facts ?? started(), live: live, releaseTagsConfigured: false) {
+            TaskChildrenOutcome(children: children)
+        }
+    }
+
+    @Test
+    func aParentFinishesWhenEveryChildHasFinishedAndOneMerged() {
+        #expect(parent([child(.toShip), child(.toShip), child(.toShip)]) == (.toShip, true))
+        #expect(parent([child(.done), child(.done)]) == (.done, true))
+        // A child waiting for a release keeps the parent in To ship.
+        #expect(parent([child(.done), child(.toShip)]) == (.toShip, true))
+        // Archived children and children marked done without a merge count
+        // as finished, but finish nothing alone.
+        #expect(parent([child(.toShip), child(.archived)]) == (.toShip, true))
+        #expect(parent([child(.done), child(.archived)]) == (.done, true))
+        #expect(parent([child(.done), child(.done, merged: false)]) == (.done, true))
+        #expect(parent([child(.archived), child(.archived)]) == (.idle, false))
+        #expect(parent([child(.done, merged: false), child(.archived)]) == (.idle, false))
+        #expect(parent([]) == (.idle, false))
+    }
+
+    @Test
+    func aParentWithAnOpenChildStaysWhereItIs() {
+        for open in [TaskStage.idle, .running, .starting, .needsYou(.review), .needsYou(.cleanupStopped(reason: "dirty"))] {
+            #expect(parent([child(.toShip), child(open, merged: false)]) == (.idle, false), "\(open)")
+        }
+    }
+
+    @Test
+    func aParentThatStillOwnsWorkOrHasNewsForTheUserDoesNotMove() {
+        let finished = [child(.toShip), child(.done)]
+        // The agent marked the task as waiting for a reply or ready.
+        var asked = started()
+        asked.replyRequestedAt = date
+        #expect(parent(finished, facts: asked) == (.needsYou(.awaitingReply), false))
+        #expect(parent(finished, facts: started(readyForReviewAt: date)) == (.needsYou(.readyForReview), false))
+        // An unread last turn waits for the user; once read, the task moves.
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .finished)) == (.needsYou(.agentFinished), false))
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .idle)) == (.toShip, true))
+        // Live work and a pending watch on another task come first.
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .working)) == (.running, false))
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == (.needsYou(.agentNeedsInput), false))
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .idle, waitsOnTask: true)) == (.running, false))
+        // Recorded endings keep their own stage.
+        var archived = started()
+        archived.archivedAt = date
+        #expect(parent(finished, facts: archived) == (.archived, false))
+        var done = started()
+        done.doneAt = date
+        #expect(parent([child(.toShip)], facts: done) == (.done, false))
+    }
+
+    @Test
+    func aParentWithItsOwnPullRequestOrWorktreeKeepsTheUsualRules() {
+        let finished = [child(.toShip)]
+        // Its own pull request decides: open waits for review, a draft or a
+        // closed one leaves it idle.
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .idle, hasPullRequestLink: true)) == (.needsYou(.review), false))
+        let draft = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: draftPR, hasPullRequestLink: true)
+        #expect(parent(finished, draft) == (.idle, false))
+        let closed = TaskLiveFacts(taskSpaceOpen: true, agent: .idle, pullRequest: TaskPullRequestState(state: .closed), hasPullRequestLink: true)
+        #expect(parent(finished, closed) == (.idle, false))
+        var inWorktree = started()
+        inWorktree.hasWorktree = true
+        #expect(parent(finished, facts: inWorktree) == (.idle, false))
+    }
+
+    @Test
+    func theChildrenAreReadOnlyForATaskThatCouldFinishThroughThem() {
+        var asked = 0
+        let busy = TaskStage.derivation(started(), live: TaskLiveFacts(taskSpaceOpen: true, agent: .working), releaseTagsConfigured: false) {
+            asked += 1
+            return .done
+        }
+        #expect(busy == (.running, false))
+        #expect(asked == 0)
+    }
+
+    @Test
+    func aClosedTaskSpaceDoesNotHoldAFinishedParentBack() {
+        let closed = TaskLiveFacts(taskSpaceOpen: false)
+        #expect(parent([child(.done)], closed) == (.done, true))
+        // Before its children finish, the closed task space needs the user.
+        #expect(parent([child(.done), child(.running)], closed) == (.needsYou(.taskSpaceClosed), false))
+        // So does a question, a ready mark, or a watch the task still holds.
+        var asked = started()
+        asked.replyRequestedAt = date
+        #expect(parent([child(.done)], closed, facts: asked) == (.needsYou(.taskSpaceClosed), false))
+        #expect(parent([child(.done)], closed, facts: started(readyForReviewAt: date)) == (.needsYou(.taskSpaceClosed), false))
+        #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: false, waitsOnTask: true)) == (.needsYou(.taskSpaceClosed), false))
+    }
+
     // MARK: - Task spaces without a record
 
     @Test

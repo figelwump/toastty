@@ -74,6 +74,23 @@ struct TaskAttachmentRetentionTests {
     }
 
     @Test
+    func aTaskDoneThroughItsChildrenLosesItsFilesLikeOneMarkedDone() {
+        func step(_ record: TaskRecord, after interval: TimeInterval = 0, done: Bool, taskSpaceOpen: Bool = false) -> TaskAttachmentRetention.Step {
+            TaskAttachmentRetention.step(
+                record, hasFiles: true, releaseTagsConfigured: false, taskSpaceOpen: taskSpaceOpen,
+                doneThroughChildren: done, now: seen.addingTimeInterval(interval)
+            )
+        }
+        // Its record shows nothing finished; the board's stage does.
+        #expect(step(record(), done: true) == .startClock)
+        #expect(step(record(), done: true, taskSpaceOpen: true) == .none)
+        let counting = record { $0.attachmentsFinishedSeenAt = seen }
+        #expect(step(counting, after: week, done: true) == .remove)
+        // A new child opens its work again.
+        #expect(step(counting, done: false) == .resetClock)
+    }
+
+    @Test
     func unfinishedOrBusyTasksKeepTheirFiles() {
         #expect(step(record()) == .none)
         // A cleanup that stopped puts the task back in Needs you.

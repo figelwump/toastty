@@ -96,11 +96,13 @@ extension TaskCoordinator {
         }
     }
 
-    /// The project's merged tasks that no release tag contains yet.
+    /// The project's merged tasks that no release tag contains yet. A task
+    /// that is To ship only because its child tasks are has no merge of its
+    /// own, so its children stand for it.
     func toShipTasks(projectRoot root: String) -> [TaskRecord] {
         if let board {
             return board.items()
-                .filter { $0.stage == .toShip }
+                .filter { $0.stage == .toShip && $0.finishedThroughChildren == false }
                 .compactMap(\.record)
                 .filter { $0.projectRoot == root && $0.release == nil }
         }

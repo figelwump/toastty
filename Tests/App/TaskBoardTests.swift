@@ -739,6 +739,185 @@ struct TaskBoardTests {
         #expect(fixture.record(task.id)?.replyRequest == nil)
     }
 
+    // MARK: - Tasks that coordinate child tasks
+
+    /// A task as `task create` records it, here without a task space. A
+    /// child names the task that started it.
+    @discardableResult
+    private func insertTask(
+        _ fixture: TaskCoordinatorTests.Fixture,
+        _ title: String,
+        id: UUID = UUID(),
+        parent: UUID? = nil,
+        change: (inout TaskRecord) -> Void = { _ in }
+    ) throws -> TaskRecord {
+        var record = TaskRecord(
+            id: id, createdAt: Date(), text: title, title: title, slug: title, source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot, setup: .started, parentTaskID: parent
+        )
+        change(&record)
+        try fixture.coordinator.records.insert(record)
+        return record
+    }
+
+    private static func merge(_ record: inout TaskRecord) {
+        record.pullRequestURL = "https://github.com/example/toastty/pull/\(abs(record.id.hashValue) % 1000 + 200)"
+        record.mergedAt = Date()
+        record.mergeCommit = String(record.id.uuidString.prefix(12))
+    }
+
+    /// The observed case: a task whose agent split the work into child
+    /// tasks stayed Idle after they merged, until the user archived it.
+    @Test func aCoordinatingTaskFinishesThroughItsChildrenOnceItsLastTurnIsRead() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        let parent = try await startTask(fixture, text: "Act on the signup feedback")
+        let session = try #require(parent.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(parent.taskSpaceWorkspaceID)
+        let panel = try #require(parent.operation.taskSpace?.panelID)
+        func item(_ id: UUID) throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(id) }) }
+        func rowItem() throws -> TaskBoardItem? {
+            let workspace = try #require(fixture.store.state.workspacesByID[taskSpace])
+            return board.item(taskSpace: workspace, statuses: fixture.sessionRuntimeStore.workspaceStatuses(for: taskSpace))
+        }
+
+        let copy = try insertTask(fixture, "signup-copy", parent: parent.id, change: Self.merge)
+        let email = try insertTask(fixture, "signup-email", parent: parent.id)
+        // The parent's agent started them and is at its prompt; one child is
+        // still open, so the parent is Idle.
+        let start = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(0.5)
+        )
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let idle = try item(parent.id)
+        #expect(idle.stage == .idle, "\(idle.stage), agent \(idle.agent)")
+        #expect(idle.finishedThroughChildren == false)
+
+        // The last child merges, and the parent's agent reports on it. The
+        // user has not read that turn, so the parent waits in Needs you.
+        _ = fixture.coordinator.records.update(id: email.id, Self.merge)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(1)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(1.5)
+        )
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        let unread = try item(parent.id)
+        #expect(unread.stage == .needsYou(.agentFinished), "\(unread.stage)")
+        #expect(try rowItem()?.stage == .needsYou(.agentFinished))
+
+        // Once read, the parent waits to ship with its children. Nothing is
+        // stored on it, and its task space stays open.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let shipping = try item(parent.id)
+        #expect(shipping.stage == .toShip, "\(shipping.stage)")
+        #expect(shipping.finishedThroughChildren)
+        #expect(TaskBoardPresentation.statusLine(shipping) == "Child tasks merged · waiting for a release")
+        #expect(TaskBoardPresentation.detailActions(shipping).isEmpty)
+        let record = try #require(fixture.record(parent.id))
+        #expect(record.mergedAt == nil && record.doneAt == nil && record.shippedAt == nil && record.archivedAt == nil)
+        #expect(fixture.store.state.workspacesByID[taskSpace] != nil)
+        // The task space's own row, the top bar and the close question read
+        // the same stage.
+        #expect(try rowItem()?.stage == .toShip)
+        #expect(try rowItem()?.finishedThroughChildren == true)
+        // Release lists the children's merges, not the parent.
+        #expect(Set(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id)) == [copy.id, email.id])
+        // A watch on the parent sees the stage, with the children's merge.
+        #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip])
+
+        // The children ship: the parent is Done.
+        for child in [copy, email] {
+            _ = fixture.coordinator.records.update(id: child.id) {
+                $0.shippedAt = Date()
+                $0.releaseTag = "v1.0.0"
+            }
+        }
+        let done = try item(parent.id)
+        #expect(done.stage == .done)
+        #expect(done.finishedThroughChildren)
+        #expect(TaskBoardPresentation.stageDescription(done).why == "child tasks finished")
+        #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip, .done])
+
+        // A new child opens the parent's work again, until it finishes too.
+        let followUp = try insertTask(fixture, "signup-follow-up", parent: parent.id)
+        #expect(try item(parent.id).stage == .idle)
+        _ = fixture.coordinator.records.update(id: followUp.id) { $0.archivedAt = Date() }
+        #expect(try item(parent.id).stage == .done)
+
+        // Closing the task space does not send a finished parent back to
+        // Needs you.
+        _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpace))
+        #expect(try item(parent.id).stage == .done)
+    }
+
+    @Test func onlyMergedWorkFinishesAParentAndNestedParentsFollow() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func stage(_ id: UUID) -> TaskStage? { board.items().first { $0.id == .task(id) }?.stage }
+        let plan = try insertTask(fixture, "plan-onboarding")
+        let parent = try insertTask(fixture, "coordinate-signup", parent: plan.id)
+        // Children closed without a merge finish nothing.
+        try insertTask(fixture, "investigate-drop-off", parent: parent.id) { $0.doneAt = Date() }
+        try insertTask(fixture, "abandoned-redesign", parent: parent.id) { $0.archivedAt = Date() }
+        #expect(stage(parent.id) == .idle)
+        #expect(stage(plan.id) == .idle)
+
+        // One merged child finishes the parent, without release tags as
+        // Done, and the parent finishes the task above it.
+        try insertTask(fixture, "fix-signup", parent: parent.id, change: Self.merge)
+        #expect(stage(parent.id) == .done)
+        #expect(stage(plan.id) == .done)
+        #expect(board.items().first { $0.id == .task(plan.id) }?.finishedThroughChildren == true)
+
+        // A parent with a pull request of its own keeps the usual rules.
+        _ = fixture.coordinator.records.update(id: parent.id) { $0.pullRequestURL = "https://github.com/example/toastty/pull/301" }
+        #expect(stage(parent.id) == .needsYou(.review))
+        #expect(stage(plan.id) == .idle)
+    }
+
+    @Test func tasksWhoseParentsLoopDoNotFinishThroughEachOther() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let first = UUID(), second = UUID(), itself = UUID()
+        try insertTask(fixture, "first", id: first, parent: second)
+        try insertTask(fixture, "second", id: second, parent: first)
+        try insertTask(fixture, "merged-under-first", parent: first, change: Self.merge)
+        try insertTask(fixture, "its-own-parent", id: itself, parent: itself)
+        try insertTask(fixture, "merged-under-itself", parent: itself, change: Self.merge)
+        let items = board.items()
+        for id in [first, second, itself] {
+            #expect(items.first { $0.id == .task(id) }?.stage == .idle)
+        }
+    }
+
+    @Test func aParentInToShipCountsInItsLaneButDoesNotOfferARelease() {
+        let parentID = UUID()
+        var parent = statusItem("act-on-signup-feedback", taskID: parentID, stage: .toShip, project: "emptyos")
+        parent.finishedThroughChildren = true
+        parent.projectWorkspaceID = UUID()
+        var child = statusItem("signup-copy", parent: parentID, stage: .toShip, project: "emptyos")
+        child.projectWorkspaceID = UUID()
+        // The family leaves Idle; the parent counts as a task to ship, and
+        // Release comes from the child's merge.
+        let sections = SidebarStatusSections.make([parent, child], releasable: { _ in true })
+        #expect(sections.idle.isEmpty && sections.needsYou.isEmpty)
+        #expect(sections.toShip.map(\.count) == [2])
+        #expect(sections.toShip.first?.releaseWorkspaceID == child.projectWorkspaceID)
+        #expect(sections.toShipLabel(isExpanded: false) == "To ship, 2 tasks, collapsed, emptyos 2")
+        // With its children in another project, the parent's lane has
+        // nothing to release.
+        let alone = SidebarStatusSections.make([parent], releasable: { _ in true })
+        #expect(alone.toShip.map(\.count) == [1])
+        #expect(alone.toShip.first?.releaseWorkspaceID == nil)
+        #expect(TasksViewSections.make([parent], releasable: { _ in true }).toShip.first?.releaseWorkspaceID == nil)
+    }
+
     @Test func childrenListUnderTheTaskThatStartedThem() {
         func item(_ title: String, taskID: UUID, parent: UUID? = nil, stage: TaskStage) -> TaskBoardItem {
             let record = TaskRecord(

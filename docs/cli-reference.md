@@ -921,7 +921,10 @@ under `worktree`, and `task retry` continues a move that failed.
 `task get` and `task list` report each task's `stage`: its `group`
 (`needsYou`, `running`, `idle`, `toShip`, `done` or `archived`), `needsUser`, and for
 Needs you the `attention` and `reason`. A task that is starting reports
-`running`; its `setup` and `worktree` say how far it got. See [Stages](tasks.md#stages).
+`running`; its `setup` and `worktree` say how far it got. A task that reached
+`toShip` or `done` because its child tasks finished also reports
+`finishedThroughChildren: true`; its record has no merge or done time of its
+own. See [Stages](tasks.md#stages).
 `task adopt` gives a task space without a record one; it defaults to the
 calling agent's task space.
 
@@ -930,7 +933,9 @@ and talk to other tasks by task ID; see
 [Coordinate tasks](tasks.md#coordinate-tasks). `task watch` tells the calling
 agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition
-held, or 1 when it can never hold or `--timeout` ran out.
+held, or 1 when it can never hold or `--timeout` ran out. `--until to-ship` or
+`--until done` on a parent task also holds when the parent finishes through
+its child tasks.
 
 `task merge` is what a merge skill runs once its checks pass; without a task
 ID it merges the calling agent's own task. Toastty merges at the checkout's

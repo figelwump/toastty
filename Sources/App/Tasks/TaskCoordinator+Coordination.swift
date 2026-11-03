@@ -237,8 +237,8 @@ extension TaskCoordinator {
         var result: [UUID: Set<TaskWatchCondition>] = [:]
         for item in board.items() {
             guard let record = item.record else { continue }
-            let merged = record.mergedAt != nil || item.pullRequestState?.state == .merged
-            result[record.id] = TaskWatchEvaluation.stageConditions(stage: item.stage, merged: merged)
+            // A task that finished through its child tasks merged with them.
+            result[record.id] = TaskWatchEvaluation.stageConditions(stage: item.stage, merged: item.hasMerged)
         }
         return result
     }
