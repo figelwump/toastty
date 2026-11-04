@@ -117,11 +117,31 @@ def main():
         else:
             evidence.setdefault('capturesUnavailable', []).append(name)
 
-    def click(identifier):
+    def top_bar(role, title):
+        """Frames of the top bar's elements with this role and title. SwiftUI
+        gives top bar controls the bar's own identifier, so they are found
+        by what they say."""
+        frames = []
+        for line in run(helper, 'dump', pid).stdout.splitlines():
+            parts = line.split(' id=', 1)
+            if len(parts) < 2 or not parts[0].endswith(' ' + role) or 'id=topbar.' not in ' id=' + parts[1]:
+                continue
+            rest = parts[1].split(' title=', 1)[1]
+            label, frame = rest.rsplit(' frame=', 1)
+            if label == title:
+                origin, size = frame.split(' ')
+                x, y = map(float, origin.split(','))
+                width, height = map(float, size.split('x'))
+                frames.append((x, y, width, height))
+        return frames
+
+    def click(role, title):
         """A real click in the middle of the element, with the app in front."""
         run(helper, 'activate', pid)
         time.sleep(0.4)
-        x, y, width, height = map(float, run(driver, 'frame', pid, identifier).stdout.split())
+        frames = top_bar(role, title)
+        require(frames, f'No {role} {title} in the top bar')
+        x, y, width, height = max(frames, key=lambda f: f[2] * f[3])
         run(driver, 'click', x + width / 2, y + height / 2)
 
     def alert():
@@ -159,17 +179,16 @@ def main():
 
         # 1. A done task space that stays open says Done.
         cli_json('action', 'run', 'workspace.select', '--workspace', agent_done_space)
-        wait_for('the Done label', lambda: run(helper, 'exists', pid, 'topbar.workspace.task-done', check=False).returncode == 0)
-        require(run(helper, 'exists', pid, 'topbar.workspace.archive-task', check=False).returncode != 0,
-                'A done task space should not show a bare Archive Task button')
+        wait_for('the Done label', lambda: top_bar('AXMenuButton', 'Done'))
+        require(not top_bar('AXButton', 'Archive Task…'), 'A done task space should not show a bare Archive Task button')
         step('done task shows Done')
         capture('done-header')
 
         # 2. Complete Task asks first; Cancel changes nothing.
         cli_json('action', 'run', 'workspace.select', '--workspace', answer_space)
-        wait_for('Complete Task', lambda: run(helper, 'exists', pid, 'topbar.workspace.complete-task', check=False).returncode == 0)
+        wait_for('Complete Task', lambda: top_bar('AXButton', 'Complete Task'))
         capture('ready-header')
-        click('topbar.workspace.complete-task')
+        click('AXButton', 'Complete Task')
         dialog = alert()
         evidence['completeAlert'] = dialog
         step('complete alert', **dialog)
@@ -185,7 +204,7 @@ def main():
 
         # 3. Complete Task closes the task space and moves to the next task
         # ready for review, past the quiet neighbor.
-        click('topbar.workspace.complete-task')
+        click('AXButton', 'Complete Task')
         alert()
         run(driver, 'dialog-press', pid, 'Complete Task')
         wait_for('the done task', lambda: stage(answer)['group'] == 'done')
