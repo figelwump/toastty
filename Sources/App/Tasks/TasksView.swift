@@ -667,6 +667,32 @@ private struct TasksViewDetail: View {
             if let agent = item.record?.resolved?.agent {
                 keyValue("Agent", [agent, item.record?.resolved?.model].compactMap { $0 }.joined(separator: " · "))
             }
+            if let source = item.record?.externalRef {
+                sourceRow(source)
+            }
+        }
+    }
+
+    /// The issue or report the task came from; its page opens in the
+    /// browser.
+    @ViewBuilder
+    private func sourceRow(_ source: TaskExternalRef) -> some View {
+        if let url = source.url.flatMap(URL.init(string:)) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Source")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .frame(width: 60, alignment: .leading)
+                Button(source.id) { NSWorkspace.shared.open(url) }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(url.absoluteString)
+                    .accessibilityIdentifier("tasks.view.detail.source")
+            }
+        } else {
+            keyValue("Source", source.id, monospaced: true)
         }
     }
 

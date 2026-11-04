@@ -616,4 +616,79 @@ struct TaskCoordinatorTests {
         try fixture.coordinator.delete(taskID: created.id)
         #expect(fixture.taskSpaceIDs == [taskSpaceID])
     }
+
+    // MARK: - Create by project directory
+
+    /// A root directory picks the open workspace on it, or opens the project
+    /// as a new workspace, but only once every other check passed.
+    @Test func createByRootDirectoryOpensAProjectOnlyForAValidRequest() async throws {
+        let fixture = try Fixture()
+        // The open workspace's terminal is inside this directory, but in the
+        // nested project repository: that is another project, so Toastty
+        // opens the directory itself.
+        let outerRoot = TasksConfigFile.normalizedPath(fixture.root.path)
+        let outer = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Update the shared tooling",
+            rootDirectory: fixture.root.path,
+            agent: "claude"
+        ))
+        let outerWorkspaceID = try #require(outer.workspaceID)
+        #expect(outerWorkspaceID != fixture.workspaceID)
+        #expect(outer.projectRoot == outerRoot)
+        #expect(fixture.store.state.workspacesByID[outerWorkspaceID]?.rootDirectory == outerRoot)
+        await fixture.waitForSetup(outer.id)
+
+        let inOpen = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the sidebar",
+            rootDirectory: fixture.projectRoot,
+            agent: "claude"
+        ))
+        #expect(inOpen.workspaceID == fixture.workspaceID)
+        #expect(inOpen.pinned.workspaceID == fixture.workspaceID)
+        await fixture.waitForSetup(inOpen.id)
+
+        let website = fixture.root.appendingPathComponent("website", isDirectory: true)
+        try FileManager.default.createDirectory(at: website.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let websiteRoot = TasksConfigFile.normalizedPath(website.path)
+        func workspacesOnWebsite() -> [WorkspaceState] {
+            fixture.store.state.workspacesByID.values.filter { $0.rootDirectory == websiteRoot }
+        }
+        // Requests that fail a check open nothing.
+        let invalid: [TaskCreateRequest] = [
+            TaskCreateRequest(text: "x", rootDirectory: website.path, agent: "nope"),
+            TaskCreateRequest(text: "x", rootDirectory: website.path, agent: "claude", effort: "-high"),
+            // Checked near the end of prepareCreate.
+            TaskCreateRequest(text: "x", rootDirectory: website.path, agent: "claude", base: "main"),
+            TaskCreateRequest(text: "x", files: ["/no/such/file"], rootDirectory: website.path, agent: "claude"),
+            TaskCreateRequest(text: "x", rootDirectory: website.path, externalRefURL: "https://example.com", agent: "claude"),
+            TaskCreateRequest(text: "x", rootDirectory: fixture.root.appendingPathComponent("missing").path, agent: "claude"),
+        ]
+        for request in invalid {
+            #expect(throws: TaskError.self) { _ = try fixture.coordinator.prepareCreate(request) }
+        }
+        #expect(workspacesOnWebsite().isEmpty)
+
+        let request = TaskCreateRequest(
+            text: "Pricing page has a typo",
+            clientRequestID: "grok:github:acme/website#4",
+            rootDirectory: website.path,
+            agent: "claude"
+        )
+        let created = try await fixture.coordinator.create(request)
+        let opened = try #require(workspacesOnWebsite().first)
+        #expect(workspacesOnWebsite().count == 1)
+        #expect(created.workspaceID == opened.id)
+        #expect(created.projectRoot == websiteRoot)
+        #expect(opened.title == "website")
+        #expect(opened.parentWorkspaceID == nil)
+        // Focus stays where the user was.
+        #expect(fixture.store.selectedWorkspace?.id == fixture.workspaceID)
+        await fixture.waitForSetup(created.id)
+        #expect(fixture.record(created.id)?.setup == .started)
+
+        // A repeated request returns the first task and opens nothing more.
+        let repeated = try await fixture.coordinator.create(request)
+        #expect(repeated.id == created.id)
+        #expect(workspacesOnWebsite().count == 1)
+    }
 }

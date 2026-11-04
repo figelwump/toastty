@@ -869,7 +869,7 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 `~/.toastty/tasks.toml`.
 
 ```
-toastty task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
@@ -882,6 +882,7 @@ toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
 toastty task adopt [--workspace <id>]
 toastty task merge [<task-id>] [--head <commit>]
+toastty task request-merge <task-id>
 toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
@@ -902,8 +903,16 @@ after its current turn ends, and the calling session keeps running; `--wait`
 cannot be used with it. See
 [Fork the conversation into new tasks](tasks.md#fork-the-conversation-into-new-tasks).
 
-Without `--workspace`, and outside an agent session, the task waits in Needs
-you for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
+`--root <dir>` names the project by its directory instead of `--workspace`:
+Toastty uses the open workspace on it, or opens the project once every other
+check passed. A relative path resolves against the current directory.
+`--external-ref` names the issue or report the task came from, such as
+`github:owner/repo#123` (printable ASCII, no spaces, at most 128
+characters), and `--external-url` gives its page; `task get` and `task list`
+return them as `externalRef`.
+
+Without `--workspace` or `--root`, and outside an agent session, the task
+waits in Needs you for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
 effort you leave out; optional [triage](tasks.md#optional-triage) fills them
 first when `[triage]` is set up.
 `task set-workspace` places a task that waits for a workspace, in an open one,
@@ -938,7 +947,13 @@ held, or 1 when it can never hold or `--timeout` ran out. `--until to-ship` or
 its child tasks.
 
 `task merge` is what a merge skill runs once its checks pass; without a task
-ID it merges the calling agent's own task. Toastty merges at the checkout's
+ID it merges the calling agent's own task. It runs only from an agent session
+in the task's task space or its parent task's; elsewhere, including a shell,
+it refuses and names `task request-merge`.
+`task request-merge <task-id>` accepts the merge from outside the task, as
+the Merge button does: the task's agent checks the pull request and then
+merges it, also in a project with `merge = "direct"`. It refuses where the
+Merge button is not offered. Toastty merges at the checkout's
 commit, refuses with `--head` when the checkout moved past the checked commit,
 waits for checks that still run, and cleans up after the agent's turn ends.
 `task cancel-merge` stops a merge the user accepted. `task archive` closes a
@@ -956,7 +971,7 @@ project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#me
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.

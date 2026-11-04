@@ -147,7 +147,10 @@ struct TaskRecordTests {
         // A record without a reply request, as saved before it existed,
         // leaves the key out.
         #expect(String(decoding: try JSONEncoder().encode(record), as: UTF8.self).contains("replyRequest") == false)
+        // So does one without an external reference, so older records load.
+        #expect(String(decoding: try JSONEncoder().encode(record), as: UTF8.self).contains("externalRef") == false)
         record.replyRequest = TaskReplyRequest(askedAt: Date(timeIntervalSince1970: 3_000), question: "Which option?")
+        record.externalRef = TaskExternalRef(id: "github:acme/toastty#123", url: "https://github.com/acme/toastty/issues/123")
         let data = try JSONEncoder().encode(record)
         #expect(try JSONDecoder().decode(TaskRecord.self, from: data) == record)
         #expect(record.taskSpaceWorkspaceID == record.operation.taskSpace?.workspaceID)

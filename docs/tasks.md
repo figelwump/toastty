@@ -125,6 +125,8 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `<text>` or `--text` | The task, as written. The agent receives it unchanged. |
 | `--file <path>` | A file to attach. Repeat for more files. Toastty keeps its own copy. |
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
+| `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
+| `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
 | `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. `[defaults]` in `tasks.toml` fills what you leave out. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
@@ -400,6 +402,36 @@ Any unscoped caller may read, message and watch any task. A workspace-scoped
 session, which you set up on purpose, reaches only the tasks it may see in
 `task list`.
 
+## Coordinate from an outside agent
+
+An agent outside Toastty on the same Mac, such as a chat assistant you talk
+to, can be the coordinator: it turns issues and bug reports into tasks,
+follows them, passes their questions to you and your answers back, and asks
+for a merge when you say so. It uses the same CLI:
+
+- `task create --root <repository> --external-ref <issue> --external-url <page>
+  --request-id <key>` makes the task. A repeated request ID returns the
+  first task. The Tasks view shows the issue as **Source**.
+- `task list --changed-since <cursor> --include-reply` and
+  `task watch <task-id> --until idle --wait` follow the tasks.
+- `task send` passes your answers.
+- `task request-merge <task-id>` accepts a merge for you; the task's agent
+  still checks the pull request first.
+
+[`examples/skills/toastty-tasks/SKILL.md`](../examples/skills/toastty-tasks/SKILL.md)
+teaches an agent this workflow. Copy its folder into the agent's skills
+directory, such as `~/.grok/skills/` for Grok. Outside a Toastty session the
+CLI is `/Applications/Toastty.app/Contents/Helpers/toastty`; for a
+development build, set `TOASTTY_CLI_PATH` and `TOASTTY_SOCKET_PATH` in the
+installed copy from the build's `instance.json`.
+
+The coordinator runs as you, so any process it starts can do what you can.
+Toastty's rules prevent mistakes, not misuse: keep the agent's own approval
+rules on for commands that merge, archive or delete. Issue text comes from
+other people, so the skill treats it as data, not instructions. Toastty still
+shows Needs you and sends its own alerts, and a task agent's permission
+prompts can be answered only in Toastty or Toastty Mobile.
+
 ## Starting tasks
 
 A task whose setup or triage is still running, or that is moving into a
@@ -594,7 +626,12 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    `release_tags`, the cleanup runs the same way, and the task then waits in
    To ship until a release tag contains its merge; see [Release](#release).
 
-Saying "merge it" to the task's agent runs the same skill. **Merge Without
+Saying "merge it" to the task's agent runs the same skill. From outside the
+task, `toastty task request-merge <task-id>` does what Merge does, and always
+through the task's agent, also with `merge = "direct"`. `toastty task merge`
+itself runs only from an agent in the task's task space or in its parent
+task's, so a shell or an outside coordinator cannot skip the agent's checks
+by mistake. **Merge Without
 Checks**, or `merge = "direct"` for the project, skips the agent and merges at
 once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
@@ -860,7 +897,9 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
 
 ## Where tasks are stored
 
-- `~/.toastty/task-records.json`: every task record.
+- `~/.toastty/task-records.json`: every task record. A Toastty build without
+  external references keeps the tasks but drops their `externalRef` when it
+  saves the file.
 - `~/.toastty/task-attachments/<task-id>/`: Toastty's copies of attached files.
   They are removed when the task is deleted, or a week after Toastty first
   saw the task Done or Archived with its task space closed. Toastty looks at

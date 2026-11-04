@@ -26,6 +26,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// Set when the user or caller chose the title, so nothing renames it.
     public var titleSetByUser: Bool
     public var source: TaskSource
+    /// The issue or report the task came from, such as a GitHub issue that
+    /// an outside coordinator turned into a task. Set only at create.
+    public var externalRef: TaskExternalRef?
     /// The fields the caller set. Nothing Toastty decides overrides them.
     public var pinned: TaskFields
     /// The fields setup used: `pinned`, completed by triage and from
@@ -184,6 +187,20 @@ public struct TaskCleanup: Codable, Equatable, Sendable {
         self.problem = problem
         self.finishedAt = finishedAt
         self.archiveOptions = archiveOptions
+    }
+}
+
+/// Where a task came from outside Toastty: an issue tracker's ID for it,
+/// such as `github:owner/repo#123` or `linear:acme:ENG-42`, and its page.
+public struct TaskExternalRef: Codable, Equatable, Sendable {
+    public static let maximumIDLength = 128
+
+    public var id: String
+    public var url: String?
+
+    public init(id: String, url: String? = nil) {
+        self.id = id
+        self.url = url
     }
 }
 

@@ -5,8 +5,8 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone, .taskArchive,
-             .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone,
+             .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
         default: false
         }
     }
@@ -57,6 +57,10 @@ extension AppControlExecutor {
                 try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller())
             }
             return .init(didMutateState: true, result: Self.taskSnapshot(merged))
+        case .taskRequestMerge:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            try perform { try coordinator.requestMergeFromOutside(taskID: record.id) }
+            return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
         case .taskCancelMerge:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.cancelMerge(taskID: record.id) }
@@ -386,6 +390,22 @@ extension AppControlExecutor {
                 try enforceWorkspaceAutomationAccess(requestedRoot)
             }
         }
+        // A project directory can open a new top-level workspace, which no
+        // scope covers, so a scoped session names its workspace instead.
+        var rootDirectory: String?
+        if let raw = args.taskString("rootDirectory") {
+            guard workspaceID == nil else {
+                throw AutomationSocketError.invalidPayload("pass workspace or rootDirectory, not both")
+            }
+            let path = raw.trimmingCharacters(in: .whitespaces)
+            guard path.hasPrefix("/") || path.hasPrefix("~") else {
+                throw AutomationSocketError.invalidPayload("rootDirectory must be an absolute path or start with ~")
+            }
+            if let callerSessionID = requestContext().callerSessionID, callerIsWorkspaceScoped(sessionID: callerSessionID) {
+                throw AutomationSocketError.invalidPayload("a workspace-scoped session cannot create a task by rootDirectory; pass its workspace")
+            }
+            rootDirectory = path
+        }
         return TaskCreateRequest(
             text: args.taskString("text") ?? "",
             files: try Self.taskStrings("files", args: args),
@@ -393,6 +413,9 @@ extension AppControlExecutor {
             title: args.taskString("title"),
             slug: args.taskString("slug"),
             workspaceID: workspaceID,
+            rootDirectory: rootDirectory,
+            externalRefID: args.taskString("externalRef"),
+            externalRefURL: args.taskString("externalURL"),
             agent: args.taskString("agent"),
             model: args.taskString("model"),
             effort: args.taskString("effort"),
@@ -610,6 +633,9 @@ extension AppControlExecutor {
             "createdAt": .string(ISO8601DateFormatter().string(from: record.createdAt)),
             "source": .string(source),
             "clientRequestID": optional(record.clientRequestID),
+            "externalRef": record.externalRef.map {
+                .object(["id": .string($0.id), "url": optional($0.url)])
+            } ?? .null,
             "workspaceID": optional(record.workspaceID?.uuidString),
             "projectRoot": optional(record.projectRoot),
             "agent": optional(record.resolved?.agent),

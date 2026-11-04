@@ -275,6 +275,83 @@ struct TaskAppControlTests {
                 context: context(scopedSessionID)
             )
         }
+        await expectInvalidPayload("a workspace-scoped session cannot create a task by rootDirectory; pass its workspace") {
+            _ = try await executor.runActionAsync(
+                id: "task.create",
+                args: ["text": .string("third"), "agent": .string("codex"), "rootDirectory": .string(fixture.root.path)],
+                context: context(scopedSessionID)
+            )
+        }
+    }
+
+    /// An outside coordinator names the project by its directory and the
+    /// issue the task came from; task.get and task.list return the issue.
+    @Test func createByRootDirectoryWithAnExternalReference() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let reference: AutomationJSONValue = .object([
+            "id": .string("github:acme/toastty#123"),
+            "url": .string("https://github.com/acme/toastty/issues/123"),
+        ])
+
+        let outcome = try await executor.runActionAsync(
+            id: "task.create",
+            args: [
+                "text": .string("Composer keeps a blank line"),
+                "rootDirectory": .string(fixture.projectRoot),
+                "agent": .string("claude"),
+                "externalRef": .string("github:acme/toastty#123"),
+                "externalURL": .string("https://github.com/acme/toastty/issues/123"),
+                "clientRequestID": .string("grok:github:acme/toastty#123"),
+            ],
+            context: context()
+        )
+        let id = try taskID(outcome.result)
+        #expect(outcome.result?["workspaceID"] == .string(fixture.workspaceID.uuidString))
+        #expect(outcome.result?["externalRef"] == reference)
+        await fixture.waitForSetup(id)
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(id.uuidString)])
+        #expect(got["externalRef"] == reference)
+        let listed = try executor.runQuery(id: "task.list", args: [:])
+        guard case .array(let tasks)? = listed["tasks"], case .object(let first)? = tasks.first else {
+            Issue.record("no tasks in \(listed)")
+            return
+        }
+        #expect(first["externalRef"] == reference)
+
+        await expectInvalidPayload("pass workspace or rootDirectory, not both") {
+            _ = try await executor.runActionAsync(id: "task.create", args: [
+                "text": .string("x"), "agent": .string("claude"),
+                "workspace": .string(fixture.workspaceID.uuidString), "rootDirectory": .string(fixture.projectRoot),
+            ], context: context())
+        }
+        await expectInvalidPayload("rootDirectory must be an absolute path or start with ~") {
+            _ = try await executor.runActionAsync(id: "task.create", args: [
+                "text": .string("x"), "agent": .string("claude"), "rootDirectory": .string("project"),
+            ], context: context())
+        }
+        await expectInvalidPayload("An external URL needs an external reference.") {
+            _ = try await executor.runActionAsync(id: "task.create", args: [
+                "text": .string("x"), "agent": .string("claude"), "workspace": .string(fixture.workspaceID.uuidString),
+                "externalURL": .string("https://github.com/acme/toastty/issues/1"),
+            ], context: context())
+        }
+        for badReference in ["github: acme#1", String(repeating: "x", count: 129), "github:acme#1é"] {
+            await expectInvalidPayload("An external reference must be printable ASCII with no spaces, at most 128 characters.") {
+                _ = try await executor.runActionAsync(id: "task.create", args: [
+                    "text": .string("x"), "agent": .string("claude"), "workspace": .string(fixture.workspaceID.uuidString),
+                    "externalRef": .string(badReference),
+                ], context: context())
+            }
+        }
+        for badURL in ["javascript:alert(1)", "file:///etc/hosts", "https://"] {
+            await expectInvalidPayload("An external URL must be an http or https address.") {
+                _ = try await executor.runActionAsync(id: "task.create", args: [
+                    "text": .string("x"), "agent": .string("claude"), "workspace": .string(fixture.workspaceID.uuidString),
+                    "externalRef": .string("linear:acme:ENG-42"), "externalURL": .string(badURL),
+                ], context: context())
+            }
+        }
     }
 
     @Test func triagesSuggestionIsInTheChoicesAndRootDirectoryOpensIt() async throws {
