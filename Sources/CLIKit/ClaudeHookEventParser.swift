@@ -210,15 +210,23 @@ enum ClaudeHookEventParser {
             return []
         }
 
+        let resumeRecordUpdate = CLICommand.sessionUpdateResumeRecord(
+            sessionID: sessionID,
+            panelID: panelID,
+            agent: .claude,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: sessionFilePath,
+            cwd: normalizedPathString(object["cwd"])
+        )
+        // Compaction continues the same session and transcript. Resetting the
+        // feed would discard the open prompt, and an idle compaction is not a
+        // turn, so no Stop hook would reopen it until the next turn ends.
+        if normalizedString(object["source"]) == "compact" {
+            return [resumeRecordUpdate]
+        }
+
         return [
-            .sessionUpdateResumeRecord(
-                sessionID: sessionID,
-                panelID: panelID,
-                agent: .claude,
-                nativeSessionID: nativeSessionID,
-                sessionFilePath: sessionFilePath,
-                cwd: normalizedPathString(object["cwd"])
-            ),
+            resumeRecordUpdate,
             .sessionProviderConversationReset(
                 sessionID: sessionID,
                 panelID: panelID,
