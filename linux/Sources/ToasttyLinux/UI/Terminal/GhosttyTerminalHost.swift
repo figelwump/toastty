@@ -473,6 +473,10 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
 
     func filterKey(panelID: UUID, keyval: UInt32, state: GdkModifierType, pressed: Bool) -> Bool {
         guard let entry = entries[panelID] else { return false }
+        // Toastty's own Return/Escape is not the user's typing. Reporting it
+        // marked restored agents and phone sends as locally typed, which kept
+        // remote input closed. The runtime registry records what those need.
+        guard entry.surface.isDeliveringProgrammaticKey == false else { return false }
         let key = Int32(keyval)
         let mods = state.rawValue & ShortcutMatcher.modifierMask
 
@@ -491,17 +495,17 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
         }
 
         guard pressed, Self.modifierKeyvals.contains(key) == false else { return false }
-        let lower = gdk_keyval_to_lower(keyval)
-        if mods == GDK_CONTROL_MASK.rawValue, Int32(lower) == GDK_KEY_c {
-            bridge.noteLocalInput(.controlC, panelID: panelID)
-        } else if mods == 0, key == GDK_KEY_Escape {
-            bridge.noteLocalInput(.escape, panelID: panelID)
-        } else if mods == (GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue), Int32(lower) == GDK_KEY_v {
-            bridge.noteLocalInput(.paste, panelID: panelID)
-        } else {
-            bridge.noteLocalInput(.key, panelID: panelID)
-        }
+        bridge.noteLocalInput(Self.localInput(keyval: keyval, mods: mods), panelID: panelID)
         return false
+    }
+
+    /// The local input a user's non-modifier key press reports.
+    nonisolated static func localInput(keyval: UInt32, mods: UInt32) -> TerminalLocalInput {
+        let lower = Int32(gdk_keyval_to_lower(keyval))
+        if mods == GDK_CONTROL_MASK.rawValue, lower == GDK_KEY_c { return .controlC }
+        if mods == 0, Int32(keyval) == GDK_KEY_Escape { return .escape }
+        if mods == (GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue), lower == GDK_KEY_v { return .paste }
+        return .key
     }
 
     // MARK: Search

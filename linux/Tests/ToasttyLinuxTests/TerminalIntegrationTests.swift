@@ -1,3 +1,4 @@
+import CGtk
 import CoreState
 import Foundation
 import Testing
@@ -166,6 +167,17 @@ struct TerminalIntegrationTests {
         #expect(GhosttyTerminalHost.existingDirectory("/usr/share/definitely-missing/deeper") == "/usr/share")
         #expect(StandaloneTerminalRuntimeBridge.normalizedCWD("file:///tmp") == "/tmp")
         #expect(StandaloneTerminalRuntimeBridge.normalizedCWD("  ") == nil)
+    }
+
+    @Test func userKeysReportTheirLocalInputKind() {
+        let ctrl = GDK_CONTROL_MASK.rawValue
+        let ctrlShift = ctrl | GDK_SHIFT_MASK.rawValue
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_c), mods: ctrl) == .controlC)
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_C), mods: ctrl) == .controlC)
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_Escape), mods: 0) == .escape)
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_V), mods: ctrlShift) == .paste)
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_Return), mods: 0) == .key)
+        #expect(GhosttyTerminalHost.localInput(keyval: UInt32(GDK_KEY_a), mods: 0) == .key)
     }
 
     @Test func automationUnescape() {
