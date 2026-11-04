@@ -67,9 +67,20 @@ public final class GhosttyTerminalSurface {
         return consumed
     }
 
-    public func sendReturn() -> Bool { sendKey(keyval: UInt32(GDK_KEY_Return)) }
+    /// True while Toastty itself delivers Return or Escape (a managed launch,
+    /// a phone send, automation). The widget runs its key filter for these
+    /// too, and the host must not report them as the user's typing.
+    public private(set) var isDeliveringProgrammaticKey = false
 
-    public func sendEscape() -> Bool { sendKey(keyval: UInt32(GDK_KEY_Escape)) }
+    public func sendReturn() -> Bool { sendProgrammaticKey(keyval: UInt32(GDK_KEY_Return)) }
+
+    public func sendEscape() -> Bool { sendProgrammaticKey(keyval: UInt32(GDK_KEY_Escape)) }
+
+    private func sendProgrammaticKey(keyval: UInt32) -> Bool {
+        isDeliveringProgrammaticKey = true
+        defer { isDeliveringProgrammaticKey = false }
+        return sendKey(keyval: keyval)
+    }
 
     /// Viewport text, or the whole screen including scrollback. Like macOS,
     /// the scrollback read ends at the screen bottom.
