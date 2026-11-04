@@ -504,6 +504,33 @@ struct ManagedAgentResumeResolverTests {
             ) == nil
         )
     }
+
+    /// Claude resumed from a subdirectory reports a transcript under that
+    /// directory's project folder, but keeps writing to the original one.
+    @Test
+    func claudeTranscriptPathFallsBackToTheFolderHoldingTheSession() throws {
+        let projects = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-claude-projects-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: projects) }
+        let sessionID = "11795aef-468a-40df-9fee-f01bf83997c6"
+        let original = projects.appendingPathComponent("-home-user-plan", isDirectory: true)
+        let resumedFrom = projects.appendingPathComponent("-home-user-plan-source", isDirectory: true)
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resumedFrom, withIntermediateDirectories: true)
+        let actual = original.appendingPathComponent("\(sessionID).jsonl")
+        try Data("{}\n".utf8).write(to: actual)
+        let reported = resumedFrom.appendingPathComponent("\(sessionID).jsonl").path
+
+        #expect(ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+            reported: reported, nativeSessionID: sessionID) == actual.path)
+        // A reported file that exists is used as is.
+        #expect(ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+            reported: actual.path, nativeSessionID: sessionID) == actual.path)
+        // With no copy anywhere, the reported path stands (Claude may create it).
+        let other = resumedFrom.appendingPathComponent("other-session.jsonl").path
+        #expect(ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+            reported: other, nativeSessionID: "other-session") == other)
+    }
 }
 
 private func makeResumeFixture(
