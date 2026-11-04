@@ -2273,6 +2273,59 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.inputAvailability.allowsRemoteSend)
     }
 
+    /// Claude compacts an idle session without running a turn, so no Stop
+    /// hook follows. Its SessionStart(source: compact) only refreshes the
+    /// resume record now; the open prompt must survive it.
+    @MainActor
+    @Test func claudeIdleCompactionKeepsTheOpenPrompt() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40)
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let nativeSessionID = fixture.resumeRecord.nativeSessionID
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: nativeSessionID,
+            snapshotID: "claude:\(nativeSessionID)",
+            at: fixture.confirmedAt
+        ))
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: nativeSessionID,
+            snapshotID: "claude:\(nativeSessionID)",
+            observation: ProviderTranscriptObservation(
+                timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                fingerprint: "managed:claude:turn-end-1",
+                payload: .turnEnded(turnID: "turn-1", reason: .completed)
+            )
+        ))
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.summary.inputAvailability.allowsRemoteSend
+        }
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected an open prompt before compaction")
+            return
+        }
+
+        // What the compaction's SessionStart hook applies: the same native
+        // binding and transcript, captured later.
+        var compacted = fixture.resumeRecord
+        compacted.capturedAt = fixture.confirmedAt.addingTimeInterval(60)
+        #expect(fixture.sessionRuntimeStore.confirmNativeSessionBinding(
+            managedSessionID: fixture.sessionID,
+            panelID: fixture.panelID,
+            record: compacted
+        ))
+        _ = fixture.publishResumeRecord(capturedAt: compacted.capturedAt)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(fixture.summary.state == .awaitingInput)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+    }
+
 
     @MainActor
     @Test func attachmentSendStagesExactBytesDeliversToBoundPanelAndSuppressesReplay() async throws {
