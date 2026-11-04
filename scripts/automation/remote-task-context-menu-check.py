@@ -167,8 +167,10 @@ def main():
         return rows
 
     def row_label(workspace):
-        """A sidebar task space row's label starts with its workspace title."""
-        title = next(w['title'] for w in instance.query('workspace.list')['workspaces'] if w['workspaceID'] == workspace)
+        """A sidebar task space row's label starts with its task's title; the
+        workspace's own title is the task's slug."""
+        title = next(t['title'] for t in cli_json('task', 'list')['tasks']
+                     if (t.get('setup') or {}).get('taskSpaceWorkspaceID') == workspace)
         return f'{title}, task space'
 
     def key(code):
