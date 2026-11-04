@@ -1716,10 +1716,12 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
-    /// The real header completes a review-ready task without closing its
-    /// workspace. Other stages keep the archive confirmation and cancellation.
+    /// The real header: stages before review offer Archive, whose alert
+    /// cancels; a review-ready task offers Complete Task, whose alert names
+    /// the kept worktree and cancels; a done task says Done; a pull request
+    /// brings the merge control.
     @MainActor
-    func testTaskWithoutPullRequestHeaderCompletesReadyTaskAndOtherwiseCancelsArchive() throws {
+    func testTaskWithoutPullRequestHeaderCancelsArchiveCompleteAndShowsDone() throws {
         let task = TaskRecord(
             createdAt: Date(), text: "Investigate a question", title: "Investigate a question",
             slug: "investigate-question", source: .quickEntry
@@ -1755,8 +1757,30 @@ final class WorkspaceViewTests: XCTestCase {
         func stage() throws -> TaskStage {
             try XCTUnwrap(board.items().first { $0.id == .task(task.id) }).stage
         }
-        let panelsBefore = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID]).panels
-        for state in ["idle", "working", "needs-input", "reply", "done"] {
+        func textFields(in view: NSView) -> [String] {
+            (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
+        }
+        /// Clicks the subtitle slot and answers the alert it opens with
+        /// `response`. The timer also runs inside NSAlert's modal loop, so
+        /// the real confirmation runs instead of a replaced one. Returns the
+        /// alert's text.
+        func clickAnsweringAlert(_ response: NSApplication.ModalResponse) throws -> [String] {
+            var dialogText: [String] = []
+            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+                    dialogText = textFields(in: content)
+                    NSApp.stopModal(withCode: response)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            defer { timer.invalidate() }
+            try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+            pumpMainRunLoop(duration: 0.2)
+            return dialogText
+        }
+        for state in ["idle", "working", "needs-input", "reply"] {
             if state == "working" || state == "needs-input" {
                 runtime.updateStatus(
                     sessionID: sessionID,
@@ -1774,62 +1798,45 @@ final class WorkspaceViewTests: XCTestCase {
                 XCTAssertNotNil(coordinator.records.record(id: task.id)?.readyForReviewAt)
                 XCTAssertEqual(try stage(), .needsYou(.awaitingReply))
             }
-            if state == "done" {
-                _ = try coordinator.readyForReview(taskID: task.id)
-                pumpMainRunLoop(duration: 0.05)
-                XCTAssertEqual(try stage(), .needsYou(.readyForReview))
-                try writeTopBarEvidence(harness, name: "topbar-task-complete-ready")
-                let retainedWork = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try FileManager.default.createDirectory(at: retainedWork, withIntermediateDirectories: true)
-                defer { try? FileManager.default.removeItem(at: retainedWork) }
-                let note = retainedWork.appendingPathComponent("answer.txt")
-                try Data("Keep the result".utf8).write(to: note)
-                coordinator.records.update(id: task.id) {
-                    $0.operation.worktree = .init(
-                        path: retainedWork.path, branch: "test/header", checkoutRoot: retainedWork.path, added: true
-                    )
-                }
-                try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-                pumpMainRunLoop(duration: 0.05)
-                XCTAssertNotNil(coordinator.records.record(id: task.id)?.doneAt)
-                XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID]?.doneAt)
-                XCTAssertEqual(try stage(), .done)
-                XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
-                XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.panels, panelsBefore)
-                XCTAssertEqual(coordinator.records.record(id: task.id)?.taskSpaceWorkspaceID, harness.workspaceID)
-                XCTAssertEqual(runtime.sessionRegistry.activeSession(for: harness.panelID)?.sessionID, sessionID)
-                XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "Keep the result")
-                XCTAssertEqual(coordinator.records.record(id: task.id)?.worktree?.path, retainedWork.path)
-                // The archive cancellation below uses the original no-worktree fixture.
-                coordinator.records.update(id: task.id) { $0.operation.worktree = nil }
-            }
             pumpMainRunLoop(duration: 0.05)
             try writeTopBarEvidence(harness, name: "topbar-task-archive-\(state)")
 
-            var dialogText: [String] = []
-            func textFields(in view: NSView) -> [String] {
-                (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
-            }
-            // This timer also runs inside NSAlert's modal loop. It cancels
-            // the real confirmation instead of replacing the archive path.
-            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
-                MainActor.assumeIsolated {
-                    guard let window = NSApp.modalWindow, let content = window.contentView else { return }
-                    dialogText = textFields(in: content)
-                    NSApp.stopModal(withCode: .alertSecondButtonReturn)
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            defer { timer.invalidate() }
-            try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-            pumpMainRunLoop(duration: 0.2)
-            timer.invalidate()
+            let dialogText = try clickAnsweringAlert(.alertSecondButtonReturn)
             XCTAssertTrue(dialogText.contains("Archive \(task.title)?"), "\(state): \(dialogText)")
             XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
             XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
             XCTAssertTrue(mergeRequests.isEmpty)
         }
+
+        // Ready for review, Complete Task asks first, naming the worktree it
+        // keeps. Cancel keeps the task and its task space.
+        _ = try coordinator.readyForReview(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(try stage(), .needsYou(.readyForReview))
+        try writeTopBarEvidence(harness, name: "topbar-task-complete-ready")
+        let retainedWork = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: retainedWork, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: retainedWork) }
+        coordinator.records.update(id: task.id) {
+            $0.operation.worktree = .init(
+                path: retainedWork.path, branch: "test/header", checkoutRoot: retainedWork.path, added: true
+            )
+        }
+        let cancelled = try clickAnsweringAlert(.alertSecondButtonReturn)
+        XCTAssertTrue(cancelled.contains("Complete \u{201C}\(task.title)\u{201D}?"), "\(cancelled)")
+        XCTAssertTrue(cancelled.contains { $0.contains("Keeps the worktree at \(retainedWork.path).") }, "\(cancelled)")
+        XCTAssertNil(coordinator.records.record(id: task.id)?.doneAt)
+        XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+        coordinator.records.update(id: task.id) { $0.operation.worktree = nil }
+
+        // A task an agent marked done keeps its task space, whose top bar
+        // says Done instead of offering a bare Archive.
+        _ = try coordinator.markDone(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(try stage(), .done)
+        XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+        try writeTopBarEvidence(harness, name: "topbar-task-done")
+        coordinator.records.update(id: task.id) { $0.doneAt = nil }
 
         // Adding a PR replaces Archive with the existing merge control,
         // even when the optional workspace-merge setting is disabled.
@@ -1844,6 +1851,54 @@ final class WorkspaceViewTests: XCTestCase {
         try writeTopBarEvidence(harness, name: "topbar-task-archive-replaced-by-merge")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
+    }
+
+    /// Complete Task, confirmed, marks the task done and closes its task space.
+    @MainActor
+    func testCompleteTaskInTheHeaderClosesTheTaskSpace() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Answer a question", title: "Answer a question",
+            slug: "answer-question", source: .quickEntry
+        )
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            taskRecord: task,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                state.workspacesByID[workspaceID]?.parentWorkspaceID = parent.id
+                state.workspacesByID[workspaceID]?.title = task.title
+            }
+        )
+        defer { harness.window.orderOut(nil) }
+        let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = try coordinator.readyForReview(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(board.items().first { $0.id == .task(task.id) }?.stage, .needsYou(.readyForReview))
+
+        // The timer also runs inside NSAlert's modal loop and confirms the
+        // real alert.
+        var answered = false
+        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard NSApp.modalWindow != nil else { return }
+                answered = true
+                NSApp.stopModal(withCode: .alertFirstButtonReturn)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        try click(atTopLeadingPoint: CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10), in: harness)
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertTrue(answered)
+        XCTAssertNotNil(coordinator.records.record(id: task.id)?.doneAt)
+        XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
+        XCTAssertNil(harness.store.state.workspacesByID[harness.workspaceID])
     }
 
     /// While GitHub says the pull request is not ready to merge, the button
