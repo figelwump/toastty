@@ -228,7 +228,10 @@ struct TaskBoardTests {
         #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
     }
 
-    @Test func completingTheShownTaskMovesFocusToTheNextActiveTaskSpace() async throws {
+    /// An unread panel in another window outranks a review, but focus stays
+    /// in the window that showed the task space.
+    @Test(arguments: [false, true])
+    func completingTheShownTaskMovesFocusToTheNextActiveTaskSpace(unreadInAnotherWindow: Bool) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = makeBoard(fixture, gitHub: FakeGitHub())
         fixture.coordinator.board = board
@@ -259,7 +262,18 @@ struct TaskBoardTests {
         ))
         #expect(store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: quietID)
             == store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: taskSpaceID).map { $0 + 1 })
+        if unreadInAnotherWindow {
+            #expect(store.send(.createWindow(seed: nil, initialFrame: nil)))
+            let otherWindow = try #require(store.state.windows.first { $0.id != windowID })
+            let otherWorkspaceID = try #require(otherWindow.selectedWorkspaceID)
+            let otherPanelID = try #require(store.state.workspacesByID[otherWorkspaceID]?.focusedPanelID)
+            #expect(store.send(.recordDesktopNotification(workspaceID: otherWorkspaceID, panelID: otherPanelID)))
+            #expect(store.nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            )?.panelID == otherPanelID)
+        }
         _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: taskSpaceID))
+        #expect(store.state.selectedWindowID == windowID)
 
         try fixture.coordinator.complete(taskID: task.id)
 

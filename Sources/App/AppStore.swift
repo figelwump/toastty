@@ -1552,8 +1552,8 @@ final class AppStore: ObservableObject {
                 preferredWindowID: windowID,
                 sessionRuntimeStore: sessionRuntimeStore,
                 updatingCycleState: false,
-                excludingWorkspaceID: workspaceID
-            ).flatMap { $0.windowID == windowID ? $0 : nil }
+                allowing: { $0.windowID == windowID && $0.workspaceID != workspaceID }
+            )
         }
         guard send(.closeWorkspace(workspaceID: workspaceID)) else { return false }
         if let target {
@@ -2091,13 +2091,13 @@ final class AppStore: ObservableObject {
         sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
     }
 
-    /// `excludingWorkspaceID` skips every panel in that workspace and
-    /// ignores the saved cycle, for a pick made just before it closes.
+    /// `allowing` limits the pick to the targets it accepts and ignores the
+    /// saved cycle, for a pick made just before a workspace closes.
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?,
         updatingCycleState: Bool = true,
-        excludingWorkspaceID: UUID? = nil
+        allowing: ((PanelNavigationTarget) -> Bool)? = nil
     ) -> PanelNavigationTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
@@ -2117,7 +2117,7 @@ final class AppStore: ObservableObject {
             focusedPanelID: selection.workspace.focusedPanelID
         )
         if let unreadTarget = navigationOrder.all.first(where: { target in
-            guard target.workspaceID != excludingWorkspaceID,
+            guard allowing?(target) != false,
                   let workspace = state.workspacesByID[target.workspaceID],
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
@@ -2156,7 +2156,7 @@ final class AppStore: ObservableObject {
             return nil
         }
 
-        if let excludingWorkspaceID {
+        if let allowing {
             let entries = buildNextActiveCycleEntries(
                 anchor: NextActiveCycleAnchor(
                     windowID: selection.windowID,
@@ -2168,7 +2168,7 @@ final class AppStore: ObservableObject {
             )
             let match = entries.lazy.compactMap { entry in
                 self.panelNavigationTarget(for: entry.panelID).map { (entry, $0) }
-            }.first { $0.1.workspaceID != excludingWorkspaceID }
+            }.first { allowing($0.1) }
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
                 selectedTabID: selectedTabID,
