@@ -22,7 +22,10 @@ Through the real UI and CLI it checks that:
 - `task archive` refuses uncommitted changes, then with --discard-changes
   removes the worktree and keeps a branch with unpushed commits;
 - Merge Without Checks waits for a pending check, and Cancel Merge ends the
-  wait without merging.
+  wait without merging;
+- the CLI outside an agent session cannot run `task merge`, and
+  `task request-merge` sends the merge prompt to the task's agent, whose
+  `task merge` then merges.
 """
 
 import argparse
@@ -428,6 +431,21 @@ def main():
         require(gh_pr(9)['state'] == 'OPEN', 'C merged after the cancel')
         step('cancelled', stage=cancelled['stage'])
         capture('5-cancelled')
+
+        # 5. An outside coordinator, with no agent session, cannot merge
+        # directly; task request-merge hands the merge to the task's agent.
+        d = started_task('Request merge check', 'READY-D')
+        d_head = open_pull_request(d, 11)
+        wait_for('D waits for review', lambda: task(d['taskID'])['stage'].get('attention') == 'review', timeout=120, interval=2)
+        code, out, err = run_cli('task', 'merge', d['taskID'])
+        require(code != 0 and 'task request-merge' in out + err, f'an outside task merge was not refused: {code} {out} {err}')
+        step('outside task merge refused', error=(out + err).strip()[-300:])
+        cli_result('task', 'request-merge', d['taskID'])
+        reply_on(d, 'MERGE-REQUESTED')
+        step('agent ran task merge after request-merge', merge=task(d['taskID'])['merge'])
+        wait_for('origin merged D', lambda: gh_pr(11)['state'] == 'MERGED', timeout=120, interval=1)
+        require(git('rev-parse', 'main', cwd=origin) == d_head, 'origin main is not D\'s accepted commit')
+        capture('6-request-merge')
 
         evidence['status'] = 'passed'
     except Exception as error:  # Always keep the failure evidence.

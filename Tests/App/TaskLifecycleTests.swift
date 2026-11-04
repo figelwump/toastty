@@ -128,15 +128,29 @@ struct TaskLifecycleTests {
             try fixture.coordinator.merge(taskID: task.id, expectedHead: nil, caller: caller)
         }
         #expect(cancelled?.message.contains("cancelled") == true)
+        // Only an agent in the task's or its parent's task space may merge:
+        // a shell, an outside coordinator or an agent elsewhere asks with
+        // task request-merge.
+        for outsider in [TaskCaller.unmanaged, TaskCaller(sessionID: "elsewhere", workspaceID: fixture.workspaceID)] {
+            let refused = #expect(throws: TaskError.self) {
+                try fixture.coordinator.merge(taskID: task.id, expectedHead: nil, caller: outsider)
+            }
+            #expect(refused?.message.contains("toastty task request-merge \(task.id.uuidString)") == true)
+        }
+
         // A coordinating task's turn that started before the cancel is held
         // back the same way.
+        let parent = try await fixture.startedTask()
+        try fixture.coordinator.records.save(id: task.id) { $0.parentTaskID = parent.id }
+        let parentSpace = try #require(parent.taskSpaceWorkspaceID)
         fixture.sessions.sessions["parent"] = TaskSessionInfo(
-            sessionID: "parent", agent: .claude, panelID: UUID(), workspaceID: fixture.workspaceID,
+            sessionID: "parent", agent: .claude, panelID: UUID(), workspaceID: parentSpace,
             cwd: nil, isActive: true, isInTurn: true, turnStartedAt: Date().addingTimeInterval(-60)
         )
-        #expect(throws: TaskError.self) {
-            try fixture.coordinator.merge(taskID: task.id, expectedHead: nil, caller: TaskCaller(sessionID: "parent", workspaceID: fixture.workspaceID))
+        let heldBack = #expect(throws: TaskError.self) {
+            try fixture.coordinator.merge(taskID: task.id, expectedHead: nil, caller: TaskCaller(sessionID: "parent", workspaceID: parentSpace))
         }
+        #expect(heldBack?.message.contains("cancelled") == true)
 
         // A later turn, such as the user saying "merge it", may merge. Here no
         // merge owner runs, so it gets past the cancel and stops there.

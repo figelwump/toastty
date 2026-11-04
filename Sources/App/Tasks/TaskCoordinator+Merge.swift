@@ -30,11 +30,14 @@ extension TaskCoordinator {
     /// GitHub's checks if they still run, and cleans up after the agent's
     /// turn ends. Returns at once. With `expectedHead`, the merge is
     /// refused unless the checkout is still at the commit the skill checked.
+    /// Only an agent working on the task, or on its parent task, may call
+    /// it; see `checkMergeCaller`.
     @discardableResult
     func merge(taskID: UUID, expectedHead: String?, caller: TaskCaller) throws -> TaskRecord {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
+        try checkMergeCaller(record, caller: caller)
         if let expectedHead {
             guard (7...64).contains(expectedHead.count), expectedHead.allSatisfy(\.isHexDigit) else {
                 throw TaskError("head must be a commit ID.")
@@ -43,6 +46,26 @@ extension TaskCoordinator {
         let target = try mergeTarget(record)
         try checkNotCancelled(record, caller: caller)
         return try startMerge(record, target: target, expectedHead: expectedHead)
+    }
+
+    /// `task.request-merge`: the user's acceptance given outside the task,
+    /// for example through an outside coordinator. It is allowed where the
+    /// Merge button is offered, and it always goes through the task's agent,
+    /// so the agent's checks run even in a project with `merge = "direct"`.
+    func requestMergeFromOutside(taskID: UUID) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        guard let item = board?.items().first(where: { $0.taskID == taskID }) else {
+            throw TaskError("Toastty has not read the state of \(record.title) yet. Try again.")
+        }
+        guard TaskBoardPresentation.detailActions(item).contains(.merge) else {
+            let reason = item.pullRequest == nil
+                ? "it has no pull request"
+                : TaskBoardPresentation.statusLine(item)
+            throw TaskError("Merge is not available for \(record.title) now: \(reason).")
+        }
+        try requestMerge(taskID: taskID, route: .agent)
     }
 
     /// Merge from the UI: the top bar's button and its shortcut, the
@@ -412,6 +435,29 @@ extension TaskCoordinator {
     /// coordinating task merging its children. A turn that started after
     /// the cancel, such as the user saying "merge it", may merge. A caller
     /// outside Toastty has no turn and is not held back.
+    /// `task.merge` records the user's acceptance itself, so it runs only
+    /// from an agent session in the task's own task space, where the merge
+    /// skill runs, or in its parent task's task space, which merges its
+    /// child tasks. Any agent there counts: the merge prompt can start the
+    /// agent in a new tab, and a relaunch restores sessions with new IDs.
+    /// Callers outside, such as a shell or an outside coordinator, ask for
+    /// the merge with `task.request-merge`, so the task's agent checks it
+    /// first. The caller's session comes from the CLI's environment, so this
+    /// prevents mistakes, not a process that claims a session.
+    private func checkMergeCaller(_ record: TaskRecord, caller: TaskCaller) throws {
+        if let callerWorkspaceID = caller.workspaceID {
+            if callerWorkspaceID == record.taskSpaceWorkspaceID { return }
+            if let parentID = record.parentTaskID,
+               callerWorkspaceID == records.record(id: parentID)?.taskSpaceWorkspaceID {
+                return
+            }
+        }
+        throw TaskError(
+            "task merge runs from an agent in the task's task space or its parent task's. "
+                + "To accept the merge, run: toastty task request-merge \(record.id.uuidString)"
+        )
+    }
+
     private func checkNotCancelled(_ record: TaskRecord, caller: TaskCaller) throws {
         guard let cancelledAt = record.mergeCancelledAt, let callerSessionID = caller.sessionID else { return }
         if let turnStartedAt = sessions?.session(callerSessionID)?.turnStartedAt, turnStartedAt > cancelledAt {

@@ -253,6 +253,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.watch`
 - `task.unwatch`
 - `task.merge`
+- `task.request-merge`
 - `task.cancel-merge`
 - `task.clean-up`
 - `task.ready-for-review`
@@ -347,9 +348,18 @@ Notable action-specific behavior:
     this condition.
 - `task.create`
   - takes `text`, repeatable absolute `files`, and optional `clientRequestID`,
-    `title`, `slug`, `workspace` (UUID), `agent`, `model`, `effort`, `prompt`,
-    `startWork` (boolean) with `base` and `branchPrefix`, and `fork`
-    (boolean). It takes no selectors.
+    `title`, `slug`, `workspace` (UUID) or `rootDirectory`, `externalRef`
+    with `externalURL`, `agent`, `model`, `effort`, `prompt`, `startWork`
+    (boolean) with `base` and `branchPrefix`, and `fork` (boolean). It takes
+    no selectors.
+  - `rootDirectory` (absolute or starting with `~`) names the project by its
+    directory instead of `workspace`: the open top-level workspace on it, or a
+    new workspace that Toastty opens after every other check passed, so an
+    invalid request opens nothing. A workspace-scoped session cannot use it.
+  - `externalRef` names the issue or report the task came from, such as
+    `github:owner/repo#123`: printable ASCII with no spaces, at most 128
+    characters. `externalURL`, its http or https page, needs `externalRef`.
+    The task object returns both as `externalRef: {id, url}`.
   - `fork: true` runs only from a managed Claude Code or Codex session. The
     task's agent starts as a fork of that session's conversation after its
     current turn ends; the caller keeps running. It uses the caller's agent,
@@ -438,6 +448,11 @@ Notable action-specific behavior:
 - `task.merge`
   - what a merge skill calls once its checks pass. Takes optional `taskID`
     (the calling managed session's own task when left out) and `head`.
+  - runs only from a managed agent session in the task's task space or in its
+    parent task's task space. Any other caller, including the CLI outside an
+    agent session, gets `INVALID_PAYLOAD` naming `task.request-merge`. The
+    caller's session comes from the CLI's environment, so this rule prevents
+    mistakes; it is not a security boundary.
   - records the user's acceptance and hands the merge to the merge owner, then
     returns the task object. The merge owner runs the bundled pull request
     script: it merges at the checkout's commit with GitHub's merge API, never
@@ -448,6 +463,15 @@ Notable action-specific behavior:
   - `INVALID_PAYLOAD` when the task is archived or merged, its task space is
     closed, it has no pull request link, a merge is already under way, or the
     user cancelled the merge during the caller's current turn.
+- `task.request-merge`
+  - requires `args.taskID`. The user's acceptance given outside the task, as
+    the Merge button gives it: the task's agent gets the merge prompt, checks
+    the pull request, and calls `task.merge`. It always uses the agent, also
+    in a project with `merge = "direct"`. Returns the task object with
+    `mergeRequestedAt`.
+  - `INVALID_PAYLOAD` where the Merge button is not offered: no open pull
+    request, no task space, a merge under way, or a merged, archived or done
+    task.
 - `task.cancel-merge`
   - takes optional `taskID`. Clears the acceptance and the task space's done
     mark, which ends a wait for checks. `INVALID_PAYLOAD` while the script

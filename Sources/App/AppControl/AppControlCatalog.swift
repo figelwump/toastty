@@ -83,6 +83,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskWatch = "task.watch"
     case taskUnwatch = "task.unwatch"
     case taskMerge = "task.merge"
+    case taskRequestMerge = "task.request-merge"
     case taskCancelMerge = "task.cancel-merge"
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
@@ -507,6 +508,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskTitle(required: false),
                     .taskSlug(required: false),
                     .taskWorkspace(required: false),
+                    .init(name: "rootDirectory", summary: "A project directory, instead of workspace: the open top-level workspace on it, or a new one that Toastty opens once the other checks pass. Absolute or starting with ~.", valueType: .string, required: false),
+                    .init(name: "externalRef", summary: "The issue or report the task came from, such as github:owner/repo#123: printable ASCII with no spaces, at most 128 characters. task.get and task.list return it.", valueType: .string, required: false),
+                    .init(name: "externalURL", summary: "The http or https page of externalRef.", valueType: .string, required: false),
                     .taskAgent(required: false),
                     .taskModel(required: false),
                     .taskEffort(required: false),
@@ -587,9 +591,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance and hands the merge to Toastty's merge owner, then returns. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Refused after the user cancelled the merge, for the agent turn that was checking it.",
+                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance and hands the merge to Toastty's merge owner, then returns. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Only an agent session in the task's task space, or in its parent task's task space, may call it; other callers use task.request-merge. Refused after the user cancelled the merge, for the agent turn that was checking it.",
                 selectors: [],
                 parameters: [.taskID(required: false), .taskHead(required: false)]
+            )
+        case .taskRequestMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Accept a task's pull request for merging from outside the task, as the Merge button does: the task's agent gets the merge prompt, checks review threads, prerequisites and CI, then merges with task.merge or reports what blocks it. It always goes through the agent, even in a project with merge = \"direct\". Refused where the Merge button is not offered: no open pull request, no task space, or a merge under way.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
             )
         case .taskCancelMerge:
             return .init(

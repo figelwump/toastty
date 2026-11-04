@@ -48,6 +48,32 @@ struct ToasttyCLITaskTests {
     }
 
     @Test
+    func taskCreateTakesARootDirectoryAndAnExternalReference() throws {
+        func arguments(_ extra: [String]) throws -> [String: AutomationJSONValue] {
+            let invocation = try ToasttyCLI.parse(
+                arguments: ["task", "create", "Pricing typo", "--agent", "claude"] + extra,
+                environment: ["PWD": "/Users/me/work"]
+            )
+            guard case .appControlRun(_, "task.create", let args) = invocation.command else {
+                throw ToasttyCLIError.usage("expected task.create")
+            }
+            return args
+        }
+        let args = try arguments([
+            "--root", "website",
+            "--external-ref", "github:acme/website#4",
+            "--external-url", "https://github.com/acme/website/issues/4",
+        ])
+        #expect(args["rootDirectory"] == .string("/Users/me/work/website"))
+        #expect(args["externalRef"] == .string("github:acme/website#4"))
+        #expect(args["externalURL"] == .string("https://github.com/acme/website/issues/4"))
+        #expect(try arguments(["--root", "/srv/site"])["rootDirectory"] == .string("/srv/site"))
+
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--root", "/srv/site", "--workspace", UUID().uuidString]) }
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--external-url", "https://example.com"]) }
+    }
+
+    @Test
     func startWorkMapsFlagsToItsActionAndCreateTakesStartWorkFlags() throws {
         let startWork = try ToasttyCLI.parse(
             arguments: ["task", "start-work", "--base", "feat/stack", "--branch-prefix", "fix", "--title", "Split it"],
@@ -244,6 +270,9 @@ struct ToasttyCLITaskTests {
                 "question": .string("Pick a hostname option"),
             ]))
         #expect(throws: ToasttyCLIError.self) { try command(["ready-for-review", "--question", "Why?"]) }
+        // An outside caller asks the task's agent to merge.
+        #expect(try command(["request-merge", taskID])
+            == .appControlRun(kind: .action, id: "task.request-merge", args: ["taskID": .string(taskID)]))
         #expect(try command(["mark-done", taskID])
             == .appControlRun(kind: .action, id: "task.mark-done", args: ["taskID": .string(taskID)]))
         #expect(try command(["clean-up", taskID])
@@ -263,6 +292,7 @@ struct ToasttyCLITaskTests {
 
         for arguments in [
             ["mark-done"], ["clean-up"], ["archive"], ["archive", "not-an-id"], ["merge", "a", "b"],
+            ["request-merge"], ["request-merge", "not-an-id"], ["request-merge", taskID, "--head", "abc1234"],
             ["merge", "--head"], ["release", "extra"], ["list", "--parent", "nope"],
         ] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }

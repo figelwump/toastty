@@ -930,13 +930,14 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
       toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
+      toastty [--json] [--socket-path <path>] task request-merge <task-id>
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
@@ -1803,7 +1804,7 @@ public enum ToasttyCLI {
                 valueOptions: [
                     "--text", "--file", "--workspace", "--agent", "--model", "--effort",
                     "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
-                    "--base", "--branch-prefix",
+                    "--base", "--branch-prefix", "--root", "--external-ref", "--external-url",
                 ],
                 flagOptions: ["--wait", "--start-work", "--fork"]
             )
@@ -1840,10 +1841,20 @@ public enum ToasttyCLI {
                 }
                 args["workspace"] = .string(workspace)
             }
+            if let root = parsed.singleValue("--root") {
+                guard parsed.singleValue("--workspace") == nil else {
+                    throw ToasttyCLIError.usage("pass --workspace or --root, not both\n\n\(usage)")
+                }
+                args["rootDirectory"] = .string(absolutePath(root))
+            }
+            if parsed.singleValue("--external-url") != nil, parsed.singleValue("--external-ref") == nil {
+                throw ToasttyCLIError.usage("--external-url needs --external-ref\n\n\(usage)")
+            }
             let valueKeys = [
                 "--agent": "agent", "--model": "model", "--effort": "effort", "--prompt": "prompt",
                 "--title": "title", "--slug": "slug", "--request-id": "clientRequestID",
                 "--base": "base", "--branch-prefix": "branchPrefix",
+                "--external-ref": "externalRef", "--external-url": "externalURL",
             ]
             for (flag, key) in valueKeys {
                 if let value = parsed.singleValue(flag) {
@@ -2032,7 +2043,7 @@ public enum ToasttyCLI {
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
 
-        case "clean-up", "mark-done":
+        case "clean-up", "mark-done", "request-merge":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
             guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task \(verb) requires a task ID\n\n\(usage)")

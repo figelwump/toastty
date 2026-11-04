@@ -812,7 +812,8 @@ final class AppControlExecutor {
             }
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone, .taskArchive:
+             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone,
+             .taskArchive:
             return try runTaskAction(action, args: args)
 
         case .taskRelease:

@@ -125,6 +125,13 @@ struct TaskCreateRequest: Equatable {
     var title: String?
     var slug: String?
     var workspaceID: UUID?
+    /// A project directory, instead of `workspaceID`: the open top-level
+    /// workspace on it, or a new one that Toastty opens once every other
+    /// check passed.
+    var rootDirectory: String?
+    /// The issue or report the task came from. Its URL needs its ID.
+    var externalRefID: String?
+    var externalRefURL: String?
     var agent: String?
     var model: String?
     var effort: String?
@@ -317,9 +324,35 @@ final class TaskCoordinator {
         }
         let sources = try request.files.map(attachableFile)
         let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
+        let externalRef = try validatedExternalRef(id: request.externalRefID, url: request.externalRefURL)
 
-        let workspaceID = try resolvedWorkspaceID(request.workspaceID, caller: caller)
-        let projectRoot = try workspaceID.map(resolvedProjectRoot)
+        // A project directory resolves to its open workspace now. A project
+        // that is not open gets its workspace ID now and opens last, after
+        // every other check, so a request that fails opens nothing.
+        var projectToOpen: (workspaceID: UUID, rootDirectory: String)?
+        let workspaceID: UUID?
+        let projectRoot: (path: String, isNew: Bool)?
+        if let rawRoot = request.rootDirectory {
+            guard request.workspaceID == nil else {
+                throw TaskError("Pass a workspace or a root directory, not both.")
+            }
+            let root = TasksConfigFile.normalizedPath(rawRoot, homeDirectoryPath: homeDirectoryPath)
+            if let open = openWorkspace(onProjectRoot: root) {
+                workspaceID = open.workspaceID
+                projectRoot = open.projectRoot
+            } else {
+                guard isDirectory(root) else {
+                    throw TaskError("The directory \(root) does not exist.")
+                }
+                let reservedID = UUID()
+                projectToOpen = (reservedID, root)
+                workspaceID = reservedID
+                projectRoot = (root, false)
+            }
+        } else {
+            workspaceID = try resolvedWorkspaceID(request.workspaceID, caller: caller)
+            projectRoot = try workspaceID.map(resolvedProjectRoot)
+        }
         let config: TasksConfig
         do {
             config = try configLoader()
@@ -329,7 +362,8 @@ final class TaskCoordinator {
         let pinnedTitle = request.title.flatMap(taskNonEmpty)
         let pinnedSlug = request.slug.flatMap(taskNonEmpty)
         let pinned = TaskFields(
-            workspaceID: request.workspaceID,
+            // A root directory names the workspace as surely as its ID does.
+            workspaceID: request.rootDirectory == nil ? request.workspaceID : workspaceID,
             agent: request.agent.flatMap(taskNonEmpty),
             model: request.model.flatMap(taskNonEmpty),
             effort: request.effort.flatMap(taskNonEmpty),
@@ -438,6 +472,7 @@ final class TaskCoordinator {
             parentTaskID: parentTaskID,
             startWork: startWork
         )
+        record.externalRef = externalRef
         record.creatorScope = caller.sessionID.flatMap { sessions?.scope(sessionID: $0) }
         record.forkSource = forkSource.map {
             TaskStartWork.Source(
@@ -469,6 +504,17 @@ final class TaskCoordinator {
         }
         guard firstMessage.contains("\u{0}") == false else {
             throw TaskError("The task or prompt contains a NUL character.")
+        }
+        if let projectToOpen {
+            let opened = try openProject(
+                title: Self.projectTitle(rootDirectory: projectToOpen.rootDirectory, suggestion: nil, homeDirectoryPath: homeDirectoryPath),
+                rootDirectory: projectToOpen.rootDirectory,
+                workspaceID: projectToOpen.workspaceID,
+                reusingOpenWorkspace: false
+            )
+            guard opened == projectToOpen.workspaceID else {
+                throw TaskError("Toastty opened \(projectToOpen.rootDirectory) in another workspace; try again.")
+            }
         }
         return TaskCreatePreparation(
             record: record,
@@ -740,8 +786,16 @@ final class TaskCoordinator {
 
     /// Opens a project that is not open as a new top-level workspace, or
     /// finds it open already, and returns its workspace.
-    private func openProject(title: String, rootDirectory: String) throws -> UUID {
-        if let open = openWorkspace(onRoot: rootDirectory) {
+    /// `reusingOpenWorkspace: false` opens a new workspace even when one has
+    /// a terminal inside the directory, for a caller that already found
+    /// that workspace on another repository.
+    private func openProject(
+        title: String,
+        rootDirectory: String,
+        workspaceID: UUID = UUID(),
+        reusingOpenWorkspace: Bool = true
+    ) throws -> UUID {
+        if reusingOpenWorkspace, let open = openWorkspace(onRoot: rootDirectory) {
             return open.id
         }
         guard isDirectory(rootDirectory) else {
@@ -750,7 +804,6 @@ final class TaskCoordinator {
         guard let windowID = store.state.windows.first?.id else {
             throw TaskError("Open a Toastty window, then try again.")
         }
-        let workspaceID = UUID()
         guard store.send(.reopenWorkspace(
             windowID: windowID,
             workspaceID: workspaceID,
@@ -1498,6 +1551,25 @@ final class TaskCoordinator {
         }
     }
 
+    /// The open top-level workspace whose project root is exactly `root`. A
+    /// workspace with a terminal inside `root` but on a nested repository,
+    /// or in a subdirectory outside any repository, is another project.
+    private func openWorkspace(onProjectRoot root: String) -> (workspaceID: UUID, projectRoot: (path: String, isNew: Bool))? {
+        for workspace in topLevelWorkspaces() {
+            guard let directory = workspace.rootDirectory ?? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) else {
+                continue
+            }
+            let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)
+            guard normalized == root || normalized.hasPrefix(root + "/") else { continue }
+            guard let projectRoot = try? resolvedProjectRoot(workspaceID: workspace.id),
+                  TasksConfigFile.normalizedPath(projectRoot.path, homeDirectoryPath: homeDirectoryPath) == root else {
+                continue
+            }
+            return (workspace.id, projectRoot)
+        }
+        return nil
+    }
+
     private func topLevelWorkspaces() -> [WorkspaceState] {
         store.state.windows
             .flatMap(\.workspaceIDs)
@@ -1544,6 +1616,27 @@ final class TaskCoordinator {
             throw TaskError("A request ID must be printable ASCII with no spaces, at most \(TaskRecord.maximumClientRequestIDLength) characters.")
         }
         return value
+    }
+
+    /// An external reference follows the request-ID rules, so a caller can
+    /// use the same value for both; its page must be http or https.
+    private func validatedExternalRef(id rawID: String?, url rawURL: String?) throws -> TaskExternalRef? {
+        let url = rawURL.flatMap(taskNonEmpty)
+        guard let id = rawID.flatMap(taskNonEmpty) else {
+            if url != nil { throw TaskError("An external URL needs an external reference.") }
+            return nil
+        }
+        guard id.count <= TaskExternalRef.maximumIDLength,
+              id.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7F }) else {
+            throw TaskError("An external reference must be printable ASCII with no spaces, at most \(TaskExternalRef.maximumIDLength) characters.")
+        }
+        if let url {
+            guard let scheme = URL(string: url)?.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  URL(string: url)?.host?.isEmpty == false else {
+                throw TaskError("An external URL must be an http or https address.")
+            }
+        }
+        return TaskExternalRef(id: id, url: url)
     }
 
     /// The top-level workspace a task belongs to: the one asked for, or the
