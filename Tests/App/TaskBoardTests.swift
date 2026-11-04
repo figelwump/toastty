@@ -228,10 +228,11 @@ struct TaskBoardTests {
         #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
     }
 
-    /// An unread panel in another window outranks a review, but focus stays
-    /// in the window that showed the task space.
-    @Test(arguments: [false, true])
-    func completingTheShownTaskMovesFocusToTheNextActiveTaskSpace(unreadInAnotherWindow: Bool) async throws {
+    /// Complete and Archive both move focus on. An unread panel in another
+    /// window outranks a review, but focus stays in the window that showed
+    /// the task space.
+    @Test(arguments: [false, true], [false, true])
+    func finishingTheShownTaskMovesFocusToTheNextActiveTaskSpace(unreadInAnotherWindow: Bool, archive: Bool) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = makeBoard(fixture, gitHub: FakeGitHub())
         fixture.coordinator.board = board
@@ -275,9 +276,15 @@ struct TaskBoardTests {
         _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: taskSpaceID))
         #expect(store.state.selectedWindowID == windowID)
 
-        try fixture.coordinator.complete(taskID: task.id)
+        if archive {
+            try await fixture.coordinator.archive(taskID: task.id, options: TaskArchiveOptions())
+            await fixture.waitUntil("the archive finishes") { fixture.record(task.id)?.cleanup?.finishedAt != nil }
+            #expect(fixture.record(task.id)?.archivedAt != nil)
+        } else {
+            try fixture.coordinator.complete(taskID: task.id)
+            #expect(fixture.record(task.id)?.doneAt != nil)
+        }
 
-        #expect(fixture.record(task.id)?.doneAt != nil)
         #expect(store.state.workspacesByID[taskSpaceID] == nil)
         // A plain close would select the quiet neighbor.
         #expect(store.selectedWorkspace?.id == reviewID)
