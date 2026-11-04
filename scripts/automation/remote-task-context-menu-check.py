@@ -19,8 +19,9 @@ real right-clicks, key events and the CLI it checks that:
   and the detail pane follows;
 - Archive… from a Tasks view row opens the archive alert; Cancel keeps the
   task and the selection; Archive archives it and selects the next row;
-- Mark Done from a row's menu moves the task into the collapsed Done group
-  and selects the next row.
+- Mark Done from a row's menu opens the Complete alert; Complete Task moves
+  the task into the collapsed Done group, closes its task space, and selects
+  the next row.
 The menus, the alert's text and each step go to
 remote-task-context-menu-check.json in the artifacts directory.
 """
@@ -275,7 +276,13 @@ def main():
         index = rows.index('Composer keeps a blank line')
         expected = rows[index + 1] if index + 1 < len(rows) else rows[index - 1]
         menu('tasks-view-mark-done', '*', 'Composer keeps a blank line,', press='Mark Done')
+        dialog = wait_for('the Complete alert', lambda: (d := json.loads(run_driver('dialog', pid).stdout)) and d)
+        evidence['completeAlert'] = dialog
+        require('Complete “Composer keeps a blank line”?' in dialog['texts'], f'Unexpected alert: {dialog}')
+        run_driver('dialog-press', pid, 'Complete Task')
         wait_for('the done task', lambda: stage(without_pr)['group'] == 'done')
+        wait_for('the closed task space', lambda: without_pr_space not in [
+            w['workspaceID'] for w in instance.query('workspace.list')['workspaces']])
         wait_for(f'{expected} to be selected', lambda: detail_title() == expected)
         step('marked done and selected the next row', selected=detail_title(), rows=tasks_view_rows())
         capture('tasks-view-after-mark-done')
