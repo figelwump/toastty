@@ -129,6 +129,7 @@ final class CommandPaletteTaskActions {
     private let fileManager: FileManager
     private let openURL: @MainActor (URL) -> Void
     private let presentFailure: @MainActor (String, String) -> Void
+    private let confirmComplete: TaskActions.CompleteConfirmation
     /// Runs a task command once the palette has closed, so its alerts open
     /// over the window instead of the palette.
     private let afterPaletteCloses: @MainActor (@escaping @MainActor () -> Void) -> Void
@@ -141,6 +142,7 @@ final class CommandPaletteTaskActions {
         presentFailure: @escaping @MainActor (String, String) -> Void = { title, message in
             WorkspaceMergeCoordinator.presentAlert(title: title, message: message)
         },
+        confirmComplete: @escaping TaskActions.CompleteConfirmation = TaskActions.confirmComplete,
         afterPaletteCloses: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
             Task { @MainActor in work() }
         }
@@ -150,6 +152,7 @@ final class CommandPaletteTaskActions {
         self.fileManager = fileManager
         self.openURL = openURL
         self.presentFailure = presentFailure
+        self.confirmComplete = confirmComplete
         self.afterPaletteCloses = afterPaletteCloses
     }
 
@@ -271,9 +274,9 @@ final class CommandPaletteTaskActions {
                   let record = item.record,
                   TaskBoardPresentation.detailActions(item).contains(action) else { return false }
             let failureTitle = "\(action.failureTitle) \(record.title)"
-            afterPaletteCloses { [presentFailure] in
+            afterPaletteCloses { [presentFailure, confirmComplete] in
                 do {
-                    try TaskActions.run(action, taskID: record.id, coordinator: coordinator)
+                    try TaskActions.run(action, taskID: record.id, coordinator: coordinator, confirmComplete: confirmComplete)
                 } catch {
                     presentFailure(failureTitle, error.localizedDescription)
                 }

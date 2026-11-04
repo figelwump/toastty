@@ -1534,6 +1534,34 @@ final class AppStore: ObservableObject {
         return focusPanelTarget(target, flashPanelOnSuccess: true)
     }
 
+    /// Closes a task space the user finished. When the front window shows
+    /// it, focus moves in that window to what Jump to Next Active would pick
+    /// from the task space, instead of the neighboring workspace. Without
+    /// such a target, the close keeps its usual selection.
+    @discardableResult
+    func closeTaskSpaceFocusingNextActive(
+        workspaceID: UUID,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> Bool {
+        var target: PanelNavigationTarget?
+        if let windowID = state.selectedWindowID,
+           let window = state.window(id: windowID),
+           window.selectedWorkspaceID == workspaceID,
+           window.showsTasksView == false {
+            target = nextUnreadOrActivePanelTarget(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionRuntimeStore,
+                updatingCycleState: false,
+                excludingWorkspaceID: workspaceID
+            ).flatMap { $0.windowID == windowID ? $0 : nil }
+        }
+        guard send(.closeWorkspace(workspaceID: workspaceID)) else { return false }
+        if let target {
+            _ = focusPanelTarget(target)
+        }
+        return true
+    }
+
     @discardableResult
     func selectWorkspaceTabFromCommand(preferredWindowID: UUID?, shortcutNumber: Int) -> Bool {
         guard shortcutNumber > 0 else { return false }
@@ -2063,10 +2091,13 @@ final class AppStore: ObservableObject {
         sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
     }
 
+    /// `excludingWorkspaceID` skips every panel in that workspace and
+    /// ignores the saved cycle, for a pick made just before it closes.
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?,
-        updatingCycleState: Bool = true
+        updatingCycleState: Bool = true,
+        excludingWorkspaceID: UUID? = nil
     ) -> PanelNavigationTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
@@ -2086,7 +2117,8 @@ final class AppStore: ObservableObject {
             focusedPanelID: selection.workspace.focusedPanelID
         )
         if let unreadTarget = navigationOrder.all.first(where: { target in
-            guard let workspace = state.workspacesByID[target.workspaceID],
+            guard target.workspaceID != excludingWorkspaceID,
+                  let workspace = state.workspacesByID[target.workspaceID],
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
             }
@@ -2122,6 +2154,30 @@ final class AppStore: ObservableObject {
                 cycleResetReason: "no_session_runtime_store"
             )
             return nil
+        }
+
+        if let excludingWorkspaceID {
+            let entries = buildNextActiveCycleEntries(
+                anchor: NextActiveCycleAnchor(
+                    windowID: selection.windowID,
+                    workspaceID: selection.workspace.id,
+                    selectedTabID: selectedTabID,
+                    focusedPanelID: selection.workspace.focusedPanelID
+                ),
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            let match = entries.lazy.compactMap { entry in
+                self.panelNavigationTarget(for: entry.panelID).map { (entry, $0) }
+            }.first { $0.1.workspaceID != excludingWorkspaceID }
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: match?.0.segment.rawValue ?? "none",
+                target: match?.1,
+                sessionRuntimeStore: sessionRuntimeStore,
+                cycleResetReason: nil
+            )
+            return match?.1
         }
 
         let activeCycleResolution = nextUnreadOrActiveCycleTarget(

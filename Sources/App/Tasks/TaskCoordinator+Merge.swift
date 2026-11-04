@@ -204,6 +204,54 @@ extension TaskCoordinator {
         return records.record(id: taskID)!
     }
 
+    /// What completing the task closes, read before the user confirms.
+    struct CompleteCheck: Equatable {
+        var hasTaskSpace: Bool
+        var agentSessions: Int
+        var unsavedDocuments: Int
+        /// A worktree that completing leaves in place.
+        var worktreePath: String?
+    }
+
+    func completeCheck(taskID: UUID) throws -> CompleteCheck {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.id }
+        return CompleteCheck(
+            hasTaskSpace: taskSpaceID != nil,
+            agentSessions: taskSpaceID.map { sessions?.activeSessions(workspaceID: $0).count ?? 0 } ?? 0,
+            unsavedDocuments: taskSpaceID.map { unsavedDocumentCount($0) } ?? 0,
+            worktreePath: record.worktree.flatMap { isDirectory($0.path) ? $0.path : nil }
+        )
+    }
+
+    /// Complete Task in the app: marks the task done, as `task mark-done`
+    /// does, then closes its task space, since the person is finished with
+    /// it. A worktree stays. Unsaved documents refuse before anything
+    /// changes.
+    @discardableResult
+    func complete(taskID: UUID) throws -> TaskRecord {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.id }
+        if let taskSpaceID, unsavedDocumentCount(taskSpaceID) > 0 {
+            throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
+        }
+        let done = try markDone(taskID: taskID)
+        guard let taskSpaceID else { return done }
+        let closed = closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
+        guard closed else {
+            throw TaskError("Toastty marked \(record.title) done but could not close its task space.")
+        }
+        flushLayout()
+        ToasttyLog.info("Completed a task and closed its task space", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+        ])
+        return records.record(id: taskID) ?? done
+    }
+
     // MARK: - Cleanup after a merge
 
     /// What the merge coordinator reports about a task space's cleanup.

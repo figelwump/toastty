@@ -198,7 +198,12 @@ extension TaskCoordinator {
                 return stop("The release shipped while its agent was working, so Toastty left the task space open.")
             }
             let hadSessions = (sessions?.activeSessions(workspaceID: taskSpaceID).isEmpty == false)
-            guard store.send(.closeWorkspace(workspaceID: taskSpaceID)) else {
+            // An archive is the person finishing the task, so focus moves
+            // on as Complete's does; a release cleanup keeps the plain close.
+            let closed = kind == .archive
+                ? closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
+                : store.send(.closeWorkspace(workspaceID: taskSpaceID))
+            guard closed else {
                 return stop("Toastty could not close the task space.")
             }
             flushLayout()

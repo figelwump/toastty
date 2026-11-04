@@ -228,6 +228,74 @@ struct TaskBoardTests {
         #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
     }
 
+    @Test func completingTheShownTaskMovesFocusToTheNextActiveTaskSpace() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
+            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        }
+        let windowID = try #require(store.state.windows.first?.id)
+
+        let task = try await startTask(fixture, text: "Answer the question")
+        let taskSpaceID = try #require(task.taskSpaceWorkspaceID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: task.id)
+        // The workspace after the task space has nothing to do; the one
+        // after that waits for review.
+        let quietID = try makeUntrackedTaskSpace(fixture, title: "Nothing to do")
+        let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        let reviewPanelID = try #require(store.state.workspacesByID[reviewID]?.focusedPanelID)
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: reviewID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: quietID)
+            == store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: taskSpaceID).map { $0 + 1 })
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: taskSpaceID))
+
+        try fixture.coordinator.complete(taskID: task.id)
+
+        #expect(fixture.record(task.id)?.doneAt != nil)
+        #expect(store.state.workspacesByID[taskSpaceID] == nil)
+        // A plain close would select the quiet neighbor.
+        #expect(store.selectedWorkspace?.id == reviewID)
+        #expect(store.selectedWorkspace?.focusedPanelID == reviewPanelID)
+    }
+
+    @Test func completingATaskThatIsNotShownLeavesTheSelectionAlone() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
+            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        }
+        let windowID = try #require(store.state.windows.first?.id)
+        let task = try await startTask(fixture, text: "Answer the question")
+        let taskSpaceID = try #require(task.taskSpaceWorkspaceID)
+        let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: reviewID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: fixture.workspaceID))
+
+        try fixture.coordinator.complete(taskID: task.id)
+
+        #expect(store.state.workspacesByID[taskSpaceID] == nil)
+        #expect(store.selectedWorkspace?.id == fixture.workspaceID)
+    }
+
     @Test func jumpKeepsReviewCycleStableWithLaterPaneAndPreservesUnreadAndApprovalPriority() throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = makeBoard(fixture, gitHub: FakeGitHub())
