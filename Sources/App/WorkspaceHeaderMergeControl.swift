@@ -246,15 +246,43 @@ struct WorkspaceHeaderTaskControl: View {
     let coordinator: TaskCoordinator
     let taskID: UUID
 
-    private var isReadyForReview: Bool {
-        board.items().first(where: { $0.id == .task(taskID) })?.stage == .needsYou(.readyForReview)
+    private var stage: TaskStage? {
+        board.items().first(where: { $0.id == .task(taskID) })?.stage
     }
 
     var body: some View {
-        if isReadyForReview {
+        let stage = stage
+        if stage == .done {
+            // A done task space that stays open, such as one an agent
+            // marked done, says so instead of offering only Archive.
+            Menu {
+                Button("Archive Task…") {
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                    Text("Done")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7, weight: .bold))
+                }
+                .font(ToastyTheme.fontWorkspaceMergeProgress)
+                .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark)
+                .frame(height: ToastyTheme.workspaceMergeControlHeight)
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("This task is done. Archive it to close its task space")
+            .accessibilityLabel("Done")
+            .accessibilityIdentifier("topbar.workspace.task-done")
+        } else if stage == .needsYou(.readyForReview) {
             Button {
                 // Recheck the current board before accepting the result.
-                guard isReadyForReview else { return }
+                guard self.stage == .needsYou(.readyForReview) else { return }
                 TaskActions.perform("Unable to Complete Task") {
                     try TaskActions.run(.markDone, taskID: taskID, coordinator: coordinator)
                 }
@@ -268,7 +296,7 @@ struct WorkspaceHeaderTaskControl: View {
                 }
             }
             .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .all))
-            .help("Mark this task done and keep its conversation and workspace")
+            .help("Mark this task done and close its task space")
             .accessibilityIdentifier("topbar.workspace.complete-task")
         } else {
             WorkspaceHeaderArchiveControl {

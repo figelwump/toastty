@@ -248,6 +248,10 @@ final class TaskCoordinator {
     weak var merges: WorkspaceMergeCoordinator?
     /// Unsaved local documents in a workspace, which closing it would lose.
     var unsavedDocumentCount: (UUID) -> Int = { _ in 0 }
+    /// Closes a task space that Complete or Archive finished, and moves
+    /// focus to the next active panel. Without it, the close selects the
+    /// neighboring workspace.
+    var closeFinishedTaskSpace: ((UUID) -> Bool)?
     /// Merge prompts waiting for a busy agent's turn to end.
     var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
     /// Archives and release cleanups running in the background.

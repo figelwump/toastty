@@ -25,6 +25,9 @@ struct CommandPaletteTaskCommandsTests {
         private(set) var actions: CommandPaletteActionHandler!
         var failures: [String] = []
         var openedURLs: [URL] = []
+        /// The answer to the Complete dialog.
+        var confirmsComplete = true
+        private(set) var completeQuestions: [TaskCoordinator.CompleteCheck] = []
 
         init() throws {
             fixture = try Fixture()
@@ -52,6 +55,10 @@ struct CommandPaletteTaskCommandsTests {
                 sessionRuntimeStore: sessionRuntimeStore,
                 openURL: { [unowned self] in openedURLs.append($0) },
                 presentFailure: { [unowned self] title, message in failures.append("\(title): \(message)") },
+                confirmComplete: { [unowned self] _, check in
+                    completeQuestions.append(check)
+                    return confirmsComplete
+                },
                 // Runs at once instead of after the palette closes.
                 afterPaletteCloses: { $0() }
             )
@@ -181,10 +188,19 @@ struct CommandPaletteTaskCommandsTests {
         harness.select(taskSpace)
         let markDone = try #require(harness.commands().first { $0.title == "Task: Mark Done" })
 
+        // Cancel in the Complete dialog changes nothing.
+        harness.confirmsComplete = false
+        #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID))
+        #expect(harness.completeQuestions.map(\.hasTaskSpace) == [true])
+        #expect(harness.fixture.record(task.id)?.doneAt == nil)
+        #expect(harness.fixture.store.state.workspacesByID[taskSpace] != nil)
+
+        // Confirmed, the task is done and its task space closes.
+        harness.confirmsComplete = true
         #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID))
 
         #expect(harness.fixture.record(task.id)?.doneAt != nil)
-        #expect(harness.fixture.store.state.workspacesByID[taskSpace]?.doneAt != nil)
+        #expect(harness.fixture.store.state.workspacesByID[taskSpace] == nil)
         #expect(harness.failures.isEmpty)
         // A done task has no actions left, and the stale row does nothing.
         #expect(harness.taskRows().isEmpty)

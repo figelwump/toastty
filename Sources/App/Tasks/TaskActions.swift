@@ -43,7 +43,15 @@ enum TaskActions {
     /// Runs one of the actions the Tasks view's detail pane offers, which the
     /// command palette offers too. Archive asks first and shows its own
     /// failures; the others throw.
-    static func run(_ action: TaskBoardPresentation.DetailAction, taskID: UUID, coordinator: TaskCoordinator) throws {
+    ///
+    /// Mark Done asks with `confirmComplete`, then completes the task, which
+    /// also closes its task space.
+    static func run(
+        _ action: TaskBoardPresentation.DetailAction,
+        taskID: UUID,
+        coordinator: TaskCoordinator,
+        confirmComplete: CompleteConfirmation = TaskActions.confirmComplete
+    ) throws {
         switch action {
         case .merge:
             try coordinator.requestMerge(taskID: taskID)
@@ -52,7 +60,7 @@ enum TaskActions {
         case .cancelMerge:
             try coordinator.cancelMerge(taskID: taskID)
         case .markDone:
-            _ = try coordinator.markDone(taskID: taskID)
+            try complete(taskID: taskID, coordinator: coordinator, confirm: confirmComplete)
         case .archive:
             archive(taskID: taskID, coordinator: coordinator)
         case .cleanUp:
@@ -185,6 +193,50 @@ enum TaskActions {
             }
         }
         return lines
+    }
+
+    /// Asks before Complete marks the task done and closes its task space.
+    typealias CompleteConfirmation = @MainActor (TaskRecord, TaskCoordinator.CompleteCheck) -> Bool
+
+    /// Reads what completing closes, asks, then completes. Cancel changes
+    /// nothing.
+    static func complete(
+        taskID: UUID,
+        coordinator: TaskCoordinator,
+        confirm: CompleteConfirmation = TaskActions.confirmComplete
+    ) throws {
+        guard let record = coordinator.records.record(id: taskID) else { return }
+        let check = try coordinator.completeCheck(taskID: taskID)
+        if check.unsavedDocuments > 0 {
+            throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
+        }
+        guard confirm(record, check) else { return }
+        try coordinator.complete(taskID: taskID)
+    }
+
+    /// The lines the Complete alert shows. Kept apart from the alert so it
+    /// can be tested.
+    static func completeSummary(_ check: TaskCoordinator.CompleteCheck) -> [String] {
+        var lines = ["Moves the task to Done."]
+        if check.hasTaskSpace {
+            let sessions = check.agentSessions == 0 ? "" :
+                " and ends its \(check.agentSessions) agent \(check.agentSessions == 1 ? "session" : "sessions")"
+            lines.append("Closes the task space\(sessions).")
+        }
+        if let path = check.worktreePath {
+            lines.append("Keeps the worktree at \(path).")
+        }
+        return lines
+    }
+
+    static func confirmComplete(record: TaskRecord, check: TaskCoordinator.CompleteCheck) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Complete \u{201C}\(record.title)\u{201D}?"
+        alert.informativeText = completeSummary(check).joined(separator: "\n")
+        alert.alertStyle = .informational
+        alert.addConfiguredButton(withTitle: "Complete Task", behavior: .defaultAction)
+        alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private static func confirmArchive(record: TaskRecord, check: TaskArchiveCheck) -> TaskArchiveOptions? {

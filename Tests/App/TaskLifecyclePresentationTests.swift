@@ -402,6 +402,15 @@ struct TaskLifecyclePresentationTests {
         #expect(TaskActions.archiveSummary(record: task, check: check).contains("2 commits at the worktree's HEAD are on no branch, remote branch or tag."))
     }
 
+    @Test func completeSummaryNamesWhatClosesAndWhatStays() {
+        #expect(TaskActions.completeSummary(TaskCoordinator.CompleteCheck(
+            hasTaskSpace: true, agentSessions: 1, unsavedDocuments: 0, worktreePath: nil
+        )) == ["Moves the task to Done.", "Closes the task space and ends its 1 agent session."])
+        #expect(TaskActions.completeSummary(TaskCoordinator.CompleteCheck(
+            hasTaskSpace: false, agentSessions: 0, unsavedDocuments: 0, worktreePath: "/repo-fix"
+        )) == ["Moves the task to Done.", "Keeps the worktree at /repo-fix."])
+    }
+
     @Test
     func remoteTagsMapToTheCommitsTheyName() {
         let output = """

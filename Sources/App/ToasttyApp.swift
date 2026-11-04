@@ -1350,6 +1350,12 @@ struct ToasttyApp: App {
             }
         )
         sessionRuntimeStore.sessionExitController = sessionExitController
+        taskCoordinator.closeFinishedTaskSpace = { [weak store, weak sessionRuntimeStore] workspaceID in
+            store?.closeTaskSpaceFocusingNextActive(
+                workspaceID: workspaceID,
+                sessionRuntimeStore: sessionRuntimeStore
+            ) ?? false
+        }
         taskCoordinator.sessions = LiveTaskSessions(
             sessionRuntimeStore: sessionRuntimeStore,
             closeController: remoteSessionCloseController,
