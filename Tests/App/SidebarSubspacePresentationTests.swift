@@ -352,7 +352,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                     title: status.displayTitle, panelID: status.panelID,
                     statusKind: status.status.kind, isWaiting: false,
                     showsUnreadSessionAccent: unread, summary: status.status.summary,
-                    statusUpdatedAt: status.statusUpdatedAt
+                    statusUpdatedAt: TaskBoard.agentActivityAt(status)
                 )]
             )
         }
@@ -381,13 +381,12 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         report(.ready, at: 50)
         XCTAssertTrue(appStore.send(.recordDesktopNotification(workspaceID: selection.workspaceID, panelID: panelID)))
         XCTAssertEqual(try runtimeRow().status, .ready)
-        let beforeRead = Date()
         XCTAssertTrue(appStore.send(.markPanelNotificationsRead(workspaceID: selection.workspaceID, panelID: panelID)))
         let read = try runtimeRow()
         XCTAssertEqual(read.status, .idle)
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(read.latestActivityAt), beforeRead)
+        XCTAssertEqual(read.latestActivityAt, Date(timeIntervalSince1970: 50))
         let idlePeer = row("idle-peer", status: .idle, index: 0, sessions: [session(reportedAt: 60)])
-        XCTAssertEqual(Presentation.sortedRows([idlePeer, read]).map(\.title), ["active", "idle-peer"])
+        XCTAssertEqual(Presentation.sortedRows([idlePeer, read]).map(\.title), ["idle-peer", "active"])
     }
 
     func testDoneMarkReplacesQuietStatusesAndSortsLast() {

@@ -3761,7 +3761,7 @@ struct SidebarView: View {
                     ?? normalizedSessionDetail(status.status.detail)
                     ?? normalizedSessionDetail(status.status.summary),
                 turnStartedAt: status.turnStartedAt,
-                statusUpdatedAt: status.statusUpdatedAt
+                statusUpdatedAt: TaskBoard.agentActivityAt(status)
             )
         }
         return SidebarSubspacePresentation.Row(
