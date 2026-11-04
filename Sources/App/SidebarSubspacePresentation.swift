@@ -55,6 +55,7 @@ enum SidebarSubspacePresentation {
         var showsUnreadSessionAccent = false
         let summary: String?
         var turnStartedAt: Date? = nil
+        /// The agent's last status report, without changes caused by reading.
         var statusUpdatedAt: Date? = nil
     }
 
@@ -103,7 +104,7 @@ enum SidebarSubspacePresentation {
         /// `TaskBoardPresentation.menuItems`.
         var taskMenu: [[TaskBoardPresentation.MenuItem]]? = nil
 
-        /// The latest status update from any session in this subspace.
+        /// The latest agent status report from any session in this subspace.
         /// Metadata changes do not update these times.
         var latestActivityAt: Date? {
             sessions.lazy.compactMap(\.statusUpdatedAt).max()

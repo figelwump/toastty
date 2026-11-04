@@ -3412,6 +3412,102 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView, titles: titles).first, "Review task 1")
     }
 
+    func testNextActiveReviewCyclesKeepReadTasksInAgentActivityOrder() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 2, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.taskCoordinator = coordinator
+        coordinator.board = try XCTUnwrap(harness.taskBoard)
+        let rootView = harness.hostingView
+        let now = Date().addingTimeInterval(-100)
+        let titles = ["Review A", "Review B"]
+        let targets = try (1...2).map { number in
+            try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space \(number)" }?.id)
+        }
+        for sessionID in ["spawner", "working-agent", "approval-agent", "ready-agent"] {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Waiting"), at: now
+            )
+        }
+        let readyPanelID = try XCTUnwrap(harness.store.state.workspacesByID[ids.readyUnreadID]?.focusedPanelID)
+        XCTAssertTrue(harness.store.send(.markPanelNotificationsRead(workspaceID: ids.readyUnreadID, panelID: readyPanelID)))
+        for (index, workspaceID) in targets.enumerated() {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            var record = TaskRecord(
+                createdAt: now, text: titles[index], title: titles[index], slug: "review-\(index)",
+                titleSetByUser: true, source: .cli, resolved: TaskFields(agent: "codex"),
+                workspaceID: ids.parentID, setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.readyForReviewAt = now
+            try coordinator.records.insert(record)
+            XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: record.id)))
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "extra-\(index)",
+                status: SessionStatus(kind: index == 0 ? .idle : .ready, summary: "Review complete"),
+                at: now.addingTimeInterval(Double(20 - index * 10))
+            )
+            if index == 1 {
+                XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID)))
+            }
+        }
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles)
+
+        // Reading B changes ready to idle while its task stays ready for review.
+        // The next jump must not release a newer read time into the sort order.
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), targets[1])
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        for workspaceID in targets {
+            let workspace = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID])
+            XCTAssertTrue(workspace.unreadPanelIDs.isEmpty)
+            XCTAssertEqual(try XCTUnwrap(harness.sessionRuntimeStore.workspaceStatuses(for: workspaceID).first).status.kind, .idle)
+            XCTAssertEqual(harness.taskCoordinator?.board?.items().first { $0.taskSpaceWorkspaceID == workspaceID }?.stage,
+                           .needsYou(.readyForReview))
+        }
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles)
+        try attachSidebarRender(rootView, name: "projects-review-before-cycle")
+        var visited = Set<UUID>()
+        for index in 0..<6 {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+            visited.insert(try XCTUnwrap(harness.store.selectedWorkspaceID(in: harness.windowID)))
+            XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles, "Review cycle jump \(index + 1)")
+            if index == 0 {
+                try attachSidebarRender(rootView, name: "projects-review-after-jump")
+            }
+        }
+        XCTAssertTrue(Set(targets).isSubset(of: visited), "The cycle must visit both already-read review tasks")
+
+        harness.store.selectWorkspace(
+            windowID: harness.windowID, workspaceID: ids.parentID, preferringUnreadSessionPanelIn: nil
+        )
+        pumpMainRunLoop(duration: 0.6)
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "extra-1", status: SessionStatus(kind: .idle, summary: "Review updated"), at: Date()
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), Array(titles.reversed()),
+                       "A new agent report must still update recency")
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "extra-0", status: SessionStatus(kind: .needsApproval, summary: "Needs approval"), at: Date()
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles,
+                       "An approval request must still sort above review tasks")
+    }
+
     func testNextActiveUsesPinnedSubspaceOrderDisplayedBySidebar() throws {
         let (harness, ids) = try makeSubspacesHarness()
         defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }

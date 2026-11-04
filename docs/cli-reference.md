@@ -313,8 +313,9 @@ Task spaces do not appear as their own sidebar cards; they render as compact row
 in a Task Spaces group inside the parent card, sorted ready, needs approval,
 error, working, idle, then done. Working task spaces keep workspace order as
 progress reports arrive. Idle task spaces sort by their latest session status
-update, newest first. Done task spaces use the later of their latest session
-status update and the time they were marked done. Ready, needs approval, and
+report from the agent, newest first. Reading a session does not count as activity.
+Done task spaces use the later of their latest agent status report
+and the time they were marked done. Ready, needs approval, and
 error task spaces sort by the latest update from a session that sets that row's
 status; updates from sessions in other states do not move the row. Equal or
 missing times use workspace order; rows with no time follow rows with a time.
