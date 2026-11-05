@@ -92,6 +92,11 @@ a turn that ends with a question. When it ends, read the task with
 A watch command that fails, for example because Toastty quit, ends; the next
 sync finds the tasks again.
 
+If Toastty sends you task webhooks (`toastty webhook list` shows one as
+approved), you do not need the background watch: each POST names a task and
+its new `stage`, so run the sync above when one arrives. A webhook event is a
+hint, and the sync stays the source of truth.
+
 ## Answer a task
 
 `toastty task send <task-id> "<the user's answer>"`, then watch it again.

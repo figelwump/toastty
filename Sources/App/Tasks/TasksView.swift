@@ -115,6 +115,9 @@ struct TasksView: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                if let webhooks = board.coordinator?.webhooks {
+                    TaskWebhookApprovalBanner(webhooks: webhooks)
+                }
                 if let configError = board.configError {
                     configErrorBanner(configError)
                 }

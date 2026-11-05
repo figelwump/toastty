@@ -413,7 +413,9 @@ for a merge when you say so. It uses the same CLI:
   --request-id <key>` makes the task. A repeated request ID returns the
   first task. The Tasks view shows the issue as **Source**.
 - `task list --changed-since <cursor> --include-reply` and
-  `task watch <task-id> --until idle --wait` follow the tasks.
+  `task watch <task-id> --until idle --wait` follow the tasks. A coordinator
+  that can receive an HTTPS request can also get a
+  [webhook](#webhooks-for-task-events), so nothing has to keep watching.
 - `task send` passes your answers.
 - `task request-merge <task-id>` accepts a merge for you; the task's agent
   still checks the pull request first.
@@ -431,6 +433,73 @@ rules on for commands that merge, archive or delete. Issue text comes from
 other people, so the skill treats it as data, not instructions. Toastty still
 shows Needs you and sends its own alerts, and a task agent's permission
 prompts can be answered only in Toastty or Toastty Mobile.
+
+## Webhooks for task events
+
+A coordinator that can receive an HTTPS request, such as a bot that wakes
+when something POSTs to its URL, can get task events from Toastty instead of
+keeping a watch running:
+
+```bash
+pbpaste | toastty webhook add grok https://hooks.example.com/wake --auth bearer --secret-stdin
+```
+
+1. `webhook add` registers the webhook. Its secret is read from stdin and
+   kept in the login Keychain. The webhook waits for your approval and
+   receives nothing until then.
+2. The sidebar shows **1 webhook** next to Tasks, and the Tasks view shows a
+   banner. **Review…** shows where events go, which events, for which tasks,
+   and how requests sign in. Only **Approve** in that sheet approves it; no
+   command can. **Deny** removes the webhook and its secret.
+   `webhook add --wait` waits for your decision: it exits 0 when you approve,
+   3 when you deny, and 4 when `--timeout` runs out.
+3. Toastty then POSTs a small JSON event when a task enters Needs you, or
+   needs you for a new reason (`task.needs_you`), merges (`task.merged`),
+   finishes (`task.done`), or is archived or deleted. `--events` can also add
+   `running` and `idle`. `--root` and `--external-ref-prefix` limit the
+   events to some tasks.
+
+Each event has `eventID`, `type`, `occurredAt`, `webhook`, and `task` with
+its `id`, `title`, `projectRoot`, `externalRef`, `stage` (`group` and
+`attention`), `question`, `pullRequestURL` and `mergedAt`. It never carries
+an agent's reply, the prompt or attachments; read those with `task get`. The
+`Toastty-Event-ID` header repeats the event ID, so a receiver can drop a
+duplicate.
+
+`--auth` sets how a request proves it came from Toastty:
+
+- `bearer`: `Authorization: Bearer <secret>`.
+- `header:<Name>`: `<Name>: <secret>`.
+- `hmac` (the default): `Toastty-Signature: t=<unix>,v1=<hex>`, an HMAC-SHA256
+  of `<t>.<body>` with the secret. Reject a `t` older than a few minutes.
+- `none`: only for `http://127.0.0.1` and `localhost`, for tests.
+
+Addresses must use HTTPS, except 127.0.0.1 and localhost. Toastty does not
+follow redirects. Logs and `webhook list` show only the host, since a path
+can hold a token, and never the secret.
+
+Delivery:
+
+- A stage that comes from the agent's status counts after it holds for 3
+  seconds, so a passing status sends nothing. Merges, Done, archives and
+  deletions count at once. A review stage and a merge made on GitHub show
+  after the next pull request check, up to 2 minutes later.
+- Toastty saves each event before it sends it, sends one at a time to each
+  webhook, and retries failures after 5 s, 15 s, 45 s and so on, up to 10
+  minutes apart, for a day. A newer stage replaces an older one still
+  waiting for the same task; merged, done, archived and deleted events are
+  kept. Retries start again when the Mac wakes.
+- After a relaunch, Toastty sends the events still waiting, does not repeat
+  changes it already sent, and reports changes it missed while it was quit,
+  such as a merge on GitHub.
+- HTTP 401, 403 or 410 stops the webhook. `webhook rotate-secret` sets a new
+  secret and starts it again.
+- An event is a wake-up hint. `task list --changed-since` stays the source of
+  truth; run it when an event arrives and from time to time.
+
+Changing a webhook's address, events, filters or `--auth` with `webhook set`,
+or editing `~/.toastty/task-webhooks.json`, needs approval again. A new
+secret does not. A workspace-scoped session cannot manage webhooks.
 
 ## Starting tasks
 
@@ -909,6 +978,9 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   the files were removed; such a task can no longer be retried.
 - `~/.toastty/recent-workspaces.json`: the last closed top-level workspaces,
   for the workspace picker.
+- `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`:
+  task webhooks and the events waiting to send. Webhook secrets and approvals
+  are in the login Keychain.
 
 Deleting a task does not remove its worktree or branch; archiving it does.
 

@@ -18,6 +18,26 @@ struct CLIInvocation: Equatable {
     /// Set by `toastty task watch --wait`: poll `task.watches` until the
     /// watch fires.
     var watchWait: CLIWatchWait? = nil
+    /// Set by `toastty webhook`: how to print the result, and whether to
+    /// wait for the user's approval.
+    var webhook: CLIWebhookOutput? = nil
+}
+
+struct CLIWebhookOutput: Equatable {
+    static let defaultWaitTimeout: TimeInterval = 600
+    static let pollInterval: TimeInterval = 1
+
+    enum Kind: Equatable {
+        case saved
+        case list
+        case test
+        case removed
+    }
+
+    var kind: Kind
+    var name: String?
+    /// Set by `webhook add --wait`: how long to wait for approval.
+    var waitTimeout: TimeInterval?
 }
 
 struct CLITaskWait: Equatable {
@@ -799,6 +819,15 @@ public enum ToasttyCLI {
                         callerSessionID: callerSessionID
                     )
                 }
+                if let webhook = invocation.webhook, response.ok {
+                    return try runWebhookOutput(
+                        client: client,
+                        response: response,
+                        output: webhook,
+                        options: invocation.options,
+                        callerSessionID: callerSessionID
+                    )
+                }
                 if let watchWait = invocation.watchWait, response.ok {
                     return try runWatchWait(
                         client: client,
@@ -913,6 +942,9 @@ public enum ToasttyCLI {
         case "task":
             return try parseTaskCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
 
+        case "webhook":
+            return try parseWebhookCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
+
         default:
             throw ToasttyCLIError.usage("unknown command: \(command)\n\n\(usage)")
         }
@@ -951,6 +983,11 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
+      toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin]
+      toastty [--json] [--socket-path <path>] webhook rotate-secret <name> --secret-stdin
+      toastty [--json] [--socket-path <path>] webhook list [<name>]
+      toastty [--json] [--socket-path <path>] webhook test|remove <name>
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1784,6 +1821,273 @@ public enum ToasttyCLI {
         }
 
         return parsed
+    }
+
+    /// `toastty webhook <verb>`: a shorter form of `action run webhook.<verb>`
+    /// and `query run webhook.list`. The secret only comes from stdin, so it
+    /// never shows in a process list or shell history.
+    private static func parseWebhookCommand(
+        _ arguments: [String],
+        options: CLIOptions,
+        environment: [String: String]
+    ) throws -> CLIInvocation {
+        guard let verb = arguments.first else {
+            throw ToasttyCLIError.usage("webhook requires a subcommand\n\n\(usage)")
+        }
+        let parsed = try parseCommandArguments(
+            Array(arguments.dropFirst()),
+            valueOptions: ["--url", "--events", "--root", "--external-ref-prefix", "--auth", "--timeout"],
+            flagOptions: ["--secret-stdin", "--wait"]
+        )
+        func readSecret() throws -> String? {
+            guard parsed.hasFlag("--secret-stdin") else { return nil }
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  text.isEmpty == false else {
+                throw ToasttyCLIError.usage("--secret-stdin read nothing; pipe the secret in, for example: pbpaste | toastty webhook add ...")
+            }
+            return text
+        }
+        func settings(into args: inout [String: AutomationJSONValue]) throws {
+            if let url = parsed.singleValue("--url") { args["url"] = .string(url) }
+            let events = parsed.values("--events")
+            if events.isEmpty == false { args["events"] = .array(events.map(AutomationJSONValue.string)) }
+            let roots = parsed.values("--root")
+            if roots.isEmpty == false {
+                let workingDirectory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
+                args["roots"] = .array(roots.map { root in
+                    let expanded = (root as NSString).expandingTildeInPath
+                    guard expanded.hasPrefix("/") == false else { return .string(expanded) }
+                    return .string(URL(filePath: workingDirectory, directoryHint: .isDirectory)
+                        .appending(path: expanded).standardizedFileURL.path(percentEncoded: false))
+                })
+            }
+            if let prefix = parsed.singleValue("--external-ref-prefix") { args["externalRefPrefix"] = .string(prefix) }
+            if let auth = parsed.singleValue("--auth") { args["auth"] = .string(auth) }
+            if let secret = try readSecret() { args["secret"] = .string(secret) }
+        }
+        func requireName(count: Int, _ form: String) throws -> String {
+            guard parsed.positionals.count == count, let name = parsed.positionals.first else {
+                throw ToasttyCLIError.usage("usage: toastty webhook \(form)\n\n\(usage)")
+            }
+            return name
+        }
+        switch verb {
+        case "add":
+            let name = try requireName(count: 2, "add <name> <url> [options]")
+            var args: [String: AutomationJSONValue] = ["name": .string(name), "url": .string(parsed.positionals[1])]
+            guard parsed.singleValue("--url") == nil else {
+                throw ToasttyCLIError.usage("webhook add takes the URL as its second argument, not --url\n\n\(usage)")
+            }
+            try settings(into: &args)
+            var timeout: TimeInterval?
+            if parsed.hasFlag("--wait") {
+                timeout = CLIWebhookOutput.defaultWaitTimeout
+                if let raw = parsed.singleValue("--timeout") {
+                    guard let value = TimeInterval(raw), value > 0 else {
+                        throw ToasttyCLIError.usage("--timeout must be a number of seconds\n\n\(usage)")
+                    }
+                    timeout = value
+                }
+            } else if parsed.singleValue("--timeout") != nil {
+                throw ToasttyCLIError.usage("--timeout needs --wait\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .action, id: "webhook.add", args: args),
+                webhook: CLIWebhookOutput(kind: .saved, name: name, waitTimeout: timeout)
+            )
+        case "set":
+            let name = try requireName(count: 1, "set <name> [options]")
+            var args: [String: AutomationJSONValue] = ["name": .string(name)]
+            try settings(into: &args)
+            guard args.count > 1 else {
+                throw ToasttyCLIError.usage("webhook set needs something to change\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .action, id: "webhook.set", args: args),
+                webhook: CLIWebhookOutput(kind: .saved, name: name)
+            )
+        case "rotate-secret":
+            let name = try requireName(count: 1, "rotate-secret <name> --secret-stdin")
+            guard let secret = try readSecret() else {
+                throw ToasttyCLIError.usage("webhook rotate-secret reads the new secret from stdin with --secret-stdin\n\n\(usage)")
+            }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .action, id: "webhook.set", args: ["name": .string(name), "secret": .string(secret)]),
+                webhook: CLIWebhookOutput(kind: .saved, name: name)
+            )
+        case "list":
+            guard parsed.positionals.count <= 1 else { throw ToasttyCLIError.usage("usage: toastty webhook list [<name>]\n\n\(usage)") }
+            var args: [String: AutomationJSONValue] = [:]
+            if let name = parsed.positionals.first { args["name"] = .string(name) }
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .query, id: "webhook.list", args: args),
+                webhook: CLIWebhookOutput(kind: .list)
+            )
+        case "test", "remove":
+            let name = try requireName(count: 1, "\(verb) <name>")
+            return CLIInvocation(
+                options: options,
+                command: .appControlRun(kind: .action, id: "webhook.\(verb)", args: ["name": .string(name)]),
+                webhook: CLIWebhookOutput(kind: verb == "test" ? .test : .removed, name: name)
+            )
+        default:
+            throw ToasttyCLIError.usage("unknown webhook subcommand: \(verb)\n\n\(usage)")
+        }
+    }
+
+    private static func runWebhookOutput(
+        client: ToasttySocketClient,
+        response: AutomationResponseEnvelope,
+        output: CLIWebhookOutput,
+        options: CLIOptions,
+        callerSessionID: String?
+    ) throws -> Int32 {
+        if options.jsonOutput, output.waitTimeout == nil {
+            try writeStdout(jsonString(for: response))
+            return 0
+        }
+        let result = response.result ?? [:]
+        switch output.kind {
+        case .list:
+            guard case .array(let items)? = result["webhooks"] else { throw ToasttyCLIError.runtime("webhook.list returned no webhooks") }
+            let webhooks = items.compactMap { item -> [String: AutomationJSONValue]? in
+                guard case .object(let object) = item else { return nil }
+                return object
+            }
+            try writeStdout(renderWebhookTable(webhooks))
+            return 0
+        case .test:
+            let summary = result.string("result") ?? "no response"
+            let delivered = result.bool("delivered") ?? false
+            try writeStdout(delivered ? "Delivered: \(summary)" : "Not delivered: \(summary)")
+            return delivered ? 0 : 1
+        case .removed:
+            try writeStdout("Removed webhook \(output.name ?? "").")
+            return 0
+        case .saved:
+            break
+        }
+        let name = result.string("name") ?? output.name ?? ""
+        let webhookID = result.string("id")
+        let status = result.string("status") ?? ""
+        if options.jsonOutput == false {
+            try writeStdout(renderSavedWebhook(result, name: name, status: status))
+        }
+        guard let timeout = output.waitTimeout, status == "pendingApproval" else {
+            if options.jsonOutput { try writeStdout(jsonString(for: response)) }
+            return 0
+        }
+        if options.jsonOutput == false {
+            try writeStdout("Waiting for approval in Toastty…")
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            Thread.sleep(forTimeInterval: CLIWebhookOutput.pollInterval)
+            guard let request = CLICommand.appControlRun(kind: .query, id: "webhook.list", args: [:])
+                .makeRequestEnvelope(callerSessionID: callerSessionID) else {
+                throw ToasttyCLIError.runtime("could not build the request")
+            }
+            let poll = try client.send(request)
+            guard poll.ok, case .array(let items)? = poll.result?["webhooks"] else {
+                throw ToasttyCLIError.runtime(poll.error.map { "\($0.code): \($0.message)" } ?? "webhook.list failed")
+            }
+            let current = items.compactMap { item -> [String: AutomationJSONValue]? in
+                // The ID, not the name: a webhook removed and added again
+                // under the same name is a different webhook.
+                guard case .object(let object) = item, object.string("id") == webhookID else { return nil }
+                return object
+            }.first
+            guard let current else {
+                if options.jsonOutput { try writeStdout(#"{"name":"\#(name)","status":"denied"}"#) }
+                else { try writeStdout("Denied in Toastty. The webhook and its secret were removed.") }
+                return 3
+            }
+            let state = current.string("status") ?? ""
+            if state == "approved" {
+                if options.jsonOutput { try writeStdout(#"{"name":"\#(name)","status":"approved"}"#) }
+                else { try writeStdout("Approved. Toastty now sends task events to \(current.string("host") ?? "the webhook").") }
+                return 0
+            }
+            if state != "pendingApproval" || Date() >= deadline {
+                if options.jsonOutput { try writeStdout(#"{"name":"\#(name)","status":"\#(state)"}"#) }
+                else { try writeStdout("Still waiting for approval in Toastty. The webhook stays pending.") }
+                return 4
+            }
+        }
+    }
+
+    private static func renderSavedWebhook(_ result: [String: AutomationJSONValue], name: String, status: String) -> String {
+        var lines: [String] = []
+        switch status {
+        case "pendingApproval":
+            lines.append("Webhook \"\(name)\" is waiting for approval in Toastty.")
+            lines.append("It receives no events until you approve it in the Tasks view (Review…).")
+        case "approved":
+            lines.append("Webhook \"\(name)\" is approved.")
+        case "disabled":
+            lines.append("Webhook \"\(name)\" is stopped (\(result.string("disabledReason") ?? "refused")).")
+        default:
+            lines.append("Webhook \"\(name)\": \(status).")
+        }
+        lines.append("  destination  \(result.string("host") ?? "")")
+        lines.append("  events       \(webhookStrings(result["events"]).joined(separator: ", "))")
+        lines.append("  tasks        \(webhookTaskFilter(result))")
+        lines.append("  auth         \(result.string("auth") ?? "")")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderWebhookTable(_ webhooks: [[String: AutomationJSONValue]]) -> String {
+        guard webhooks.isEmpty == false else { return "No webhooks." }
+        let header = ["NAME", "STATUS", "DESTINATION", "EVENTS", "TASKS", "LAST DELIVERY"]
+        let rows = webhooks.map { webhook -> [String] in
+            var status = webhook.string("status") ?? ""
+            switch status {
+            case "pendingApproval": status = "waiting for approval"
+            case "disabled": status = "stopped (\(webhook.string("disabledReason") ?? "refused"))"
+            default: break
+            }
+            var last = "—"
+            if case .object(let delivery)? = webhook["lastDelivery"] {
+                last = [delivery.string("result"), delivery.string("at")].compactMap { $0 }.joined(separator: " · ")
+            }
+            return [
+                webhook.string("name") ?? "",
+                status,
+                webhook.string("host") ?? "",
+                webhookStrings(webhook["events"]).joined(separator: ","),
+                webhookTaskFilter(webhook),
+                last,
+            ]
+        }
+        let widths = header.indices.map { column in
+            ([header] + rows).map { $0[column].count }.max() ?? 0
+        }
+        return ([header] + rows).map { row in
+            row.enumerated().map { column, cell in
+                column == row.count - 1 ? cell : cell.padding(toLength: widths[column], withPad: " ", startingAt: 0)
+            }.joined(separator: "  ")
+        }.joined(separator: "\n")
+    }
+
+    private static func webhookStrings(_ value: AutomationJSONValue?) -> [String] {
+        guard case .array(let items)? = value else { return [] }
+        return items.compactMap { item in
+            guard case .string(let string) = item else { return nil }
+            return string
+        }
+    }
+
+    private static func webhookTaskFilter(_ webhook: [String: AutomationJSONValue]) -> String {
+        var parts: [String] = []
+        let roots = webhookStrings(webhook["roots"])
+        parts.append(roots.isEmpty ? "all projects" : roots.joined(separator: ", "))
+        if let prefix = webhook.string("externalRefPrefix") { parts.append("external ref \(prefix)*") }
+        return parts.joined(separator: " · ")
     }
 
     /// `toastty task <verb>`: a shorter form of `action run task.<verb>` and

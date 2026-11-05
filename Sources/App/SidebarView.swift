@@ -1076,7 +1076,8 @@ struct SidebarView: View {
             newTask: newTask.map { action in { action() } },
             selectSegment: { segment in
                 _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
-            }
+            },
+            webhooks: taskBoard.coordinator?.webhooks
         )
     }
 

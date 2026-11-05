@@ -11,6 +11,8 @@ struct SidebarTasksHeader: View {
     let openTasksView: () -> Void
     let newTask: (() -> Void)?
     let selectSegment: (SidebarSegment) -> Void
+    /// Shows how many webhooks wait for approval.
+    var webhooks: TaskWebhookService? = nil
 
     @State private var isRowHovered = false
 
@@ -54,6 +56,10 @@ struct SidebarTasksHeader: View {
                 SidebarSemanticTextBridge(text: Self.tasksRowAccessibilityLabel(needsYouCount: needsYouCount))
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
+            }
+
+            if let webhooks {
+                TaskWebhookPendingPill(webhooks: webhooks, open: openTasksView)
             }
 
             if let newTask {
