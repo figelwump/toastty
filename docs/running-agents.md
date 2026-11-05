@@ -669,7 +669,7 @@ Running and merging a task are built in, through the shipped
 `toastty-task-start` and `toastty-task-merge` skills, so the earlier
 `worktree-create`, `worktree-done` and `worktree-cleanup` examples are gone.
 Personal copies of them use app actions that Toastty no longer has; delete
-them. To add your own rules to every task, set `start_prompt` in
+them. To add rules that apply only to tasks, set `start_prompt` in
 `~/.toastty/tasks.toml`. To merge with your own skill, name it in the project's
 `merge_skill`. The workflow guide
 (`setup guide --topic workflows`) gives an agent rules for writing a workflow

@@ -757,7 +757,7 @@ adds, such as the task text or the pull request.
 
 ```toml
 [defaults]
-start_prompt = "Ask Codex for a review before you open a pull request."  # optional extra text
+start_prompt = "Ask me before you open a pull request."  # optional extra text
 merge_skill = "toastty-task-merge"
 
 [workspace."~/GiantThings/repos/emptyos"]
@@ -771,9 +771,11 @@ release_prompt = "Wait for my approval before any production change."  # optiona
   report, and sets the task's status. The repository's own instructions, such
   as `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
   line.
-- `start_prompt` is text the first message gives after the skill line, such as
-  your own review or evidence rules. It adds to the start skill and does not
-  replace it.
+- `start_prompt` is text the first message gives after the skill line, for
+  rules that apply only to tasks. It adds to the start skill and does not
+  replace it. Rules for all agent work, such as code review, belong in your
+  global agent instructions (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`),
+  which the agent reads already.
 - A first message that does not name the shipped start skill ends with one
   line that tells the agent to run `task needs-reply` before it ends a turn
   with a question. The shipped skill already says this.
