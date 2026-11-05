@@ -1,8 +1,11 @@
 import CoreState
 import Foundation
 
-/// Navigation follows the sidebar's model order, including rows in collapsed
-/// subspaces. Panels without session rows remain reachable after those rows.
+/// Navigation follows the sidebar's order, including rows in collapsed
+/// subspaces. Task spaces keep the window's workspace order, with a task
+/// space drawn under the task that started it, so the order does not change
+/// while the user jumps. Panels without session rows remain reachable after
+/// those rows.
 @MainActor
 struct SidebarPanelNavigationOrder {
     let forward: [PanelNavigationTarget]
@@ -13,7 +16,7 @@ struct SidebarPanelNavigationOrder {
     init(
         state: AppState,
         sessionRegistry: SessionRegistry?,
-        displayedSubspaceOrderByParentID: [UUID: [UUID]],
+        linkedParentID: (UUID) -> UUID? = { _ in nil },
         windowID: UUID,
         workspaceID: UUID,
         focusedPanelID: UUID?
@@ -28,7 +31,7 @@ struct SidebarPanelNavigationOrder {
             in: state,
             windowID: windowID,
             sessionRegistry: sessionRegistry,
-            displayedSubspaceOrderByParentID: displayedSubspaceOrderByParentID
+            linkedParentID: linkedParentID
         )
         let focusedIndex = current.targets.firstIndex { $0.panelID == focusedPanelID }
         let hasSessionRows = current.targets.contains {
@@ -55,7 +58,7 @@ struct SidebarPanelNavigationOrder {
                 in: state,
                 windowID: window.id,
                 sessionRegistry: sessionRegistry,
-                displayedSubspaceOrderByParentID: displayedSubspaceOrderByParentID
+                linkedParentID: linkedParentID
             ).targets
         }
         var seenPanelIDs = Set<UUID>()
@@ -67,16 +70,15 @@ struct SidebarPanelNavigationOrder {
         in state: AppState,
         windowID: UUID,
         sessionRegistry: SessionRegistry?,
-        displayedSubspaceOrderByParentID: [UUID: [UUID]]
+        linkedParentID: (UUID) -> UUID?
     ) -> (targets: [PanelNavigationTarget], sessionPanelIDs: Set<UUID>, workspaceIDs: [UUID]) {
         guard let window = state.window(id: windowID) else { return ([], [], []) }
         var workspaceIDs = state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
-            let subspaceIDs = state.subspaceWorkspaceIDs(of: parentID)
-            let displayedIDs = displayedSubspaceOrderByParentID[parentID] ?? []
-            let validIDs = Set(subspaceIDs)
-            var placedIDs = Set<UUID>()
-            let orderedIDs = (displayedIDs + subspaceIDs).filter { validIDs.contains($0) && placedIDs.insert($0).inserted }
-            return [parentID] + orderedIDs
+            [parentID] + SidebarSubspacePresentation.groupingLinkedChildren(
+                state.subspaceWorkspaceIDs(of: parentID),
+                id: { $0 },
+                linkedParentID: linkedParentID
+            )
         }
         let sidebarWorkspaceIDs = Set(workspaceIDs)
         workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) }

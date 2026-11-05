@@ -430,7 +430,7 @@ struct TaskBoardTests {
             terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: try #require(fixture.store.state.windows.first?.id), runtimeRegistry: runtime)
         )
         let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
-        #expect(sidebar.subspaceRowModel(workspace: workspace, spawner: nil, windowWorkspaceIDs: [workspaceID]).title == "Unread dot repair")
+        #expect(sidebar.subspaceRowModel(workspace: workspace, spawner: nil).title == "Unread dot repair")
         #expect(workspace.title == task.slug)
         #expect(fixture.record(task.id)?.slug == task.slug)
 
@@ -1029,13 +1029,14 @@ struct TaskBoardTests {
         let idleChild = item("composer-blank-line", taskID: UUID(), parent: parentID, stage: .idle)
 
         let sections = SidebarStatusSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
-        // A family lists together in its most urgent group: the idle child
-        // stays under its running parent, dimmed, and is not counted there.
+        // A family lists together in its most urgent group, in the order
+        // given: the idle child stays under its running parent, dimmed, and
+        // is not counted there.
         #expect(sections.running.map(\.item.title) == [
-            "pricing-page", "task-inbox", "composer-blank-line", "hotkey-capture", "ios-outbox",
+            "pricing-page", "task-inbox", "hotkey-capture", "composer-blank-line", "ios-outbox",
         ])
         #expect(sections.running.map(\.isLinkedChild) == [false, false, true, true, true])
-        #expect(sections.running.map(\.isContext) == [false, false, true, false, false])
+        #expect(sections.running.map(\.isContext) == [false, false, false, true, false])
         #expect(sections.count(.running) == 4)
         #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
         #expect(sections.count(.idle) == 1)
@@ -1067,6 +1068,35 @@ struct TaskBoardTests {
         )
     }
 
+    /// Status lists tasks in the order of the project cards: by project,
+    /// then by task space in window order, whatever the board's activity
+    /// order. Tasks with no task space follow their project's, oldest first.
+    @Test func statusListsTasksInTheSidebarOrder() {
+        let projectA = UUID(), projectB = UUID(), spaceA1 = UUID(), spaceB1 = UUID(), spaceA2 = UUID()
+        func item(_ title: String, project: UUID?, space: UUID?, createdAt: TimeInterval) -> TaskBoardItem {
+            var item = statusItem(title, stage: .needsYou(.review))
+            item.projectWorkspaceID = project
+            item.taskSpaceWorkspaceID = space
+            item.record?.createdAt = Date(timeIntervalSince1970: createdAt)
+            return item
+        }
+        // Newest activity first, as the board gives them.
+        let board = [
+            item("a2", project: projectA, space: spaceA2, createdAt: 1),
+            item("b1", project: projectB, space: spaceB1, createdAt: 2),
+            item("a-unplaced-new", project: projectA, space: nil, createdAt: 9),
+            item("no-project", project: nil, space: nil, createdAt: 0),
+            item("a-unplaced-old", project: projectA, space: nil, createdAt: 3),
+            item("a1", project: projectA, space: spaceA1, createdAt: 4),
+        ]
+        let ordered = SidebarStatusSections.sidebarOrder(
+            board, workspaceIDs: [projectA, projectB, spaceA1, spaceB1, spaceA2]
+        )
+        let expected = ["a1", "a2", "a-unplaced-old", "a-unplaced-new", "b1", "no-project"]
+        #expect(ordered.map(\.title) == expected)
+        #expect(SidebarStatusSections.make(ordered).needsYou.map(\.item.title) == expected)
+    }
+
     /// The case from the report: an idle parent whose child waits for a
     /// review lists with the child in Needs you, instead of apart in Idle.
     @Test func aFamilyListsInTheGroupOfItsMostUrgentTask() {
@@ -1077,13 +1107,13 @@ struct TaskBoardTests {
         let parent = statusItem("chatgpt-public-url", taskID: parentID, stage: .idle, project: "emptyos")
         let brainstorm = statusItem("coordinator-brainstorm", stage: .idle)
 
-        // Newest activity first, as the board gives them.
+        // A family lists at its root's place in the sidebar order.
         let sections = SidebarStatusSections.make([thumbnail, child, space, parent, brainstorm])
         #expect(sections.needsYou.map(\.item.title) == [
-            "thumbnail", "chatgpt-public-url", "mcp-page-tools", "task-space-after-ship",
+            "thumbnail", "task-space-after-ship", "chatgpt-public-url", "mcp-page-tools",
         ])
-        #expect(sections.needsYou.map(\.isLinkedChild) == [false, false, true, false])
-        #expect(sections.needsYou.map(\.isContext) == [false, true, false, false])
+        #expect(sections.needsYou.map(\.isLinkedChild) == [false, false, false, true])
+        #expect(sections.needsYou.map(\.isContext) == [false, false, true, false])
         #expect(sections.count(.needsYou) == 3)
         #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
 
@@ -1095,20 +1125,20 @@ struct TaskBoardTests {
         #expect(calm.idle.map(\.isContext) == [false, false, false])
     }
 
-    /// Reading a child must not move it within its held family either.
-    @Test func aSelectedChildKeepsItsPlaceInItsFamily() {
+    /// Reading a child holds its whole family in the group, in place.
+    @Test func aSelectedChildHoldsItsFamilyInItsGroup() {
         let parentID = UUID()
         let parent = statusItem("parent", taskID: parentID, stage: .idle)
         let zulu = statusItem("zulu", parent: parentID, stage: .needsYou(.agentFinished))
         let alpha = statusItem("alpha", parent: parentID, stage: .idle)
         let before = SidebarStatusSections.make([zulu, parent, alpha])
-        #expect(before.needsYou.map(\.item.title) == ["parent", "alpha", "zulu"])
+        #expect(before.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
 
-        let pin = SidebarStatusSections.pin(previous: nil, selected: zulu.id, displayed: before.slots)
+        let pin = SidebarStatusSections.pin(previous: nil, selected: zulu.id, displayed: before.groups)
         var read = zulu
         read.stage = .idle
-        let held = SidebarStatusSections.make([alpha, parent, read], pin: pin)
-        #expect(held.needsYou.map(\.item.title) == ["parent", "alpha", "zulu"])
+        let held = SidebarStatusSections.make([read, parent, alpha], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
         #expect(held.needsYou.map(\.isContext) == [true, true, true])
         #expect(held.idle.isEmpty)
     }
@@ -1132,10 +1162,10 @@ struct TaskBoardTests {
         #expect(sections.running.map(\.item.title) == ["a", "b", "d"])
     }
 
-    /// Selecting a task reads its turn. Its family keeps the group and slot
-    /// it had on screen until the selection moves, and moves at once only
-    /// when it becomes more urgent.
-    @Test func theSelectedTaskHoldsItsSlotUntilTheSelectionMoves() {
+    /// Selecting a task reads its turn. Its family keeps the group it had on
+    /// screen until the selection moves, and moves at once only when it
+    /// becomes more urgent. Inside a group, rows keep the sidebar order.
+    @Test func theSelectedTaskHoldsItsGroupUntilTheSelectionMoves() {
         let first = statusItem("first", stage: .needsYou(.agentFinished))
         let clicked = statusItem("clicked", stage: .needsYou(.agentFinished))
         let last = statusItem("last", stage: .needsYou(.review))
@@ -1143,8 +1173,8 @@ struct TaskBoardTests {
         let before = SidebarStatusSections.make([first, clicked, last, quiet])
         #expect(before.needsYou.map(\.item.title) == ["first", "clicked", "last"])
 
-        let pin = SidebarStatusSections.pin(previous: nil, selected: clicked.id, displayed: before.slots)
-        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, slot: .init(group: .needsYou, above: [first.id])))
+        let pin = SidebarStatusSections.pin(previous: nil, selected: clicked.id, displayed: before.groups)
+        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, group: .needsYou))
         var read = clicked
         read.stage = .idle
         let held = SidebarStatusSections.make([first, read, last, quiet], pin: pin)
@@ -1156,37 +1186,36 @@ struct TaskBoardTests {
         #expect(held.idle.map(\.item.title) == ["quiet"])
         #expect(held.pin == pin)
         // The same selection keeps the pin; another selection lets it go.
-        #expect(SidebarStatusSections.pin(previous: held.pin, selected: clicked.id, displayed: held.slots) == pin)
+        #expect(SidebarStatusSections.pin(previous: held.pin, selected: clicked.id, displayed: held.groups) == pin)
         let released = SidebarStatusSections.make(
             [first, read, last, quiet],
-            pin: SidebarStatusSections.pin(previous: held.pin, selected: first.id, displayed: held.slots)
+            pin: SidebarStatusSections.pin(previous: held.pin, selected: first.id, displayed: held.groups)
         )
         #expect(released.needsYou.map(\.item.title) == ["first", "last"])
         #expect(released.idle.map(\.item.title) == ["clicked", "quiet"])
 
         // A selected idle task that starts to need the user moves at once,
         // and holds in its new place from then on.
-        let quietPin = SidebarStatusSections.pin(previous: nil, selected: quiet.id, displayed: before.slots)
+        let quietPin = SidebarStatusSections.pin(previous: nil, selected: quiet.id, displayed: before.groups)
         var asks = quiet
         asks.stage = .needsYou(.agentNeedsInput)
         let urgent = SidebarStatusSections.make([first, clicked, last, asks], pin: quietPin)
         #expect(urgent.needsYou.map(\.item.title).contains("quiet"))
         #expect(urgent.idle.isEmpty)
-        #expect(urgent.pin?.slot.group == .needsYou)
+        #expect(urgent.pin?.group == .needsYou)
 
-        // Found on the mini: selecting another task releases the one held
-        // before it, which leaves the group at the same time. The newly
-        // selected task must not jump past the rows that were below it.
+        // Selecting another task releases the one held before it, which
+        // leaves the group at the same time. The rest keep their order.
         let parentID = UUID()
         let parent = statusItem("parent", taskID: parentID, stage: .idle)
         let child = statusItem("child", parent: parentID, stage: .needsYou(.review))
         var answered = first
         answered.stage = .idle
-        let previousPin = SidebarStatusSections.Pin(subject: first.id, slot: .init(group: .needsYou, above: []))
-        let shown = SidebarStatusSections.make([clicked, child, answered, parent], pin: previousPin)
+        let previousPin = SidebarStatusSections.Pin(subject: first.id, group: .needsYou)
+        let shown = SidebarStatusSections.make([answered, clicked, parent, child], pin: previousPin)
         #expect(shown.needsYou.map(\.item.title) == ["first", "clicked", "parent", "child"])
-        let next = SidebarStatusSections.pin(previous: shown.pin, selected: clicked.id, displayed: shown.slots)
-        let switched = SidebarStatusSections.make([child, answered, read, parent], pin: next)
+        let next = SidebarStatusSections.pin(previous: shown.pin, selected: clicked.id, displayed: shown.groups)
+        let switched = SidebarStatusSections.make([answered, read, parent, child], pin: next)
         #expect(switched.needsYou.map(\.item.title) == ["clicked", "parent", "child"])
         #expect(switched.idle.map(\.item.title) == ["first"])
     }

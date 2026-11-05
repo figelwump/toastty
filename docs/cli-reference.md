@@ -310,21 +310,11 @@ under the caller's workspace as a **task space** and records the caller as its
 spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
 Task spaces do not appear as their own sidebar cards; they render as compact rows
-in a Task Spaces group inside the parent card, sorted ready, needs approval,
-error, working, idle, then done. Working task spaces keep workspace order as
-progress reports arrive. Idle task spaces sort by their latest session status
-report from the agent, newest first. Reading a session does not count as activity.
-Done task spaces use the later of their latest agent status report
-and the time they were marked done. Ready, needs approval, and
-error task spaces sort by the latest update from a session that sets that row's
-status; updates from sessions in other states do not move the row. Equal or
-missing times use workspace order; rows with no time follow rows with a time.
-Hovering over the list holds its order. Reading the selected task keeps its
-previous status and activity values for sorting until selection changes; its
-appearance still shows that it was read. Its parent keeps its sorting values too
-when needed to hold a selected child in place. Other tasks sort normally. A
-selected task can move earlier for more urgent work and holds that priority until
-selection changes. Ties always use the current workspace order. The spawning
+in a Task Spaces group inside the parent card, in the window's workspace order.
+A task space started by another task's agent draws right under that task's
+row. Status shows in each row's mark and badge and never moves a row: rows
+move only when a task space opens or leaves the group. Jump to Next Active
+visits task spaces in the same order. The spawning
 session's row shows a ⑂ chip that filters the group to its task spaces. Nesting stays one level deep, so a parent that is
 itself a task space resolves to its root. Closing a parent keeps its
 task spaces open as top-level workspaces.
@@ -352,7 +342,7 @@ targets its own workspace rather than the selected one; a caller whose session
 Toastty no longer runs must name the workspace. Only task spaces hold the mark:
 `workspace.set-done` rejects a top-level workspace, and moving a task space to top
 level drops it. The sidebar shows a done task space with a check in place of its
-idle box and sorts it last; the box also toggles the mark by click. The mark
+idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
 that set the mark, including its end, keeps it, and restored sessions and

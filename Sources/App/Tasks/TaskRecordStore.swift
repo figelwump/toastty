@@ -44,6 +44,16 @@ final class TaskRecordStore: ObservableObject {
         records.first { $0.taskSpaceWorkspaceID == workspaceID }
     }
 
+    /// The open task space of the task that started this task space's task.
+    /// The sidebar draws the task space under it, and Jump to Next Active
+    /// visits it in that place.
+    func linkedParentTaskSpaceID(of workspace: WorkspaceState, in state: AppState) -> UUID? {
+        guard let parentTaskID = workspace.taskID.flatMap(record(id:))?.parentTaskID,
+              let parentSpace = record(id: parentTaskID)?.taskSpaceWorkspaceID,
+              state.workspacesByID[parentSpace] != nil else { return nil }
+        return parentSpace
+    }
+
     /// Adds a record and saves at once. When the save fails, the record is
     /// not added and the error is thrown.
     func insert(_ record: TaskRecord) throws {

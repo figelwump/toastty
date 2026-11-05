@@ -514,7 +514,9 @@ window.
   urgent one: an idle parent whose child needs you lists in Needs you, dimmed,
   with the child under it. Group counts include only the tasks whose own stage
   is in that group, and a row listed in a group its own stage is not in is
-  dimmed. The selected task's family keeps its group and position until you
+  dimmed. Inside a group, tasks keep the Projects order: by project, then in
+  the order their task spaces opened, so a row moves only when its stage
+  changes its group. The selected task's family keeps its group until you
   select another row, so reading a finished turn dims the row instead of
   moving it from under the pointer; a task that starts to need you moves at
   once. A parent without a pull request moves to To ship or Done when its

@@ -120,9 +120,6 @@ final class AppStore: ObservableObject {
     private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
-    // The sidebar can pin or freeze subspace rows. Keep its last displayed
-    // order for navigation without publishing another view update.
-    private var sidebarSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     private var browserRecentItemIDByPanelID: [UUID: RecentRightPanelItemID] = [:]
     // Defaults belong to exact live sessions, not the selected panel or window.
     @Published private var defaultScratchpadDocumentIDsBySessionID: [String: UUID] = [:]
@@ -217,7 +214,6 @@ final class AppStore: ObservableObject {
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
-        sidebarSubspaceOrderByParentID.removeAll()
         navigationGeneration &+= 1
         navigationHistory.clear()
         navigationOriginPanelID = resolvedNavigationPanelID
@@ -2083,12 +2079,14 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
-    func recordSidebarSubspaceOrder(_ workspaceIDs: [UUID], parentWorkspaceID: UUID) {
-        sidebarSubspaceOrderByParentID[parentWorkspaceID] = workspaceIDs
-    }
-
-    func clearSidebarSubspaceOrder(parentWorkspaceID: UUID) {
-        sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
+    /// Which task space the sidebar draws each task space under; see
+    /// `TaskRecordStore.linkedParentTaskSpaceID(of:in:)`.
+    private func sidebarLinkedParentID(sessionRuntimeStore: SessionRuntimeStore?) -> (UUID) -> UUID? {
+        guard let records = sessionRuntimeStore?.taskCoordinator?.records else { return { _ in nil } }
+        let state = state
+        return { workspaceID in
+            state.workspacesByID[workspaceID].flatMap { records.linkedParentTaskSpaceID(of: $0, in: state) }
+        }
     }
 
     /// `allowing` limits the pick to the targets it accepts and ignores the
@@ -2111,7 +2109,7 @@ final class AppStore: ObservableObject {
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry,
-            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            linkedParentID: sidebarLinkedParentID(sessionRuntimeStore: sessionRuntimeStore),
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
             focusedPanelID: selection.workspace.focusedPanelID
@@ -2281,7 +2279,7 @@ final class AppStore: ObservableObject {
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore.sessionRegistry,
-            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            linkedParentID: sidebarLinkedParentID(sessionRuntimeStore: sessionRuntimeStore),
             windowID: anchor.windowID,
             workspaceID: anchor.workspaceID,
             focusedPanelID: anchor.focusedPanelID
