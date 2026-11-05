@@ -219,7 +219,13 @@ struct TaskRoutingTests {
         let timedOut = try await fixture.coordinator.create(TaskCreateRequest(text: "one", workspaceID: fixture.workspaceID))
         await fixture.waitUntil("the first task starts") { fixture.record(timedOut.id)?.setup == .started }
         let first = try #require(fixture.record(timedOut.id))
-        #expect(first.resolved == TaskFields(workspaceID: fixture.workspaceID, agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        #expect(first.resolved == TaskFields(
+            workspaceID: fixture.workspaceID,
+            agent: "claude",
+            model: "claude-opus-5-5",
+            effort: "high",
+            skill: TaskPrompt.defaultStartSkill
+        ))
         #expect(first.triageNote == "Triage did not answer in 120 s.")
 
         fixture.triage.answer(.success(TaskTriage.Answer(agent: "gemini", model: "gemini-pro")))

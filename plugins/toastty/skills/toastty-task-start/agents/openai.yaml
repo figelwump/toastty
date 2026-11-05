@@ -1,4 +1,4 @@
 interface:
   display_name: "Toastty Task Start"
-  short_description: "Move a task into its own worktree, or split it into new tasks."
-  default_prompt: "Use $toastty-task-start to move this task into its own worktree and implement it."
+  short_description: "Take a task from request to review in its own worktree."
+  default_prompt: "Use $toastty-task-start to work on this task."

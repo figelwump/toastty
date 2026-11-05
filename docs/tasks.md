@@ -749,15 +749,15 @@ adds, such as the task text or the pull request.
 
 | Event | Triggered by | Setting | Default |
 |---|---|---|---|
-| Task starts (first message) | Create Task | `start_skill` | none |
-| Move into a worktree | the agent, from its start skill | none: the shipped `toastty-task-start` | |
+| Task starts (first message) | Create Task | `start_skill` | `toastty-task-start` (shipped) |
+| Move into a worktree | the agent, when you ask it to implement the work | none: part of the shipped `toastty-task-start` | |
 | Merge | the Merge button or the palette | `merge_skill` | `toastty-task-merge` (shipped) |
 | Release | **Release…**, the palette or `toastty task release` | `release_skill` | none |
 | Archive, clean up, done | Toastty itself | none | |
 
 ```toml
 [defaults]
-start_skill = "task-start"
+start_prompt = "Ask Codex for a review before you open a pull request."  # optional extra text
 merge_skill = "toastty-task-merge"
 
 [workspace."~/GiantThings/repos/emptyos"]
@@ -765,6 +765,18 @@ release_skill = "emptyos-release"
 release_prompt = "Wait for my approval before any production change."  # optional extra text
 ```
 
+- The shipped `toastty-task-start` takes a task from your request to your
+  review. Its agent clarifies the request, moves implementation into its own
+  worktree, verifies the work, publishes the pull request and a Scratchpad
+  report, and sets the task's status. The repository's own instructions, such
+  as `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
+  line.
+- `start_prompt` is text the first message gives after the skill line, such as
+  your own review or evidence rules. It adds to the start skill and does not
+  replace it.
+- A first message that does not name the shipped start skill ends with one
+  line that tells the agent to run `task needs-reply` before it ends a turn
+  with a question. The shipped skill already says this.
 - `start_skill` also starts a first message that triage or `--prompt` wrote,
   and the first message of a fresh session that continues a moved task in its
   worktree. A forked session already has the conversation, so it gets no
@@ -834,11 +846,13 @@ branch_prefix = "feat"
   [Merge a task](#merge-a-task).
 - `merge_prompt` is text Merge sends to the task's agent after the merge skill
   line. Set alone, it replaces the default message.
+- `start_prompt` is text a task's first message gives after the start skill
+  line; see [Skills for task events](#skills-for-task-events).
 - `start_skill`, `merge_skill` and `release_skill` name skills; see
   [Skills for task events](#skills-for-task-events). A skill name is one word
   with no spaces.
 
-`merge`, `merge_prompt` and the three skill keys can also go in `[defaults]`;
+`merge`, `merge_prompt`, `start_prompt` and the three skill keys can also go in `[defaults]`;
 a workspace's own value wins. A `release_skill` in `[defaults]` lets every
 project release.
 
