@@ -9,7 +9,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         id: UUID = UUID(),
         status: SidebarSubspacePresentation.RowStatus,
         spawner: String? = "spawner-a",
-        index: Int,
         sessions: [SidebarSubspacePresentation.SessionLine] = [],
         doneAt: Date? = nil
     ) -> SidebarSubspacePresentation.Row {
@@ -22,8 +21,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             summary: nil,
             spawningSessionID: spawner,
             spawnerName: spawner.map { "Agent \($0)" },
-            sessions: sessions,
-            creationIndex: index
+            sessions: sessions
         )
     }
 
@@ -52,8 +50,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                 summary: nil,
                 spawningSessionID: nil,
                 spawnerName: nil,
-                sessions: [],
-                creationIndex: 0
+                sessions: []
             ).rowAnnotation?.key
         }
 
@@ -180,7 +177,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             })
             return Presentation.Row(
                 id: UUID(), title: "task", status: status, annotations: [:], summary: nil,
-                spawningSessionID: nil, spawnerName: nil, sessions: sessions, creationIndex: 0
+                spawningSessionID: nil, spawnerName: nil, sessions: sessions
             ).isWaiting
         }
 
@@ -206,7 +203,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                 title: "Claude", panelID: UUID(), statusKind: .working,
                 isWaiting: true,
                 summary: "Review still running"
-            )], creationIndex: 0
+            )]
         )
         XCTAssertEqual(
             SidebarSubspacePresentation.rowAccessibilityLabel(row, showsSpawnerTag: false),
@@ -217,179 +214,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(hover.annotations[0].text, "PR #58")
     }
 
-    func testSortedRowsRankByStatusAndKeepCreationOrderWithoutActivityTimes() {
-        let rows = [
-            row("a-working", status: .working, index: 0),
-            row("b-ready", status: .ready, index: 1),
-            row("c-idle", status: .idle, index: 2),
-            row("d-approval", status: .needsApproval, index: 3),
-            row("e-ready", status: .ready, index: 4),
-            row("f-error", status: .error, index: 5),
-        ]
-        XCTAssertEqual(
-            SidebarSubspacePresentation.sortedRows(rows).map(\.title),
-            ["b-ready", "e-ready", "d-approval", "f-error", "a-working", "c-idle"]
-        )
-    }
-
-    func testQuietAndAttentionGroupsSortByNewestRelevantStatusBeforeCreationOrder() {
-        let statuses: [SidebarSubspacePresentation.RowStatus] = [.ready, .needsApproval, .error, .idle]
-        let kinds: [SessionStatusKind] = [.ready, .needsApproval, .error, .idle]
-        let rows = statuses.enumerated().flatMap { index, status in
-            [
-                row("old-\(status)", status: status, index: index * 2,
-                    sessions: [session(kinds[index], reportedAt: TimeInterval(100 - index), unread: true)]),
-                row("new-\(status)", status: status, index: index * 2 + 1,
-                    sessions: [session(kinds[index], reportedAt: TimeInterval(200 + index), unread: true)]),
-            ]
-        }
-        XCTAssertEqual(
-            SidebarSubspacePresentation.sortedRows(rows.reversed()).map(\.title),
-            statuses.flatMap { ["new-\($0)", "old-\($0)"] }
-        )
-    }
-
-    func testEqualAndMissingActivityTimesUseStableCreationOrder() {
-        let rows = [
-            row("empty", status: .idle, index: 0),
-            row("unreported", status: .idle, index: 1, sessions: [session(reportedAt: nil)]),
-            row("older", status: .idle, index: 2, sessions: [session(reportedAt: 10)]),
-            row("newer", status: .idle, index: 3, sessions: [session(reportedAt: 20)]),
-            row("same-time", status: .idle, index: 4, sessions: [session(reportedAt: 20)]),
-        ]
-        let expected = ["newer", "same-time", "older", "empty", "unreported"]
-        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows).map(\.title), expected)
-        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows.reversed()).map(\.title), expected)
-    }
-
-    func testBackgroundProgressDoesNotReorderAttentionOrUnreadReadyRows() {
-        for (status, kind) in [(SidebarSubspacePresentation.RowStatus.ready, SessionStatusKind.ready),
-                               (.needsApproval, .needsApproval), (.error, .error)] {
-            let recent = row("recent", status: status, index: 0,
-                             sessions: [session(kind, reportedAt: 20, unread: true)])
-            for progressAt: TimeInterval in [30, 50, 70] {
-                let lowerKinds: [SessionStatusKind] = status == .needsApproval ? [.error, .ready] :
-                    (status == .error ? [.ready] : [])
-                let older = row("older", status: status, index: 1, sessions: [
-                    session(kind, reportedAt: 10, unread: true),
-                    session(.working, reportedAt: progressAt),
-                    session(.idle, reportedAt: progressAt + 1),
-                ] + lowerKinds.map { session($0, reportedAt: progressAt, unread: true) })
-                XCTAssertEqual(SidebarSubspacePresentation.sortedRows([older, recent]).map(\.title),
-                               ["recent", "older"])
-            }
-        }
-    }
-
-    func testAttentionRecencyIgnoresDoneMarksAndTimestampsFromOtherStates() {
-        let now = Date(timeIntervalSince1970: 100)
-        for (status, kind) in [(SidebarSubspacePresentation.RowStatus.ready, SessionStatusKind.ready),
-                               (.needsApproval, .needsApproval), (.error, .error)] {
-            let timed = row("timed", status: status, index: 2,
-                            sessions: [session(kind, reportedAt: 20, unread: true)])
-            let old = row("old", status: status, index: 1,
-                          sessions: [session(kind, reportedAt: 10, unread: true)], doneAt: now)
-            let unreported = row("unreported", status: status, index: 0, sessions: [
-                session(kind, reportedAt: nil, unread: true), session(.working, reportedAt: 90),
-            ], doneAt: now)
-            XCTAssertEqual(SidebarSubspacePresentation.sortedRows([unreported, old, timed]).map(\.title),
-                           ["timed", "old", "unreported"])
-        }
-    }
-
-    func testDoneRowsUseLatestActivityOrDoneMarkIncludingRowsWithoutSessions() {
-        let rows = [
-            row("old", status: .done, index: 0, sessions: [session(reportedAt: 10)],
-                doneAt: Date(timeIntervalSince1970: 20)),
-            row("new-mark", status: .done, index: 1, doneAt: Date(timeIntervalSince1970: 40)),
-            row("new-activity", status: .done, index: 2, sessions: [session(reportedAt: 50)],
-                doneAt: Date(timeIntervalSince1970: 30)),
-        ]
-        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows).map(\.title),
-                       ["new-activity", "new-mark", "old"])
-        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows.reversed()).map(\.title),
-                       ["new-activity", "new-mark", "old"])
-    }
-
-    func testRecentlyIdleSubspaceLeadsIdleGroupAndKeepsHoverOrder() {
-        typealias Presentation = SidebarSubspacePresentation
-        let older = row("older", status: .idle, index: 0, sessions: [session(reportedAt: 10)])
-        let selected = row("selected", status: .idle, index: 1, sessions: [session(reportedAt: 20)])
-        let newest = row("newest", status: .idle, index: 2, sessions: [session(reportedAt: 30)])
-        let before = [older.id, selected.id, newest.id]
-        let sorted = Presentation.sortedRows([older, selected, newest])
-        XCTAssertEqual(sorted.map(\.id), [newest.id, selected.id, older.id])
-        XCTAssertEqual(
-            Presentation.orderedRows(sorted, frozenOrder: before).map(\.id), before
-        )
-    }
-
-    func testRuntimeProgressMetadataAndReadTransitionsDriveSubspaceActivityOrder() throws {
-        typealias Presentation = SidebarSubspacePresentation
-        let appStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let runtime = SessionRuntimeStore(
-            sendSessionStatusNotification: { _, _, _, _, _ in },
-            isApplicationActive: { false }
-        )
-        runtime.bind(store: appStore)
-        let selection = try XCTUnwrap(appStore.state.selectedWorkspaceSelection())
-        let panelID = try XCTUnwrap(selection.workspace.focusedPanelID)
-        runtime.startSession(
-            sessionID: "activity", agent: .codex, panelID: panelID,
-            windowID: selection.windowID, workspaceID: selection.workspaceID,
-            codexStatusTrackingSource: .externallyReported,
-            cwd: "/repo", repoRoot: "/repo", at: Date(timeIntervalSince1970: 1)
-        )
-        defer { runtime.stopSession(sessionID: "activity", at: Date()) }
-
-        func runtimeRow() throws -> Presentation.Row {
-            let status = try XCTUnwrap(runtime.workspaceStatuses(for: selection.workspaceID).first)
-            let unread = appStore.state.workspacesByID[selection.workspaceID]?.unreadPanelIDs.contains(panelID) == true
-            return row(
-                "active", status: Presentation.rowStatus(sessionStatuses: [(status.status.kind, unread)]),
-                index: 1,
-                sessions: [.init(
-                    title: status.displayTitle, panelID: status.panelID,
-                    statusKind: status.status.kind, isWaiting: false,
-                    showsUnreadSessionAccent: unread, summary: status.status.summary,
-                    statusUpdatedAt: TaskBoard.agentActivityAt(status)
-                )]
-            )
-        }
-        func report(_ kind: SessionStatusKind, at seconds: TimeInterval) {
-            runtime.updateStatus(
-                sessionID: "activity", status: .init(kind: kind, summary: "Progress"),
-                at: Date(timeIntervalSince1970: seconds)
-            )
-        }
-        let peer = row("peer", status: .working, index: 0, sessions: [session(.working, reportedAt: 20)])
-        report(.working, at: 10)
-        XCTAssertEqual(Presentation.sortedRows([peer, try runtimeRow()]).map(\.title), ["peer", "active"])
-        for progressAt: TimeInterval in [30, 40, 50] {
-            report(.working, at: progressAt)
-            XCTAssertEqual(Presentation.sortedRows([peer, try runtimeRow()]).map(\.title), ["peer", "active"])
-        }
-
-        runtime.updateFiles(
-            sessionID: "activity", files: ["changed.swift"], cwd: "/repo/new",
-            repoRoot: "/repo", at: Date(timeIntervalSince1970: 40)
-        )
-        XCTAssertEqual(try runtimeRow().latestActivityAt, Date(timeIntervalSince1970: 50))
-        let newerPeer = row("newer-peer", status: .working, index: 0, sessions: [session(.working, reportedAt: 35)])
-        XCTAssertEqual(Presentation.sortedRows([newerPeer, try runtimeRow()]).map(\.title), ["newer-peer", "active"])
-
-        report(.ready, at: 50)
-        XCTAssertTrue(appStore.send(.recordDesktopNotification(workspaceID: selection.workspaceID, panelID: panelID)))
-        XCTAssertEqual(try runtimeRow().status, .ready)
-        XCTAssertTrue(appStore.send(.markPanelNotificationsRead(workspaceID: selection.workspaceID, panelID: panelID)))
-        let read = try runtimeRow()
-        XCTAssertEqual(read.status, .idle)
-        XCTAssertEqual(read.latestActivityAt, Date(timeIntervalSince1970: 50))
-        let idlePeer = row("idle-peer", status: .idle, index: 0, sessions: [session(reportedAt: 60)])
-        XCTAssertEqual(Presentation.sortedRows([idlePeer, read]).map(\.title), ["idle-peer", "active"])
-    }
-
-    func testDoneMarkReplacesQuietStatusesAndSortsLast() {
+    func testDoneMarkReplacesQuietStatuses() {
         func shown(_ status: SidebarSubspacePresentation.RowStatus) -> SidebarSubspacePresentation.RowStatus {
             SidebarSubspacePresentation.rowStatus(sessionStatus: status, isDone: true)
         }
@@ -402,165 +227,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(shown(.error), .error)
         XCTAssertEqual(SidebarSubspacePresentation.rowStatus(sessionStatus: .ready, isDone: false), .ready)
 
-        let rows = [
-            row("a-done", status: .done, index: 0),
-            row("b-idle", status: .idle, index: 1),
-            row("c-ready", status: .ready, index: 2),
-        ]
-        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows).map(\.title), ["c-ready", "b-idle", "a-done"])
+        let rows = [row("a-done", status: .done), row("b-idle", status: .idle), row("c-ready", status: .ready)]
         XCTAssertTrue(SidebarSubspacePresentation.tally(rows).ready == 1)
-    }
-
-    func testFrozenOrderHoldsExistingRowsAndAppendsNewOnes() {
-        let first = row("first", status: .working, index: 0)
-        let second = row("second", status: .working, index: 1)
-        let frozen = [second.id, first.id]
-
-        var promoted = first
-        promoted = SidebarSubspacePresentation.Row(
-            id: first.id, title: first.title, status: .ready, annotations: [:], summary: nil,
-            spawningSessionID: first.spawningSessionID, spawnerName: first.spawnerName,
-            sessions: [], creationIndex: first.creationIndex
-        )
-        let added = row("added", status: .needsApproval, index: 2)
-
-        XCTAssertEqual(
-            SidebarSubspacePresentation.orderedRows([promoted, second, added], frozenOrder: frozen).map(\.title),
-            ["second", "first", "added"]
-        )
-        XCTAssertEqual(
-            SidebarSubspacePresentation.orderedRows([promoted, second, added], frozenOrder: nil).map(\.title),
-            ["first", "added", "second"]
-        )
-    }
-
-    func testReadingKeepsTheSelectedRowsSortValuesUntilSelectionMoves() {
-        typealias Presentation = SidebarSubspacePresentation
-        let a = row("a", status: .ready, index: 2)
-        let b = row("b", status: .ready, index: 3)
-        let w = row("w", status: .working, index: 0)
-        let i = row("i", status: .idle, index: 1)
-        let shownBeforeSelection = [a, b, w, i]
-        func read(_ row: Presentation.Row) -> Presentation.Row {
-            Presentation.Row(
-                id: row.id, title: row.title, status: .idle, annotations: [:], summary: nil,
-                spawningSessionID: row.spawningSessionID, spawnerName: row.spawnerName,
-                sessions: [], creationIndex: row.creationIndex
-            )
-        }
-        func order(
-            _ rows: [Presentation.Row],
-            previous: Presentation.Pin?,
-            selected: UUID,
-            shown: [Presentation.Row]
-        ) -> (pin: Presentation.Pin?, titles: [String]) {
-            let unpinned = Presentation.sortedRows(rows)
-            let pin = Presentation.pin(
-                previous: previous,
-                selectedRowID: selected,
-                displayedKeys: Dictionary(uniqueKeysWithValues: shown.map { ($0.id, $0.sortKey) }),
-                rows: unpinned
-            )
-            return (pin, Presentation.sortedRows(unpinned, pin: pin).map(\.title))
-        }
-
-        // Selecting a reads it, but it stays first instead of sorting last.
-        let first = order([read(a), b, w, i], previous: nil, selected: a.id, shown: shownBeforeSelection)
-        XCTAssertEqual(first.titles, ["a", "b", "w", "i"])
-
-        // Moving to b: it stays ahead of working rows as a settles among idle rows.
-        let second = order([read(a), read(b), w, i], previous: first.pin, selected: b.id, shown: shownBeforeSelection)
-        XCTAssertEqual(second.pin, Presentation.Pin(rowID: b.id, keys: [b.id: b.sortKey]))
-        XCTAssertEqual(second.titles, ["b", "w", "i", "a"])
-
-        // A filter that hides b keeps its pin for when the filter clears.
-        XCTAssertEqual(
-            Presentation.pin(previous: second.pin, selectedRowID: b.id, displayedKeys: [:], rows: [read(a), read(b), w, i]),
-            second.pin
-        )
-
-        // Leaving the group releases the pin.
-        let left = order([read(a), read(b), w, i], previous: second.pin, selected: UUID(), shown: [])
-        XCTAssertNil(left.pin)
-        XCTAssertEqual(left.titles, ["w", "i", "a", "b"])
-    }
-
-    func testReadRowKeepsItsActivityOrderAndAllowsNewUnreadRowsAboveIt() throws {
-        typealias P = SidebarSubspacePresentation
-        // Reading a review or question task changes its status time without
-        // changing the row's stage. That time must not promote the read row.
-        for status in [P.RowStatus.ready, .review, .question] {
-            let first = row("first", status: status, index: 0, sessions: [session(.ready, reportedAt: 20, unread: true)])
-            let second = row("second", status: status, index: 1, sessions: [session(.ready, reportedAt: 10, unread: true)])
-            let read = row("first", id: first.id, status: status == .ready ? .idle : status,
-                           index: 0, sessions: [session(reportedAt: 90)])
-            let arrived = row("new", status: status, index: 2, sessions: [session(.ready, reportedAt: 30, unread: true)])
-            let keys = Dictionary(uniqueKeysWithValues: [first, second].map { ($0.id, $0.sortKey) })
-            let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: first.id, displayedKeys: keys, rows: [read, second, arrived]))
-            let nextRender = try XCTUnwrap(P.pin(previous: pin, selectedRowID: first.id, displayedKeys: [:], rows: [read, second, arrived]))
-            for retained in [pin, nextRender] {
-                let ordered = P.sortedRows([read, second, arrived], pin: retained)
-                XCTAssertEqual(ordered.map(\.title), ["new", "first", "second"], "\(status)")
-                XCTAssertEqual(ordered[1].status, read.status, "Retained sorting values must not restore unread styling")
-                XCTAssertEqual(ordered[1].latestActivityAt, Date(timeIntervalSince1970: 90))
-            }
-            XCTAssertNil(P.pin(previous: pin, selectedRowID: nil, displayedKeys: keys, rows: [read, second]))
-        }
-    }
-
-    func testSelectedRowRetainsMoreUrgentWorkAfterItBecomesQuiet() throws {
-        typealias P = SidebarSubspacePresentation
-        let working = row("selected", status: .working, index: 0)
-        let initial = try XCTUnwrap(P.pin(previous: nil, selectedRowID: working.id, displayedKeys: [:], rows: [working]))
-        let approval = row("selected", id: working.id, status: .needsApproval, index: 0)
-        let promoted = try XCTUnwrap(P.pin(previous: initial, selectedRowID: working.id, displayedKeys: [:], rows: [approval]))
-        let quiet = row("selected", id: working.id, status: .idle, index: 0)
-        let retained = try XCTUnwrap(P.pin(previous: promoted, selectedRowID: working.id, displayedKeys: [:], rows: [quiet]))
-        let unread = row("unread", status: .ready, index: 1)
-        let peer = row("error", status: .error, index: 2)
-        XCTAssertEqual(P.sortedRows([peer, quiet, unread], pin: retained).map(\.title), ["unread", "selected", "error"])
-        XCTAssertEqual(P.sortedRows([peer, quiet, unread]).map(\.title), ["unread", "error", "selected"])
-    }
-
-    func testSelectedChildKeepsItsSiblingOrderThroughReadFilterAndHover() throws {
-        typealias P = SidebarSubspacePresentation
-        let parent = row("parent", status: .review, index: 0, sessions: [session(reportedAt: 20)])
-        var child = row("child", status: .ready, index: 2)
-        child.linkedParentID = parent.id
-        var sibling = row("sibling", status: .ready, index: 3)
-        sibling.linkedParentID = parent.id
-        let other = row("other", status: .review, index: 1, sessions: [session(reportedAt: 30)])
-        let before = [other, parent, child, sibling]
-        var read = row("child", id: child.id, status: .idle, index: 2)
-        read.linkedParentID = parent.id
-        let readParent = row("parent", id: parent.id, status: .review, index: 0, sessions: [session(reportedAt: 90)])
-        let rows = [readParent, read, sibling, other]
-        let keys = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0.sortKey) })
-        let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: child.id, displayedKeys: keys, rows: rows))
-        XCTAssertEqual(P.groupingLinkedChildren(P.sortedRows(rows, pin: pin)).map(\.title), before.map(\.title))
-        let hidden = P.pin(previous: pin, selectedRowID: child.id, displayedKeys: [:], rows: rows)
-        XCTAssertEqual(hidden, pin)
-        let frozen = [parent, child, sibling, other].map(\.id)
-        XCTAssertEqual(P.groupingLinkedChildren(P.orderedRows(rows, frozenOrder: frozen, pin: pin)).map(\.id), frozen)
-        XCTAssertEqual(P.groupingLinkedChildren(P.orderedRows(rows, frozenOrder: nil, pin: hidden)).map(\.title), before.map(\.title))
-    }
-
-    func testRetainedSortValuesUseTheCurrentWorkspaceOrderForTies() throws {
-        typealias P = SidebarSubspacePresentation
-        let selected = row("selected", status: .working, index: 1)
-        let pin = try XCTUnwrap(P.pin(previous: nil, selectedRowID: selected.id, displayedKeys: [:], rows: [selected]))
-        let moved = row("selected", id: selected.id, status: .working, index: 0)
-        let peer = row("peer", status: .working, index: 1)
-        XCTAssertEqual(P.sortedRows([peer, moved], pin: pin).map(\.title), ["selected", "peer"])
-        XCTAssertNil(P.pin(previous: pin, selectedRowID: selected.id, displayedKeys: [:], rows: [peer]))
     }
 
     func testSpawnerChipCountsToneAndFilterState() {
         let rows = [
-            row("one", status: .ready, spawner: "a", index: 0),
-            row("two", status: .needsApproval, spawner: "a", index: 1),
-            row("three", status: .error, spawner: "b", index: 2),
-            row("four", status: .working, spawner: nil, index: 3),
+            row("one", status: .ready, spawner: "a"),
+            row("two", status: .needsApproval, spawner: "a"),
+            row("three", status: .error, spawner: "b"),
+            row("four", status: .working, spawner: nil),
         ]
         XCTAssertEqual(
             SidebarSubspacePresentation.spawnerChip(sessionID: "a", rows: rows, activeFilterSessionID: "a"),
@@ -624,7 +300,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                     statusKind: .needsApproval, isWaiting: false, summary: "pnpm db:migrate"
                 ),
             ],
-            creationIndex: 0,
             path: NSHomeDirectory() + "/worktrees/qa-mobile-navigation"
         )
         let model = SidebarSubspacePresentation.hoverTipModel(row) { key in
@@ -653,7 +328,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
 
         let empty = SidebarSubspacePresentation.hoverTipModel(SidebarSubspacePresentation.Row(
             id: UUID(), title: "idle-space", status: .idle, annotations: [:], summary: nil,
-            spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 1
+            spawningSessionID: nil, spawnerName: nil, sessions: []
         )) { _ in .named(.neutral) }
         XCTAssertTrue(empty.sessions.isEmpty)
         XCTAssertEqual(empty.hiddenSessionCount, 0)
@@ -729,28 +404,28 @@ final class SidebarSubspacePresentationTests: XCTestCase {
 
         // Finished rows leave a project card only while nothing in them runs
         // or waits for the user.
-        XCTAssertTrue(P.isHiddenAsFinished(row("merged", status: .toShip, index: 0)))
-        XCTAssertTrue(P.isHiddenAsFinished(row("done", status: .done, index: 0)))
-        XCTAssertFalse(P.isHiddenAsFinished(row("review", status: .review, index: 0)))
-        XCTAssertFalse(P.isHiddenAsFinished(row("working", status: .working, index: 0)))
+        XCTAssertTrue(P.isHiddenAsFinished(row("merged", status: .toShip)))
+        XCTAssertTrue(P.isHiddenAsFinished(row("done", status: .done)))
+        XCTAssertFalse(P.isHiddenAsFinished(row("review", status: .review)))
+        XCTAssertFalse(P.isHiddenAsFinished(row("working", status: .working)))
         // An unread finished turn sets the status, but another agent still works.
-        let mixed = row("mixed", status: .done, index: 0, sessions: [
+        let mixed = row("mixed", status: .done, sessions: [
             session(.ready, reportedAt: 2, unread: true),
             session(.working, reportedAt: 1),
         ])
         XCTAssertFalse(P.isHiddenAsFinished(mixed))
 
-        XCTAssertEqual(P.tally([row("a", status: .review, index: 0), row("b", status: .review, index: 1)]).review, 2)
-        XCTAssertTrue(P.showsDoneToggle(row("review", status: .review, index: 0)))
-        XCTAssertFalse(P.showsDoneToggle(row("merged", status: .toShip, index: 0)))
+        XCTAssertEqual(P.tally([row("a", status: .review), row("b", status: .review)]).review, 2)
+        XCTAssertTrue(P.showsDoneToggle(row("review", status: .review)))
+        XCTAssertFalse(P.showsDoneToggle(row("merged", status: .toShip)))
     }
 
     func testLinkedChildrenDrawUnderTheTaskThatStartedThemOneLevelDeep() {
-        var parent = row("task-inbox", status: .working, index: 0)
-        var child = row("hotkey-capture", status: .review, index: 1)
-        var grandchild = row("hotkey-docs", status: .working, index: 2)
-        let other = row("pricing-page", status: .idle, index: 3)
-        var orphan = row("ios-outbox", status: .idle, index: 4)
+        var parent = row("task-inbox", status: .working)
+        var child = row("hotkey-capture", status: .review)
+        var grandchild = row("hotkey-docs", status: .working)
+        let other = row("pricing-page", status: .idle)
+        var orphan = row("ios-outbox", status: .idle)
         child.linkedParentID = parent.id
         grandchild.linkedParentID = child.id
         orphan.linkedParentID = UUID()

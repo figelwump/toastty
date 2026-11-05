@@ -60,28 +60,6 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
         XCTAssertTrue(fixture.store.state.workspacesByID[below.id]?.unreadPanelIDs.isEmpty == true)
     }
 
-    func testJumpUsesDisplayedSubspaceOrderWhileRowsArePinnedOrFrozen() throws {
-        let parentTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
-        let firstTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
-        let secondTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
-        let parent = makeUnreadCommandWorkspace(title: "Parent", tabs: [parentTab], selectedTabIndex: 0)
-        var first = makeUnreadCommandWorkspace(title: "First", tabs: [firstTab], selectedTabIndex: 0)
-        var second = makeUnreadCommandWorkspace(title: "Second", tabs: [secondTab], selectedTabIndex: 0)
-        first.parentWorkspaceID = parent.id
-        second.parentWorkspaceID = parent.id
-        let fixture = makeSpatialFixture(workspaces: [parent, first, second])
-        startSpatialSessions([parentTab.panelIDs[0]], workspace: parent, fixture: fixture)
-        startSpatialSessions([firstTab.panelIDs[0]], workspace: first, fixture: fixture)
-        startSpatialSessions([secondTab.panelIDs[0]], workspace: second, fixture: fixture)
-        fixture.store.recordSidebarSubspaceOrder([UUID(), second.id, second.id], parentWorkspaceID: parent.id)
-
-        try assertSpatialJump(to: secondTab.panelIDs[0], fixture: fixture)
-        try assertSpatialJump(to: firstTab.panelIDs[0], fixture: fixture)
-        try assertSpatialJump(to: parentTab.panelIDs[0], fixture: fixture)
-        fixture.store.clearSidebarSubspaceOrder(parentWorkspaceID: parent.id)
-        try assertSpatialJump(to: firstTab.panelIDs[0], fixture: fixture)
-    }
-
     func testUnreadSessionsFollowCustomOrderBeforeReadWorkingSession() throws {
         let tab = makeUnreadCommandTab(focusedPanelIndex: 1, unreadPanelIndices: [])
         var workspace = makeUnreadCommandWorkspace(title: "Sessions", tabs: [tab], selectedTabIndex: 0)
@@ -163,7 +141,6 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
         let order = SidebarPanelNavigationOrder(
             state: fixture.store.state,
             sessionRegistry: registry,
-            displayedSubspaceOrderByParentID: [:],
             windowID: fixture.windowID,
             workspaceID: workspace.id,
             focusedPanelID: nil
@@ -231,7 +208,6 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
         let targets = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: nil,
-            displayedSubspaceOrderByParentID: [:],
             windowID: windows[1].id,
             workspaceID: workspaces[1].id,
             focusedPanelID: tabs[1].panelIDs[1]
@@ -254,7 +230,6 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
         let order = SidebarPanelNavigationOrder(
             state: fixture.store.state,
             sessionRegistry: nil,
-            displayedSubspaceOrderByParentID: [:],
             windowID: fixture.windowID,
             workspaceID: workspaces[1].id,
             focusedPanelID: nil

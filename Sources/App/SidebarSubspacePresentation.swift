@@ -2,18 +2,19 @@ import CoreState
 import Foundation
 
 /// Pure presentation logic for the Subspaces group under a workspace card:
-/// one list of the workspaces spawned under it, sorted by what needs the
-/// user first, with a ⑂ chip on the session that spawned each one.
+/// one list of the workspaces spawned under it, in the window's workspace
+/// order, with a ⑂ chip on the session that spawned each one. Status shows
+/// in each row's mark and badge; it never moves a row.
 @MainActor
 enum SidebarSubspacePresentation {
-    /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers an unread finished turn. `question`,
+    /// Row status. Agent approval and error states always win; `ready`
+    /// covers an unread finished turn. `question`,
     /// `review` and `toShip` come from the task's stage: an agent that waits
     /// for the user's reply, a pull request waiting for the user, and a merge
     /// waiting for a release. `done` is the workspace's
     /// done mark or the task's stage rather than a session state, so finished
-    /// tasks sink to the bottom.
-    enum RowStatus: Int, Comparable, Sendable {
+    /// tasks leave the group.
+    enum RowStatus: Int, Sendable {
         case ready = 0
         case question
         case needsApproval
@@ -24,17 +25,11 @@ enum SidebarSubspacePresentation {
         case toShip
         case done
 
-        static func < (lhs: RowStatus, rhs: RowStatus) -> Bool {
-            lhs.rawValue < rhs.rawValue
-        }
-
         var needsAttention: Bool {
             self == .needsApproval || self == .error
         }
 
-        /// Which status wins when a subspace has several sessions. This is
-        /// not the sort order: approval and error outrank ready, but ready
-        /// rows still list first because they are the quickest to act on.
+        /// Which status wins when a subspace has several sessions.
         fileprivate var precedence: Int {
             switch self {
             case .needsApproval: return 4
@@ -94,45 +89,12 @@ enum SidebarSubspacePresentation {
         /// elsewhere can nest a subspace under it.
         var spawnerWorkspaceID: UUID? = nil
         let sessions: [SessionLine]
-        /// Position in the window's workspace order. Working rows keep this
-        /// order; other groups use it when their recency times are equal.
-        let creationIndex: Int
         /// Absolute path of where the subspace lives; see
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
         /// The task's menu items when the task space has a task record; see
         /// `TaskBoardPresentation.menuItems`.
         var taskMenu: [[TaskBoardPresentation.MenuItem]]? = nil
-
-        /// The latest agent status report from any session in this subspace.
-        /// Metadata changes do not update these times.
-        var latestActivityAt: Date? {
-            sessions.lazy.compactMap(\.statusUpdatedAt).max()
-        }
-
-        /// Progress changes the working row's text, not its position. Rows
-        /// that need the user follow the session that sets their status, so
-        /// another session's background progress cannot move them.
-        fileprivate var sortActivityAt: Date? {
-            switch status {
-            case .working:
-                return nil
-            case .done:
-                return [doneAt, latestActivityAt].compactMap { $0 }.max()
-            case .idle, .question, .review, .toShip:
-                return latestActivityAt
-            case .ready, .needsApproval, .error:
-                return sessions.lazy.filter {
-                    SidebarSubspacePresentation.rowStatus(
-                        kind: $0.statusKind, showsUnreadSessionAccent: $0.showsUnreadSessionAccent
-                    ) == status
-                }.compactMap(\.statusUpdatedAt).max()
-            }
-        }
-
-        var sortKey: SortKey {
-            SortKey(status: status, activityAt: sortActivityAt ?? .distantPast)
-        }
 
         /// A subspace is waiting only when none of its working sessions is
         /// actively making progress. Attention and unread ready states win.
@@ -152,24 +114,6 @@ enum SidebarSubspacePresentation {
             }
             return nil
         }
-    }
-
-    /// The same ordering for live rows and the selected row's retained values.
-    struct SortKey: Comparable, Sendable {
-        let status: RowStatus
-        let activityAt: Date
-
-        static func < (lhs: SortKey, rhs: SortKey) -> Bool {
-            if lhs.status != rhs.status { return lhs.status < rhs.status }
-            return lhs.activityAt > rhs.activityAt
-        }
-    }
-
-    /// Reading changes the row's appearance, but not these sorting values
-    /// until selection moves. New work can still move the row earlier.
-    struct Pin: Equatable, Sendable {
-        let rowID: UUID
-        let keys: [UUID: SortKey]
     }
 
     struct Tally: Equatable, Sendable {
@@ -304,80 +248,40 @@ enum SidebarSubspacePresentation {
         }
     }
 
-    static func sortedRows(_ rows: [Row], pin: Pin? = nil) -> [Row] {
-        rows.sorted { lhs, rhs in
-            let lhsKey = sortKey(for: lhs, pin: pin)
-            let rhsKey = sortKey(for: rhs, pin: pin)
-            return lhsKey != rhsKey ? lhsKey < rhsKey : lhs.creationIndex < rhs.creationIndex
-        }
-    }
-
-    static func sortKey(for row: Row, pin: Pin?) -> SortKey {
-        let retained = pin?.keys[row.id] ?? row.sortKey
-        return row.status < retained.status ? row.sortKey : retained
-    }
-
-    /// Keeps the order the user was looking at while the pointer is over the
-    /// list, so a row cannot slide away as they aim at it. Rows that appeared
-    /// since the freeze follow in sorted order.
-    static func orderedRows(_ rows: [Row], frozenOrder: [UUID]?, pin: Pin? = nil) -> [Row] {
-        let sorted = sortedRows(rows, pin: pin)
-        guard let frozenOrder else { return sorted }
-        let rowsByID = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0) })
-        var result = frozenOrder.compactMap { rowsByID[$0] }
-        let placed = Set(result.map(\.id))
-        result += sorted.filter { placed.contains($0.id) == false }
-        return result
-    }
-
-    /// A select-and-read mutation has already changed the live row by the
-    /// next render. Take its sorting values from the previous render. When
-    /// selection moves, the previous task sorts normally again. Resolve
-    /// against all rows so filtering does not discard the retained values.
-    static func pin(
-        previous: Pin?,
-        selectedRowID: UUID?,
-        displayedKeys: [UUID: SortKey],
-        rows: [Row]
-    ) -> Pin? {
-        guard let selectedRowID, rows.contains(where: { $0.id == selectedRowID }) else { return nil }
-        var retainedIDs = Set([selectedRowID])
-        // Grouping draws a child under its parent. Retain that parent's
-        // displayed values too, or releasing a previously selected parent
-        // would pull the newly selected child down with it.
-        if let child = groupingLinkedChildren(rows).first(where: { $0.id == selectedRowID }),
-           child.isLinkedChild, let parentID = child.linkedParentID {
-            retainedIDs.insert(parentID)
-        }
-        let previousKeys = previous?.rowID == selectedRowID ? previous?.keys : nil
-        let keys = Dictionary(rows.filter { retainedIDs.contains($0.id) }.map { row in
-            let retained = previousKeys?[row.id] ?? displayedKeys[row.id] ?? row.sortKey
-            // A read collapse can update activity time without changing a
-            // review or question status. Only a more urgent status moves it.
-            return (row.id, row.status < retained.status ? row.sortKey : retained)
-        }, uniquingKeysWith: { first, _ in first })
-        return Pin(rowID: selectedRowID, keys: keys)
-    }
-
     /// Draws each linked child right under the task that started it, in
     /// the order the children already had. A child whose parent is not in
     /// the list keeps its own place.
     static func groupingLinkedChildren(_ rows: [Row]) -> [Row] {
+        groupingLinkedChildren(rows, id: \.id, linkedParentID: \.linkedParentID) { $0.isLinkedChild = true }
+    }
+
+    /// The same grouping for any list with parent links. Jump to Next Active
+    /// uses it on workspace IDs, so it walks task spaces in the order the
+    /// group draws them.
+    static func groupingLinkedChildren<Item>(
+        _ items: [Item],
+        id: (Item) -> UUID,
+        linkedParentID: (Item) -> UUID?,
+        markChild: (inout Item) -> Void = { _ in }
+    ) -> [Item] {
         // One level only: a child's own children draw as top-level rows.
-        let rowIDs = Set(rows.map(\.id))
-        let topLevelIDs = Set(rows.filter { row in
-            row.linkedParentID.map { $0 == row.id || rowIDs.contains($0) == false } ?? true
-        }.map(\.id))
-        let childrenByParentID = Dictionary(grouping: rows.filter { row in
-            row.linkedParentID.map(topLevelIDs.contains) == true && topLevelIDs.contains(row.id) == false
-        }, by: { $0.linkedParentID! })
-        guard childrenByParentID.isEmpty == false else { return rows }
-        let childIDs = Set(childrenByParentID.values.flatMap { $0.map(\.id) })
-        var result: [Row] = []
-        for row in rows where childIDs.contains(row.id) == false {
-            result.append(row)
-            for var child in childrenByParentID[row.id] ?? [] {
-                child.isLinkedChild = true
+        let itemIDs = Set(items.map(id))
+        let topLevelIDs = Set(items.filter { item in
+            linkedParentID(item).map { $0 == id(item) || itemIDs.contains($0) == false } ?? true
+        }.map(id))
+        var childrenByParentID: [UUID: [Item]] = [:]
+        for item in items {
+            guard topLevelIDs.contains(id(item)) == false,
+                  let parentID = linkedParentID(item), topLevelIDs.contains(parentID) else { continue }
+            childrenByParentID[parentID, default: []].append(item)
+        }
+        guard childrenByParentID.isEmpty == false else { return items }
+        let childIDs = Set(childrenByParentID.values.flatMap { $0.map(id) })
+        var result: [Item] = []
+        for item in items where childIDs.contains(id(item)) == false {
+            result.append(item)
+            for var child in childrenByParentID[id(item)] ?? [] {
+                markChild(&child)
                 result.append(child)
             }
         }

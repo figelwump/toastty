@@ -506,8 +506,8 @@ same session as plain working.
 
 Task spaces, the workspaces an agent spawned from another workspace, appear
 under their parent in a collapsible **Task Spaces** group, on Home and on the
-parent's workspace screen. Rows sort as in the desktop sidebar: unread results
-first, then approvals, errors, working, idle, and done. Each row shows the
+parent's workspace screen. Rows sort by status: unread results first, then
+approvals, errors, working, idle, and done. Each row shows the
 task space's status, its primary annotation or pull request chip, and the
 summary of the session that sets the status. Tap a row to open the task space,
 which names its parent above its sessions. Touch and hold a row for its

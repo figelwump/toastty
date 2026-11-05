@@ -558,31 +558,21 @@ private struct SidebarStatusPillSemanticText: ViewModifier {
     }
 }
 
-/// What each Subspaces group last put on screen, and the slot its selected
-/// row holds. A plain reference rather than SwiftUI state: the group records
-/// it while computing its order, where state writes are not allowed, and the
-/// pin must be in place in the same update that reads the jumped-to row.
 /// The task board as of the sidebar's last body pass. Built once per pass
 /// and read by the header, the Status segment, card footers and rows, so a
-/// redraw does not rebuild the board for every card. A plain reference for
-/// the same reason as `SubspaceOrderMemory`.
+/// redraw does not rebuild the board for every card. A plain reference
+/// rather than SwiftUI state, because the body writes it while it computes.
 @MainActor
 private final class SidebarTaskBoardSnapshot {
     var windowItems: [TaskBoardItem] = []
     var allItems: [TaskBoardItem] = []
 }
 
-@MainActor
-private final class SubspaceOrderMemory {
-    var displayedKeysByParentID: [UUID: [UUID: SidebarSubspacePresentation.SortKey]] = [:]
-    var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
-}
-
-/// The Status segment's last drawn slots and the selected task's pin. Kept
-/// out of view state, like `SubspaceOrderMemory`, so recording them does not
-/// draw the sidebar again.
+/// The Status segment's last drawn groups and the selected task's hold.
+/// Kept out of view state, like `SidebarTaskBoardSnapshot`, so recording
+/// them does not draw the sidebar again.
 private final class StatusOrderMemory {
-    var displayedSlots: [TaskBoardItem.Subject: SidebarStatusSections.Slot] = [:]
+    var displayedGroups: [TaskBoardItem.Subject: TaskStage.Group] = [:]
     var pin: SidebarStatusSections.Pin?
 }
 
@@ -670,10 +660,6 @@ struct SidebarView: View {
     @State private var expandedToShipProjectIDs: Set<UUID> = []
     /// Spawning session whose subspaces the group shows, per parent workspace.
     @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
-    /// Row order captured when the pointer entered a group, so rows hold
-    /// still under the pointer; released on exit.
-    @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
-    @State private var subspaceOrderMemory = SubspaceOrderMemory()
     @State private var statusOrderMemory = StatusOrderMemory()
     @State private var taskBoardSnapshot = SidebarTaskBoardSnapshot()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
@@ -1094,7 +1080,7 @@ struct SidebarView: View {
     /// The Status segment: Needs you, Running, Idle, To ship and Done.
     private var statusSegmentContent: some View {
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let items = taskBoardSnapshot.windowItems
+        let items = SidebarStatusSections.sidebarOrder(taskBoardSnapshot.windowItems, workspaceIDs: windowWorkspaceIDs)
         let selectedTask = selectedWorkspaceID.flatMap { workspaceID in
             items.first { $0.taskSpaceWorkspaceID == workspaceID }?.id
         }
@@ -1104,11 +1090,11 @@ struct SidebarView: View {
             pin: SidebarStatusSections.pin(
                 previous: statusOrderMemory.pin,
                 selected: selectedTask,
-                displayed: statusOrderMemory.displayedSlots
+                displayed: statusOrderMemory.displayedGroups
             )
         )
         statusOrderMemory.pin = sections.pin
-        statusOrderMemory.displayedSlots = sections.slots
+        statusOrderMemory.displayedGroups = sections.groups
         return SidebarStatusSegment(
             sections: sections,
             isToShipExpanded: $isStatusToShipExpanded,
@@ -1126,7 +1112,6 @@ struct SidebarView: View {
                     subspaceRowModel(
                         workspace: workspace,
                         spawner: nil,
-                        windowWorkspaceIDs: windowWorkspaceIDs,
                         // A To ship row sits under its project's header,
                         // which already names the project.
                         projectTag: entry.item.stage == .toShip ? nil : entry.item.projectTitle,
@@ -1146,10 +1131,10 @@ struct SidebarView: View {
         }
         .padding(.top, 2)
         .onDisappear {
-            // Slots from a segment that is not on screen would pin the next
-            // selection where the user no longer sees it.
+            // Groups from a segment that is not on screen would hold the
+            // next selection where the user no longer sees it.
             statusOrderMemory.pin = nil
-            statusOrderMemory.displayedSlots = [:]
+            statusOrderMemory.displayedGroups = [:]
         }
     }
 
@@ -3725,8 +3710,7 @@ struct SidebarView: View {
             guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
             let row = subspaceRowModel(
                 workspace: workspace,
-                spawner: workspace.spawningSessionID.flatMap(spawnerStatus),
-                windowWorkspaceIDs: windowWorkspaceIDs
+                spawner: workspace.spawningSessionID.flatMap(spawnerStatus)
             )
             // A finished task leaves its project's card; the card's footer
             // counts it and the Tasks view lists it.
@@ -3741,7 +3725,6 @@ struct SidebarView: View {
     func subspaceRowModel(
         workspace: WorkspaceState,
         spawner: WorkspaceSessionStatus?,
-        windowWorkspaceIDs: [UUID],
         projectTag: String? = nil,
         isLinkedChild: Bool = false
     ) -> SidebarSubspacePresentation.Row {
@@ -3778,7 +3761,7 @@ struct SidebarView: View {
             ),
             stage: boardItem?.stage,
             projectTag: projectTag,
-            linkedParentID: linkedParentTaskSpaceID(of: boardItem),
+            linkedParentID: taskCoordinator?.records.linkedParentTaskSpaceID(of: workspace, in: store.state),
             isLinkedChild: isLinkedChild,
             childProgressLabel: boardItem?.taskID.flatMap(childProgressLabel(ofTaskID:)),
             doneAt: workspace.doneAt,
@@ -3796,7 +3779,6 @@ struct SidebarView: View {
             spawnerPanelID: spawner?.panelID,
             spawnerWorkspaceID: spawner?.workspaceID,
             sessions: sessions,
-            creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
             path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace),
             taskMenu: taskMenu(for: boardItem, workspace: workspace)
         )
@@ -3830,13 +3812,6 @@ struct SidebarView: View {
         return true
     }
 
-    private func linkedParentTaskSpaceID(of item: TaskBoardItem?) -> UUID? {
-        guard let parentTaskID = item?.parentTaskID,
-              let parentSpace = taskCoordinator?.records.record(id: parentTaskID)?.taskSpaceWorkspaceID,
-              store.state.workspacesByID[parentSpace] != nil else { return nil }
-        return parentSpace
-    }
-
     private func childProgressLabel(ofTaskID taskID: UUID) -> String? {
         guard let coordinator = taskCoordinator,
               coordinator.records.records.contains(where: { $0.parentTaskID == taskID }) else { return nil }
@@ -3861,17 +3836,9 @@ struct SidebarView: View {
         let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID]
         let isExpanded = collapsedSubspaceGroupParentIDs.contains(parentWorkspaceID) == false
         let filteredRows = SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: filterSessionID)
-        let pin = SidebarSubspacePresentation.pin(
-            previous: subspaceOrderMemory.pinByParentID[parentWorkspaceID],
-            selectedRowID: selectedWorkspaceID,
-            displayedKeys: subspaceOrderMemory.displayedKeysByParentID[parentWorkspaceID] ?? [:],
-            rows: rows
-        )
-        let orderedRows = SidebarSubspacePresentation.groupingLinkedChildren(
-            SidebarSubspacePresentation.orderedRows(
-                filteredRows, frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID], pin: pin
-            )
-        )
+        // Rows keep the window's workspace order; only adding or removing a
+        // task space moves the rows around it.
+        let orderedRows = SidebarSubspacePresentation.groupingLinkedChildren(filteredRows)
         let tally = SidebarSubspacePresentation.tally(rows)
         let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
         let attentionRowIDs = Set(rows.filter { $0.status.needsAttention }.map(\.id))
@@ -3880,11 +3847,6 @@ struct SidebarView: View {
             rows.first { $0.spawningSessionID == sessionID }?.spawnerName
         }
         let orderedRowIDs = orderedRows.map(\.id)
-        subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
-        subspaceOrderMemory.displayedKeysByParentID[parentWorkspaceID] = Dictionary(rows.map {
-            ($0.id, SidebarSubspacePresentation.sortKey(for: $0, pin: pin))
-        }, uniquingKeysWith: { first, _ in first })
-        store.recordSidebarSubspaceOrder(orderedRowIDs, parentWorkspaceID: parentWorkspaceID)
 
         return VStack(alignment: .leading, spacing: 3) {
             subspacesGroupHeader(
@@ -3921,22 +3883,12 @@ struct SidebarView: View {
                     accessibilityReduceMotion ? nil : .easeInOut(duration: 0.28),
                     value: orderedRowIDs
                 )
-                .onHover { isHovering in
-                    if isHovering {
-                        frozenSubspaceOrderByParentID[parentWorkspaceID] = orderedRowIDs
-                    } else {
-                        frozenSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
-                    }
-                }
             }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 12)
         .id(SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID))
         .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
-        .onDisappear {
-            store.clearSidebarSubspaceOrder(parentWorkspaceID: parentWorkspaceID)
-        }
         .onAppear {
             if needsAttention {
                 collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
@@ -4692,10 +4644,6 @@ struct SidebarView: View {
         }
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
-        frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }
-        subspaceOrderMemory.displayedKeysByParentID = subspaceOrderMemory.displayedKeysByParentID
-            .filter { parentIDs.contains($0.key) }
-        subspaceOrderMemory.pinByParentID = subspaceOrderMemory.pinByParentID.filter { parentIDs.contains($0.key) }
     }
 
     private func toggleSessionChildRows(sessionID: String) {

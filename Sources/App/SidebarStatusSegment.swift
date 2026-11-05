@@ -27,18 +27,11 @@ struct SidebarStatusSections: Equatable {
         var group: TaskStage.Group { members.map(\.stage.group).min() ?? root.stage.group }
     }
 
-    /// Where a family is on screen: its group, and the families above it
-    /// there, by their first task.
-    struct Slot: Equatable {
-        let group: TaskStage.Group
-        let above: [TaskBoardItem.Subject]
-    }
-
-    /// Where the selected task's family holds while the task stays selected.
-    /// See `pin(previous:selected:displayed:)`.
+    /// The group the selected task's family holds while the task stays
+    /// selected. See `pin(previous:selected:displayed:)`.
     struct Pin: Equatable {
         let subject: TaskBoardItem.Subject
-        let slot: Slot
+        let group: TaskStage.Group
     }
 
     struct Lane: Equatable, Identifiable {
@@ -91,27 +84,44 @@ struct SidebarStatusSections: Equatable {
         entries(group).filter { $0.item.stage.group == group }.count
     }
 
-    /// Each family's slot on screen, by every member, so the next selection
-    /// can pin its family where the user saw it.
-    var slots: [TaskBoardItem.Subject: Slot] {
-        var result: [TaskBoardItem.Subject: Slot] = [:]
+    /// The group each row is drawn in, so the next selection can hold its
+    /// family where the user saw it.
+    var groups: [TaskBoardItem.Subject: TaskStage.Group] {
+        var result: [TaskBoardItem.Subject: TaskStage.Group] = [:]
         for group in Self.rowGroups {
-            var above: [TaskBoardItem.Subject] = []
-            var slot = Slot(group: group, above: [])
             for entry in entries(group) {
-                if entry.isLinkedChild == false {
-                    slot = Slot(group: group, above: above)
-                    above.append(entry.id)
-                }
-                result[entry.id] = slot
+                result[entry.id] = group
             }
         }
         return result
     }
 
-    /// `items` newest activity first, as the board gives them. Needs you
-    /// keeps that order, so the latest request is on top; Running and Idle
-    /// sort by project and title, so rows hold still while agents work.
+    /// The order the sidebar lists tasks in: by project, in the window's
+    /// workspace order, then by task space, in the order the task spaces
+    /// opened. Tasks with no task space in the window follow their project's
+    /// task spaces, oldest first. The project cards and Jump to Next Active
+    /// use the same workspace order, so a task never moves within its group.
+    static func sidebarOrder(_ items: [TaskBoardItem], workspaceIDs: [UUID]) -> [TaskBoardItem] {
+        let position = Dictionary(workspaceIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        func key(_ item: TaskBoardItem) -> (project: Int, taskSpace: Int, createdAt: Date) {
+            (
+                item.projectWorkspaceID.flatMap { position[$0] } ?? Int.max,
+                item.taskSpaceWorkspaceID.flatMap { position[$0] } ?? Int.max,
+                item.record?.createdAt ?? .distantFuture
+            )
+        }
+        return items.enumerated().sorted { lhs, rhs in
+            let left = key(lhs.element), right = key(rhs.element)
+            if left.project != right.project { return left.project < right.project }
+            if left.taskSpace != right.taskSpace { return left.taskSpace < right.taskSpace }
+            if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
+    /// `items` in the order the sidebar lists them; see `sidebarOrder`.
+    /// Each group keeps that order, so a row moves only when its stage
+    /// changes its group.
     static func make(
         _ items: [TaskBoardItem],
         releasable: (TaskBoardItem) -> Bool = { _ in false },
@@ -119,25 +129,21 @@ struct SidebarStatusSections: Equatable {
     ) -> Self {
         var sections = Self()
         var familiesByGroup = Dictionary(grouping: families(items), by: \.group)
-        for group in rowGroups {
-            familiesByGroup[group] = sortedFamilies(familiesByGroup[group] ?? [], group: group, items: items)
-        }
         // Selecting a task reads its turn, which can move it to a calmer
-        // group under the pointer. Its family keeps its group, and stays
-        // right after the families that were above it and are still there,
-        // until the selection moves: rows above it can leave or arrive, but it
-        // never jumps past a row. Anything more urgent still moves it, and
-        // it holds in its new place from then on.
+        // group under the pointer. Its family keeps its group until the
+        // selection moves. Anything more urgent still moves it, and it holds
+        // in that group from then on.
         if let pin, let located = locate(pin.subject, in: familiesByGroup) {
-            let group = min(located.group, pin.slot.group)
-            let family = familiesByGroup[located.group]!.remove(at: located.index)
-            var target = familiesByGroup[group] ?? []
-            let insertion = group == pin.slot.group
-                ? target.lastIndex { $0.members.contains { pin.slot.above.contains($0.id) } }.map { $0 + 1 } ?? 0
-                : located.index
-            target.insert(family, at: insertion)
-            familiesByGroup[group] = target
-            sections.pin = Pin(subject: pin.subject, slot: Slot(group: group, above: target.prefix(insertion).map(\.root.id)))
+            let group = min(located.group, pin.group)
+            if group != located.group {
+                let family = familiesByGroup[located.group]!.remove(at: located.index)
+                let position = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+                let rank = { (family: Family) in position[family.root.id] ?? Int.max }
+                var target = familiesByGroup[group] ?? []
+                target.insert(family, at: target.firstIndex { rank($0) > rank(family) } ?? target.endIndex)
+                familiesByGroup[group] = target
+            }
+            sections.pin = Pin(subject: pin.subject, group: group)
         }
         // A row whose own stage is in another group is drawn dimmed: a
         // relative listed with its family, or a held row the user has read.
@@ -186,15 +192,15 @@ struct SidebarStatusSections: Equatable {
     }
 
     /// The pin for the selected task: kept while the same task stays
-    /// selected, else taken from where the task's family was on screen.
+    /// selected, else taken from the group its family was drawn in.
     static func pin(
         previous: Pin?,
         selected: TaskBoardItem.Subject?,
-        displayed: [TaskBoardItem.Subject: Slot]
+        displayed: [TaskBoardItem.Subject: TaskStage.Group]
     ) -> Pin? {
         guard let selected else { return nil }
         if let previous, previous.subject == selected { return previous }
-        return displayed[selected].map { Pin(subject: selected, slot: $0) }
+        return displayed[selected].map { Pin(subject: selected, group: $0) }
     }
 
     /// Splits the tasks in Needs you, Running and Idle into families: each
@@ -214,36 +220,6 @@ struct SidebarStatusSections: Equatable {
         return listed.filter { childIDs.contains($0.id) == false }.map { root in
             Family(root: root, children: root.taskID.flatMap { childrenByParentID[$0] } ?? [])
         }
-    }
-
-    /// Needs you lists the family with the newest request first: its newest
-    /// member that needs you. Running and Idle sort by project and title,
-    /// so rows hold still while agents work. Children always sort by project
-    /// and title, so reading one does not move it within its family.
-    private static func sortedFamilies(_ families: [Family], group: TaskStage.Group, items: [TaskBoardItem]) -> [Family] {
-        let sorted = families.map { family in
-            var family = family
-            family.children.sort(by: byProjectAndTitle)
-            return family
-        }
-        switch group {
-        case .needsYou:
-            let position = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
-            func rank(_ family: Family) -> Int {
-                family.members.filter { $0.stage.group == group }.compactMap { position[$0.id] }.min() ?? Int.max
-            }
-            return sorted.sorted { rank($0) < rank($1) }
-        case .running, .idle, .toShip, .done, .archived:
-            return sorted.sorted { byProjectAndTitle($0.root, $1.root) }
-        }
-    }
-
-    private static func byProjectAndTitle(_ lhs: TaskBoardItem, _ rhs: TaskBoardItem) -> Bool {
-        let lhsProject = lhs.projectTitle ?? ""
-        let rhsProject = rhs.projectTitle ?? ""
-        return lhsProject != rhsProject
-            ? lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
-            : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
 
     /// Puts each task right after the task that started it when both are
