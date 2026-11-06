@@ -641,11 +641,12 @@ or when a phone first turns notifications on, tasks that already wait send
 nothing. The session alerts still cover a finished turn and an approval.
 
 A task alert replaces the Ready alert of the turn that caused it, so one event
-sends one alert. The Mac holds a Ready alert from a task space for 8 seconds:
-long enough for the stage to settle and for the pull request check that a
-finished turn starts. If the task does not need you for a reason above in that
-time, the Ready alert goes out. An approval alert goes out at once: an approval
-puts the task in Needs you for a reason without a task alert.
+sends one alert. The Mac holds a Ready alert from a task space for 8 seconds,
+long enough for the stage to settle. A finished turn also asks GitHub about the
+task's pull request; while that answer is outstanding, the alert stays held, up
+to 75 seconds. If the task does not need you for a reason above in that time,
+the Ready alert goes out. An approval alert goes out at once: an approval puts
+the task in Needs you for a reason without a task alert.
 
 Tapping a task alert opens the task's session while its task space is open,
 and the task's detail otherwise. The app icon badge counts the tasks that need
@@ -654,7 +655,8 @@ you, as the Mac's Tasks row and the Status segment do, instead of sessions.
 The alert text leaves the Mac: the task's title, the agent's question, and the
 pull request number. Error text from a failed setup or cleanup stays on the
 Mac. Task alerts follow the same rules as session alerts: the Mac sends them
-only while you are away from it.
+only while you are away from it, and drops a held Ready alert when you come back
+during the hold.
 
 Compatibility:
 
