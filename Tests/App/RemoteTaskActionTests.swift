@@ -292,6 +292,104 @@ struct RemoteTaskActionTests {
         #expect(fixture.record(task.id)?.mergeCancelledAt != nil)
     }
 
+    @Test func aPhoneRequestRunsThroughTheServicesGatewayOnlyWhileTheSwitchIsOn() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let runtimeHome = "/tmp/toastty-remote-task-actions-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        // A phone paired before the service starts, with Task actions on.
+        let devices = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
+        let offer = try devices.issueNativePairingOffer(gatewayURL: URL(string: "https://test.tailnet.ts.net")!, at: Date())
+        guard case .paired(let device, let credential) = try devices.redeemNativePairingOffer(
+            using: .qr(offerID: offer.id, secret: offer.qrPayload.secret),
+            deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: Date()
+        ) else {
+            Issue.record("Pairing failed")
+            return
+        }
+        try devices.setTaskActionsEnabled(true, forDevice: device.id)
+
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: NoGitHub()),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        let server = SilentGatewayServer()
+        var captured: RemoteGatewayRequestHandler?
+        let service = RemoteAccessService(
+            store: fixture.store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            taskBoard: board,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_997,
+            initiallyEnabled: false,
+            pushConfiguration: nil,
+            gatewayServerFactory: { handler in
+                captured = handler
+                return server
+            }
+        )
+        service.setEnabled(true, persist: false)
+        defer { service.setEnabled(false, persist: false) }
+        server.onListenerReady?(42_997)
+        let handler = try #require(captured)
+
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "The unread dot stays on", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."
+        ))
+        await fixture.waitForSetup(created.id)
+        let task = try #require(fixture.record(created.id))
+        fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: try #require(task.taskSpaceWorkspaceID),
+            key: "github-pr",
+            annotation: try #require(WorkspaceAnnotation.validated(text: "PR #7", url: pullRequestURL))
+        ))
+        // The snapshot a phone gets offers Merge.
+        let offered = try #require(service.facadeSessionList(at: .now).tasks?.tasks.first { $0.id == task.id })
+        #expect(offered.mergeControl?.kind == .merge)
+
+        func send(_ action: RemoteTaskAction, id: String) async throws -> RemoteTaskActionResult {
+            let request = RemoteTaskActionRequest(taskID: task.id, action: action, clientRequestID: id, expectedPullRequestNumber: 7)
+            let outcome = handler.handle(RemoteGatewayHTTPRequest(
+                method: "POST",
+                path: RemoteTaskActionPolicy.actionPath,
+                headers: ["authorization": "Bearer \(credential)", "tailscale-user-login": "owner@example.com"],
+                body: try ConversationEventCoding.makeEncoder().encode(request)
+            ), at: .now)
+            let response: RemoteGatewayHTTPResponse
+            switch outcome {
+            case .deferredTaskAction(let deviceID, let deferred):
+                response = await handler.resolveTaskAction(deviceID: deviceID, request: deferred)
+            case .respond(let answer):
+                response = answer
+            default:
+                throw CocoaError(.coderInvalidValue)
+            }
+            return try ConversationEventCoding.makeDecoder().decode(RemoteTaskActionResponse.self, from: response.body).result
+        }
+
+        #expect(try await send(.merge, id: "merge-1") == .performed)
+        let requestedAt = try #require(fixture.record(task.id)?.mergeRequestedAt)
+        #expect(service.facadeSessionList(at: .now).tasks?.tasks.first { $0.id == task.id }?.mergeControl?.kind == .merging)
+
+        // Switched off on the Mac: nothing more runs.
+        service.setDeviceTaskActions(false, for: device.id)
+        #expect(try await send(.cancelMerge, id: "cancel-1") == .rejected(reason: .permissionDenied, message: nil))
+        #expect(fixture.record(task.id)?.mergeRequestedAt == requestedAt)
+        // Back on, the same request runs.
+        service.setDeviceTaskActions(true, for: device.id)
+        #expect(try await send(.cancelMerge, id: "cancel-1") == .performed)
+        #expect(fixture.record(task.id)?.mergeRequestedAt == nil)
+    }
+
     @Test func aRemoteArchiveNeverDiscardsChangesOrCommits() async throws {
         let (fixture, harness) = try worktreeHarness()
         let task = try await taskInWorktree(fixture)
@@ -400,6 +498,21 @@ struct RemoteTaskActionTests {
         #expect(await harness.perform(.delete, failed.id, id: "delete-1") == .performed)
         #expect(await harness.perform(.delete, failed.id, id: "delete-2") == .rejected(reason: .taskNotFound, message: nil))
     }
+}
+
+/// A gateway that sends nothing anywhere, so the service runs without a
+/// listener.
+private final class SilentGatewayServer: RemoteAccessGatewayServing {
+    var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
+    var onDeviceRevoked: ((UUID) -> Void)?
+    var onListenerReady: ((UInt16) -> Void)?
+    var onListenerFailed: ((RemoteAccessListenerFailure) -> Void)?
+
+    func start(port _: UInt16) throws {}
+    func stop() {}
+    func disconnectWebSockets(for _: UUID) {}
+    func disconnectAllWebSockets() {}
+    func broadcast(_: RemoteGatewayStreamMessage) {}
 }
 
 /// Answers no pull request question, so the board keeps what it has.
