@@ -241,8 +241,9 @@ struct RemoteTaskCreatorTests {
         let result = await harness.creator.create(harness.request(), device: harness.device)
         #expect(result == .rejected(reason: .createFailed, message: "tasks.toml: line 3: unknown key \"agnet\""))
         #expect(harness.records.isEmpty)
-        #expect(RemoteTaskCreator.failureMessage(TaskError(String(repeating: "a", count: 400))).count
+        #expect(RemoteTaskCreator.failureMessage(TaskError(String(repeating: "a", count: 400)))?.count
             == RemoteTaskCreatePolicy.maximumFailureMessageLength)
+        #expect(RemoteTaskCreator.failureMessage(CocoaError(.fileWriteNoPermission)) == nil)
     }
 
     @Test func uploadedFilesBecomeTaskAttachmentsWithTheirNamesAndTheUploadsAreRemoved() async throws {

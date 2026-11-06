@@ -238,9 +238,10 @@ final class RemoteTaskCreator {
     }
 
     /// The coordinator's explanation, as the CLI shows it, bounded and on
-    /// one line.
-    static func failureMessage(_ error: any Error) -> String {
-        let raw = (error as? TaskError)?.message ?? error.localizedDescription
+    /// one line. Only the coordinator's own messages go to the device;
+    /// another error's text can carry system detail, so it sends none.
+    static func failureMessage(_ error: any Error) -> String? {
+        guard let raw = (error as? TaskError)?.message else { return nil }
         let scalars = raw.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) }
         let line = String(scalars).trimmingCharacters(in: .whitespaces)
         guard line.count > RemoteTaskCreatePolicy.maximumFailureMessageLength else { return line }
