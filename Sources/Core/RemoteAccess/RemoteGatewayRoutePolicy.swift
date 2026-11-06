@@ -21,6 +21,9 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case sessionStartOptions
     case sessionStart
     case sessionStartWithAttachments
+    case taskCreateOptions
+    case taskCreate
+    case taskCreateWithAttachments
     case questionAnswer
     case messageSend
     case messageSendWithAttachments
@@ -49,6 +52,9 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .sessionStartOptions: RemoteSessionStartPolicy.optionsPath
         case .sessionStart: RemoteSessionStartPolicy.startPath
         case .sessionStartWithAttachments: RemoteSessionStartPolicy.startWithAttachmentsPath
+        case .taskCreateOptions: RemoteTaskCreatePolicy.optionsPath
+        case .taskCreate: RemoteTaskCreatePolicy.createPath
+        case .taskCreateWithAttachments: RemoteTaskCreatePolicy.createWithAttachmentsPath
         case .questionAnswer: "/api/conversation.question.answer"
         case .messageSendWithAttachments: RemoteAttachmentPolicy.sendPath
         case .messageSend: "/api/conversation.message.send"
@@ -119,6 +125,11 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .sessionStartOptions: .init(route: .sessionStartOptions, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
         .sessionStart: .init(route: .sessionStart, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .sessionStartWithAttachments: .init(route: .sessionStartWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A task starts an agent with the task as its first message, so the
+        // create routes follow the session start routes.
+        .taskCreateOptions: .init(route: .taskCreateOptions, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        .taskCreate: .init(route: .taskCreate, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .taskCreateWithAttachments: .init(route: .taskCreateWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .questionAnswer: .init(route: .questionAnswer, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSendWithAttachments: .init(route: .messageSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),

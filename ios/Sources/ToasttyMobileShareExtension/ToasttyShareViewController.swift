@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 /// Receives content from the share sheet, saves it in the App Group, and
-/// opens Toastty's new-session sheet with it.
+/// opens Toastty's New Task sheet with it, or its new-session sheet when the
+/// Mac cannot create tasks.
 final class ToasttyShareViewController: UIViewController {
     private let status = ToasttyShareStatus()
     private var handoff: Task<Void, Never>?
@@ -52,7 +53,7 @@ final class ToasttyShareViewController: UIViewController {
             status.phase = .failed("Toastty couldn't save what you shared. Try again.")
             return
         }
-        if let url = URL(string: "\(scheme)://new-session/\(draft.id.uuidString)"), await openApp(url) {
+        if let url = URL(string: "\(scheme)://shared-draft/\(draft.id.uuidString)"), await openApp(url) {
             extensionContext?.completeRequest(returningItems: nil)
         } else {
             status.phase = .saved
@@ -106,9 +107,9 @@ private struct ToasttyShareView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.largeTitle)
                     .foregroundStyle(.green)
-                Text("Saved for a new session")
+                Text("Saved for Toastty")
                     .font(.headline)
-                Text("Open Toastty within 30 minutes to start it.")
+                Text("Open Toastty within 30 minutes to use it.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

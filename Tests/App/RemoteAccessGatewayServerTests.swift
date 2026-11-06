@@ -79,6 +79,7 @@ struct RemoteAccessGatewayServerTests {
         previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil,
         attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil,
         sessionStartHandler: (@MainActor (RemoteSessionStartRequest, RemoteDeviceRecord) async -> RemoteSessionStartResult)? = nil,
+        taskCreateHandler: (@MainActor (RemoteTaskCreateRequest, RemoteDeviceRecord) async -> RemoteTaskCreateResult)? = nil,
         onListenerFailure: ((RemoteAccessListenerFailure) -> Void)? = nil,
         candidatePort: (Int) -> UInt16 = { _ in UInt16.random(in: 49500..<64000) }
     ) async throws -> Harness {
@@ -106,6 +107,7 @@ struct RemoteAccessGatewayServerTests {
             handler.previewHandler = previewHandler
             handler.attachmentSendHandler = attachmentSendHandler
             handler.sessionStartHandler = sessionStartHandler
+            handler.taskCreateHandler = taskCreateHandler
             let server = RemoteAccessGatewayServer(
                 handler: handler,
                 maximumConnections: maximumConnections,
@@ -742,6 +744,44 @@ struct RemoteAccessGatewayServerTests {
         #expect(harness.server.attachmentUploadCountForTesting == 0)
     }
 
+    /// Both create routes cross the real listener: the plain one as a
+    /// deferred create, the upload one through header admission, which it
+    /// releases once the body is decoded.
+    @Test func taskCreateTraversesNativeLoopbackWithAndWithoutAttachments() async throws {
+        var received: [RemoteTaskCreateRequest] = []
+        let taskID = UUID()
+        let harness = try await Self.startHarness(taskCreateHandler: { request, _ in
+            received.append(request)
+            return .created(taskID: taskID)
+        })
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        func post(_ path: String, _ create: RemoteTaskCreateRequest) async throws -> RemoteTaskCreateResult {
+            var request = URLRequest(url: harness.baseURL.appending(path: path))
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+            request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+            request.httpBody = try create.encodedForTransport()
+            let (data, response) = try await session.data(for: request)
+            #expect((response as? HTTPURLResponse)?.statusCode == 200)
+            return try ConversationEventCoding.makeDecoder().decode(RemoteTaskCreateResponse.self, from: data).result
+        }
+        let plain = RemoteTaskCreateRequest(
+            clientRequestID: "wire-task", workspaceID: UUID(), profileID: "codex", text: "Fix the composer"
+        )
+        #expect(try await post(RemoteTaskCreatePolicy.createPath, plain) == .created(taskID: taskID))
+        let withFile = RemoteTaskCreateRequest(
+            clientRequestID: "wire-task-file", workspaceID: UUID(), profileID: "codex", text: "See the notes",
+            attachments: [.init(filename: "large.txt", data: Data(repeating: 65, count: 200_000))]
+        )
+        #expect(try await post(RemoteTaskCreatePolicy.createWithAttachmentsPath, withFile) == .created(taskID: taskID))
+        #expect(received == [plain, withFile])
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+    }
+
     @Test func decodedSessionStartReleasesUploadAdmissionWhileItsLauncherWaits() async throws {
         var resumeLaunch: CheckedContinuation<Void, Never>?
         var launchEntered = false
@@ -856,7 +896,11 @@ struct RemoteAccessGatewayServerTests {
         #expect(harness.server.attachmentUploadCountForTesting == 0)
     }
 
-    @Test(arguments: [RemoteAttachmentPolicy.sendPath, RemoteSessionStartPolicy.startWithAttachmentsPath])
+    @Test(arguments: [
+        RemoteAttachmentPolicy.sendPath,
+        RemoteSessionStartPolicy.startWithAttachmentsPath,
+        RemoteTaskCreatePolicy.createWithAttachmentsPath,
+    ])
     func admittedAttachmentUploadUsesItsAbsoluteDeadlineAndReleasesSlotAfterTimeout(path: String) async throws {
         let harness = try await Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000,
                                             attachmentUploadTimeoutNanoseconds: 500_000_000)

@@ -1393,7 +1393,9 @@ struct ToasttyApp: App {
             runtimePaths: runtimePaths,
             sessionLauncher: remoteSessionLauncher,
             sessionCloseController: remoteSessionCloseController,
-            sessionExitController: sessionExitController
+            sessionExitController: sessionExitController,
+            taskCoordinator: taskCoordinator,
+            quickEntryController: quickEntryController
         )
         _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
         // The quick entry Agent picker offers the models the iPhone's

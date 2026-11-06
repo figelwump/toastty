@@ -440,6 +440,9 @@ public enum TaskSource: Codable, Equatable, Sendable {
     /// Made for a task space that existed before it had a record, when the
     /// user or an agent chose to track it.
     case adopted
+    /// A paired device, such as Toastty Mobile, through Remote Access.
+    /// Builds before this case read it as `.cli`.
+    case remoteDevice(deviceID: UUID)
 
     private enum Kind: String, Codable {
         case cli
@@ -447,11 +450,13 @@ public enum TaskSource: Codable, Equatable, Sendable {
         case quickEntry
         case recovered
         case adopted
+        case remoteDevice
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case sessionID
+        case deviceID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -469,6 +474,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
             self = .recovered
         case .adopted:
             self = .adopted
+        case .remoteDevice:
+            self = .remoteDevice(deviceID: try container.decode(UUID.self, forKey: .deviceID))
         }
     }
 
@@ -486,6 +493,9 @@ public enum TaskSource: Codable, Equatable, Sendable {
             try container.encode(Kind.recovered, forKey: .kind)
         case .adopted:
             try container.encode(Kind.adopted, forKey: .kind)
+        case .remoteDevice(let deviceID):
+            try container.encode(Kind.remoteDevice, forKey: .kind)
+            try container.encode(deviceID, forKey: .deviceID)
         }
     }
 }

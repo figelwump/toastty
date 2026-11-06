@@ -196,6 +196,22 @@ final class RemoteAccessSessionStartBridge: @unchecked Sendable {
     }
 }
 
+final class RemoteAccessTaskCreateBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func options(
+        _ request: RemoteTaskCreateOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteTaskCreateOptionsResponse {
+        MainActor.assumeIsolated {
+            service?.taskCreateOptions(request, device: device)
+                ?? RemoteTaskCreateOptionsResponse(
+                    permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
+                )
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -503,6 +519,8 @@ final class RemoteAccessService: ObservableObject {
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
     private let sessionStartBridge = RemoteAccessSessionStartBridge()
     private var sessionStarter: RemoteSessionStarter?
+    private let taskCreateBridge = RemoteAccessTaskCreateBridge()
+    private var taskCreator: RemoteTaskCreator?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -638,6 +656,8 @@ final class RemoteAccessService: ObservableObject {
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
         sessionCloseController: SessionCloseController? = nil,
         sessionExitController: SessionExitController? = nil,
+        taskCoordinator: (any RemoteTaskCreating)? = nil,
+        quickEntryController: QuickEntryController? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -756,6 +776,31 @@ final class RemoteAccessService: ObservableObject {
         handler.sessionStartHandler = { [weak self] request, device in
             guard let starter = self?.sessionStarter else { return .rejected(reason: .launchFailed) }
             return await starter.start(request, device: device)
+        }
+        if let taskCoordinator, let quickEntryController {
+            taskCreateBridge.service = self
+            taskCreator = RemoteTaskCreator(
+                coordinator: taskCoordinator,
+                choices: { [weak quickEntryController] in
+                    quickEntryController?.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
+                        ?? QuickEntryChoices(workspaces: [], profiles: [], frequentPresets: [])
+                },
+                recordCreatedTask: { [weak quickEntryController] preset, workspaceID in
+                    quickEntryController?.recordCreatedTask(preset: preset, workspaceID: workspaceID)
+                },
+                attachmentStore: attachmentStore,
+                deviceMayCreate: { [weak self] deviceID in
+                    guard let self, self.isEnabled else { return false }
+                    return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+                }
+            )
+            handler.taskCreateOptionsHandler = { [taskCreateBridge] request, device in
+                taskCreateBridge.options(request, device: device)
+            }
+            handler.taskCreateHandler = { [weak self] request, device in
+                guard let creator = self?.taskCreator else { return .rejected(reason: .createFailed, message: nil) }
+                return await creator.create(request, device: device)
+            }
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -3932,6 +3977,16 @@ final class RemoteAccessService: ObservableObject {
             ?? RemoteSessionStartOptionsResponse(
                 permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device),
                 workspace: .notFound
+            )
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteTaskCreateOptionsResponse {
+        taskCreator?.options(device: device)
+            ?? RemoteTaskCreateOptionsResponse(
+                permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
             )
     }
 

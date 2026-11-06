@@ -108,6 +108,12 @@ public protocol GatewayClientProtocol: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse
 }
 
 public extension GatewayClientProtocol {
@@ -179,6 +185,18 @@ public extension GatewayClientProtocol {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -526,6 +544,38 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         let response = try await sendTransportRequest(urlRequest)
         guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
         return try decodeVersioned(RemoteSessionStartResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskCreatePolicy.optionsPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskCreateOptionsResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// Uses the upload route when files are attached, as a session start
+    /// does, so the Mac authorizes the headers before it reads the body.
+    public func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse {
+        var urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: request.attachments.isEmpty ? RemoteTaskCreatePolicy.createPath : RemoteTaskCreatePolicy.createWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
+        )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
+        return try decodeVersioned(RemoteTaskCreateResponse.self, from: response.body) {
             $0.protocolVersion
         }
     }

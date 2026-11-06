@@ -986,14 +986,17 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(session.label.contains("Fix the flaky Cursor picker test"))
     }
 
+    /// A Mac without task creation keeps Home's ＋ on New Session.
     func testNewSessionFromHomeStartsInTheChosenWorkspace() {
         // Starts are remembered across launches, so pin the last workspace
         // for this launch to make the switch below a real one.
-        let app = launchFixtureApp(launchArguments: [
-            "-toastty-mobile-new-session-last-workspace", toasttyWorkspaceID,
-        ])
+        let app = launchFixtureApp(
+            launchArguments: ["-toastty-mobile-new-session-last-workspace", toasttyWorkspaceID],
+            environment: ["TOASTTY_MOBILE_FIXTURE_TASK_CREATE": "unsupported"]
+        )
         let newSession = app.buttons["toastty-mobile-home-new-session"]
         XCTAssertTrue(newSession.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["toastty-mobile-home-new-task"].exists)
         attachScreenshot(named: "fixture-new-session-home", of: app)
         newSession.tap()
 
@@ -1036,8 +1039,84 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-new-session-home-listed", of: app)
     }
 
-    func testSharedDraftLinkOpensThePrefilledNewSessionSheet() throws {
+    func testNewTaskFromHomeCreatesATaskWithAFrequentPreset() {
+        let app = launchFixtureApp()
+        let newTask = app.buttons["toastty-mobile-home-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["toastty-mobile-home-new-session"].exists)
+        newTask.tap()
+
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(create.isEnabled, "A task needs its text")
+        let workspace = app.buttons["toastty-mobile-new-task-workspace"]
+        XCTAssertEqual(workspace.value as? String, "toastty")
+        // The Mac's quick entry choice: its last preset.
+        let agent = app.buttons["toastty-mobile-new-task-agent"]
+        XCTAssertEqual(agent.value as? String, "codex · gpt-6.1-sol · high")
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-footer"].exists)
+        attachScreenshot(named: "fixture-new-task-empty", of: app)
+
+        app.buttons["toastty-mobile-new-task-frequent-0"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "claude · opus-5.5 · xhigh" })
+        workspace.tap()
+        let research = app.buttons["herdr research"]
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        research.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { workspace.value as? String == "herdr research" })
+
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        text.tap()
+        text.typeText("Composer keeps a blank line after send on iPad split view.")
+        XCTAssertTrue(waitUntil(timeout: 5) { create.isEnabled })
+        attachScreenshot(named: "fixture-new-task-filled", of: app)
+        create.tap()
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Task saved on your Mac. It's setting up now.")
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-sheet"].waitForNonExistence(timeout: 5))
+        attachScreenshot(named: "fixture-new-task-created", of: app)
+
+        // New Session stays on the workspace screen's ＋.
+        openWorkspace(toasttyWorkspaceID, in: app)
+        let newSession = app.buttons["toastty-mobile-workspace-new-session"]
+        XCTAssertTrue(newSession.waitForExistence(timeout: 5))
+        newSession.tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-new-session-start"].waitForExistence(timeout: 5))
+    }
+
+    func testSharedDraftLinkOpensThePrefilledNewTaskSheet() throws {
         let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "link"])
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertFalse(create.exists, "A draft opened by its link waits for the link")
+
+        let link = try XCTUnwrap(URL(string: "toastty-mobile-dev://shared-draft/\(sharedDraftID)"))
+        app.open(link)
+        XCTAssertTrue(create.waitForExistence(timeout: 10))
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertEqual(text.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-error"].exists,
+                      "The sheet says what the share left out")
+        XCTAssertTrue(waitUntil(timeout: 5) { create.isEnabled })
+        attachScreenshot(named: "fixture-new-task-shared-draft", of: app)
+        create.tap()
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Task saved on your Mac. It's setting up now.")
+    }
+
+    /// A Mac without task creation opens shared content in New Session, and
+    /// the link an earlier share extension built still works.
+    func testSharedDraftLinkOpensThePrefilledNewSessionSheet() throws {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "link",
+            "TOASTTY_MOBILE_FIXTURE_TASK_CREATE": "unsupported",
+        ])
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
         let start = app.buttons["toastty-mobile-new-session-start"]
         XCTAssertFalse(start.exists, "A draft opened by its link waits for the link")
@@ -1065,16 +1144,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     func testWaitingSharedDraftOpensWhenTheAppStarts() {
         let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "waiting"])
-        let start = app.buttons["toastty-mobile-new-session-start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10))
-        let message = app.textViews["toastty-mobile-new-session-message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        XCTAssertEqual(message.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 10))
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertEqual(text.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
         XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
         attachScreenshot(named: "fixture-shared-draft-waiting", of: app)
 
-        app.buttons["toastty-mobile-new-session-cancel"].tap()
-        XCTAssertTrue(start.waitForNonExistence(timeout: 5))
+        app.buttons["toastty-mobile-new-task-cancel"].tap()
+        XCTAssertTrue(create.waitForNonExistence(timeout: 5))
     }
 
     func testSwipeInfoOpensTheDetailSheet() {

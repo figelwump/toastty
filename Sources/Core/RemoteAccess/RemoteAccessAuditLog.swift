@@ -32,6 +32,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         case conversationClosed = "conversation_closed"
         case sessionStartAccepted = "session_start_accepted"
         case sessionStartRejected = "session_start_rejected"
+        case taskCreateAccepted = "task_create_accepted"
+        case taskCreateRejected = "task_create_rejected"
     }
 
     public var at: Date

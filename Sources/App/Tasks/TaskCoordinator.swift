@@ -121,6 +121,10 @@ struct TaskCreateRequest: Equatable {
     var text: String
     /// Absolute paths of files to attach.
     var files: [String] = []
+    /// Names to show for `files`, in the same order, when the files' own
+    /// names are not meaningful, as for an upload Remote Access stored
+    /// under a random name. The copies keep the files' own names.
+    var fileDisplayNames: [String]?
     var clientRequestID: String?
     var title: String?
     var slug: String?
@@ -155,11 +159,18 @@ struct TaskCaller: Equatable {
     var workspaceID: UUID?
     /// The quick entry panel, rather than the CLI.
     var isQuickEntry = false
+    /// A paired device, through Remote Access. Its request IDs are its own.
+    var remoteDeviceID: UUID?
 
     static let unmanaged = TaskCaller()
     static let quickEntry = TaskCaller(isQuickEntry: true)
 
+    static func remoteDevice(_ deviceID: UUID) -> TaskCaller {
+        TaskCaller(remoteDeviceID: deviceID)
+    }
+
     var source: TaskSource {
+        if let remoteDeviceID { return .remoteDevice(deviceID: remoteDeviceID) }
         if let sessionID { return .agent(sessionID: sessionID) }
         return isQuickEntry ? .quickEntry : .cli
     }
@@ -305,9 +316,15 @@ final class TaskCoordinator {
     /// Checks the request, copies the files, saves the record and starts
     /// setup. Returns as soon as the record is saved; setup continues in the
     /// background.
+    /// `beforeSave` runs after the files are copied, directly before the
+    /// record is saved; a throw there saves nothing and removes the copies.
     @discardableResult
-    func create(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) async throws -> TaskRecord {
-        try await finishCreate(try prepareCreate(request, caller: caller))
+    func create(
+        _ request: TaskCreateRequest,
+        caller: TaskCaller = .unmanaged,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
+        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
     }
 
     /// Every check that needs app state, done before any file is copied.
@@ -328,6 +345,9 @@ final class TaskCoordinator {
         }
         guard request.files.count <= TaskRecord.maximumAttachmentCount else {
             throw TaskError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
+        }
+        guard request.fileDisplayNames.map({ $0.count == request.files.count }) ?? true else {
+            throw TaskError("Give one display name for each attached file.")
         }
         let sources = try request.files.map(attachableFile)
         let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
@@ -455,13 +475,16 @@ final class TaskCoordinator {
         var usedNames: Set<String> = []
         var copies: [(source: String, destination: String)] = []
         var attachments: [TaskAttachment] = []
-        for (requestedPath, resolvedPath) in zip(request.files, sources) {
+        for (index, (requestedPath, resolvedPath)) in zip(request.files, sources).enumerated() {
             let originalName = (requestedPath as NSString).lastPathComponent
             let name = Self.uniqueFileName(originalName, taken: usedNames)
             usedNames.insert(name)
             let destination = directoryURL.appending(path: name, directoryHint: .notDirectory).path(percentEncoded: false)
             copies.append((resolvedPath, destination))
-            attachments.append(TaskAttachment(path: destination, displayName: originalName))
+            attachments.append(TaskAttachment(
+                path: destination,
+                displayName: request.fileDisplayNames?[index] ?? originalName
+            ))
         }
 
         var record = TaskRecord(
@@ -539,7 +562,10 @@ final class TaskCoordinator {
 
     /// Copies the files off the main thread, then saves the record and
     /// starts setup.
-    func finishCreate(_ preparation: TaskCreatePreparation) async throws -> TaskRecord {
+    func finishCreate(
+        _ preparation: TaskCreatePreparation,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
         if let existing = preparation.existing {
             return existing
         }
@@ -569,6 +595,12 @@ final class TaskCoordinator {
         if let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] == nil {
             try? fileManager.removeItem(at: directoryURL)
             throw TaskError("The task's workspace closed before the task was saved.")
+        }
+        do {
+            try beforeSave?()
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw error
         }
         record.createdAt = now()
         do {

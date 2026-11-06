@@ -544,8 +544,10 @@ checkbox. An older phone ignores them and keeps its flat list.
 
 ### Starting a session
 
-Tap **+** on the Home screen or on a workspace screen to start a new agent
-session. Choose the workspace, the agent, optionally a model and an effort
+Tap **+** on a workspace screen to start a new agent session. On the Home
+screen, **+** opens [New Task](#creating-a-task) instead when the Mac can
+create tasks; with an older Mac it starts a session as described here. Choose
+the workspace, the agent, optionally a model and an effort
 level, and write the first message or attach photos or files. Use **Attach** in
 the first-message field to choose **Photo Library**, **Take Photo**, or
 **Choose File**. Review or remove the selected files, then tap **Start**.
@@ -613,14 +615,52 @@ off and then run an older Toastty build on the Mac, that build does not know
 the switch: it rewrites the device record without it, and the switch is on
 again when you return to a newer build.
 
+### Creating a task
+
+Tap **+** on the Home screen to create a [task](tasks.md), as the Mac's quick
+entry panel does. Write the task, attach photos or files with **Attach**, and
+tap **Create**. The Mac saves the task at once and runs its setup: it makes
+the task space and starts the agent there. The sheet closes when the Mac has
+saved the task. On the Mac the task appears at once; on the phone it appears
+when its task space does.
+
+- **Workspace** lists the Mac's open top-level workspaces. It starts on the
+  workspace of the last quick entry task, as on the Mac.
+- **Agent** sets the agent, model and effort together. Each agent has its own
+  menu of models and efforts, with **Other…** for typing a model ID.
+  **Frequent** shows the Mac's Frequent presets, or the `[defaults]` preset
+  from `tasks.toml` before the first task. The Agent pill starts on the Mac's
+  last quick entry preset. A task created from the phone counts toward
+  Frequent and becomes the last quick entry workspace and preset on the Mac.
+  Only agents whose sessions the phone can show are offered.
+- **Text** is required, because the task's title comes from it. The same file
+  types and limits as [Photos and files from iOS](#photos-and-files-from-ios)
+  apply. The Mac copies the files into the task and deletes the uploads.
+- **Permission.** Creating a task starts an agent, so it uses the device's
+  **Start sessions** switch and send access, as starting a session does.
+- **Retries.** If the phone does not get an answer, **Create** sends the same
+  request again. The Mac stores the request ID with the task and returns that
+  task instead of creating another, for as long as the task exists. Changing
+  the task, its files, the workspace, or the agent makes a new request.
+
+Task creation needs updates on both sides. The Mac advertises the
+`task_create` capability for `POST /api/task.create.options` and
+`POST /api/task.create`. With files attached, the phone uses the native-only
+`POST /api/task.create-with-attachments` route, with the same upload checks
+and 12 MiB limit as a session start. With an older Mac, **+** on Home starts a
+session and shared content opens the new-session sheet. The Mac records the
+task's source as Toastty Mobile; a Toastty build from before this change shows
+it as created from the CLI.
+
 ### Share to Toastty from other apps
 
 In Photos, Safari, Files, or any app with a share sheet, tap **Share**, then
-**Toastty**. Toastty opens with the new-session sheet filled in. Images, PDFs,
-and supported text files become attachments. A link becomes the page title and
-URL in the message, and shared text goes in the message as is. The sheet starts
-on the same workspace as **+** on Home. Choose the agent and tap **Start** as
-usual. Nothing goes to the Mac until you tap **Start**.
+**Toastty**. Toastty opens the New Task sheet filled in, or the new-session
+sheet when the Mac cannot create tasks. Images, PDFs, and supported text files
+become attachments. A link becomes the page title and URL in the text, and
+shared text goes in the text as is. A new-session sheet starts on the same
+workspace as **+** on Home. Check the workspace and agent, then tap **Create**
+or **Start** as usual. Nothing goes to the Mac until you do.
 
 The share applies the same limits as the attachment picker: up to four files,
 8 MiB in total, with photos resized and re-encoded as JPEG. When you share more,
@@ -628,8 +668,8 @@ Toastty keeps what fits and the sheet says how many items it left out. Shared
 content waits on the phone in Toastty's App Group container. The app deletes it
 when the sheet opens, and deletes unopened content after 30 minutes.
 
-The sheet waits when it cannot open right away: while another new-session
-sheet is open, before the Mac connects, or while the phone is not paired. It
+The sheet waits when it cannot open right away: while another New Task or
+new-session sheet is open, before the Mac connects, or while the phone is not paired. It
 opens when that ends, or the next time you open Toastty within 30 minutes. If
 iOS does not let the share open Toastty, the share sheet says so; open Toastty
 yourself. A notification you tap goes first, and the shared sheet waits for
@@ -778,6 +818,12 @@ support conversations; update Toastty on the Mac to enable previews.
   The Mac checks the permission again immediately before it sends the command
   to the terminal. Accepted and refused starts are recorded in the audit log
   with the device, without the message text.
+- Creating a task has the same requirements as starting a session. The device
+  chooses only an open top-level workspace, an agent profile, a model, an
+  effort level, the task text, and attached files. The Mac checks the
+  permission again before it stores the files and before it saves the task.
+  Accepted and refused creates are recorded in the audit log with the device,
+  without the task text.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These
