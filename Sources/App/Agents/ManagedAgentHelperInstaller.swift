@@ -132,9 +132,29 @@ final class ManagedAgentHelperInstaller {
             try? fileManager.removeItem(at: temporaryURL)
             throw error
         }
+        #if os(Linux)
+        try linkSharedLibraries(besides: sourceURL, into: destinationDirectoryURL)
+        #endif
 
         return destinationURL.path
     }
+
+    #if os(Linux)
+    /// An installed CLI and agent shim find the Swift runtime libraries only
+    /// through `$ORIGIN` (scripts/linux/install.sh links them beside the
+    /// executables), so a staged copy gets the same links next to it.
+    private func linkSharedLibraries(besides sourceURL: URL, into destinationDirectoryURL: URL) throws {
+        let sourceDirectoryURL = sourceURL.deletingLastPathComponent()
+        guard let names = try? fileManager.contentsOfDirectory(atPath: sourceDirectoryURL.path) else { return }
+        for name in names where name.hasPrefix("lib") && name.contains(".so") {
+            let target = sourceDirectoryURL.appendingPathComponent(name).resolvingSymlinksInPath().path
+            let linkPath = destinationDirectoryURL.appendingPathComponent(name).path
+            if (try? fileManager.destinationOfSymbolicLink(atPath: linkPath)) == target { continue }
+            try? fileManager.removeItem(atPath: linkPath)
+            try fileManager.createSymbolicLink(atPath: linkPath, withDestinationPath: target)
+        }
+    }
+    #endif
 
     private func makeInstanceDirectory() throws -> URL {
         guard processID > 1 else {

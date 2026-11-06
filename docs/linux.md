@@ -1019,6 +1019,8 @@ code (macOS branches unchanged); run a macOS build
 | `Tests/App/WorkspaceMergeEndToEndTests.swift` | Linux CLI path next to the test runner; the pull-request script comes from the resolved app resources (the test runner has no bundle resources) |
 | `Tests/App/SystemNotificationSenderTests.swift` | `tearDown` hops onto the main actor explicitly under corelibs XCTest |
 | `Sources/App/Agents/ToasttyAgentPluginBundle.swift` | `bundleRootURL(bundle:)` (macOS value unchanged: `<resources>/ToasttyAgentPluginBundle`) backs `bundledPluginURL`; on Linux, for `Bundle.main`, `linuxBundleRootURL` looks in `TOASTTY_APP_RESOURCES_PATH` (install) and then the checkout root (same layout) |
+| `Sources/App/Agents/ManagedAgentHelperInstaller.swift` | staging the CLI and agent shim into a runtime home also links the `lib*.so*` files beside the source executables: an installed helper finds the Swift runtime only through `$ORIGIN` |
+| `Tests/App/ManagedAgentResumeResolverTests.swift` | (unguarded, platform-neutral) the transcript-path assertion compares symlink-resolved paths (`/var` vs `/private/var` on macOS) |
 | `Sources/App/Agents/CodexSkillsManager.swift` | (unguarded, same path on macOS) the default marketplace source is `ToasttyAgentPluginBundle.bundleRootURL()` instead of a restated `Bundle.main.resourceURL` path |
 | `Sources/CLIKit/SetupResourceResolver.swift` | Linux checkout builds fall back to `<checkout>/examples/skills` when the resources have no `WorkflowExamples/skills` |
 | `plugins/toastty/skills/toastty-read-terminal/SKILL.md` | (text, ships on macOS too) the pane-by-number example says "pane 3" (Option+Shift+3; Alt+Shift+3 on Linux) instead of "⌘3", which switches tabs on macOS |

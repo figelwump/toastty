@@ -128,7 +128,7 @@ public final class WorkspaceContentController {
         entries[workspaceID] = entry
         gtk_stack_add_named(cast(stack), entry.tabs.widget, workspaceID.uuidString)
         entry.tabs.onSelect = { [weak self] tabID in
-            self?.store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+            self?.store.sendNavigation(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
         }
         entry.tabs.onCloseRequest = { [weak self] tabID in
             self?.onTabCloseRequest?(workspaceID, tabID)
@@ -162,7 +162,7 @@ public final class WorkspaceContentController {
             guard let self,
                   let selection = self.store.state.workspaceSelection(containingPanelID: panelID),
                   SeenUnreadPolicy.clickNeedsFocusAction(workspace: selection.workspace, panelID: panelID) else { return }
-            self.store.send(.focusPanel(workspaceID: selection.workspaceID, panelID: panelID))
+            self.store.sendNavigation(.focusPanel(workspaceID: selection.workspaceID, panelID: panelID))
         }
         frame.onClose = { [weak self] in
             guard let self else { return }

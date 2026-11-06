@@ -45,12 +45,29 @@ public protocol LinuxStoreBinding: AnyObject {
     @discardableResult
     func send(_ action: AppAction) -> Bool
 
+    /// Dispatches a user visit (a click or navigation command) that
+    /// Back/Forward history records; several actions form one visit.
+    /// Maintenance actions use `send`.
+    @discardableResult
+    func sendNavigation(_ actions: [AppAction]) -> Bool
+
     /// `handler` runs on the main thread after every state change.
     func observe(_ handler: @escaping @MainActor (AppState) -> Void) -> LinuxObservation
 
     var sessions: any LinuxSessionSource { get }
 
     var commands: any LinuxAppCommandHandling { get }
+}
+
+extension LinuxStoreBinding {
+    /// No navigation history without the app-logic layer.
+    @discardableResult
+    public func sendNavigation(_ actions: [AppAction]) -> Bool {
+        actions.reduce(false) { changed, action in send(action) || changed }
+    }
+
+    @discardableResult
+    public func sendNavigation(_ action: AppAction) -> Bool { sendNavigation([action]) }
 }
 
 /// Managed-agent session data shown in the sidebar. Backed by

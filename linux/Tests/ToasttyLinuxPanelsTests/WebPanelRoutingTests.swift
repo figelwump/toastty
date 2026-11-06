@@ -154,6 +154,16 @@ struct LocalDocumentNavigationTests {
         #expect(ScratchpadPanelController.allowsNavigation(to: "about:srcdoc"))
         #expect(ScratchpadPanelController.allowsNavigation(to: "https://example.com") == false)
     }
+
+    /// The generated document's iframe can post `renderReady` too; an
+    /// out-of-range revision must be ignored, not trap.
+    @Test func scratchpadRevisionsConvertExactly() {
+        #expect(ScratchpadPanelController.revision(3) == 3)
+        #expect(ScratchpadPanelController.revision(4.0) == 4)
+        for value: Any? in [1e100, -1e100, 1.5, Double.nan, Double.infinity, "3", nil] {
+            #expect(ScratchpadPanelController.revision(value) == nil)
+        }
+    }
 }
 
 @Suite("Downloads")

@@ -374,6 +374,9 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
         Signal.connectDoubles(widget, "context-menu") { [weak self] x, y in
             self?.showContextMenu(panelID: panelID, x: x, y: y)
         }
+        Signal.connect(widget, "local-paste") { [weak self] in
+            self?.bridge.noteLocalInput(.paste, panelID: panelID)
+        }
         TerminalSignal.connectString(widget, "link-hover") { [weak self] url in
             guard let entry = self?.entries[panelID] else { return }
             Gtk.setLabel(entry.linkLabel, url ?? "")
@@ -580,7 +583,7 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
             gtk_gesture_set_state(cast(gesture), GTK_EVENT_SEQUENCE_CLAIMED)
             _ = entry.surface.grabFocus()
             if let workspaceID = self.bridge.selection(containing: panelID)?.workspaceID {
-                self.bridge.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                self.bridge.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             }
         }
         gtk_widget_add_controller(entry.container.widgetPointer, cast(gesture))

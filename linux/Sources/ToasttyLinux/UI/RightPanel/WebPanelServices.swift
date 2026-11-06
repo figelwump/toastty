@@ -96,7 +96,7 @@ public final class StoreWebPanelServices: WebPanelServices {
             return
         }
         if SeenUnreadPolicy.clickNeedsFocusAction(workspace: selection.workspace, panelID: panelID) {
-            store.send(.focusRightAuxPanel(workspaceID: selection.workspaceID, panelID: panelID))
+            store.sendNavigation(.focusRightAuxPanel(workspaceID: selection.workspaceID, panelID: panelID))
         }
     }
 

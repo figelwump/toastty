@@ -52,7 +52,7 @@ public final class SidebarController {
             guard let self, let rowPointer else { return }
             let index = Int(gtk_list_box_row_get_index(cast(rowPointer)))
             guard self.rows.indices.contains(index) else { return }
-            self.store.send(.selectWorkspace(windowID: self.windowID, workspaceID: self.rows[index].workspaceID))
+            self.store.sendNavigation(.selectWorkspace(windowID: self.windowID, workspaceID: self.rows[index].workspaceID))
         }
         // Double-clicking a workspace renames it (macOS sidebar). The gesture
         // lives on the list, which survives row rebuilds: the first click
@@ -235,9 +235,11 @@ public final class SidebarController {
     private func focusSession(panelID: UUID, workspaceID: UUID) {
         guard let workspace = store.state.workspacesByID[workspaceID],
               let tabID = workspace.tabID(containingPanelID: panelID) else { return }
-        store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
-        store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
-        store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        store.sendNavigation([
+            .selectWorkspace(windowID: windowID, workspaceID: workspaceID),
+            .selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID),
+            .focusPanel(workspaceID: workspaceID, panelID: panelID),
+        ])
     }
 
     // MARK: Context menu

@@ -73,7 +73,8 @@ void toastty_ghostty_app_free (ghostty_app_t app);
  * those of live widgets, which are detached from them and stay inert. Call
  * it once the main loop has quit, before the process exits: a renderer
  * thread still drawing while exit() tears down the GL driver crashes it.
- * Main thread only. */
+ * First calls ghostty_app_begin_shutdown on every app, so a thread blocked
+ * on the undrained app mailbox cannot stall the join. Main thread only. */
 void toastty_ghostty_free_all_surfaces (void);
 
 /* The action_user_data passed to toastty_ghostty_app_new. */
@@ -225,6 +226,9 @@ GdkTexture *toastty_ghostty_surface_get_texture (ToasttyGhosttySurface *self);
  *                         press/release is not sent to the terminal.
  *  "context-menu"         (gdouble x, gdouble y) right click not consumed by
  *                         the terminal (mouse reporting off).
+ *  "local-paste"          () a middle click is about to paste the primary
+ *                         selection (primary paste on, mouse reporting off),
+ *                         emitted before the press reaches the terminal.
  *
  * Properties: "title", "pwd" (read-only strings).
  */

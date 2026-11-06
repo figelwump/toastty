@@ -130,8 +130,10 @@ public enum CommandRouter {
         case "layout.split.up":
             return withWorkspace { .splitFocusedSlotInDirection(workspaceID: $0, direction: .up) }
         case "panel.close":
-            guard let focusedPanelID else { return .none }
-            return .actions([.closePanel(panelID: focusedPanelID)])
+            // The focused right-panel tab when the right panel has focus, not
+            // the main-area panel behind it.
+            guard let panelTargetID else { return .none }
+            return .actions([.closePanel(panelID: panelTargetID)])
         case "panel.reopen-last-closed":
             return withWorkspace { .reopenLastClosedPanel(workspaceID: $0) }
         case "layout.split.select-previous":
@@ -181,21 +183,9 @@ public enum CommandRouter {
 
         // Sessions and attention
         case "panel.focus-next-unread-or-active":
-            guard let workspace, let workspaceID, let tabID = workspace.resolvedSelectedTabID,
-                  let target = state.nextUnreadPanel(
-                      fromWindowID: windowID,
-                      workspaceID: workspaceID,
-                      tabID: tabID,
-                      focusedPanelID: focusedPanelID
-                  ) else {
-                return .app(commandID)
-            }
-            var actions: [AppAction] = []
-            if target.windowID != windowID { actions.append(.selectWindow(windowID: target.windowID)) }
-            actions.append(.selectWorkspace(windowID: target.windowID, workspaceID: target.workspaceID))
-            actions.append(.selectWorkspaceTab(workspaceID: target.workspaceID, tabID: target.tabID))
-            actions.append(.focusPanel(workspaceID: target.workspaceID, panelID: target.panelID))
-            return .actions(actions)
+            // The shared command (AppStore.focusNextUnreadOrActivePanelFromCommand)
+            // also presents the target's window when it is another one.
+            return .app(commandID)
         case "terminal.agent-reads.toggle":
             guard let focusedPanelID, case .terminal(let terminal)? = tab?.panels[focusedPanelID] else { return .none }
             return .actions([.setTerminalPanelAgentReadPolicy(

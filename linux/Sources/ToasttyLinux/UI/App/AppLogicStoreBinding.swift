@@ -30,6 +30,11 @@ public final class AppLogicStoreBinding: LinuxStoreBinding, LinuxSessionSource, 
         logic.send(action, source: "linux_ui")
     }
 
+    @discardableResult
+    public func sendNavigation(_ actions: [AppAction]) -> Bool {
+        logic.sendNavigation(actions, source: "linux_ui")
+    }
+
     public func observe(_ handler: @escaping @MainActor (AppState) -> Void) -> LinuxObservation {
         // observeState fires immediately; LinuxStoreBinding observers expect
         // only changes, so skip the initial value.

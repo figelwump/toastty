@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: faraz <farazrkhan@gmail.com>
+Date: Fri, 6 Nov 2026 14:44:27 -0800
+Subject: [PATCH 9/9] App: let blocked mailbox pushes give up once the embedder
+ shuts down
+
+After an embedder's main loop returns, nothing ticks the app, so a render
+or IO thread blocked on a full app mailbox never finishes and freeing its
+surface (which joins those threads) waits forever. Add
+ghostty_app_begin_shutdown(): afterwards a push that would wait for room
+drops its message. Forever-waiting pushes now wait in 10 ms slices to see
+the flag.
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 54431ff30..957fb927a 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1252,6 +1252,7 @@ GHOSTTY_API ghostty_app_t ghostty_app_new(const ghostty_runtime_config_s*,
+                                              ghostty_config_t);
+ GHOSTTY_API void ghostty_app_free(ghostty_app_t);
+ GHOSTTY_API void ghostty_app_tick(ghostty_app_t);
++GHOSTTY_API void ghostty_app_begin_shutdown(ghostty_app_t);
+ GHOSTTY_API void* ghostty_app_userdata(ghostty_app_t);
+ GHOSTTY_API void ghostty_app_set_focus(ghostty_app_t, bool);
+ GHOSTTY_API bool ghostty_app_key(ghostty_app_t, ghostty_input_key_s);
+diff --git a/src/App.zig b/src/App.zig
+index df384ca0c..ed07f5fbf 100644
+--- a/src/App.zig
++++ b/src/App.zig
+@@ -608,6 +608,18 @@ pub const Message = union(enum) {
+     };
+ };
+ 
++/// Set by `beginShutdown`. Once the embedder stops ticking the app (its
++/// main loop has returned) nothing drains the mailbox, so a surface thread
++/// blocked on a full queue would never finish and freeing its surface would
++/// wait on that thread forever.
++var shutting_down: std.atomic.Value(bool) = .init(false);
++
++/// The embedder is about to free its surfaces without ticking the app again:
++/// from now on a push that would wait for room drops its message instead.
++pub fn beginShutdown() void {
++    shutting_down.store(true, .release);
++}
++
+ /// Mailbox is the way that other threads send the app thread messages.
+ pub const Mailbox = struct {
+     /// The type used for sending messages to the app thread.
+@@ -618,7 +630,17 @@ pub const Mailbox = struct {
+ 
+     /// Send a message to the surface.
+     pub fn push(self: Mailbox, msg: Message, timeout: Queue.Timeout) Queue.Size {
+-        const result = self.mailbox.push(global.io(), msg, timeout);
++        const result = switch (timeout) {
++            // Wait in slices so a waiter notices `beginShutdown`.
++            .forever => while (true) {
++                if (shutting_down.load(.acquire)) {
++                    break self.mailbox.push(global.io(), msg, .{ .instant = {} });
++                }
++                const pushed = self.mailbox.push(global.io(), msg, .{ .ns = 10 * std.time.ns_per_ms });
++                if (pushed > 0) break pushed;
++            },
++            else => self.mailbox.push(global.io(), msg, timeout),
++        };
+ 
+         // Wake up our app loop
+         self.rt_app.wakeup();
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 34d1946b1..c03d788cf 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1767,6 +1767,13 @@ pub const CAPI = struct {
+ 
+     /// Tick the event loop. This should be called whenever the "wakeup"
+     /// callback is invoked for the runtime.
++    /// Call before freeing surfaces once the app will not be ticked again
++    /// (see `CoreApp.beginShutdown`).
++    export fn ghostty_app_begin_shutdown(v: *App) void {
++        _ = v;
++        CoreApp.beginShutdown();
++    }
++
+     export fn ghostty_app_tick(v: *App) void {
+         v.core_app.tick(v) catch |err| {
+             log.err("error app tick err={}", .{err});

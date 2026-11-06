@@ -453,7 +453,7 @@ public final class LinuxWindowController {
     public func perform(_ commandID: String) -> Bool {
         if commandID.hasPrefix(PaletteModel.workspacePrefix),
            let id = UUID(uuidString: String(commandID.dropFirst(PaletteModel.workspacePrefix.count))) {
-            store.send(.selectWorkspace(windowID: windowID, workspaceID: id))
+            store.sendNavigation(.selectWorkspace(windowID: windowID, workspaceID: id))
             return true
         }
         if hosts.performWindowCommand(commandID, windowID: windowID, window: window) {
@@ -485,7 +485,8 @@ public final class LinuxWindowController {
                 requestClosePanel(panelID)
                 return true
             }
-            for action in actions { store.send(action) }
+            // Commands are user input: Back/Forward records where they lead.
+            store.sendNavigation(actions)
             return true
         case .ui(let command):
             handleUI(command)
@@ -555,7 +556,16 @@ public final class LinuxWindowController {
             guard let workspace = store.state.workspacesByID[workspaceID] else { return }
             let panelCount = workspace.allPanelsByID.count
             if panelCount <= 1 {
-                store.send(.closeWorkspace(workspaceID: workspaceID))
+                // No workspace confirmation for a lone panel, but its host
+                // still asks about a running process or an unsaved draft.
+                let close: @MainActor () -> Void = { [weak self] in
+                    _ = self?.store.send(.closeWorkspace(workspaceID: workspaceID))
+                }
+                if let panelID = workspace.allPanelsByID.keys.first {
+                    hosts.requestClose(panelID: panelID, parent: window, close: close)
+                } else {
+                    close()
+                }
                 return
             }
             Dialogs.confirm(
