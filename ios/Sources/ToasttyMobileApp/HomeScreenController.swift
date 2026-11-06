@@ -138,6 +138,9 @@ final class HomeScreenController {
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
+    /// A task whose detail Home should show, as a tapped task alert asks.
+    /// Home clears it once the detail is open.
+    var requestedTaskDetailID: UUID?
     /// Whether a new-session or new-task sheet is on screen. Content shared
     /// from another app waits for it to close instead of replacing its draft.
     var isShowingNewSessionForm = false
@@ -225,6 +228,27 @@ final class HomeScreenController {
 
     func dismissConversation() {
         selectConversation(nil)
+    }
+
+    /// Where a tapped task alert goes: the task's session while the
+    /// snapshot has it, which means its task space is open, else the task's
+    /// detail. A restored snapshot can lack what the live one has, so the
+    /// tap waits for a live snapshot before it falls back or gives up.
+    func taskAlertRoute(taskID: UUID, conversationID: UUID?) -> TaskAlertRoute {
+        if let conversationID {
+            if conversation(id: conversationID) != nil { return .conversation(conversationID) }
+            if freshness != .live { return .waitForLiveSnapshot }
+        }
+        if snapshot.taskBoard?.task(id: taskID) != nil { return .taskDetail(taskID) }
+        return freshness == .live ? .unavailable : .waitForLiveSnapshot
+    }
+
+    enum TaskAlertRoute: Equatable {
+        case conversation(UUID)
+        case taskDetail(UUID)
+        case waitForLiveSnapshot
+        /// The task is gone, or the Mac no longer runs the task system.
+        case unavailable
     }
 
     func update(

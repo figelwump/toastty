@@ -20,6 +20,13 @@ final class ToasttyPushInstallationMarker: ToasttyPushInstallationIdentifying {
 
 enum ToasttyPushPresentation: Equatable { case unavailable, off, turningOff, permissionDenied, pending, enabled }
 
+/// A tapped task alert: the task, and the session the Mac named for it
+/// while its task space was open.
+struct ToasttyPushTaskTap: Equatable, Sendable {
+    let taskID: UUID
+    let conversationID: UUID?
+}
+
 @MainActor
 @Observable
 final class ToasttyPushController {
@@ -27,6 +34,7 @@ final class ToasttyPushController {
     private(set) var errorMessage: String?
     private(set) var configurationMatches = false
     private(set) var pendingConversationID: UUID?
+    private(set) var pendingTaskTap: ToasttyPushTaskTap?
     private(set) var storedState: MobilePushState?
 
     let configuration: ToasttyPushConfiguration?
@@ -180,7 +188,10 @@ final class ToasttyPushController {
         transientRetryAt = nil
         revision &+= 1
         configurationMatches = false
-        if context?.pairingID != next?.pairingID { pendingConversationID = nil }
+        if context?.pairingID != next?.pairingID {
+            pendingConversationID = nil
+            pendingTaskTap = nil
+        }
         context = next
         if let next {
             let queued = queuedTaps
@@ -200,6 +211,7 @@ final class ToasttyPushController {
     }
     func setOpenConversation(_ id: UUID?) { openConversationID = id }
     func consumedConversationTap() { pendingConversationID = nil }
+    func consumedTaskTap() { pendingTaskTap = nil }
 
     /// Persist intent before opening the OS prompt. Only permission blocks
     /// the intro; the delivery proof and Mac handoff run after dismissal.
@@ -267,6 +279,7 @@ final class ToasttyPushController {
     @discardableResult
     func prepareForUnpair(pairingID: UUID? = nil) async -> Bool {
         pendingConversationID = nil
+        pendingTaskTap = nil
         queuedTaps.removeAll()
         await restore()
         if let pairingID, let context, context.pairingID != pairingID { return true }
@@ -298,14 +311,24 @@ final class ToasttyPushController {
             return true
         }
         guard context?.pairingID == payload.pairingID else { return true }
-        return payload.conversationID?.rawValue == openConversationID
+        // The open session already shows what its alert says. A task alert
+        // without a session always shows.
+        guard let conversationID = payload.conversationID?.rawValue else { return false }
+        return conversationID == openConversationID
     }
 
     func receiveTap(_ payload: RemotePushPayload) {
-        guard payload.isValid, payload.kind == .session else { return }
+        guard payload.isValid, payload.kind == .session || payload.kind == .task else { return }
         guard let context else { queuedTaps = Array((queuedTaps + [payload]).suffix(8)); return }
         guard payload.pairingID == context.pairingID else { return }
-        pendingConversationID = payload.conversationID?.rawValue
+        // The latest tap wins.
+        if payload.kind == .task, let taskID = payload.taskID {
+            pendingConversationID = nil
+            pendingTaskTap = ToasttyPushTaskTap(taskID: taskID, conversationID: payload.conversationID?.rawValue)
+        } else {
+            pendingTaskTap = nil
+            pendingConversationID = payload.conversationID?.rawValue
+        }
     }
 
     /// One reconciliation path handles foreground, connection, token, and

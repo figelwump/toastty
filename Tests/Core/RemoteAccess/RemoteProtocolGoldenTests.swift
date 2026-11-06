@@ -34,7 +34,7 @@ struct RemoteProtocolGoldenTests {
             at: Self.fixtureDirectory,
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent))
-        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-verification.json"]
+        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-task.json", "push-verification.json"]
         #expect(expectedNames == Set(fixtures.map(\.name)).union(pushFixtureNames), "Fixture files must exactly match the registered v1 contract")
 
         for fixture in fixtures {
@@ -49,7 +49,9 @@ struct RemoteProtocolGoldenTests {
         #expect(registration.protocolVersion == RemoteGatewayProtocol.version)
         #expect(registration.registration?.relayID == RemotePushPolicy.developmentRelayID)
         #expect(registration.registration.map { RemotePushPolicy.isValidCapabilityToken($0.sendToken) } == true)
-        for (filename, kind) in [("push-session.json", RemotePushPayloadKind.session), ("push-verification.json", .verification)] {
+        for (filename, kind) in [
+            ("push-session.json", RemotePushPayloadKind.session), ("push-task.json", .task), ("push-verification.json", .verification),
+        ] {
             let data = try Data(contentsOf: Self.fixtureDirectory.appending(path: filename))
             let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
             let payloadData = try JSONSerialization.data(withJSONObject: #require(object["toastty"]))
@@ -59,7 +61,7 @@ struct RemoteProtocolGoldenTests {
             var reencoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
             // Foundation emits uppercase UUIDs; the relay emits lowercase.
             // UUID identity and the remaining wire fields must agree.
-            for key in ["registrationID", "pairingID", "conversationID", "eventID"] {
+            for key in ["registrationID", "pairingID", "conversationID", "eventID", "taskID"] {
                 if let value = reencoded[key] as? String { reencoded[key] = value.lowercased() }
             }
             #expect(NSDictionary(dictionary: reencoded) == object["toastty"] as? NSDictionary)
@@ -68,6 +70,47 @@ struct RemoteProtocolGoldenTests {
         #expect(clean.utf8.count <= 512 && !clean.contains("\n"))
         #expect(clean.allSatisfy { $0 == "👩🏽‍💻" })
         #expect(!RemotePushPolicy.isValidCapabilityToken(String(repeating: "_", count: 43)))
+    }
+
+    /// The relay accepts exactly these keys for a task alert, `null` when
+    /// empty, and checks the same limits; see `workers/push`.
+    @Test func taskAlertRequestKeepsEveryKeyAndOnlyTheTextItsReasonCarries() throws {
+        let taskID = UUID()
+        let question = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .question,
+            taskTitle: "Composer\nblank line", detail: "Keep the\nblank line?\u{2028}Or trim it?", pullRequestNumber: 12
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(question)) as? [String: Any])
+        #expect(Set(object.keys) == ["kind", "eventID", "taskID", "conversationID", "reason", "taskTitle", "detail", "pullRequestNumber"])
+        #expect(object["kind"] as? String == "task")
+        #expect(object["reason"] as? String == "question")
+        #expect(object["conversationID"] is NSNull)
+        #expect(object["pullRequestNumber"] is NSNull)
+        #expect(object["taskTitle"] as? String == "Composerblank line")
+        #expect(object["detail"] as? String == "Keep the blank line? Or trim it?")
+
+        // A failure reason carries no free text: it can hold paths or output.
+        let failed = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: RemoteConversationID(), reason: .setupFailed,
+            taskTitle: "Task", detail: "create_hook exited 1 in /Users/me/repo", pullRequestNumber: 4
+        )
+        #expect(failed.detail == nil && failed.pullRequestNumber == nil)
+        let review = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .review, taskTitle: "\n", pullRequestNumber: 263
+        )
+        #expect(review.pullRequestNumber == 263 && review.taskTitle == "Toastty task")
+        #expect(RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .mergeStopped, taskTitle: "T", pullRequestNumber: 0
+        ).pullRequestNumber == nil)
+
+        let long = try #require(RemotePushPolicy.notificationDetail(String(repeating: "👩🏽‍💻", count: 60)))
+        #expect(long.utf8.count <= RemotePushPolicy.maximumDetailBytes && long.hasSuffix("…"))
+        #expect(RemotePushPolicy.notificationDetail(" \n\t ") == nil)
+        let largest = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: RemoteConversationID(), reason: .question,
+            taskTitle: String(repeating: "\"\\/", count: 200), detail: String(repeating: "\"\\/", count: 200)
+        )
+        #expect(try JSONEncoder().encode(largest).count <= RemotePushPolicy.maximumBodyBytes)
     }
 
     @Test func optionalPresentationFieldsAreAdditiveToBaselineGoldenSnapshot() throws {

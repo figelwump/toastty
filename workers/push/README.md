@@ -10,8 +10,12 @@ The paired-device relay uses `wrangler.relay.jsonc` and a separate Worker,
 `toastty-push-dev`. Unconfigured app builds do not expose notifications.
 The operator probe remains separate from automatic enrollment.
 
-The Mac sends Ready and Needs approval events only while locked or after two
-minutes without input. Events suppressed during active Mac use are discarded,
+The Mac sends Ready and Needs approval session alerts, and task alerts, only while
+locked or after two minutes without input. A task alert names a fixed reason, a
+task title, and only for a question the question text; the relay words the alert.
+A relay without task alerts answers them with HTTP 400 before it reserves the
+event or contacts Apple, and the Mac then sends the session alert instead. See
+[Task alerts](../../docs/remote-access.md#task-alerts). Events suppressed during active Mac use are discarded,
 even if approval remains pending after the user leaves. This host rule does not
 apply to enrollment verification alerts. See [iPhone notifications](../../docs/remote-access.md#iphone-notifications).
 

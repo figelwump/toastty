@@ -1,0 +1,235 @@
+import CoreState
+import Foundation
+import RemoteProtocol
+
+/// Decides when a task's phone alert fires: when its stage settles into
+/// Needs you for a reason that has an alert.
+///
+/// It samples the stages the task board works out, about once a second. A
+/// new stage counts only after it holds for `settleInterval`, so a stage
+/// that flips back quickly, such as a status at a tool boundary, sends
+/// nothing. The first sample only records, so tasks that already waited
+/// when sampling started, such as after a relaunch, send nothing.
+struct TaskAlertDetector {
+    static let defaultSettleInterval: TimeInterval = 3
+
+    /// One task's sample.
+    struct Observation: Equatable {
+        var stage: TaskStage
+        /// An accepted merge is under way: the agent checks it, or Toastty
+        /// merges or waits for checks.
+        var isMerging: Bool
+
+        /// What a change is measured on. A reason's text, such as a setup
+        /// error, is not part of it.
+        fileprivate var key: Key {
+            var attention: String?
+            if case .needsYou(let reason) = stage { attention = reason.name }
+            return Key(group: stage.group, attention: attention, isMerging: isMerging)
+        }
+    }
+
+    fileprivate struct Key: Equatable {
+        var group: TaskStage.Group
+        var attention: String?
+        var isMerging: Bool
+    }
+
+    struct Trigger: Equatable {
+        var taskID: UUID
+        var reason: RemotePushTaskAlertReason
+    }
+
+    private var settled: [UUID: Observation]?
+    private var candidates: [UUID: (key: Key, since: Date)] = [:]
+
+    var isPrimed: Bool { settled != nil }
+
+    mutating func reset() {
+        settled = nil
+        candidates = [:]
+    }
+
+    mutating func observe(
+        _ current: [UUID: Observation],
+        now: Date,
+        settleInterval: TimeInterval = defaultSettleInterval
+    ) -> [Trigger] {
+        guard var settled else {
+            self.settled = current
+            candidates = [:]
+            return []
+        }
+        var triggers: [Trigger] = []
+        for (id, observation) in current.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            guard let previous = settled[id] else {
+                // A new task: what it is now counts as a change from nothing.
+                settled[id] = observation
+                if let reason = Self.reason(from: nil, to: observation) {
+                    triggers.append(Trigger(taskID: id, reason: reason))
+                }
+                continue
+            }
+            let key = observation.key
+            if previous.key == key {
+                candidates[id] = nil
+                settled[id] = observation
+                continue
+            }
+            if let candidate = candidates[id], candidate.key == key {
+                guard now.timeIntervalSince(candidate.since) >= settleInterval else { continue }
+            } else if settleInterval > 0 {
+                candidates[id] = (key, now)
+                continue
+            }
+            candidates[id] = nil
+            settled[id] = observation
+            if let reason = Self.reason(from: previous, to: observation) {
+                triggers.append(Trigger(taskID: id, reason: reason))
+            }
+        }
+        for id in settled.keys where current[id] == nil {
+            settled[id] = nil
+            candidates[id] = nil
+        }
+        self.settled = settled
+        return triggers
+    }
+
+    /// The alert a settled move from `previous` to `current` sends, if any.
+    /// The session's own alerts cover a finished turn and an approval, and
+    /// the user is at hand for the rest of Needs you: a task they just
+    /// created that waits for a workspace, or a task space they closed.
+    static func reason(from previous: Observation?, to current: Observation) -> RemotePushTaskAlertReason? {
+        guard case .needsYou(let attention) = current.stage else { return nil }
+        switch attention {
+        case .awaitingReply: return .question
+        case .setupFailed: return .setupFailed
+        case .moveFailed: return .moveFailed
+        case .cleanupStopped: return .cleanupStopped
+        case .review, .readyForReview, .agentFinished, .agentError:
+            // A merge that stopped on a blocker ends the agent's turn and
+            // leaves the pull request open, so the task falls back to Review.
+            if previous?.isMerging == true { return .mergeStopped }
+            switch attention {
+            case .review, .readyForReview: return .review
+            default: return nil
+            }
+        case .pickWorkspace, .taskSpaceClosed, .agentNeedsInput:
+            return nil
+        }
+    }
+}
+
+/// Plans the task alerts a Mac sends to paired phones, and which session
+/// alerts they replace.
+///
+/// A session that finishes a turn in a task space holds its "Ready" alert
+/// for `sessionHold`. When its task settles into Needs you for a reason
+/// with an alert in that time, the task alert replaces the held alert, so
+/// one event sends one alert. Otherwise the held alert goes out as before.
+/// The hold covers the settle window plus the pull request check that a
+/// finished turn starts.
+@MainActor
+final class RemoteTaskAlerts {
+    struct Timing {
+        /// `nil` turns the automatic pass off, for tests that call `pass`.
+        var passInterval: Duration? = .seconds(1)
+        /// Lets workspaces and agent sessions restore before the first sample
+        /// after sampling starts, so a task space that is still opening does
+        /// not count as a change.
+        var startupDelay: TimeInterval = 10
+        var settleInterval: TimeInterval = TaskAlertDetector.defaultSettleInterval
+        var sessionHold: TimeInterval = 8
+    }
+
+    /// A task alert, with the session alerts it replaces. A relay that
+    /// predates task alerts refuses it; the replaced alerts then go out.
+    struct TaskAlert: Equatable {
+        var notification: RemotePushTaskNotification
+        var replaced: [RemotePushSessionNotification]
+    }
+
+    enum Delivery: Equatable {
+        case task(TaskAlert)
+        /// A held session alert that no task alert replaced.
+        case session(RemotePushSessionNotification)
+    }
+
+    let timing: Timing
+    private let now: () -> Date
+    private var detector = TaskAlertDetector()
+    private var startedAt: Date?
+    private typealias HeldAlert = (notification: RemotePushSessionNotification, at: Date)
+    private var held: [UUID: [HeldAlert]] = [:]
+
+    init(timing: Timing = Timing(), now: @escaping () -> Date = Date.init) {
+        self.timing = timing
+        self.now = now
+    }
+
+    var hasHeldAlerts: Bool { held.isEmpty == false }
+
+    /// Holds a finished turn's alert for the task whose task space the
+    /// session runs in.
+    func hold(_ notification: RemotePushSessionNotification, taskID: UUID) {
+        held[taskID, default: []].append((notification, now()))
+    }
+
+    /// Forgets the baseline and held alerts, as when the last phone grant
+    /// goes away. The next pass records again and sends nothing.
+    func reset() {
+        detector.reset()
+        startedAt = nil
+        held = [:]
+    }
+
+    /// One sample of the task board. `conversationID` finds the session a
+    /// tap opens for a task that held no alert.
+    func pass(
+        items: [TaskBoardItem],
+        conversationID: (TaskBoardItem) -> RemoteConversationID?
+    ) -> [Delivery] {
+        let at = now()
+        let startedAt = self.startedAt ?? at
+        self.startedAt = startedAt
+        var deliveries: [Delivery] = []
+        if at.timeIntervalSince(startedAt) >= timing.startupDelay {
+            var observations: [UUID: TaskAlertDetector.Observation] = [:]
+            var itemsByID: [UUID: TaskBoardItem] = [:]
+            for item in items {
+                guard let id = item.record?.id else { continue }
+                observations[id] = .init(stage: item.stage, isMerging: item.merge != nil)
+                itemsByID[id] = item
+            }
+            for trigger in detector.observe(observations, now: at, settleInterval: timing.settleInterval) {
+                guard let item = itemsByID[trigger.taskID], let record = item.record else { continue }
+                let replaced = (held.removeValue(forKey: trigger.taskID) ?? []).map(\.notification)
+                deliveries.append(.task(TaskAlert(
+                    notification: RemotePushTaskNotification(
+                        eventID: UUID(),
+                        taskID: record.id,
+                        conversationID: replaced.last?.conversationID ?? conversationID(item),
+                        reason: trigger.reason,
+                        taskTitle: item.title,
+                        detail: record.replyRequest?.question,
+                        pullRequestNumber: item.pullRequest?.number
+                    ),
+                    replaced: replaced
+                )))
+            }
+        }
+        for (taskID, alerts) in held {
+            var waiting: [HeldAlert] = []
+            for alert in alerts {
+                if at.timeIntervalSince(alert.at) >= timing.sessionHold {
+                    deliveries.append(.session(alert.notification))
+                } else {
+                    waiting.append(alert)
+                }
+            }
+            held[taskID] = waiting.isEmpty ? nil : waiting
+        }
+        return deliveries
+    }
+}

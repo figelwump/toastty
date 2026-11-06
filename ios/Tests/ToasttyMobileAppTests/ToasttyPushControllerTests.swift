@@ -363,6 +363,35 @@ final class ToasttyPushControllerTests: XCTestCase {
         await assertSuppressed(false, controller: h.controller, payload: current)
     }
 
+    func testTaskAlertTapNamesTheTaskAndItsSessionAndTheLatestTapWins() async throws {
+        let h = try await Harness.make()
+        let task = UUID(), conversation = UUID()
+        let taskAlert = RemotePushPayload(kind: .task, registrationID: UUID(), pairingID: h.credential.device.id,
+            conversationID: RemoteConversationID(rawValue: conversation), eventID: UUID(), taskID: task)
+        let sessionAlert = RemotePushPayload(kind: .session, registrationID: UUID(), pairingID: h.credential.device.id,
+            conversationID: RemoteConversationID(rawValue: UUID()), eventID: UUID())
+        h.controller.receiveTap(sessionAlert)
+        h.controller.receiveTap(taskAlert)
+        XCTAssertEqual(h.controller.pendingTaskTap, ToasttyPushTaskTap(taskID: task, conversationID: conversation))
+        XCTAssertNil(h.controller.pendingConversationID)
+        h.controller.consumedTaskTap()
+        XCTAssertNil(h.controller.pendingTaskTap)
+
+        var otherPairing = taskAlert; otherPairing.pairingID = UUID()
+        h.controller.receiveTap(otherPairing)
+        XCTAssertNil(h.controller.pendingTaskTap)
+
+        // The open session already shows what the alert says. A task alert
+        // without a session shows even while no session is open.
+        h.controller.setOpenConversation(conversation)
+        await assertSuppressed(true, controller: h.controller, payload: taskAlert)
+        var withoutSession = taskAlert; withoutSession.conversationID = nil
+        h.controller.receiveTap(withoutSession)
+        XCTAssertEqual(h.controller.pendingTaskTap, ToasttyPushTaskTap(taskID: task, conversationID: nil))
+        h.controller.setOpenConversation(nil)
+        await assertSuppressed(false, controller: h.controller, payload: withoutSession)
+    }
+
     func testGatewayAndDeviceProviderPinsBeforeSupplyingNewPairingCredential() async throws {
         let h = try await Harness.make()
         let generation = await h.vault.currentGeneration()

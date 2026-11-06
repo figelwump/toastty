@@ -55,6 +55,38 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
         }
     }
 
+    /// What a phone that predates an alert kind does with it, as phones
+    /// before task alerts do with `task`: the payload does not decode, so
+    /// iOS shows the alert's own text, a tap opens the app without routing,
+    /// and nothing crashes.
+    func testAnAlertKindThisBuildDoesNotKnowDecodesToNothingAndDoesNotRoute() async {
+        let toastty: [String: Any] = [
+            "version": 1, "kind": "release", "registrationID": UUID().uuidString, "pairingID": UUID().uuidString,
+            "eventID": UUID().uuidString, "releaseID": UUID().uuidString,
+        ]
+        XCTAssertNil(ToasttyPushNotificationBridge.payload(["toastty": toastty]))
+        let delegate = ToasttyMobileApplicationDelegate()
+        delegate.pushBridge.onTap = { _ in XCTFail("An unknown kind must not route") }
+        var records: [ToasttyDiagnosticRecord] = []
+        delegate.pushBridge.onDiagnosticRecord = { records.append($0) }
+        let recorder = CallbackRecorder()
+        await deliver(action: UNNotificationDefaultActionIdentifier, payload: nil,
+                      rawToastty: try? JSONSerialization.data(withJSONObject: toastty), to: delegate, recorder: recorder)
+        XCTAssertEqual(recorder.events, ["completed"])
+        XCTAssertEqual(records.map(\.event), [.pushPayloadInvalid])
+    }
+
+    func testTaskAlertTapRoutesThroughTheBridge() async {
+        let delegate = ToasttyMobileApplicationDelegate()
+        let payload = RemotePushPayload(kind: .task, registrationID: UUID(), pairingID: UUID(),
+            eventID: UUID(), taskID: UUID())
+        var received: [RemotePushPayload] = []
+        delegate.pushBridge.onTap = { received.append($0) }
+        let recorder = CallbackRecorder()
+        await deliver(action: UNNotificationDefaultActionIdentifier, payload: payload, to: delegate, recorder: recorder)
+        XCTAssertEqual(received, [payload])
+    }
+
     func testTapBeforeSessionSetupCompletesAndRemainsBuffered() async {
         let delegate = ToasttyMobileApplicationDelegate()
         let payload = sessionPayload()
@@ -68,14 +100,14 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
         XCTAssertEqual(recorder.events, ["completed"])
     }
 
-    private func deliver(action: String, payload: RemotePushPayload?,
+    private func deliver(action: String, payload: RemotePushPayload?, rawToastty: Data? = nil,
                          to delegate: ToasttyMobileApplicationDelegate,
                          recorder: CallbackRecorder) async {
         let completed = expectation(description: "Notification response completed")
         DispatchQueue.global().async {
             XCTAssertFalse(Thread.isMainThread)
             do {
-                let response = try Self.makeResponse(action: action, payload: payload)
+                let response = try Self.makeResponse(action: action, payload: payload, rawToastty: rawToastty)
                 let systemDelegate: any UNUserNotificationCenterDelegate = delegate
                 systemDelegate.userNotificationCenter?(.current(), didReceive: response) {
                     XCTAssertTrue(Thread.isMainThread)
@@ -95,9 +127,13 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
             conversationID: RemoteConversationID(rawValue: UUID()), eventID: UUID())
     }
 
-    nonisolated private static func makeResponse(action: String, payload: RemotePushPayload?) throws -> UNNotificationResponse {
+    nonisolated private static func makeResponse(
+        action: String, payload: RemotePushPayload?, rawToastty: Data? = nil
+    ) throws -> UNNotificationResponse {
         let content = UNMutableNotificationContent()
-        if let payload {
+        if let rawToastty {
+            content.userInfo = ["toastty": try JSONSerialization.jsonObject(with: rawToastty)]
+        } else if let payload {
             content.userInfo = ["toastty": try JSONSerialization.jsonObject(with: JSONEncoder().encode(payload))]
         } else {
             content.userInfo = ["toastty": ["invalid": true]]

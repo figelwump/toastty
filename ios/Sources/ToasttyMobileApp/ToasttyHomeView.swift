@@ -273,6 +273,11 @@ struct ToasttyHomeView: View {
             }
         }
         .toasttyNewTaskSheet($newTask, controller: controller)
+        .onChange(of: controller.requestedTaskDetailID, initial: true) { _, taskID in
+            guard let taskID else { return }
+            controller.requestedTaskDetailID = nil
+            openTask(taskID)
+        }
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
