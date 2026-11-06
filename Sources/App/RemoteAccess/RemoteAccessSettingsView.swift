@@ -512,6 +512,16 @@ struct RemoteAccessSettingsView: View {
                             .controlSize(.small)
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device allow or deny Claude Code permission requests, including saving Always Allow rules.")
+                            // Merging, archiving and deleting tasks change
+                            // them on the Mac. Off until turned on.
+                            Toggle("Task actions", isOn: Binding(
+                                get: { device.taskActionsEnabled },
+                                set: { service.setDeviceTaskActions($0, for: device.id) }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(device.scopes.contains(.send) == false)
+                            .help("Let this device merge, complete, archive, retry and delete tasks. Merge Without Checks and deleting unpushed commits stay on the Mac.")
                         }
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)

@@ -16,6 +16,8 @@ struct ToasttyConversationScreen: View {
     /// exactly that draft.
     @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
     @State private var isShowingDetails = false
+    /// The task detail that ⓘ opened, for a session in a task space.
+    @State private var taskDetail: ToasttyTaskDetailSelection?
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -138,6 +140,13 @@ struct ToasttyConversationScreen: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     composerBar(conversation)
                 }
+                // The task bar, like the Mac's top bar, for a session in a
+                // task space.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if let task = task(for: conversation) {
+                        ToasttyTaskBar(task: task, controller: controller)
+                    }
+                }
             } else {
                 ContentUnavailableView(
                     "Conversation no longer available",
@@ -171,12 +180,44 @@ struct ToasttyConversationScreen: View {
             // Next sits rightmost, with Panels just inside it. Each shows
             // only when it has somewhere to go.
             ToolbarItemGroup(placement: .topBarTrailing) {
+                taskDetailButton
                 panelsButton
                 nextSessionButton
             }
         }
+        .sheet(item: $taskDetail) { selection in
+            if let task = controller.snapshot.taskBoard?.task(id: selection.id) {
+                ToasttyTaskDetailSheet(
+                    task: task,
+                    canOpenTaskSpace: false,
+                    openTaskSpace: { _ in },
+                    controller: controller
+                )
+            }
+        }
+        .toasttyTaskActionPresenter(controller)
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
+        }
+    }
+
+    /// The task whose task space holds this session.
+    private func task(for conversation: MobileConversation) -> RemoteTaskSummary? {
+        controller.snapshot.taskBoard?.task(taskSpaceID: conversation.workspaceID)
+    }
+
+    /// ⓘ opens the task's detail, with its actions.
+    @ViewBuilder
+    private var taskDetailButton: some View {
+        if let conversation = controller.conversation(id: conversationID), let task = task(for: conversation) {
+            Button {
+                taskDetail = ToasttyTaskDetailSelection(id: task.id)
+            } label: {
+                Label("Task Details", systemImage: "info.circle")
+            }
+            .tint(ToasttyDesignTokens.amber)
+            .accessibilityHint("Shows the task\u{2019}s stage and actions")
+            .accessibilityIdentifier("toastty-conversation-task-detail")
         }
     }
 
@@ -316,11 +357,13 @@ struct ToasttyConversationScreen: View {
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .accessibilityHidden(true)
             }
-            // The trailing Panels and Next buttons narrow the title area;
-            // the agent name goes first when the full line no longer fits.
+            // The trailing ⓘ, Panels and Next buttons narrow the title area;
+            // the agent name goes first when the full line no longer fits,
+            // then the workspace, so the status never wraps.
             ViewThatFits(in: .horizontal) {
                 headerStatusLine(conversation, metadata: headerMetadata(conversation))
                 headerStatusLine(conversation, metadata: conversation.workspaceTitle)
+                headerStatusLine(conversation, metadata: "")
             }
         }
         // The inline navigation bar cannot grow with accessibility type

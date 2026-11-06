@@ -510,6 +510,7 @@ final class RemoteAccessService: ObservableObject {
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
     private let sessionStartBridge = RemoteAccessSessionStartBridge()
     private var sessionStarter: RemoteSessionStarter?
+    private var taskActionRunner: RemoteTaskActionRunner?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -762,6 +763,26 @@ final class RemoteAccessService: ObservableObject {
         handler.sessionStartHandler = { [weak self] request, device in
             guard let starter = self?.sessionStarter else { return .rejected(reason: .launchFailed) }
             return await starter.start(request, device: device)
+        }
+        taskActionRunner = RemoteTaskActionRunner(
+            coordinator: { [weak taskBoard] in taskBoard?.coordinator },
+            deviceMayAct: { [weak self] deviceID in
+                guard let self, self.isEnabled else { return false }
+                return self.deviceStore.devices.first { $0.id == deviceID }?.canActOnTasks ?? false
+            },
+            currentTask: { [weak self] taskID in self?.currentTask(id: taskID) }
+        )
+        handler.taskActionHandler = { [weak self] request, device in
+            guard let self, self.isEnabled, let runner = self.taskActionRunner else {
+                return .rejected(reason: .tasksUnavailable, message: nil)
+            }
+            return await runner.perform(request, device: device)
+        }
+        handler.taskArchiveCheckHandler = { [weak self] request, _ in
+            guard let self, self.isEnabled, let runner = self.taskActionRunner else {
+                return .rejected(reason: .tasksUnavailable, message: nil)
+            }
+            return await runner.archiveCheck(request)
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -1407,7 +1428,23 @@ final class RemoteAccessService: ObservableObject {
 
     private func makeTaskBoard() -> RemoteTaskBoard? {
         guard let taskBoard, taskBoard.isEnabled else { return nil }
-        return RemoteTaskBoardProjection.board(items: taskBoard.items(), state: store.state)
+        return RemoteTaskBoardProjection.board(items: taskBoard.items(), context: taskProjectionContext(taskBoard))
+    }
+
+    private func taskProjectionContext(_ taskBoard: TaskBoardStore) -> RemoteTaskBoardProjection.Context {
+        RemoteTaskBoardProjection.Context(
+            state: store.state,
+            mergeRequest: { [sessionRuntimeStore] workspaceID in sessionRuntimeStore.workspaceMergeRequests[workspaceID] },
+            isTriageConfigured: { [weak coordinator = taskBoard.coordinator] in coordinator?.isTriageConfigured ?? false }
+        )
+    }
+
+    /// The task as the snapshot would show it now, with the item it comes
+    /// from, so an action is checked against the Mac's current list.
+    func currentTask(id taskID: UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)? {
+        guard let taskBoard, taskBoard.isEnabled,
+              let item = taskBoard.items().first(where: { $0.id == .task(taskID) }) else { return nil }
+        return (item, RemoteTaskBoardProjection.summary(item, context: taskProjectionContext(taskBoard)))
     }
 
     /// Maps each managed session to its conversation, limited to the
@@ -3997,6 +4034,25 @@ final class RemoteAccessService: ObservableObject {
             action: .deviceScopesChanged,
             deviceID: deviceID,
             detail: enabled ? "approve_enabled" : "approve_disabled"
+        ))
+        deviceManagementError = nil
+        refreshDevices()
+    }
+
+    func setDeviceTaskActions(_ enabled: Bool, for deviceID: UUID) {
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
+        do {
+            guard try deviceStore.setTaskActionsEnabled(enabled, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
+        auditLog.record(RemoteAccessAuditEntry(
+            at: Date(),
+            action: .deviceScopesChanged,
+            deviceID: deviceID,
+            detail: enabled ? "task_actions_enabled" : "task_actions_disabled"
         ))
         deviceManagementError = nil
         refreshDevices()

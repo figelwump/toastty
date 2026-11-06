@@ -29,6 +29,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case nativeDeviceRevoke
     case nativePushConfiguration
     case nativePushRegistration
+    case taskAction
+    case taskArchiveCheck
 
     var path: String {
         switch self {
@@ -57,6 +59,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .nativeDeviceRevoke: "/v1/native-device/revoke"
         case .nativePushConfiguration: RemotePushPolicy.configurationPath
         case .nativePushRegistration: RemotePushPolicy.registrationPath
+        case .taskAction: RemoteTaskActionPolicy.actionPath
+        case .taskArchiveCheck: RemoteTaskActionPolicy.archiveCheckPath
         }
     }
 }
@@ -127,6 +131,12 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .nativeDeviceRevoke: .init(route: .nativeDeviceRevoke, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativePushConfiguration: .init(route: .nativePushConfiguration, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativePushRegistration: .init(route: .nativePushRegistration, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        // Task actions change tasks on the Mac, so they need send scope; the
+        // handler also checks the device's Task actions switch. The archive
+        // check reads git state only to offer an archive, so it needs the
+        // same.
+        .taskAction: .init(route: .taskAction, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .taskArchiveCheck: .init(route: .taskArchiveCheck, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

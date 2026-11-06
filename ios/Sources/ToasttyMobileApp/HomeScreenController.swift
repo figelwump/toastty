@@ -79,6 +79,8 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
         /// A session started on the Mac but has not reached the list yet.
         case sessionStarted
         case sessionClosed
+        /// The Mac ran a task action, or started it.
+        case taskAction
         case failed
     }
 
@@ -89,7 +91,7 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     var canUndo: Bool {
         switch kind {
         case .changed, .flagChanged: true
-        case .sessionStarted, .sessionClosed, .failed: false
+        case .sessionStarted, .sessionClosed, .taskAction, .failed: false
         }
     }
 }
@@ -111,6 +113,18 @@ final class HomeScreenController {
     private(set) var hostSupportsSessionStart: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
+    /// Whether the connected Mac takes task actions from this device. The
+    /// Mac's per-device Task actions switch is checked per request.
+    var hostSupportsTaskActions: Bool
+    /// Tasks with an action on its way to the Mac.
+    var tasksWithActionInFlight: Set<UUID> = []
+    @ObservationIgnored
+    var sendTaskAction: (@MainActor (RemoteTaskActionRequest) async -> ToasttyTaskActionSendOutcome)?
+    @ObservationIgnored
+    var loadTaskArchiveCheck: (@MainActor (RemoteTaskArchiveCheckRequest) async -> ToasttyTaskArchiveCheckOutcome)?
+    /// How long a task action waits before its one retry.
+    @ObservationIgnored
+    var taskActionRetryDelay: Duration = .seconds(1)
     private(set) var closeConfirmation: ConversationCloseConfirmation?
     private(set) var subspaceDoneNotice: SubspaceDoneNotice?
     var connectionState: MobileConnectionState
@@ -181,6 +195,7 @@ final class HomeScreenController {
         hostSupportsConversationFlag = runtimeMode == .fixture
         hostSupportsSessionStart = runtimeMode == .fixture
         hostSupportsConversationClose = runtimeMode == .fixture
+        hostSupportsTaskActions = runtimeMode == .fixture
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -210,6 +225,7 @@ final class HomeScreenController {
         hostSupportsConversationFlag: Bool? = nil,
         hostSupportsSessionStart: Bool? = nil,
         hostSupportsConversationClose: Bool? = nil,
+        hostSupportsTaskActions: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -224,6 +240,9 @@ final class HomeScreenController {
         }
         if let hostSupportsConversationClose {
             self.hostSupportsConversationClose = hostSupportsConversationClose
+        }
+        if let hostSupportsTaskActions {
+            self.hostSupportsTaskActions = hostSupportsTaskActions
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
@@ -672,7 +691,7 @@ final class HomeScreenController {
         case .flagChanged(let conversationID, let isFlagged)?:
             subspaceDoneNotice = nil
             setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
-        case .sessionStarted?, .sessionClosed?, .failed?, nil:
+        case .sessionStarted?, .sessionClosed?, .taskAction?, .failed?, nil:
             break
         }
     }
@@ -681,6 +700,18 @@ final class HomeScreenController {
         if subspaceDoneNotice?.id == notice.id {
             subspaceDoneNotice = nil
         }
+    }
+
+    /// Fixture mode has no Mac, so a task action changes the snapshot
+    /// itself.
+    func applyFixtureHostSnapshot(_ transform: (MobileHomeSnapshot) -> MobileHomeSnapshot) {
+        guard runtimeMode == .fixture else { return }
+        hostSnapshot = transform(hostSnapshot)
+        presentSnapshot()
+    }
+
+    func announceTaskAction(_ message: String) {
+        subspaceDoneNotice = SubspaceDoneNotice(kind: .taskAction, message: message)
     }
 
     private func presentSnapshot() {

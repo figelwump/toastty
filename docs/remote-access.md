@@ -570,6 +570,56 @@ thing. It sends a `tasks` board in the session snapshot and advertises the
 snapshot carries the board. An older Mac omits it, and the phone keeps **All |
 Active**. An older phone ignores the board.
 
+#### Acting on tasks
+
+A session that belongs to a task space shows a task bar under its title: the
+task's stage, its pull request, and the same Merge control as the Mac's top
+bar. **ⓘ** opens the task's detail. The control has the Mac's states and ▼
+menus:
+
+| Control | When | Tap | ▼ menu |
+| --- | --- | --- | --- |
+| **Merge PR #N** | The pull request is open and GitHub reports no blocker | Asks, then merges | Archive Task… |
+| **Open PR #N** | GitHub reports a blocker, such as failing checks | Opens the pull request | Merge PR #N, Archive Task… |
+| **Merging PR #N…** | The agent checks, or Toastty waits for checks, merges, or cleans up | Nothing | Cancel Merge, while the agent checks or Toastty waits |
+| **Complete Task** | No pull request, and the agent marked the work ready | Asks, then marks the task done | None |
+| **Cleanup Stopped · PR #N** | The cleanup after the merge stopped | Opens the menu | Clean Up, Keep As Is |
+| **Done · PR #N** or **Done** | The task finished and its task space is still open | Opens the menu | Archive Task… |
+| **Archive Task…** | Any other stage without a pull request | Opens the archive sheet | None |
+
+Unlike the Mac, the phone asks before it merges. Merge then starts the same
+merge as the Mac's button: the task's agent checks the pull request and
+merges it, unless `tasks.toml` says `merge = "direct"`. The task's detail
+and the task rows' context menus offer the Mac's other task actions: **Mark
+Done**, **Archive…**, **Cancel Merge**, **Clean Up**, **Keep As Is**,
+**Retry**, and **Delete Task**. Mark Done and Delete ask first.
+
+**Archive Task…** first asks the Mac what the archive would close and lose,
+then shows it: whether the worktree has uncommitted changes, commits that are
+not on the remote, and a switch to also close the pull request on GitHub.
+The Mac keeps a branch whose commits are not on the remote. Uncommitted
+changes, unsaved documents, and commits on no branch block the archive on the
+phone; discarding or deleting them stays on the Mac, as do **Merge Without
+Checks** and **Release**.
+
+Acting on tasks needs a native paired device with send access and its **Task
+actions** switch on under **Paired Devices** in Remote Access settings. The
+switch is off by default, also for devices paired before this feature.
+Without it, the phone still shows the control, and the Mac refuses each
+action with a message that names the switch.
+
+The Mac decides everything. Each task in the board carries a `mergeControl`
+(its kind, title, and menu) and an `actions` list, computed with the Mac's
+own presentation code. The phone sends `POST /api/task.action` with the
+action's name, a `clientRequestID`, and the pull request number it showed;
+`POST /api/task.archive-check` reads the archive check. The Mac checks each
+action against the task's current list again and refuses one it no longer
+offers, or one for a different pull request, so a stale snapshot cannot act
+on an old state. A repeat of a request with the same `clientRequestID` within
+ten minutes returns the first answer and runs nothing again. The Mac
+advertises these routes with the `task_actions` capability. An older Mac
+omits it, and the phone keeps the read-only detail.
+
 ### Starting a session
 
 Tap **+** on the Home screen or on a workspace screen to start a new agent
@@ -806,6 +856,14 @@ support conversations; update Toastty on the Mac to enable previews.
   The Mac checks the permission again immediately before it sends the command
   to the terminal. Accepted and refused starts are recorded in the audit log
   with the device, without the message text.
+- Acting on a task needs a native paired device with send access and the
+  **Task actions** switch on, which is off by default. The device sends only a
+  task ID, the name of an action the Mac offered, and for an archive whether
+  to close the pull request. The Mac reads the switch again when the action
+  runs and refuses any action its current list for that task does not offer.
+  Discarding uncommitted changes, deleting unpushed commits, Merge Without
+  Checks, and Release are not available remotely. Each action and refusal is
+  recorded in the audit log with the device.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

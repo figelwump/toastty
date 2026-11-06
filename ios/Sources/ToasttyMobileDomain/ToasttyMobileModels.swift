@@ -689,6 +689,12 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: taskBoard)
     }
 
+    /// The same snapshot with another task board, such as one a fixture
+    /// changed after a task action.
+    public func withTaskBoard(_ taskBoard: MobileTaskBoard?) -> MobileHomeSnapshot {
+        MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: taskBoard)
+    }
+
     /// Subspaces nested under `parentID`, in the desktop sidebar's order.
     /// With the task system, a finished task leaves its project's list, as
     /// on the Mac; its project counts it instead.

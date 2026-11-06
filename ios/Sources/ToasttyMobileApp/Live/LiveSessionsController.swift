@@ -68,6 +68,12 @@ protocol LiveConnectionRuntime: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse?
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse?
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -116,6 +122,18 @@ extension LiveConnectionRuntime {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse? {
+        nil
+    }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        nil
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
         nil
     }
 
@@ -279,6 +297,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteSessionStartResponse? {
         try await coordinator.startSession(request)
     }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        try await coordinator.taskAction(request)
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        try await coordinator.taskArchiveCheck(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -415,6 +445,25 @@ final class LiveSessionsController {
                     return response.map { .answered($0.result) } ?? .unconfirmed
                 } catch {
                     return .unconfirmed
+                }
+            }
+        )
+        homeController.installTaskActions(
+            perform: { [runtime] request in
+                do {
+                    let response = try await runtime.taskAction(request)
+                    return response.map { .answered($0.result) } ?? .notSent
+                } catch {
+                    // Whether the Mac ran it is not known.
+                    return .unconfirmed
+                }
+            },
+            archiveCheck: { [runtime] request in
+                do {
+                    let response = try await runtime.taskArchiveCheck(request)
+                    return response.map { .answered($0.result) } ?? .unreachable
+                } catch {
+                    return .unreachable
                 }
             }
         )
@@ -620,6 +669,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
+        homeController.setHostSupportsTaskActions(acceptsTaskActions)
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -628,6 +678,13 @@ final class LiveSessionsController {
     /// when the sheet loads its options.
     private var acceptsSessionStart: Bool {
         coordinatorState.capabilities.contains(.sessionStart) && deviceScopes.contains(.send)
+    }
+
+    /// A task action changes the Mac, so only a device allowed to send
+    /// sees the controls. The Mac's per-device Task actions switch is
+    /// checked when the request arrives.
+    private var acceptsTaskActions: Bool {
+        coordinatorState.capabilities.contains(.taskActions) && deviceScopes.contains(.send)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -769,6 +826,7 @@ final class LiveSessionsController {
             hostSupportsConversationFlag: acceptsConversationFlag,
             hostSupportsSessionStart: acceptsSessionStart,
             hostSupportsConversationClose: acceptsConversationClose,
+            hostSupportsTaskActions: acceptsTaskActions,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

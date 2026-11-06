@@ -391,6 +391,9 @@ struct ToasttySubspaceRow: View {
                     action: toggleDone
                 )
             }
+            if let task = row.task {
+                ToasttyTaskActionMenuItems(task: task, controller: controller)
+            }
         } preview: {
             ToasttySubspaceDetailCard(
                 row: row,
@@ -707,7 +710,7 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?, .sessionStarted?, .sessionClosed?: .success
+                case .changed?, .flagChanged?, .sessionStarted?, .sessionClosed?, .taskAction?: .success
                 case .failed?: .error
                 case nil: nil
                 }

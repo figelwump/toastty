@@ -118,7 +118,7 @@ struct ToasttyTaskStatusList: View {
                     projectTag: task.projectTitle
                 )
             } else {
-                ToasttyTaskRow(task: task, freshness: controller.freshness) {
+                ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller) {
                     openTask(task.id)
                 }
             }
@@ -202,6 +202,7 @@ struct ToasttyTaskGroupHeader: View {
 struct ToasttyTaskRow: View {
     let task: RemoteTaskSummary
     let freshness: LiveProjectionFreshness
+    var controller: HomeScreenController?
     let open: () -> Void
 
     var body: some View {
@@ -251,6 +252,12 @@ struct ToasttyTaskRow: View {
         .accessibilityLabel([task.title, task.statusLine, task.projectTitle].compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint("Shows the task")
         .accessibilityIdentifier("toastty-task-row-\(task.id.uuidString)")
+        .contextMenu {
+            Button("Show Task", systemImage: "info.circle", action: open)
+            if let controller {
+                ToasttyTaskActionMenuItems(task: task, controller: controller)
+            }
+        }
     }
 }
 
@@ -354,11 +361,12 @@ struct ToasttyProjectFinishedFooter: View {
 }
 
 /// A task's detail: its stage and why, its status line, its pull request,
-/// and its project. Task actions come later; this shows where it stands.
+/// its project, and the actions the Mac offers for it now.
 struct ToasttyTaskDetailSheet: View {
     let task: RemoteTaskSummary
     let canOpenTaskSpace: Bool
     let openTaskSpace: (UUID) -> Void
+    var controller: HomeScreenController?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -389,6 +397,11 @@ struct ToasttyTaskDetailSheet: View {
                         .font(.callout.monospaced())
                         .foregroundStyle(ToasttyDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                    // The live task's actions; a task the Mac no longer
+                    // lists offers none.
+                    if let controller, let current = controller.snapshot.taskBoard?.task(id: task.id) {
+                        ToasttyTaskActionButtons(task: current, controller: controller)
+                    }
                     if let pullRequest = task.pullRequest {
                         Link(destination: pullRequest.url) {
                             HStack(spacing: 6) {
@@ -434,6 +447,7 @@ struct ToasttyTaskDetailSheet: View {
         }
         .presentationDetents([.medium, .large])
         .accessibilityIdentifier("toastty-task-detail")
+        .modifier(ToasttyOptionalTaskActionPresenter(controller: controller))
     }
 
     static func stageColor(_ task: RemoteTaskSummary) -> Color {
@@ -444,6 +458,19 @@ struct ToasttyTaskDetailSheet: View {
         case .done?: return ToasttyDesignTokens.green
         case .starting?: return ToasttyDesignTokens.mutedText
         case nil: return task.group == .needsYou ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText
+        }
+    }
+}
+
+/// A sheet's own presenter, when it has a controller to act through.
+struct ToasttyOptionalTaskActionPresenter: ViewModifier {
+    let controller: HomeScreenController?
+
+    func body(content: Content) -> some View {
+        if let controller {
+            content.toasttyTaskActionPresenter(controller)
+        } else {
+            content
         }
     }
 }
