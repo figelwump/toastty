@@ -95,6 +95,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// When the user cancelled a merge. A `task.merge` from the same agent
     /// turn is refused after it.
     public var mergeCancelledAt: Date?
+    /// Why Toastty's last merge of the pull request stopped without
+    /// merging, such as a refused `--expect-head`. A new merge clears it.
+    public var mergeFailure: TaskMergeFailure?
     /// The steps that closed the task space and removed its worktree after
     /// a merge, an archive, or a release, and why they stopped if they did.
     public var cleanup: TaskCleanup?
@@ -150,6 +153,17 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
         self.parentTaskID = parentTaskID
         self.startWork = startWork
         self.operation = operation
+    }
+}
+
+/// A merge that Toastty started and that stopped without merging.
+public struct TaskMergeFailure: Codable, Equatable, Sendable {
+    public var at: Date
+    public var reason: String
+
+    public init(at: Date, reason: String) {
+        self.at = at
+        self.reason = reason
     }
 }
 

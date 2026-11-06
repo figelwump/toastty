@@ -42,7 +42,8 @@ enum TaskBoardPresentation {
             case .agentNeedsInput: return "\(agentName(item)) is waiting for your input"
             case .awaitingReply: return replyLine(item)
             case .agentError: return "\(agentName(item)) stopped with an error"
-            case .review, .readyForReview: return "Ready for your review"
+            case .review, .readyForReview:
+                return item.record?.mergeFailure == nil ? "Ready for your review" : "⚠ merge stopped"
             case .agentFinished: return "\(agentName(item)) finished · waiting for you"
             case .cleanupStopped:
                 switch item.record?.cleanup?.kind {
@@ -96,9 +97,12 @@ enum TaskBoardPresentation {
             case .agentNeedsInput: return ("Needs you", "the agent asked for input")
             case .awaitingReply: return ("Needs you", "the agent asked a question")
             case .agentError: return ("Needs you", "the agent stopped with an error")
-            case .review:
+            case .review, .readyForReview:
+                if let failure = item.record?.mergeFailure {
+                    return ("Review", "the last merge stopped: \(failure.reason)")
+                }
+                if attention == .readyForReview { return ("Review", "marked ready, agent idle") }
                 return ("Review", item.pullRequestState == nil ? "PR linked, agent idle" : "PR open, agent idle")
-            case .readyForReview: return ("Review", "marked ready, agent idle")
             case .agentFinished: return ("Needs you", "the agent finished its turn")
             case .cleanupStopped(let reason): return ("Needs you", reason)
             }

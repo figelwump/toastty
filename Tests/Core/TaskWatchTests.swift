@@ -42,6 +42,24 @@ struct TaskWatchTests {
     }
 
     @Test
+    func aStoppedMergeEndsOnlyTheWatchesThatNeedAMerge() {
+        let stopped = TaskWatchFacts(
+            activity: .idle, activityChangedAt: nil, stages: [.readyForReview], mergeFailure: "head moved"
+        )
+        #expect(TaskWatchEvaluation.impossibility(.merged, facts: stopped) == "was not merged: head moved")
+        #expect(TaskWatchEvaluation.impossibility(.toShip, facts: stopped) == "was not merged: head moved")
+        // Done can come without a merge, and review is unaffected.
+        #expect(TaskWatchEvaluation.impossibility(.done, facts: stopped) == nil)
+        #expect(TaskWatchEvaluation.impossibility(.readyForReview, facts: stopped) == nil)
+
+        // The pull request merged anyway, for example on GitHub.
+        var mergedAnyway = stopped
+        mergedAnyway.stages = [.readyForReview, .merged, .toShip]
+        #expect(TaskWatchEvaluation.impossibility(.merged, facts: mergedAnyway) == nil)
+        #expect(TaskWatchEvaluation.holds(.merged, createdAt: made, facts: mergedAnyway))
+    }
+
+    @Test
     func aStageConditionHoldsFromItsStageOnward() {
         func conditions(_ stage: TaskStage, merged: Bool = false) -> Set<TaskWatchCondition> {
             TaskWatchEvaluation.stageConditions(stage: stage, merged: merged)

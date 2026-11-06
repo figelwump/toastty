@@ -190,9 +190,12 @@ struct WorkspaceMergeLiveCommandRunner: WorkspaceMergeCommandRunning {
 /// still writing its reply when the pull request merges.
 @MainActor
 final class WorkspaceMergeCoordinator {
-    /// What happened to a request's cleanup, for the task that owns the
-    /// workspace.
+    /// What happened to a request's merge or cleanup, for the task that
+    /// owns the workspace.
     enum CleanupEvent: Equatable {
+        /// The merge stopped without merging: the script refused it, or a
+        /// waiting merge could not go on. Nothing waits for the merge now.
+        case mergeFailed(reason: String)
         /// GitHub reported the merge; cleanup starts next. Sent before
         /// anything is closed, so the merge is recorded first.
         case merged(TaskPullRequestState?)
@@ -215,14 +218,16 @@ final class WorkspaceMergeCoordinator {
     /// Receives every answer from the merge polling, so tasks see merges
     /// without asking GitHub a second time.
     weak var pullRequestStateCache: PullRequestStateCache?
-    /// Told about each request's cleanup.
+    /// Told about each request's merge outcome and cleanup.
     var cleanupObserver: (@MainActor (_ workspaceID: UUID, _ event: CleanupEvent) -> Void)?
     private let runner: any WorkspaceMergeCommandRunning
     private let scriptPath: String?
     private let userDefaults: UserDefaults?
     private let pollInterval: Duration
+    /// Tells the user what happened. Never a modal alert: a merge can
+    /// start from an agent or the CLI, and an app-modal alert would stall
+    /// the automation socket until someone at the Mac dismisses it.
     private let notify: @MainActor (_ title: String, _ body: String) -> Void
-    private let presentFailure: @MainActor (_ title: String, _ message: String) -> Void
     private var requests: [UUID: WorkspaceMergeRequest] = [:]
     private var pollTasks: [UUID: Task<Void, Never>] = [:]
     private var pollFailureCounts: [UUID: Int] = [:]
@@ -237,8 +242,7 @@ final class WorkspaceMergeCoordinator {
         scriptPath: String? = Bundle.main.url(forResource: "workspace-pull-request", withExtension: "py")?.path,
         userDefaults: UserDefaults? = ToasttyAppDefaults.current,
         pollInterval: Duration = WorkspaceMergeCoordinator.pollInterval,
-        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceMergeCoordinator.sendNotification,
-        presentFailure: @escaping @MainActor (_ title: String, _ message: String) -> Void = WorkspaceMergeCoordinator.presentAlert
+        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceMergeCoordinator.sendNotification
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -247,7 +251,6 @@ final class WorkspaceMergeCoordinator {
         self.userDefaults = userDefaults
         self.pollInterval = pollInterval
         self.notify = notify
-        self.presentFailure = presentFailure
         sessionRuntimeStore.workspaceMergeCoordinator = self
         // Through `update`, so saved requests are shown and their checks
         // start, before the reconcile below drops the ones that no longer apply.
@@ -264,7 +267,8 @@ final class WorkspaceMergeCoordinator {
 
     /// Merges the pull request, or turns on auto-merge, and marks the
     /// workspace done. With `thenCleanUp`, the request then waits for the
-    /// merge and cleans up after it. A refusal shows why and changes nothing.
+    /// merge and cleans up after it. A refusal changes nothing; it is
+    /// reported to the task through `cleanupObserver` and as a notification.
     /// With `expectedHead`, the merge is refused unless the checkout's
     /// commit is that one: the version the merge skill checked.
     @discardableResult
@@ -436,22 +440,26 @@ final class WorkspaceMergeCoordinator {
         )
         guard requests[workspaceID] == request else { return }
         let pullRequest = "PR #\(request.pullRequest.number)"
+        // The workspace may have closed, or moved to another pull request,
+        // while the script ran; the done mark and a failure belong to this
+        // one only.
+        let annotation = store?.state.workspacesByID[workspaceID]?
+            .annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        let isCurrent = WorkspacePullRequestLink(annotationURL: annotation?.url) == request.pullRequest
         let isWaiting = outcome.status == "waiting"
         guard outcome.status == "merged" || isWaiting, let acceptedHead = outcome.head else {
-            update(workspaceID, nil)
-            presentFailure("Unable to Merge \(pullRequest)", outcome.detail)
+            mergeFailed(workspaceID, pullRequest: pullRequest, reason: outcome.detail, recordOnTask: isCurrent)
             return
         }
         if isWaiting, outcome.base?.isEmpty != false {
-            update(workspaceID, nil)
-            presentFailure("Unable to Merge \(pullRequest)", "The merge did not report its target branch. Check the pull request, then merge again.")
+            mergeFailed(
+                workspaceID, pullRequest: pullRequest,
+                reason: "The merge did not report its target branch. Check the pull request, then merge again.",
+                recordOnTask: isCurrent
+            )
             return
         }
-        // The workspace may have closed, or moved to another pull request,
-        // while the script ran; the done mark belongs to this one only.
-        let annotation = store?.state.workspacesByID[workspaceID]?
-            .annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
-        guard let store, WorkspacePullRequestLink(annotationURL: annotation?.url) == request.pullRequest else {
+        guard let store, isCurrent else {
             update(workspaceID, nil)
             return
         }
@@ -538,8 +546,19 @@ final class WorkspaceMergeCoordinator {
         pollTasks[workspaceID] = nil
         update(workspaceID, nil)
         store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
-        cleanupObserver?(workspaceID, .dropped)
+        cleanupObserver?(workspaceID, .mergeFailed(reason: reason))
         notify("\(pullRequest) was not merged", reason)
+    }
+
+    /// Ends a merge the script refused, before anything changed. The task
+    /// records why, unless the workspace moved to another pull request
+    /// meanwhile, and the Merge button is back for another try.
+    private func mergeFailed(_ workspaceID: UUID, pullRequest: String, reason: String, recordOnTask: Bool) {
+        update(workspaceID, nil)
+        if recordOnTask {
+            cleanupObserver?(workspaceID, .mergeFailed(reason: reason))
+        }
+        notify("Unable to Merge \(pullRequest)", reason)
     }
 
     // MARK: - Pull request checks
@@ -699,7 +718,7 @@ final class WorkspaceMergeCoordinator {
         } else if store?.state.workspacesByID[workspaceID] == nil {
             notify("Closing \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
         } else {
-            presentFailure("Unable to Close \(pullRequest)", outcome.detail)
+            notify("Unable to Close \(pullRequest)", outcome.detail)
         }
     }
 
