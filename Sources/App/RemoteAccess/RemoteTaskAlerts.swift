@@ -19,13 +19,20 @@ struct TaskAlertDetector {
         /// An accepted merge is under way: the agent checks it, or Toastty
         /// merges or waits for checks.
         var isMerging: Bool
+        /// When Toastty's last merge of the pull request stopped without
+        /// merging (`TaskRecord.mergeFailure`). It stays until a new merge
+        /// starts.
+        var mergeFailedAt: Date? = nil
+        /// The user cancelled the last accepted merge.
+        var isMergeCancelled = false
 
         /// What a change is measured on. A reason's text, such as a setup
-        /// error, is not part of it.
+        /// error, is not part of it. A recorded merge failure is, so a merge
+        /// that fails at once without changing the stage still counts.
         fileprivate var key: Key {
             var attention: String?
             if case .needsYou(let reason) = stage { attention = reason.name }
-            return Key(group: stage.group, attention: attention, isMerging: isMerging)
+            return Key(group: stage.group, attention: attention, isMerging: isMerging, mergeFailedAt: mergeFailedAt)
         }
     }
 
@@ -33,6 +40,7 @@ struct TaskAlertDetector {
         var group: TaskStage.Group
         var attention: String?
         var isMerging: Bool
+        var mergeFailedAt: Date?
     }
 
     struct Trigger: Equatable {
@@ -45,6 +53,10 @@ struct TaskAlertDetector {
     /// Tasks seen merging since their last settled stage. A merge that ends
     /// before it settles, such as one that fails at once, still counts.
     private var mergeAttempts: Set<UUID> = []
+    /// The recorded merge failure each task last settled into Needs you
+    /// with. A failure recorded while the agent still worked is reported
+    /// when the task then needs the user, and only once.
+    private var reportedMergeFailures: [UUID: Date] = [:]
 
     var isPrimed: Bool { settled != nil }
 
@@ -52,6 +64,7 @@ struct TaskAlertDetector {
         settled = nil
         candidates = [:]
         mergeAttempts = []
+        reportedMergeFailures = [:]
     }
 
     mutating func observe(
@@ -62,6 +75,7 @@ struct TaskAlertDetector {
         guard var settled else {
             self.settled = current
             candidates = [:]
+            reportedMergeFailures = current.compactMapValues(\.mergeFailedAt)
             return []
         }
         var triggers: [Trigger] = []
@@ -69,7 +83,7 @@ struct TaskAlertDetector {
             guard let previous = settled[id] else {
                 // A new task: what it is now counts as a change from nothing.
                 settled[id] = observation
-                if let reason = Self.reason(from: nil, to: observation) {
+                if let reason = settle(id, observation, mergeEnded: false) {
                     triggers.append(Trigger(taskID: id, reason: reason))
                 }
                 continue
@@ -93,12 +107,9 @@ struct TaskAlertDetector {
             }
             candidates[id] = nil
             settled[id] = observation
-            var from = previous
-            if mergeAttempts.contains(id) {
-                from.isMerging = true
-                if observation.isMerging == false { mergeAttempts.remove(id) }
-            }
-            if let reason = Self.reason(from: from, to: observation) {
+            let mergeEnded = (previous.isMerging || mergeAttempts.contains(id)) && observation.isMerging == false
+            if observation.isMerging == false { mergeAttempts.remove(id) }
+            if let reason = settle(id, observation, mergeEnded: mergeEnded) {
                 triggers.append(Trigger(taskID: id, reason: reason))
             }
         }
@@ -106,29 +117,54 @@ struct TaskAlertDetector {
             settled[id] = nil
             candidates[id] = nil
             mergeAttempts.remove(id)
+            reportedMergeFailures[id] = nil
         }
         self.settled = settled
         return triggers
     }
 
-    /// The alert a settled move from `previous` to `current` sends, if any.
-    /// The session's own alerts cover a finished turn and an approval, and
-    /// the user is at hand for the rest of Needs you: a task they just
-    /// created that waits for a workspace, or a task space they closed.
-    static func reason(from previous: Observation?, to current: Observation) -> RemotePushTaskAlertReason? {
-        guard case .needsYou(let attention) = current.stage else { return nil }
+    /// The alert a task that settled into `observation` sends, if any.
+    /// `mergeEnded` says an accepted merge was under way just before.
+    private mutating func settle(_ id: UUID, _ observation: Observation, mergeEnded: Bool) -> RemotePushTaskAlertReason? {
+        guard case .needsYou = observation.stage else { return nil }
+        let failure = observation.mergeFailedAt
+        let isNewFailure = failure != nil && failure != reportedMergeFailures[id]
+        reportedMergeFailures[id] = failure
+        let merge: MergeOutcome = if isNewFailure {
+            .stopped
+        } else if mergeEnded {
+            // A merge skill that stopped on a blocker ends its turn without
+            // a recorded failure. A merge the user cancelled is their own.
+            observation.isMergeCancelled ? .cancelled : .stopped
+        } else {
+            .none
+        }
+        return Self.reason(observation.stage, merge: merge)
+    }
+
+    enum MergeOutcome {
+        case none
+        case stopped
+        case cancelled
+    }
+
+    /// The alert for a task that settled into `stage`. The session's own
+    /// alerts cover a finished turn and an approval, and the user is at hand
+    /// for the rest of Needs you: a task they just created that waits for a
+    /// workspace, a task space they closed, or a merge they cancelled.
+    static func reason(_ stage: TaskStage, merge: MergeOutcome) -> RemotePushTaskAlertReason? {
+        guard case .needsYou(let attention) = stage else { return nil }
         switch attention {
         case .awaitingReply: return .question
         case .setupFailed: return .setupFailed
         case .moveFailed: return .moveFailed
         case .cleanupStopped: return .cleanupStopped
         case .review, .readyForReview, .agentFinished, .agentError:
-            // A merge that stopped on a blocker ends the agent's turn and
-            // leaves the pull request open, so the task falls back to Review.
-            if previous?.isMerging == true { return .mergeStopped }
-            switch attention {
-            case .review, .readyForReview: return .review
-            default: return nil
+            switch (merge, attention) {
+            case (.stopped, _): return .mergeStopped
+            case (.cancelled, _): return nil
+            case (.none, .review), (.none, .readyForReview): return .review
+            case (.none, _): return nil
             }
         case .pickWorkspace, .taskSpaceClosed, .agentNeedsInput:
             return nil
@@ -223,8 +259,14 @@ final class RemoteTaskAlerts {
             var observations: [UUID: TaskAlertDetector.Observation] = [:]
             var itemsByID: [UUID: TaskBoardItem] = [:]
             for item in items {
-                guard let id = item.record?.id else { continue }
-                observations[id] = .init(stage: item.stage, isMerging: item.merge != nil)
+                guard let record = item.record else { continue }
+                let id = record.id
+                observations[id] = .init(
+                    stage: item.stage,
+                    isMerging: item.merge != nil,
+                    mergeFailedAt: record.mergeFailure?.at,
+                    isMergeCancelled: record.mergeCancelledAt != nil
+                )
                 itemsByID[id] = item
             }
             for trigger in detector.observe(observations, now: at, settleInterval: timing.settleInterval) {

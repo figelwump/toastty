@@ -101,6 +101,40 @@ struct TaskAlertDetectorTests {
         #expect(run(from: .needsYou(.review), short + held(.needsYou(.review)) + again) == [.mergeStopped, .review])
     }
 
+    /// Toastty records why its own merge stopped (`TaskRecord.mergeFailure`)
+    /// and offers Merge again, so the stage can stay at Review.
+    @Test func aRecordedMergeFailureReportsAStoppedMergeOnce() {
+        let failedAt = t0.addingTimeInterval(1)
+        func obs(_ stage: TaskStage, merging: Bool = false, failure: Date? = nil, cancelled: Bool = false)
+            -> [UUID: TaskAlertDetector.Observation] {
+            [task: .init(stage: stage, isMerging: merging, mergeFailedAt: failure, isMergeCancelled: cancelled)]
+        }
+        func run(_ initial: [UUID: TaskAlertDetector.Observation],
+                 _ steps: [[UUID: TaskAlertDetector.Observation]]) -> [RemotePushTaskAlertReason] {
+            var detector = TaskAlertDetector()
+            _ = detector.observe(initial, now: t0)
+            return steps.enumerated().flatMap { index, step in
+                detector.observe(step, now: t0.addingTimeInterval(TimeInterval(index + 1))).map(\.reason)
+            }
+        }
+        let review = TaskStage.needsYou(.review)
+        // The merge fails at once and the task stays at Review.
+        #expect(run(obs(review), Array(repeating: obs(review, failure: failedAt), count: 4)) == [.mergeStopped])
+        // The failure is recorded while the agent still works; the turn then
+        // ends at Review.
+        let working = Array(repeating: obs(.running, failure: failedAt), count: 4)
+        #expect(run(obs(.running), working + Array(repeating: obs(review, failure: failedAt), count: 4)) == [.mergeStopped])
+        // A failure from before sampling started, or one already reported,
+        // does not report again when the agent's next turn ends at Review.
+        let nextTurn = Array(repeating: obs(.running, failure: failedAt), count: 4)
+            + Array(repeating: obs(review, failure: failedAt), count: 4)
+        #expect(run(obs(review, failure: failedAt), nextTurn) == [.review])
+        // A merge the user cancelled sends nothing.
+        let cancelled = Array(repeating: obs(.running, merging: true), count: 4)
+            + Array(repeating: obs(review, cancelled: true), count: 4)
+        #expect(run(obs(review), cancelled).isEmpty)
+    }
+
     @Test func aNewTaskThatFailedFiresAtOnceAndADeletedTaskIsForgotten() {
         var detector = TaskAlertDetector()
         _ = detector.observe([:], now: t0)

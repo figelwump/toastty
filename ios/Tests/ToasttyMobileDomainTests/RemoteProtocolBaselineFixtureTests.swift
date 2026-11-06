@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            58,
+            59,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
