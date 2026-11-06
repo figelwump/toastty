@@ -277,12 +277,7 @@ final class QuickEntryController: ObservableObject {
     }
 
     private func finish(created record: TaskRecord) {
-        if let preset = model?.preset {
-            presetUsage?.record(preset)
-        }
-        if let workspaceID = model?.workspaceID {
-            presetUsage?.recordWorkspace(workspaceID)
-        }
+        recordCreatedTask(preset: model?.preset, workspaceID: model?.workspaceID)
         let frame = panel?.frame
         close()
         restoreFocus()
@@ -530,11 +525,50 @@ final class QuickEntryController: ObservableObject {
         closePicker(refocusText: false)
     }
 
+    // MARK: - Choices for other entry points
+
+    /// What the panel would offer if it opened now, for a task created
+    /// elsewhere with the same choices: Toastty Mobile's New Task sheet.
+    /// `includeProfile` narrows the agents, and with them the presets.
+    func currentChoices(
+        includeProfile: (AgentLaunchProfileSummary) -> Bool = { _ in true }
+    ) -> QuickEntryChoices {
+        let defaults = (try? configLoader())?.defaults
+        let profiles = quickEntryAgentProfiles(defaults: defaults, includeProfile: includeProfile)
+        let frequent = frequentPresets(defaults: defaults, profiles: profiles)
+        let workspaces = Self.taskWorkspaces(in: store.state)
+        return QuickEntryChoices(
+            workspaces: workspaces,
+            initialWorkspaceID: Self.initialWorkspaceID(
+                selectedProject: selectedProjectID(),
+                lastUsed: presetUsage?.lastWorkspaceID,
+                options: workspaces.map { QuickEntryModel.Option(id: $0.id.uuidString, title: $0.title) }
+            ),
+            profiles: profiles,
+            frequentPresets: frequent,
+            initialPreset: presetUsage?.lastUsed(agents: Set(profiles.map(\.id))) ?? frequent.first
+        )
+    }
+
+    /// Counts a created task's preset for Frequent and remembers its
+    /// workspace, as Create Task in the panel does.
+    func recordCreatedTask(preset: QuickEntryPreset?, workspaceID: UUID?) {
+        if let preset {
+            presetUsage?.record(preset)
+        }
+        if let workspaceID {
+            presetUsage?.recordWorkspace(workspaceID)
+        }
+    }
+
     /// The installed profiles that can take a task as their first message,
     /// each with its models and efforts.
-    private func quickEntryAgentProfiles(defaults: TasksConfig.Defaults?) -> [QuickEntryAgentProfile] {
+    private func quickEntryAgentProfiles(
+        defaults: TasksConfig.Defaults?,
+        includeProfile: (AgentLaunchProfileSummary) -> Bool = { _ in true }
+    ) -> [QuickEntryAgentProfile] {
         agentProfiles()
-            .filter { $0.isInstalled && $0.acceptsInitialPrompt }
+            .filter { $0.isInstalled && $0.acceptsInitialPrompt && includeProfile($0) }
             .map { summary in
                 var models: [String] = []
                 if summary.supportsModel {
@@ -666,19 +700,22 @@ final class QuickEntryController: ObservableObject {
         }
     }
 
+    private func workspaceOptions() -> [QuickEntryModel.Option] {
+        Self.taskWorkspaces(in: store.state).map { QuickEntryModel.Option(id: $0.id.uuidString, title: $0.title) }
+    }
+
     /// Top-level workspaces in sidebar order, window by window. A task
     /// belongs to a top-level workspace, so subspaces are not offered.
-    private func workspaceOptions() -> [QuickEntryModel.Option] {
-        let state = store.state
+    static func taskWorkspaces(in state: AppState) -> [QuickEntryChoices.Workspace] {
         var seen: Set<UUID> = []
-        var options: [QuickEntryModel.Option] = []
+        var workspaces: [QuickEntryChoices.Workspace] = []
         for window in state.windows {
             for workspaceID in state.topLevelWorkspaceIDs(in: window.id) where seen.insert(workspaceID).inserted {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                options.append(QuickEntryModel.Option(id: workspaceID.uuidString, title: workspace.title))
+                workspaces.append(QuickEntryChoices.Workspace(id: workspaceID, title: workspace.title))
             }
         }
-        return options
+        return workspaces
     }
 
     /// The project of the workspace selected in Toastty's main window; a
@@ -719,4 +756,20 @@ final class QuickEntryController: ObservableObject {
             selectionText: selectionText
         ))
     }
+}
+
+/// The workspaces and agent choices quick entry offers at one moment.
+struct QuickEntryChoices: Equatable {
+    struct Workspace: Equatable {
+        var id: UUID
+        var title: String
+    }
+
+    var workspaces: [Workspace]
+    /// The workspace the panel would start on, when one is open.
+    var initialWorkspaceID: UUID?
+    var profiles: [QuickEntryAgentProfile]
+    var frequentPresets: [QuickEntryPreset]
+    /// The preset the panel would start on.
+    var initialPreset: QuickEntryPreset?
 }

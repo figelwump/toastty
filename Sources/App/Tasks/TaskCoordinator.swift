@@ -121,6 +121,10 @@ struct TaskCreateRequest: Equatable {
     var text: String
     /// Absolute paths of files to attach.
     var files: [String] = []
+    /// Names to show for `files`, in the same order, when the files' own
+    /// names are not meaningful, as for an upload Remote Access stored
+    /// under a random name. The copies keep the files' own names.
+    var fileDisplayNames: [String]?
     var clientRequestID: String?
     var title: String?
     var slug: String?
@@ -155,11 +159,18 @@ struct TaskCaller: Equatable {
     var workspaceID: UUID?
     /// The quick entry panel, rather than the CLI.
     var isQuickEntry = false
+    /// A paired device, through Remote Access. Its request IDs are its own.
+    var remoteDeviceID: UUID?
 
     static let unmanaged = TaskCaller()
     static let quickEntry = TaskCaller(isQuickEntry: true)
 
+    static func remoteDevice(_ deviceID: UUID) -> TaskCaller {
+        TaskCaller(remoteDeviceID: deviceID)
+    }
+
     var source: TaskSource {
+        if let remoteDeviceID { return .remoteDevice(deviceID: remoteDeviceID) }
         if let sessionID { return .agent(sessionID: sessionID) }
         return isQuickEntry ? .quickEntry : .cli
     }
@@ -326,6 +337,9 @@ final class TaskCoordinator {
         guard request.files.count <= TaskRecord.maximumAttachmentCount else {
             throw TaskError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
         }
+        guard request.fileDisplayNames.map({ $0.count == request.files.count }) ?? true else {
+            throw TaskError("Give one display name for each attached file.")
+        }
         let sources = try request.files.map(attachableFile)
         let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
         let externalRef = try validatedExternalRef(id: request.externalRefID, url: request.externalRefURL)
@@ -449,13 +463,16 @@ final class TaskCoordinator {
         var usedNames: Set<String> = []
         var copies: [(source: String, destination: String)] = []
         var attachments: [TaskAttachment] = []
-        for (requestedPath, resolvedPath) in zip(request.files, sources) {
+        for (index, (requestedPath, resolvedPath)) in zip(request.files, sources).enumerated() {
             let originalName = (requestedPath as NSString).lastPathComponent
             let name = Self.uniqueFileName(originalName, taken: usedNames)
             usedNames.insert(name)
             let destination = directoryURL.appending(path: name, directoryHint: .notDirectory).path(percentEncoded: false)
             copies.append((resolvedPath, destination))
-            attachments.append(TaskAttachment(path: destination, displayName: originalName))
+            attachments.append(TaskAttachment(
+                path: destination,
+                displayName: request.fileDisplayNames?[index] ?? originalName
+            ))
         }
 
         var record = TaskRecord(

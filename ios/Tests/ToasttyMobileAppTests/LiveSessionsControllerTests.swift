@@ -588,6 +588,42 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.canStartSessions)
     }
 
+    /// Home's ＋ opens New Task only for a live Mac that advertises task
+    /// creation to a device allowed to send; otherwise it stays New Session.
+    func testTaskCreateNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.sessionStart]
+        ))
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.canStartSessions)
+        XCTAssertFalse(home.canCreateTasks, "An older Mac keeps New Session")
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.sessionStart, .taskCreate]
+        ))
+        XCTAssertTrue(home.canCreateTasks)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.canCreateTasks)
+        await subject.updateDeviceScopes([.read, .send])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false),
+            capabilities: [.sessionStart, .taskCreate]
+        ))
+        XCTAssertFalse(home.canCreateTasks)
+    }
+
     func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
         let runtime = LiveRuntimeSpy()
         let conversationID = RemoteConversationID()

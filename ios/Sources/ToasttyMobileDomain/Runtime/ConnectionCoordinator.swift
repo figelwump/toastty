@@ -908,6 +908,37 @@ public actor ConnectionCoordinator {
         return try await gateway.startSession(request)
     }
 
+    /// Asks which workspaces and agents a new task can use, only while live
+    /// against a host that advertises task creation. `nil` is a
+    /// capability/lifecycle refusal, not a transport failure.
+    public func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskCreate) else {
+            return nil
+        }
+        return try await gateway.taskCreateOptions(request)
+    }
+
+    /// Creates a task, with the same gating as the options. `nil` means
+    /// nothing was sent, so the caller may repeat the request with the same
+    /// `clientRequestID`.
+    public func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskCreate) else {
+            return nil
+        }
+        // A task's first message is a send. When this device is known to
+        // have lost send access, answer as the Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteTaskCreateResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.createTask(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

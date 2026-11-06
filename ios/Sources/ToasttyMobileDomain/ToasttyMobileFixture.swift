@@ -430,6 +430,41 @@ public extension ToasttyMobileFixture {
         )
     }
 
+    /// What a Mac would offer for a new task: its top-level workspaces,
+    /// two agents, and a Frequent list as quick entry would rank it.
+    static func taskCreateOptions(workspaces: [MobileWorkspace]) -> RemoteTaskCreateOptionsResponse {
+        RemoteTaskCreateOptionsResponse(
+            permission: .allowed,
+            workspaces: workspaces.map { RemoteTaskCreateWorkspace(id: $0.id, title: $0.title) },
+            defaultWorkspaceID: workspaces.first?.id,
+            agents: [
+                RemoteSessionStartAgent(
+                    profileID: "claude",
+                    displayName: "Claude",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["claude-opus-5-5", "claude-sonnet-5-5"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"]
+                ),
+                RemoteSessionStartAgent(
+                    profileID: "codex",
+                    displayName: "Codex",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["gpt-6.1-sol"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh"]
+                ),
+            ],
+            frequentPresets: [
+                RemoteTaskPreset(profileID: "claude", model: "claude-opus-5-5", effort: "xhigh"),
+                RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: "high"),
+                RemoteTaskPreset(profileID: "claude", model: "claude-sonnet-5-5"),
+            ],
+            defaultPreset: RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: "high"),
+            supportsAttachments: true
+        )
+    }
+
     /// The session a fixture start adds to `workspace`, as the Mac's next
     /// snapshot would list it.
     static func startedConversation(

@@ -58,6 +58,10 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case localDraftRelease = "local_draft_release"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
+    /// A native client may create a task, as the Mac's quick entry does.
+    /// It uses the device's session start permission, which the create
+    /// options report.
+    case taskCreate = "task_create"
 }
 
 /// Public compatibility probe used before a client has credentials.

@@ -5,8 +5,8 @@ it, makes a task space for it under a workspace, and starts the agent there.
 The task keeps its own record, so it exists before its task space is ready and
 after setup fails.
 
-This page covers the quick entry panel, creating tasks from the CLI or from
-an agent, moving a task into its own git worktree, task stages with the
+This page covers the quick entry panel, creating tasks from the CLI, from
+an agent, or from Toastty Mobile, moving a task into its own git worktree, task stages with the
 Status sidebar and the Tasks view, `~/.toastty/tasks.toml`, and optional
 triage.
 
@@ -107,6 +107,12 @@ Reload Configuration. The shortcut needs no Accessibility permission. If
 another app already uses it, Reload Configuration says so, and the shortcut
 still works inside Toastty from the File menu. Smoke runs and test hosts do
 not register it.
+
+Toastty Mobile has the same form: **+** on its Home screen and content shared
+from another app open **New Task**, with this panel's workspaces, Frequent
+presets and `[defaults]`. A task created there counts toward Frequent and the
+last workspace here. See
+[Creating a task](remote-access.md#creating-a-task) in Remote Access.
 
 ## Create a task
 

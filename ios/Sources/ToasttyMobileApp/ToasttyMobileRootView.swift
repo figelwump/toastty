@@ -10,8 +10,11 @@ struct ToasttyMobileRootView: View {
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var presentedSheet: ToasttyMobileSheet?
-    /// The new-session sheet for content shared from another app.
+    /// The new-session sheet for content shared from another app, when the
+    /// Mac cannot create tasks.
     @State private var sharedNewSession: ToasttyNewSessionModel?
+    /// The New Task sheet for content shared from another app.
+    @State private var sharedNewTask: ToasttyNewTaskModel?
     /// A notification or link opened something during this activation, so a
     /// waiting shared draft does not cover it.
     @State private var routedDestinationSinceActivation = false
@@ -299,6 +302,7 @@ struct ToasttyMobileRootView: View {
             }
         }
         .toasttyNewSessionSheet($sharedNewSession, controller: sessionController.homeController)
+        .toasttyNewTaskSheet($sharedNewTask, controller: sessionController.homeController)
         .onChange(of: presentedSheet) { _, sheet in
             guard sheet == .settings else { presentNotificationIntroIfNeeded(); return }
             Task {
@@ -368,24 +372,26 @@ struct ToasttyMobileRootView: View {
             navigationPath = [.workspace(workspaceID)]
             presentedSheet = nil
             routedDestinationSinceActivation = true
-        case .newSession(let draftID):
+        case .sharedDraft(let draftID):
             routeSharedDraft(draftID)
         }
     }
 
-    /// Opens the new-session sheet with a draft the share extension saved,
-    /// over whatever screen is showing, in the workspace Home would use. A
-    /// draft that cannot open yet stays saved for `queueWaitingSharedDraft`.
+    /// Opens a draft the share extension saved over whatever screen is
+    /// showing: in the New Task sheet, or in the new-session sheet, in the
+    /// workspace Home would use, when the Mac cannot create tasks. A draft
+    /// that cannot open yet stays saved for `queueWaitingSharedDraft`.
     private func routeSharedDraft(_ draftID: UUID) {
         let home = sessionController.homeController
         let preferences = ToasttyNewSessionPreferences()
-        guard home.canStartSessions,
-              let workspace = home.defaultSessionStartWorkspace(lastUsed: preferences.lastWorkspaceID) else {
+        let sessionWorkspace = home.defaultSessionStartWorkspace(lastUsed: preferences.lastWorkspaceID)
+        guard home.canCreateTasks || (home.canStartSessions && sessionWorkspace != nil) else {
             discardPendingDeepLinkAfterLiveSnapshot()
             return
         }
         // One sheet at a time. Settings closes for the draft; an open
-        // new-session form keeps its own draft, and this one waits for it.
+        // New Task or new-session form keeps its own draft, and this one
+        // waits for it.
         guard home.isShowingNewSessionForm == false else { return }
         guard presentedSheet == nil else {
             presentedSheet = nil
@@ -393,15 +399,24 @@ struct ToasttyMobileRootView: View {
         }
         pendingDeepLinkDestination = nil
         guard let draft = sharedDraftStore?.take(id: draftID) else { return }
-        sharedNewSession = ToasttyNewSessionModel(
-            workspaceID: workspace.id,
-            workspaceTitle: workspace.title,
-            host: home,
-            preferences: preferences,
-            message: draft.text,
-            attachments: draft.attachments,
-            notice: draft.skippedItemsNotice
-        )
+        if home.canCreateTasks {
+            sharedNewTask = ToasttyNewTaskModel(
+                host: home,
+                text: draft.text,
+                attachments: draft.attachments,
+                notice: draft.skippedItemsNotice
+            )
+        } else if let workspace = sessionWorkspace {
+            sharedNewSession = ToasttyNewSessionModel(
+                workspaceID: workspace.id,
+                workspaceTitle: workspace.title,
+                host: home,
+                preferences: preferences,
+                message: draft.text,
+                attachments: draft.attachments,
+                notice: draft.skippedItemsNotice
+            )
+        }
     }
 
     /// Opens a shared draft that its link did not open: the extension could
@@ -413,7 +428,7 @@ struct ToasttyMobileRootView: View {
               routedDestinationSinceActivation == false,
               sessionController.pushController?.pendingConversationID == nil,
               let draftID = sharedDraftStore.waitingDraftID() else { return }
-        pendingDeepLinkDestination = .newSession(draftID)
+        pendingDeepLinkDestination = .sharedDraft(draftID)
         routePendingDeepLinkIfAvailable()
     }
 
@@ -431,7 +446,7 @@ struct ToasttyMobileRootView: View {
     }
 
     private func presentNotificationIntroIfNeeded() {
-        guard presentedSheet == nil, sharedNewSession == nil, navigationPath.isEmpty,
+        guard presentedSheet == nil, sharedNewSession == nil, sharedNewTask == nil, navigationPath.isEmpty,
               pendingDeepLinkDestination == nil,
               sessionController.state == .paired(.live),
               sessionController.pushController?.canIntroduce == true else { return }

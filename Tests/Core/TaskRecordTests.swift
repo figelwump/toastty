@@ -156,10 +156,20 @@ struct TaskRecordTests {
         #expect(record.taskSpaceWorkspaceID == record.operation.taskSpace?.workspaceID)
     }
 
-    @Test(arguments: [TaskSource.cli, .agent(sessionID: "s1"), .quickEntry, .recovered])
+    @Test(arguments: [
+        TaskSource.cli, .agent(sessionID: "s1"), .quickEntry, .recovered, .adopted,
+        .remoteDevice(deviceID: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!),
+    ])
     func sourceRoundTripsThroughJSON(source: TaskSource) throws {
         let data = try JSONEncoder().encode(source)
         #expect(try JSONDecoder().decode(TaskSource.self, from: data) == source)
+    }
+
+    /// Builds before a source kind existed read it as `.cli` and keep the
+    /// record, so a newer kind such as `remoteDevice` is safe to write.
+    @Test func aSourceKindFromANewerBuildReadsAsCLI() throws {
+        let newer = Data(#"{"kind":"carrierPigeon","deviceID":"66666666-6666-6666-6666-666666666666"}"#.utf8)
+        #expect(try JSONDecoder().decode(TaskSource.self, from: newer) == .cli)
     }
 
     @Test

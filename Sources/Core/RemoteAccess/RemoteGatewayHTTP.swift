@@ -11,6 +11,14 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
     public static let maximumHeaderBytes = 16 * 1024
     public static let maximumBodyBytes = RemoteGatewayProtocol.maximumRequestBodyBytes
 
+    /// Routes whose body may be as large as `RemoteAttachmentPolicy.maximumEncodedBodyBytes`.
+    /// The listener authorizes their headers before it reads the body.
+    public static func isAttachmentUploadPath(_ path: String) -> Bool {
+        path == RemoteAttachmentPolicy.sendPath
+            || path == RemoteSessionStartPolicy.startWithAttachmentsPath
+            || path == RemoteTaskCreatePolicy.createWithAttachmentsPath
+    }
+
     public var method: String
     /// Path only, query string stripped.
     public var path: String
@@ -151,8 +159,7 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
         } else {
             contentLength = 0
         }
-        let isAttachmentRoute = path == RemoteAttachmentPolicy.sendPath
-            || path == RemoteSessionStartPolicy.startWithAttachmentsPath
+        let isAttachmentRoute = isAttachmentUploadPath(path)
         guard !isAttachmentRoute || headerValues["content-length"] != nil else { return .invalid }
         let limit = isAttachmentRoute ? RemoteAttachmentPolicy.maximumEncodedBodyBytes : maximumBodyBytes
         guard contentLength >= 0, contentLength <= limit else { return .invalid }

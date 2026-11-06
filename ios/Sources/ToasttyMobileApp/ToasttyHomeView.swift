@@ -199,6 +199,7 @@ struct ToasttyHomeView: View {
     /// The session whose detail card the Info swipe opened.
     @State private var infoConversation: ToasttySessionInfoSelection?
     @State private var newSession: ToasttyNewSessionModel?
+    @State private var newTask: ToasttyNewTaskModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let defaults: UserDefaults
 
@@ -248,6 +249,7 @@ struct ToasttyHomeView: View {
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
         .toasttyNewSessionSheet($newSession, controller: controller)
+        .toasttyNewTaskSheet($newTask, controller: controller)
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
@@ -577,11 +579,24 @@ struct ToasttyHomeView: View {
         )
     }
 
-    /// Starts a session in the workspace of the last one started from this
-    /// phone, which the sheet lets the person change.
+    /// Creates a task, as the Mac's quick entry does. A Mac without task
+    /// creation gets the new-session sheet instead.
     @ViewBuilder
     private var newSessionButton: some View {
-        if controller.canStartSessions,
+        if controller.canCreateTasks {
+            Button {
+                newTask = ToasttyNewTaskModel(host: controller)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .background(ToasttyDesignTokens.amber, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+            .accessibilityLabel("New task")
+            .accessibilityIdentifier("toastty-mobile-home-new-task")
+        } else if controller.canStartSessions,
            let workspace = controller.defaultSessionStartWorkspace(
                lastUsed: ToasttyNewSessionPreferences(defaults: defaults).lastWorkspaceID
            ) {

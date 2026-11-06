@@ -3,8 +3,9 @@ import Foundation
 enum ToasttyMobileDeepLinkDestination: Equatable, Sendable {
     case conversation(UUID)
     case workspace(UUID)
-    /// A draft the share extension saved for the new-session sheet.
-    case newSession(UUID)
+    /// A draft the share extension saved. It opens the New Task sheet, or
+    /// the new-session sheet when the Mac cannot create tasks.
+    case sharedDraft(UUID)
 }
 
 /// Pure, strict parser for the routes owned by the current app build.
@@ -51,8 +52,9 @@ struct DeepLinkParser: Equatable, Sendable {
             return .conversation(identifier)
         case "workspace":
             return .workspace(identifier)
-        case "new-session":
-            return .newSession(identifier)
+        // "new-session" is the route an earlier share extension built.
+        case "shared-draft", "new-session":
+            return .sharedDraft(identifier)
         default:
             return nil
         }

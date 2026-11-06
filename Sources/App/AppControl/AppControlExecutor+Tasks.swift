@@ -623,6 +623,7 @@ extension AppControlExecutor {
         case .quickEntry: source = "quickEntry"
         case .recovered: source = "recovered"
         case .adopted: source = "adopted"
+        case .remoteDevice: source = "remoteDevice"
         }
         var snapshot: [String: AutomationJSONValue] = [
             "taskID": .string(record.id.uuidString),

@@ -1,14 +1,14 @@
 import XCTest
 
 /// Drives the system share sheet: Safari shares a page to the Toastty share
-/// extension, which must open Toastty's new-session sheet with the link.
+/// extension, which must open Toastty's New Task sheet with the link.
 @MainActor
 final class ToasttyMobileShareSheetUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
     }
 
-    func testSharingAPageFromSafariOpensThePrefilledNewSessionSheet() throws {
+    func testSharingAPageFromSafariOpensThePrefilledNewTaskSheet() throws {
         let toastty = XCUIApplication()
         toastty.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         toastty.launch()
@@ -30,18 +30,18 @@ final class ToasttyMobileShareSheetUITests: XCTestCase {
         attachScreenshot(named: "share-sheet", of: safari)
         extensionCell.tap()
 
-        let start = toastty.buttons["toastty-mobile-new-session-start"]
+        let create = toastty.buttons["toastty-mobile-new-task-create"]
         if toastty.wait(for: .runningForeground, timeout: 20) == false {
             attachScreenshot(named: "extension-did-not-open-app", of: safari)
             XCTFail("The extension did not open Toastty. \(dump(safari, "extension"))")
             return
         }
-        XCTAssertTrue(start.waitForExistence(timeout: 15), dump(toastty, "toastty"))
-        let message = toastty.textViews["toastty-mobile-new-session-message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        let text = message.value as? String ?? ""
+        XCTAssertTrue(create.waitForExistence(timeout: 15), dump(toastty, "toastty"))
+        let taskText = toastty.textViews["toastty-mobile-new-task-text"]
+        XCTAssertTrue(taskText.waitForExistence(timeout: 5))
+        let text = taskText.value as? String ?? ""
         XCTAssertTrue(text.contains("https://example.com/"), text)
-        attachScreenshot(named: "shared-new-session-sheet", of: toastty)
+        attachScreenshot(named: "shared-new-task-sheet", of: toastty)
     }
 
     /// Safari keeps Share in its toolbar on some layouts and in its More

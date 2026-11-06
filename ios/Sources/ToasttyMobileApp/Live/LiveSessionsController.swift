@@ -68,6 +68,12 @@ protocol LiveConnectionRuntime: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse?
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse?
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -116,6 +122,18 @@ extension LiveConnectionRuntime {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse? {
+        nil
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        nil
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
         nil
     }
 
@@ -279,6 +297,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteSessionStartResponse? {
         try await coordinator.startSession(request)
     }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        try await coordinator.taskCreateOptions(request)
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        try await coordinator.createTask(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -412,6 +442,26 @@ final class LiveSessionsController {
                 // session, so the caller retries with the same request ID.
                 do {
                     let response = try await runtime.startSession(request)
+                    return response.map { .answered($0.result) } ?? .unconfirmed
+                } catch {
+                    return .unconfirmed
+                }
+            }
+        )
+        homeController.installTaskCreate(
+            options: { [runtime] in
+                do {
+                    let response = try await runtime.taskCreateOptions(RemoteTaskCreateOptionsRequest())
+                    return response.map(ToasttyTaskCreateOptionsOutcome.loaded) ?? .unreachable
+                } catch {
+                    return .unreachable
+                }
+            },
+            create: { [runtime] request in
+                // Any failure leaves it unknown whether the Mac saved the
+                // task, so the caller retries with the same request ID.
+                do {
+                    let response = try await runtime.createTask(request)
                     return response.map { .answered($0.result) } ?? .unconfirmed
                 } catch {
                     return .unconfirmed
@@ -620,6 +670,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
+        homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -628,6 +679,12 @@ final class LiveSessionsController {
     /// when the sheet loads its options.
     private var acceptsSessionStart: Bool {
         coordinatorState.capabilities.contains(.sessionStart) && deviceScopes.contains(.send)
+    }
+
+    /// A task starts an agent with the task as its first message, so it is
+    /// gated like a session start.
+    private var acceptsTaskCreate: Bool {
+        coordinatorState.capabilities.contains(.taskCreate) && deviceScopes.contains(.send)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -768,6 +825,7 @@ final class LiveSessionsController {
             hostSupportsSubspaceDone: acceptsSubspaceDone,
             hostSupportsConversationFlag: acceptsConversationFlag,
             hostSupportsSessionStart: acceptsSessionStart,
+            hostSupportsTaskCreate: acceptsTaskCreate,
             hostSupportsConversationClose: acceptsConversationClose,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
