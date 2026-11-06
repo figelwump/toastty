@@ -6,6 +6,9 @@ enum ToasttyMobileDeepLinkDestination: Equatable, Sendable {
     /// A draft the share extension saved. It opens the New Task sheet, or
     /// the new-session sheet when the Mac cannot create tasks.
     case sharedDraft(UUID)
+    /// A tapped task alert: its session when the snapshot has it, else the
+    /// task's detail.
+    case task(UUID, conversationID: UUID?)
 }
 
 /// Pure, strict parser for the routes owned by the current app build.

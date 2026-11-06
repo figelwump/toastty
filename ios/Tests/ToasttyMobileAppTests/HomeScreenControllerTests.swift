@@ -1125,6 +1125,37 @@ final class SessionStartControllerTests: XCTestCase {
         XCTAssertEqual(kept.count, 3)
     }
 
+    /// A tapped task alert opens the task's session while its task space is
+    /// open, else the task's detail. It waits for a live snapshot before it
+    /// falls back or gives up.
+    func testTaskAlertOpensTheSessionWhileItsTaskSpaceIsOpenElseTheDetail() throws {
+        let snapshot = ToasttyMobileFixture.taskHome
+        let question = ToasttyMobileFixture.questionTaskID
+        let taskSpace = try XCTUnwrap(snapshot.taskBoard?.task(id: question)?.taskSpaceWorkspaceID)
+        let session = try XCTUnwrap(snapshot.workspaces.first { $0.id == taskSpace }?.conversations.first?.id)
+        let live = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot, connectionState: .live)
+        XCTAssertEqual(live.taskAlertRoute(taskID: question, conversationID: session), .conversation(session))
+        // The session closed since the alert: the detail opens instead.
+        XCTAssertEqual(live.taskAlertRoute(taskID: question, conversationID: UUID()), .taskDetail(question))
+        // Setup failed, so the task has no session.
+        let failed = ToasttyMobileFixture.setupFailedTaskID
+        XCTAssertEqual(live.taskAlertRoute(taskID: failed, conversationID: nil), .taskDetail(failed))
+        XCTAssertEqual(live.taskAlertRoute(taskID: UUID(), conversationID: nil), .unavailable)
+
+        let restored = HomeScreenController(
+            runtimeMode: .fixture, snapshot: snapshot, connectionState: .reconnecting, freshness: .stale
+        )
+        XCTAssertEqual(restored.taskAlertRoute(taskID: question, conversationID: session), .conversation(session))
+        XCTAssertEqual(restored.taskAlertRoute(taskID: question, conversationID: UUID()), .waitForLiveSnapshot)
+        XCTAssertEqual(restored.taskAlertRoute(taskID: UUID(), conversationID: nil), .waitForLiveSnapshot)
+
+        // A Mac that stopped running the task system has no task to show.
+        let withoutTasks = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertEqual(withoutTasks.taskAlertRoute(taskID: question, conversationID: nil), .unavailable)
+    }
+
     func testHomeStartsInTheLastUsedWorkspaceWhileTheMacStillListsIt() {
         let controller = HomeScreenController(
             runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live

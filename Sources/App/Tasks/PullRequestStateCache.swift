@@ -49,6 +49,11 @@ final class PullRequestStateCache: ObservableObject {
         entries[link.url]?.state
     }
 
+    /// Whether a request for this pull request is running.
+    func isRefreshing(_ link: WorkspacePullRequestLink) -> Bool {
+        inFlight[link.url] != nil
+    }
+
     /// Asks GitHub again, unless a request for this pull request is running.
     @discardableResult
     func refresh(_ link: WorkspacePullRequestLink) -> Task<Void, Never> {

@@ -38,6 +38,29 @@ struct RemotePushRelayClientTests {
         #expect(PushRelayTestURLProtocol.state.requests.count == 1)
     }
 
+    /// A relay deployed before task alerts answers a task alert with 400.
+    /// The client reports that apart from other failures, so the caller can
+    /// send the session alert instead.
+    @Test func taskAlertSendsEveryKeyAndReportsARefusedAlertApartFromOtherFailures() async throws {
+        let session = RemotePushRelayClient.makeSession(protocolClasses: [PushRelayTestURLProtocol.self])
+        defer { session.invalidateAndCancel() }
+        let client = RemotePushRelayClient(session: session)
+        let relay = try #require(RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!))
+        let grant = RemoteDevicePushRegistration(deviceID: UUID(), registration: .init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: relay.relayID), configuration: relay)
+        let task = RemotePushTaskNotification(eventID: UUID(), taskID: UUID(), conversationID: nil, reason: .review,
+            taskTitle: "Jump-to-next-active fix", pullRequestNumber: 263)
+        for (status, expected) in [(202, RemotePushSendOutcome.accepted), (400, .unsupportedAlert), (410, .registrationUnavailable), (429, .dropped), (502, .dropped)] {
+            PushRelayTestURLProtocol.state.reset(status: status)
+            #expect(await client.send(task, to: grant) == expected)
+            let request = try #require(PushRelayTestURLProtocol.state.requests.first)
+            #expect(PushRelayTestURLProtocol.state.requests.count == 1)
+            #expect(request.url?.path == "/v1/registrations/\(grant.registrationID.uuidString.lowercased())/notifications")
+        }
+        let session400 = RemotePushSessionNotification(eventID: UUID(), conversationID: RemoteConversationID(), sessionTitle: "T", status: .ready)
+        PushRelayTestURLProtocol.state.reset(status: 400)
+        #expect(await client.send(session400, to: grant) == .unsupportedAlert)
+    }
+
     @Test func productionSessionRefusesRedirectsAndDisablesCookiesAndCache() async throws {
         let session = RemotePushRelayClient.makeSession(protocolClasses: [PushRelayTestURLProtocol.self])
         defer { session.invalidateAndCancel() }

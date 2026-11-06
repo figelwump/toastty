@@ -5,11 +5,16 @@ import RemoteProtocol
 enum RemotePushSendOutcome: Equatable, Sendable {
     case accepted
     case registrationUnavailable
+    /// The relay refused this alert's content (HTTP 400). A relay deployed
+    /// before task alerts refuses every task alert this way, and accepted
+    /// none of it, so the caller can send an older alert kind instead.
+    case unsupportedAlert
     case dropped
 }
 
 protocol RemotePushRelaying: Sendable {
     func send(_ notification: RemotePushSessionNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome
+    func send(_ notification: RemotePushTaskNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome
     func revoke(_ registration: RemoteDevicePushRegistration) async -> Bool
 }
 
@@ -33,12 +38,22 @@ final class RemotePushRelayClient: RemotePushRelaying {
     }
 
     func send(_ notification: RemotePushSessionNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
-        guard !Task.isCancelled,
-              let body = try? JSONEncoder().encode(notification), body.count <= RemotePushPolicy.maximumBodyBytes else { return .dropped }
+        await sendNotification(try? JSONEncoder().encode(notification), to: registration)
+    }
+
+    func send(_ notification: RemotePushTaskNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        await sendNotification(try? JSONEncoder().encode(notification), to: registration)
+    }
+
+    private func sendNotification(_ body: Data?, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        guard !Task.isCancelled, let body, body.count <= RemotePushPolicy.maximumBodyBytes else { return .dropped }
         let request = request(method: "POST", registration: registration, suffix: "/notifications", body: body)
         guard let status = await status(for: request) else { return .dropped }
         if (200...299).contains(status) { return .accepted }
         if [401, 404, 410].contains(status) { return .registrationUnavailable }
+        // The relay validates the body before it reserves the event or
+        // contacts Apple, so a 400 never delivered anything.
+        if status == 400 { return .unsupportedAlert }
         return .dropped
     }
 

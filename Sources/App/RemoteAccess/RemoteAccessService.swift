@@ -507,6 +507,8 @@ final class RemoteAccessService: ObservableObject {
     private var nextPushCleanupIndex = 0
     private var pushCleanupRequestedWhileRunning = false
     private var pushForegroundObserver: AnyCancellable?
+    private let taskAlerts: RemoteTaskAlerts
+    private var taskAlertLoop: Task<Void, Never>?
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
@@ -677,6 +679,7 @@ final class RemoteAccessService: ObservableObject {
         pushConfiguration: RemotePushConfiguration? = .configured(),
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .current() },
+        taskAlerts: RemoteTaskAlerts = RemoteTaskAlerts(),
         tailnetServeSetup: @escaping TailnetServeSetup = { port, configuredOrigin, configureIfNeeded in
             try await TailscaleServeSetup().run(
                 port: port,
@@ -706,6 +709,7 @@ final class RemoteAccessService: ObservableObject {
         self.pushConfiguration = pushConfiguration
         self.pushRelay = pushRelay
         self.pushMacPresence = pushMacPresence
+        self.taskAlerts = taskAlerts
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
@@ -1057,6 +1061,7 @@ final class RemoteAccessService: ObservableObject {
 
     private func beginConversationTracking() {
         guard storeActionObserverToken == nil, conversationTrackingCancellables.isEmpty else { return }
+        startTaskAlertLoop()
         conversationTrackingGeneration &+= 1
         let generation = conversationTrackingGeneration
         panelMetadataCache.start()
@@ -1191,6 +1196,9 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func endConversationTracking() {
+        taskAlertLoop?.cancel()
+        taskAlertLoop = nil
+        taskAlerts.reset()
         panelMetadataPollTask?.cancel()
         panelMetadataPollTask = nil
         panelMetadataCache.stop()
@@ -1364,16 +1372,12 @@ final class RemoteAccessService: ObservableObject {
         guard isEnabled, let pushConfiguration,
               ProviderTranscriptSupport.isManagedProvider(event.agent),
               pushTasksByEventID[event.eventID] == nil else { return }
-        guard pushTasksByEventID.count < 8 else {
-            ToasttyLog.warning("Notification event dropped because delivery is busy", category: .automation)
-            return
-        }
         let registrations = deviceStore.eligiblePushRegistrations(configuration: pushConfiguration)
         guard !registrations.isEmpty,
               sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID[event.panelID] == event.sessionID,
               let record = sessionRuntimeStore.sessionRegistry.sessionsByID[event.sessionID], record.isActive, record.agent == event.agent,
-              let panel = store.state.workspacesByID.values.compactMap({ $0.allPanelsByID[event.panelID] }).first,
-              case .terminal(let terminal) = panel else { return }
+              let workspace = store.state.workspacesByID.values.first(where: { $0.allPanelsByID[event.panelID] != nil }),
+              case .terminal(let terminal) = workspace.allPanelsByID[event.panelID] else { return }
         // SessionRuntimeStore has already accepted and deduplicated the event.
         // Drop it now while the Mac is in use; becoming idle must not replay it.
         guard pushMacPresence().allowsPush else { return }
@@ -1397,16 +1401,40 @@ final class RemoteAccessService: ObservableObject {
             sessionTitle: candidate.title,
             status: status
         )
-        pushTasksByEventID[event.eventID] = Task { [weak self] in
+        // A finished turn in a task space waits briefly: when its task then
+        // needs the user, the task alert replaces this one. An approval puts
+        // the task in Needs you for a reason without a task alert, so it
+        // goes out at once.
+        if event.kind == .turnComplete, let taskID = taskID(ofTaskSpace: workspace.id) {
+            taskAlerts.hold(notification, taskID: taskID)
+            return
+        }
+        startPushDelivery(eventID: notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+            await self?.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
+        }
+    }
+
+    /// Sends one event to each eligible phone, four at a time.
+    private func startPushDelivery(
+        eventID: UUID,
+        configuration: RemotePushConfiguration,
+        deliver: @escaping @MainActor @Sendable (RemoteDevicePushRegistration) async -> Void
+    ) {
+        guard pushTasksByEventID[eventID] == nil else { return }
+        guard pushTasksByEventID.count < 8 else {
+            ToasttyLog.warning("Notification event dropped because delivery is busy", category: .automation)
+            return
+        }
+        let registrations = deviceStore.eligiblePushRegistrations(configuration: configuration)
+        guard !registrations.isEmpty else { return }
+        pushTasksByEventID[eventID] = Task { [weak self] in
             guard let self else { return }
-            defer { self.pushTasksByEventID.removeValue(forKey: event.eventID) }
+            defer { self.pushTasksByEventID.removeValue(forKey: eventID) }
             await withTaskGroup(of: Void.self) { group in
                 for (index, registration) in registrations.enumerated() {
                     guard !Task.isCancelled else { group.cancelAll(); break }
                     if index >= 4 { await group.next() }
-                    group.addTask {
-                        await self.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
-                    }
+                    group.addTask { await deliver(registration) }
                 }
             }
         }
@@ -1420,13 +1448,103 @@ final class RemoteAccessService: ObservableObject {
         guard !Task.isCancelled, isEnabled,
               deviceStore.eligiblePushRegistrations(configuration: configuration).contains(registration) else { return }
         if await pushRelay.send(notification, to: registration) == .registrationUnavailable {
-            do {
-                try deviceStore.clearPushRegistration(matching: registration)
-                retryPushCleanup()
-            } catch {
-                ToasttyLog.error("Failed to save notification grant removal", category: .automation)
+            clearPushRegistration(registration)
+        }
+    }
+
+    private func deliverTaskAlert(
+        _ alert: RemoteTaskAlerts.TaskAlert,
+        to registration: RemoteDevicePushRegistration,
+        configuration: RemotePushConfiguration
+    ) async {
+        guard !Task.isCancelled, isEnabled,
+              deviceStore.eligiblePushRegistrations(configuration: configuration).contains(registration) else { return }
+        switch await pushRelay.send(alert.notification, to: registration) {
+        case .registrationUnavailable:
+            clearPushRegistration(registration)
+        case .unsupportedAlert:
+            // A relay deployed before task alerts refuses them without
+            // sending anything. Send the session alerts this one replaced,
+            // as the Mac did before task alerts.
+            ToasttyLog.info("Notification relay refused a task alert; sending its session alert", category: .automation, metadata: [
+                "replaced_count": String(alert.replaced.count),
+            ])
+            for notification in alert.replaced {
+                await deliverPushNotification(notification, to: registration, configuration: configuration)
+            }
+        case .accepted, .dropped:
+            break
+        }
+    }
+
+    private func clearPushRegistration(_ registration: RemoteDevicePushRegistration) {
+        do {
+            try deviceStore.clearPushRegistration(matching: registration)
+            retryPushCleanup()
+        } catch {
+            ToasttyLog.error("Failed to save notification grant removal", category: .automation)
+        }
+    }
+
+    // MARK: - Task alerts
+
+    /// The task whose task space this workspace is, while the task system
+    /// is on.
+    private func taskID(ofTaskSpace workspaceID: UUID) -> UUID? {
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        return taskBoard.coordinator?.records.record(taskSpaceWorkspaceID: workspaceID)?.id
+    }
+
+    private func startTaskAlertLoop() {
+        guard taskAlertLoop == nil, pushConfiguration != nil, taskBoard != nil,
+              let interval = taskAlerts.timing.passInterval else { return }
+        taskAlertLoop = Task { [weak self] in
+            while Task.isCancelled == false {
+                try? await Task.sleep(for: interval)
+                guard Task.isCancelled == false else { return }
+                self?.runTaskAlertPass()
             }
         }
+    }
+
+    /// One sample of the task board: sends the task alerts it finds and the
+    /// held session alerts that no task alert replaced. Internal so tests
+    /// can drive passes without the timer.
+    func runTaskAlertPass() {
+        guard isEnabled, let pushConfiguration, let taskBoard, taskBoard.isEnabled,
+              deviceStore.eligiblePushRegistrations(configuration: pushConfiguration).isEmpty == false else {
+            // Start again from the current stages once a phone can receive.
+            taskAlerts.reset()
+            return
+        }
+        let pullRequests = taskBoard.pullRequests
+        let deliveries = taskAlerts.pass(
+            items: taskBoard.items(),
+            isAwaitingPullRequest: { item in item.pullRequest.map { pullRequests?.isRefreshing($0) == true } ?? false },
+            conversationID: { [weak self] item in self?.taskConversationID(item) }
+        )
+        // As for session alerts: drop alerts while the Mac is in use. A held
+        // alert whose user came back to the Mac during the hold goes too.
+        guard deliveries.isEmpty == false, pushMacPresence().allowsPush else { return }
+        for delivery in deliveries {
+            switch delivery {
+            case .session(let notification):
+                startPushDelivery(eventID: notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+                    await self?.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
+                }
+            case .task(let alert):
+                startPushDelivery(eventID: alert.notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+                    await self?.deliverTaskAlert(alert, to: registration, configuration: pushConfiguration)
+                }
+            }
+        }
+    }
+
+    /// The conversation of the task's own agent, which a task alert opens.
+    private func taskConversationID(_ item: TaskBoardItem) -> RemoteConversationID? {
+        guard let record = item.record,
+              let session = taskBoard?.coordinator?.liveAgentSession(of: record) else { return nil }
+        return scanConversationCandidates(mintingIDs: false).first { $0.panelID == session.panelID }?.conversationID
     }
 
     private func retryPushCleanup() {

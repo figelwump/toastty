@@ -3574,6 +3574,11 @@ private final class RemotePushRelaySpy: RemotePushRelaying {
         return sendOutcome
     }
 
+    func send(_ notification: RemotePushTaskNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        registrations.append(registration)
+        return sendOutcome
+    }
+
     func revoke(_ registration: RemoteDevicePushRegistration) async -> Bool {
         revoked.append(registration)
         if holdRevoke { return await withCheckedContinuation { revokeContinuation = $0 } }

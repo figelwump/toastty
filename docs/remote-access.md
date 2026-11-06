@@ -136,6 +136,8 @@ or the Lock Screen remains supported when banners or sound are off.
 
 Alerts include the session title and Ready or Needs approval. The title passes
 through Toastty's notification service and Apple. There is no title-hiding option.
+While the Mac runs the task system, a task that needs you sends its own alert;
+see [Task alerts](#task-alerts).
 Tapping an alert opens its conversation if it still belongs to the current Mac
 pairing. The Mac must remain running with Remote Access enabled to send new
 alerts. The phone does not need an open connection to receive Apple's alert, but
@@ -619,6 +621,53 @@ on an old state. A repeat of a request with the same `clientRequestID` within
 ten minutes returns the first answer and runs nothing again. The Mac
 advertises these routes with the `task_actions` capability. An older Mac
 omits it, and the phone keeps the read-only detail.
+
+#### Task alerts
+
+When a task enters Needs you, the Mac sends one alert to each phone with
+notifications on:
+
+| Why | Alert |
+| --- | --- |
+| The agent ended its turn with `task needs-reply` | **<task> asks**, then the question |
+| The pull request waits for review, or the agent marked work without one ready | **PR #N is ready for review** or **Ready for review**, then the task |
+| An accepted merge stopped without merging | **Merge stopped**, then the task and its pull request |
+| Setup or the move into a worktree failed | **Setup failed** or **Move to worktree failed**, then the task |
+| The cleanup after a merge, archive or release stopped | **Cleanup stopped**, then the task |
+
+The Mac decides from the same stages as the board. A stage counts after it
+holds for 3 seconds, so a stage that flips back sends nothing. After a relaunch,
+or when a phone first turns notifications on, tasks that already wait send
+nothing. The session alerts still cover a finished turn and an approval.
+
+A task alert replaces the Ready alert of the turn that caused it, so one event
+sends one alert. The Mac holds a Ready alert from a task space for 8 seconds,
+long enough for the stage to settle. A finished turn also asks GitHub about the
+task's pull request; while that answer is outstanding, the alert stays held, up
+to 75 seconds. If the task does not need you for a reason above in that time,
+the Ready alert goes out. An approval alert goes out at once: an approval puts
+the task in Needs you for a reason without a task alert.
+
+Tapping a task alert opens the task's session while its task space is open,
+and the task's detail otherwise. The app icon badge counts the tasks that need
+you, as the Mac's Tasks row and the Status segment do, instead of sessions.
+
+A merge counts as stopped when Toastty records why its own merge stopped
+(**⚠ merge stopped** on the task's row), or when the merge skill ends its turn
+on a blocker. A merge you cancelled sends nothing.
+
+The alert text leaves the Mac: the task's title, the agent's question, and the
+pull request number. Error text from a failed setup, merge or cleanup stays on
+the Mac; the task's detail on the phone shows it. Task alerts follow the same rules as session alerts: the Mac sends them
+only while you are away from it, and drops a held Ready alert when you come back
+during the hold.
+
+Compatibility:
+
+- The notification service needs a version with task alerts. An older one
+  refuses them, and the Mac sends the session's Ready alert instead, as before.
+- A phone that predates task alerts shows their text, but tapping one only
+  opens the app. In the foreground, it does not show them.
 
 ### Starting a session
 

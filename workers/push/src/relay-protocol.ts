@@ -1,6 +1,8 @@
 export const policy = {
   bodyBytes: 4096,
   titleBytes: 512,
+  /** A task alert's question. It is the only free text besides the title. */
+  detailBytes: 512,
   challengeSeconds: 300,
   activeSeconds: 90 * 24 * 3600,
   eventSeconds: 3600,
@@ -41,6 +43,17 @@ export function failure(error: unknown): Response {
 }
 
 export async function readObject(request: Request, keys: readonly string[]): Promise<Record<string, unknown>> {
+  return exactKeys(await readJSONObject(request), keys);
+}
+
+function exactKeys(object: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  if (Object.keys(object).length !== keys.length || keys.some(key => !Object.hasOwn(object, key))) {
+    throw new RelayError(400, "invalid_request");
+  }
+  return object;
+}
+
+async function readJSONObject(request: Request): Promise<Record<string, unknown>> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new RelayError(415, "json_required");
   }
@@ -66,11 +79,7 @@ export async function readObject(request: Request, keys: readonly string[]): Pro
   try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); }
   catch { throw new RelayError(400, "invalid_request"); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new RelayError(400, "invalid_request");
-  const object = parsed as Record<string, unknown>;
-  if (Object.keys(object).length !== keys.length || keys.some(key => !Object.hasOwn(object, key))) {
-    throw new RelayError(400, "invalid_request");
-  }
-  return object;
+  return parsed as Record<string, unknown>;
 }
 
 export function uuid(value: unknown): string {
@@ -128,13 +137,72 @@ export async function enrollment(request: Request): Promise<Enrollment> {
   };
 }
 
-export interface SessionAlert { eventID: string; conversationID: string; sessionTitle: string; status: "ready" | "needs_approval" }
-export async function sessionAlert(request: Request): Promise<SessionAlert> {
-  const value = await readObject(request, ["eventID", "conversationID", "sessionTitle", "status"]);
-  if (typeof value.sessionTitle !== "string" || value.sessionTitle.length === 0 ||
-      new TextEncoder().encode(value.sessionTitle).byteLength > policy.titleBytes ||
-      /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u.test(value.sessionTitle) || (value.status !== "ready" && value.status !== "needs_approval")) {
+export interface SessionAlert {
+  kind: "session"; eventID: string; conversationID: string; sessionTitle: string; status: "ready" | "needs_approval";
+}
+
+/** Why a task needs the user. The relay, not the Mac, words each alert, so
+ * a send credential can choose only a task title, a question and a number. */
+export type TaskAlertReason = "question" | "review" | "merge_stopped" | "setup_failed" | "move_failed" | "cleanup_stopped";
+const taskAlertReasons: readonly TaskAlertReason[] = ["question", "review", "merge_stopped", "setup_failed", "move_failed", "cleanup_stopped"];
+
+export interface TaskAlert {
+  kind: "task"; eventID: string; taskID: string; conversationID: string | null; reason: TaskAlertReason;
+  taskTitle: string; detail: string | null; pullRequestNumber: number | null;
+}
+
+/** A session alert has no `kind` field, as sent by Macs before task alerts.
+ * A relay without task alerts rejects the task fields, and the Mac then
+ * sends the session alert it would have sent before. */
+export async function notificationAlert(request: Request): Promise<SessionAlert | TaskAlert> {
+  const value = await readJSONObject(request);
+  return Object.hasOwn(value, "kind") ? taskAlert(value) : sessionAlert(value);
+}
+
+function sessionAlert(object: Record<string, unknown>): SessionAlert {
+  const value = exactKeys(object, ["eventID", "conversationID", "sessionTitle", "status"]);
+  if (!displayText(value.sessionTitle, policy.titleBytes) || (value.status !== "ready" && value.status !== "needs_approval")) {
     throw new RelayError(400, "invalid_request");
   }
-  return { eventID: uuid(value.eventID), conversationID: uuid(value.conversationID), sessionTitle: value.sessionTitle, status: value.status };
+  return { kind: "session", eventID: uuid(value.eventID), conversationID: uuid(value.conversationID),
+    sessionTitle: value.sessionTitle, status: value.status };
+}
+
+function taskAlert(object: Record<string, unknown>): TaskAlert {
+  const value = exactKeys(object, ["kind", "eventID", "taskID", "conversationID", "reason", "taskTitle", "detail", "pullRequestNumber"]);
+  const reason = taskAlertReasons.find(known => known === value.reason);
+  const number = value.pullRequestNumber;
+  if (value.kind !== "task" || !reason || !displayText(value.taskTitle, policy.titleBytes) ||
+      // Only a question carries text besides the title, and only a pull
+      // request reason carries a number.
+      (value.detail !== null && (reason !== "question" || !displayText(value.detail, policy.detailBytes))) ||
+      (number !== null && (!(reason === "review" || reason === "merge_stopped") ||
+        typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 2_147_483_647))) {
+    throw new RelayError(400, "invalid_request");
+  }
+  return {
+    kind: "task", eventID: uuid(value.eventID), taskID: uuid(value.taskID),
+    conversationID: value.conversationID === null ? null : uuid(value.conversationID), reason,
+    taskTitle: value.taskTitle as string, detail: value.detail as string | null, pullRequestNumber: number as number | null
+  };
+}
+
+/** One line of alert text: no control, separator or surrogate characters. */
+function displayText(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string" && value.length > 0 && new TextEncoder().encode(value).byteLength <= maxBytes &&
+    !/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u.test(value);
+}
+
+/** The fixed wording for each alert. */
+export function alertText(alert: SessionAlert | TaskAlert): { title: string; body: string } {
+  if (alert.kind === "session") return { title: alert.sessionTitle, body: alert.status === "ready" ? "Ready" : "Needs approval" };
+  const pullRequest = alert.pullRequestNumber === null ? undefined : `PR #${alert.pullRequestNumber}`;
+  switch (alert.reason) {
+    case "question": return { title: `${alert.taskTitle} asks`, body: alert.detail ?? "Waiting for your reply" };
+    case "review": return { title: pullRequest ? `${pullRequest} is ready for review` : "Ready for review", body: alert.taskTitle };
+    case "merge_stopped": return { title: "Merge stopped", body: pullRequest ? `${alert.taskTitle} · ${pullRequest}` : alert.taskTitle };
+    case "setup_failed": return { title: "Setup failed", body: alert.taskTitle };
+    case "move_failed": return { title: "Move to worktree failed", body: alert.taskTitle };
+    case "cleanup_stopped": return { title: "Cleanup stopped", body: alert.taskTitle };
+  }
 }
