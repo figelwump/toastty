@@ -116,7 +116,7 @@ struct ToasttySubspaceGroup: View {
                     )
                     .toasttyListRow()
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if row.status.showsDoneToggle, controller.canMarkSubspacesDone {
+                        if row.showsDoneToggle, controller.canMarkSubspacesDone {
                             Button {
                                 controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
                             } label: {
@@ -370,7 +370,7 @@ struct ToasttySubspaceRow: View {
     /// The box is a checkbox only while the row is quiet and the Mac will
     /// take the change; otherwise it is just the row's status mark.
     private var showsDoneToggle: Bool {
-        row.status.showsDoneToggle && controller.canMarkSubspacesDone
+        row.showsDoneToggle && controller.canMarkSubspacesDone
     }
 
     private func toggleDone() {

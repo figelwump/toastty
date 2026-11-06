@@ -673,6 +673,15 @@ or move failed, offers Retry and Delete. A task space row keeps its workspace it
 **Move to top level** and **Close workspace**, below a divider. It has no
 **Mark as done** item, since a task is done when it merges or you mark it done.
 
+The status mark at the start of a task space row is also a done checkbox, on
+the Mac and on iPhone. While the task has an open pull request, or a merge is
+under way, the mark only shows the status: the task finishes through Merge or
+Archive, as the detail pane offers. iPhone hides its Done swipe too. The Mac
+refuses a done mark that any phone sends for such a task; an older iPhone
+reports that it could not update the task. A done mark the task already
+has can still be cleared. A subspace without a task record keeps the
+checkbox.
+
 ## Merge a task
 
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar

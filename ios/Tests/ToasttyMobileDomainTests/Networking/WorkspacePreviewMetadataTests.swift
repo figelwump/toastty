@@ -99,6 +99,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
     func testHostEncodedSubspaceFieldsReachThePresentationAndOlderHostsStayFlat() throws {
         let parentID = UUID()
         let subspaceID = UUID()
+        let reviewID = UUID()
         let spawner = RemoteConversationID(rawValue: UUID())
         let response = RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
             projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
@@ -111,6 +112,10 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
                     parentWorkspaceID: parentID, spawningConversationID: spawner,
                     primaryAnnotationKey: "ticket", doneAt: Date(timeIntervalSince1970: 1_788_695_000)
                 ),
+                // A task with an open pull request, which finishes through Merge.
+                RemoteWorkspaceSummary(
+                    id: reviewID, title: "review", panels: [], parentWorkspaceID: parentID, acceptsDoneMark: false
+                ),
             ]
         ))
         // This is the encoder used by RemoteGatewayRequestHandler for session lists.
@@ -118,12 +123,20 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation()
 
         XCTAssertEqual(presentation.topLevelWorkspaces.map(\.id), [parentID])
-        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first)
+        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == subspaceID })
         XCTAssertEqual(row.id, subspaceID)
         XCTAssertEqual(row.status, .done)
         XCTAssertEqual(row.chip?.text, "TOAST-7")
         XCTAssertEqual(row.workspace.spawningConversationID, spawner.rawValue)
         XCTAssertEqual(presentation.parent(of: subspaceID)?.id, parentID)
+        XCTAssertTrue(row.showsDoneToggle)
+        let review = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == reviewID })
+        XCTAssertFalse(review.workspace.acceptsDoneMark)
+        XCTAssertFalse(review.showsDoneToggle)
+        // The host sends the field only when the box is hidden.
+        let plain = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceSummary(id: subspaceID, title: "task", panels: [], parentWorkspaceID: parentID))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("acceptsDoneMark"))
 
         // An older host sends none of the fields, so every workspace is top level.
         let flat = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: [
@@ -132,6 +145,12 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         ])).presentation()
         XCTAssertEqual(Set(flat.topLevelWorkspaces.map(\.id)), [parentID, subspaceID])
         XCTAssertTrue(flat.subspaceRows(of: parentID).isEmpty)
+        // Nor the done-mark field, so its subspaces keep the box.
+        let older = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: [
+            ["id": parentID.uuidString, "title": "toastty", "panels": []],
+            ["id": subspaceID.uuidString, "title": "task", "panels": [], "parentWorkspaceID": parentID.uuidString],
+        ])).presentation()
+        XCTAssertEqual(older.subspaceRows(of: parentID).map(\.showsDoneToggle), [true])
     }
 
     func testCanonicalHostAnnotationsReachWorkspacesAndOlderWorkspacesHaveNone() throws {

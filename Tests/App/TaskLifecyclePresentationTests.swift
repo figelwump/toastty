@@ -105,6 +105,23 @@ struct TaskLifecyclePresentationTests {
         var release = record(mergeRequested: false)
         release.release = TaskRelease(childTaskIDs: [])
         #expect(TaskBoardPresentation.detailActions(item(.running, pullRequest: false, record: release)) == [.archive])
+
+        // The done checkbox follows the same rule: a task the detail pane
+        // offers to merge, or whose merge is under way, takes no done mark.
+        #expect(item(.needsYou(.review)).acceptsDoneMark == false)
+        #expect(item(.running, merge: .checking).acceptsDoneMark == false)
+        #expect(item(.needsYou(.readyForReview), pullRequest: false).acceptsDoneMark)
+        var closed = item(.needsYou(.review))
+        closed.pullRequestState = TaskPullRequestState(state: .closed)
+        #expect(closed.acceptsDoneMark)
+        // Cleanup after a merge GitHub reported is still the merge.
+        var cleaningUp = item(.toShip, merge: .cleaningUp)
+        cleaningUp.pullRequestState = TaskPullRequestState(state: .merged)
+        #expect(cleaningUp.acceptsDoneMark == false)
+        // A task space without a record keeps its checkbox.
+        var watched = item(.needsYou(.review))
+        watched.record = nil
+        #expect(watched.acceptsDoneMark)
     }
 
     /// The sidebar's and the Tasks view's context menus, and the detail

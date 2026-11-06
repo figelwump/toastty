@@ -418,6 +418,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(P.tally([row("a", status: .review), row("b", status: .review)]).review, 2)
         XCTAssertTrue(P.showsDoneToggle(row("review", status: .review)))
         XCTAssertFalse(P.showsDoneToggle(row("merged", status: .toShip)))
+        // A task with an open pull request finishes through Merge: its rail
+        // mark shows the status but is no checkbox, unless a mark is there
+        // to clear.
+        var openPullRequest = row("review", status: .review)
+        openPullRequest.acceptsDoneMark = false
+        XCTAssertFalse(P.showsDoneToggle(openPullRequest))
+        XCTAssertFalse(P.canToggleDone(openPullRequest))
+        var markedWithOpenPullRequest = row("done", status: .done, doneAt: Date())
+        markedWithOpenPullRequest.acceptsDoneMark = false
+        XCTAssertTrue(P.showsDoneToggle(markedWithOpenPullRequest))
     }
 
     func testLinkedChildrenDrawUnderTheTaskThatStartedThemOneLevelDeep() {

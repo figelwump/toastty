@@ -387,6 +387,10 @@ public enum RemoteWorkspaceDoneResult: String, Codable, Equatable, Sendable {
     /// A session in the subspace is working, waiting on approval, or failed,
     /// so the task is not one to wave off as done.
     case workInProgress = "work_in_progress"
+    /// The subspace's task has an open pull request or a merge under way,
+    /// so it finishes through Merge, not a done mark. Older clients cannot
+    /// decode this result and report the request as failed.
+    case hasOpenPullRequest = "has_open_pull_request"
     case workspaceNotFound = "workspace_not_found"
 }
 

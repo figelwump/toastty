@@ -76,6 +76,9 @@ enum SidebarSubspacePresentation {
         var isDone: Bool { doneAt != nil }
         /// When the workspace was marked done, including quiet spaces with no sessions.
         var doneAt: Date? = nil
+        /// False for a task with an open pull request or a merge under way;
+        /// see `TaskBoardItem.acceptsDoneMark`.
+        var acceptsDoneMark = true
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -363,10 +366,17 @@ enum SidebarSubspacePresentation {
         shownCount == totalCount ? "\(totalCount)" : "\(shownCount)/\(totalCount)"
     }
 
+    /// Whether the row offers to change its done mark: a task with an open
+    /// pull request finishes through Merge, so it offers only to clear one.
+    static func canToggleDone(_ row: Row) -> Bool {
+        row.isDone || row.acceptsDoneMark
+    }
+
     /// The rail mark toggles the done mark only while it is a box: idle,
     /// done, or a ready turn the user can wave off. A working, approval, or
     /// error mark is about the agent, not the task.
     static func showsDoneToggle(_ row: Row) -> Bool {
+        guard canToggleDone(row) else { return false }
         switch row.status {
         case .idle, .ready, .done, .question, .review: return true
         case .needsApproval, .error, .working, .toShip: return false

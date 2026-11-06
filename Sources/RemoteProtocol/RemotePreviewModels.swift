@@ -19,13 +19,19 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     public var primaryAnnotationKey: String?
     /// When this subspace's task was marked done; absent while it is open.
     public var doneAt: Date?
+    /// Whether the host takes a done mark for this subspace. False for a
+    /// task with an open pull request, which finishes through Merge; the
+    /// host refuses the mark then. Sent only when false, so an older host's
+    /// subspaces accept it.
+    public var acceptsDoneMark: Bool
     public init(
         id: UUID, title: String, panels: [RemoteWorkspacePanel],
         annotations: [RemoteWorkspaceAnnotation] = [],
         parentWorkspaceID: UUID? = nil,
         spawningConversationID: RemoteConversationID? = nil,
         primaryAnnotationKey: String? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        acceptsDoneMark: Bool = true
     ) {
         self.id = id
         self.title = title
@@ -35,6 +41,7 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         self.spawningConversationID = spawningConversationID
         self.primaryAnnotationKey = primaryAnnotationKey
         self.doneAt = doneAt
+        self.acceptsDoneMark = acceptsDoneMark
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -46,10 +53,11 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         try container.encodeIfPresent(spawningConversationID, forKey: .spawningConversationID)
         try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        if !acceptsDoneMark { try container.encode(false, forKey: .acceptsDoneMark) }
     }
     private enum CodingKeys: String, CodingKey {
         case id, title, panels, annotations
-        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt
+        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt, acceptsDoneMark
     }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,6 +70,7 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
             RemoteConversationID.self, forKey: .spawningConversationID)
         primaryAnnotationKey = try container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)
         doneAt = try container.decodeIfPresent(Date.self, forKey: .doneAt)
+        acceptsDoneMark = try container.decodeIfPresent(Bool.self, forKey: .acceptsDoneMark) ?? true
     }
 }
 

@@ -1068,10 +1068,11 @@ struct RemoteAccessServiceSafetyTests {
 
     @Test func remoteDoneRefusesALateRequestWhileWorkIsInProgress() {
         func result(
-            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false
+            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false, accepts: Bool = true
         ) -> RemoteWorkspaceDoneResult {
             RemoteAccessService.workspaceDoneResult(
-                requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy)
+                requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy,
+                acceptsDoneMark: accepts)
         }
         #expect(result(done: true) == .updated)
         // An agent started new work after the tap; its turn cleared or will
@@ -1080,6 +1081,114 @@ struct RemoteAccessServiceSafetyTests {
         #expect(result(done: false, isDone: true, busy: true) == .updated)
         #expect(result(done: true, isDone: true, busy: true) == .unchanged)
         #expect(result(done: true, isSubspace: false) == .notSubspace)
+        // A task with an open pull request finishes through Merge; clearing
+        // a mark it already has stays allowed.
+        #expect(result(done: true, accepts: false) == .hasOpenPullRequest)
+        #expect(result(done: false, isDone: true, accepts: false) == .updated)
+        #expect(result(done: true, isDone: true, accepts: false) == .unchanged)
+    }
+
+    /// The bug this guards: a phone's done checkbox finished a task in
+    /// Ready for review whose pull request was still open, skipping the
+    /// merge and To ship. Runs a real task, board, and remote service.
+    @MainActor
+    @Test func remoteDoneRefusesATaskWithAnOpenPullRequestAndTellsClientsToHideTheBox() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = TaskBoardTests.FakeGitHub()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskID = created.id
+        let taskSpace = try #require(fixture.record(taskID)?.taskSpaceWorkspaceID)
+        // The agent finished its turn and the user read it.
+        let session = try #require(fixture.record(taskID)?.operation.agentLaunch?.sessionID)
+        let panel = try #require(fixture.record(taskID)?.operation.taskSpace?.panelID)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date().addingTimeInterval(1))
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        #expect(fixture.sessionRuntimeStore.workspaceStatuses(for: taskSpace).map(\.status.kind) == [.idle])
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "plain", activate: false)))
+        let plain = try #require(fixture.store.state.windows.first?.workspaceIDs.last)
+        #expect(fixture.store.send(.setWorkspaceParent(
+            workspaceID: plain, parentWorkspaceID: fixture.workspaceID, spawningSessionID: nil)))
+        let pullRequestURL = "https://github.com/example/toastty/pull/124"
+        for workspaceID in [taskSpace, plain] {
+            #expect(fixture.store.send(.setWorkspaceAnnotation(
+                workspaceID: workspaceID,
+                key: "github-pr",
+                annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+            )))
+        }
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        await board.pullRequests?.refresh(link).value
+
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-done-pr-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let service = RemoteAccessService(
+            store: fixture.store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_995,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_995)
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: Date())
+        func summary(_ workspaceID: UUID) throws -> RemoteWorkspaceSummary {
+            try #require(service.facadeSessionList(at: Date()).workspaces.first { $0.id == workspaceID })
+        }
+
+        // The task finishes through Merge: the Mac refuses the mark and
+        // tells clients to hide the box. A subspace without a task keeps it.
+        let refused = service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device)
+        #expect(refused == .hasOpenPullRequest)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+        #expect(board.items().first { $0.id == .task(taskID) }?.stage.group != .done)
+        #expect(try summary(taskSpace).acceptsDoneMark == false)
+        #expect(try summary(plain).acceptsDoneMark)
+        #expect(service.setWorkspaceDone(.init(workspaceID: plain, done: true), device: device) == .updated)
+
+        // A mark the task already has can still be cleared.
+        #expect(fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: Date())))
+        #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: false), device: device) == .updated)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+
+        // Once the pull request is closed without a merge, the box returns.
+        // Only GitHub's answer changed, and clients still hear of it.
+        try await Task.sleep(for: .milliseconds(300))
+        server.removeAllBroadcasts()
+        gitHub.answer(pullRequestURL, state: "CLOSED")
+        await board.pullRequests?.refresh(link).value
+        #expect(try summary(taskSpace).acceptsDoneMark)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, server.sessionListSnapshots.last?
+            .workspaces.first(where: { $0.id == taskSpace })?.acceptsDoneMark != true {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(server.sessionListSnapshots.last?.workspaces.first { $0.id == taskSpace }?.acceptsDoneMark == true)
+        #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device) == .updated)
+        #expect(board.items().first { $0.id == .task(taskID) }?.stage == .done)
     }
 
     @MainActor
