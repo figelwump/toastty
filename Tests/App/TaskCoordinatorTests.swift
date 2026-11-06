@@ -198,12 +198,62 @@ struct TaskCoordinatorTests {
         #expect(fixture.savedRecord(created.id)?.setup == .started)
     }
 
+    @Test func firstMessageNamesTheShippedStartSkillUnlessTurnedOff() async throws {
+        let fixture = try Fixture()
+        fixture.config.defaults.startPrompt = "Ask codex for a review before the PR."
+
+        // Without start_skill, the shipped skill comes first and start_prompt
+        // follows it. The skill tells the agent about needs-reply, so the
+        // message leaves that line out.
+        let shipped = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the composer",
+            workspaceID: fixture.workspaceID,
+            agent: "codex"
+        ))
+        await fixture.waitForSetup(shipped.id)
+        let shippedRecord = try #require(fixture.record(shipped.id))
+        #expect(shippedRecord.resolved?.skill == TaskPrompt.defaultStartSkill)
+        // The start prompt is saved with the task, for a fresh session that
+        // continues a move into a worktree.
+        #expect(fixture.savedRecord(shipped.id)?.resolved?.startPrompt == "Ask codex for a review before the PR.")
+        let shippedPanel = try #require(shippedRecord.operation.taskSpace?.panelID)
+        let sent = try #require(fixture.router.sentTextByPanelID[shippedPanel])
+        let skillLine = try #require(sent.range(of: "Use the toastty-task-start skill."))
+        let startPrompt = try #require(sent.range(of: "Ask codex for a review before the PR."))
+        let text = try #require(sent.range(of: "Fix the composer"))
+        #expect(skillLine.upperBound < startPrompt.lowerBound)
+        #expect(startPrompt.upperBound < text.lowerBound)
+        #expect(sent.contains("needs-reply") == false)
+
+        // "none" names no skill, so the message keeps the needs-reply line.
+        fixture.config.defaults.startSkill = "none"
+        fixture.config.defaults.startPrompt = nil
+        let plain = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the sidebar",
+            workspaceID: fixture.workspaceID,
+            agent: "codex"
+        ))
+        await fixture.waitForSetup(plain.id)
+        let plainRecord = try #require(fixture.record(plain.id))
+        #expect(plainRecord.resolved?.skill == nil)
+        let plainPanel = try #require(plainRecord.operation.taskSpace?.panelID)
+        let plainSent = try #require(fixture.router.sentTextByPanelID[plainPanel])
+        #expect(plainSent.contains("Use the ") == false)
+        #expect(plainSent.contains(TaskPrompt.replyLine))
+    }
+
     @Test func defaultsFillOnlyTheFieldsTheCallerLeftOut() async throws {
         let fixture = try Fixture()
         fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
 
         let defaulted = try await fixture.coordinator.create(TaskCreateRequest(text: "one", workspaceID: fixture.workspaceID))
-        #expect(defaulted.resolved == TaskFields(workspaceID: fixture.workspaceID, agent: "claude", model: "claude-opus-5-5", effort: "high"))
+        #expect(defaulted.resolved == TaskFields(
+            workspaceID: fixture.workspaceID,
+            agent: "claude",
+            model: "claude-opus-5-5",
+            effort: "high",
+            skill: TaskPrompt.defaultStartSkill
+        ))
 
         let pinnedEffort = try await fixture.coordinator.create(TaskCreateRequest(text: "two", workspaceID: fixture.workspaceID, effort: "low"))
         #expect(pinnedEffort.resolved?.effort == "low")
@@ -249,6 +299,13 @@ struct TaskCoordinatorTests {
         await expectFailure(TaskCreateRequest(text: "x", clientRequestID: "has space", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "request ID")
 
         await expectFailure(TaskCreateRequest(text: String(repeating: "x", count: 70 * 1024), workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "too long")
+        // While triage routes the task, the check still counts the project's
+        // start_prompt, which setup adds after the skill line.
+        fixture.config.triage = TasksConfig.Triage(command: "fake-triage")
+        fixture.config.defaults.startPrompt = String(repeating: "p", count: 40 * 1024)
+        await expectFailure(TaskCreateRequest(text: String(repeating: "x", count: 40 * 1024), workspaceID: fixture.workspaceID), mentioning: "too long")
+        fixture.config.triage = nil
+        fixture.config.defaults.startPrompt = nil
         await expectFailure(TaskCreateRequest(text: "a\u{0}b", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "NUL")
 
         fixture.configError = TasksConfigParseError(line: 4, message: "unknown table [create]")

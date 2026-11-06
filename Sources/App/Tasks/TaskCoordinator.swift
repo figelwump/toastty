@@ -391,6 +391,7 @@ final class TaskCoordinator {
         )
         let parentTaskID = caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID }
         let startSkill = projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+        let startPrompt = projectRoot.flatMap { config.startPrompt(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
         if let forkSource {
             guard let workspaceID else {
                 throw TaskError("--fork needs the calling session's workspace, and it has closed.")
@@ -400,7 +401,8 @@ final class TaskCoordinator {
                 agent: forkSource.agent.rawValue,
                 workspaceID: workspaceID,
                 parentTask: parentTaskID.flatMap { records.record(id: $0) },
-                skill: startSkill
+                skill: startSkill,
+                startPrompt: startPrompt
             )
             setup = .settingUp
         } else if missing.isEmpty == false, isTriageEnabled(config) {
@@ -410,7 +412,8 @@ final class TaskCoordinator {
                 pinned: pinned,
                 workspaceID: workspaceID,
                 defaults: config.defaults,
-                skill: startSkill
+                skill: startSkill,
+                startPrompt: startPrompt
             )
             setup = .settingUp
         } else {
@@ -488,10 +491,13 @@ final class TaskCoordinator {
         }
         // The launcher refuses a first message it cannot pass, and every
         // retry would fail the same way, so the request fails now. A fork's
-        // message names its task space, which setup makes later.
+        // message names its task space, which setup makes later. While triage
+        // routes the task, `resolved` is empty, so the check uses the
+        // project's start skill and prompt, which setup adds later.
         let firstMessage = record.forkSource == nil
             ? TaskPrompt.compose(
-                skill: resolved?.skill,
+                skill: resolved?.skill ?? pinned.skill ?? startSkill,
+                startPrompt: resolved?.startPrompt ?? startPrompt,
                 firstPrompt: prompt,
                 text: text,
                 attachmentPaths: attachments.map(\.path)
@@ -1135,6 +1141,7 @@ final class TaskCoordinator {
         var firstPrompt = resolved.prompt
         var prompt = TaskPrompt.compose(
             skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
             firstPrompt: firstPrompt,
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
@@ -1149,6 +1156,7 @@ final class TaskCoordinator {
             firstPrompt = nil
             prompt = TaskPrompt.compose(
                 skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
                 firstPrompt: nil,
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
@@ -1428,10 +1436,14 @@ final class TaskCoordinator {
                 // A release that comes back here keeps to its release skill.
                 skill: current.release == nil
                     ? config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil,
+                startPrompt: current.release == nil
+                    ? config.startPrompt(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
                     : nil
             )
             let firstMessage = TaskPrompt.compose(
                 skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
                 firstPrompt: resolved.prompt,
                 text: current.text,
                 attachmentPaths: current.attachments.map(\.path)
@@ -1682,18 +1694,26 @@ final class TaskCoordinator {
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
     /// chosen agent is left out.
-    /// `skill` is the project's start skill, used when `pinned` names none.
+    /// `skill` is the project's start skill, used when `pinned` names none,
+    /// and `startPrompt` its `start_prompt`.
     func resolvedFields(
         pinned: TaskFields,
         workspaceID: UUID?,
         defaults: TasksConfig.Defaults,
-        skill: String? = nil
+        skill: String? = nil,
+        startPrompt: String? = nil
     ) throws -> TaskFields {
         guard let agent = pinned.agent ?? defaults.agent else {
             throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
         }
         let profile = try checkedProfile(agent)
-        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt, skill: pinned.skill ?? skill)
+        var fields = TaskFields(
+            workspaceID: workspaceID,
+            agent: agent,
+            prompt: pinned.prompt,
+            skill: pinned.skill ?? skill,
+            startPrompt: startPrompt
+        )
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model

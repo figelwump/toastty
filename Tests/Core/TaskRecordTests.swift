@@ -97,6 +97,43 @@ struct TaskRecordTests {
     }
 
     @Test
+    func startPromptFollowsTheWorktreeAndTheShippedSkillDropsTheReplyLine() {
+        let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
+        #expect(TaskPrompt.compose(
+            skill: TaskPrompt.defaultStartSkill,
+            startPrompt: "Ask for a review first.",
+            firstPrompt: "Start with the views.",
+            text: "Fix it",
+            attachmentPaths: [],
+            worktree: worktree
+        ) == """
+        Use the toastty-task-start skill.
+
+        You are in the git worktree /w/fix, on branch fix/composer.
+
+        Ask for a review first.
+
+        Start with the views.
+
+        The task, as written:
+
+        Fix it
+        """)
+
+        // A fresh session that continues a move gets the same start prompt.
+        let record = TaskRecord(
+            createdAt: Date(),
+            text: "Fix it",
+            title: "Fix it",
+            slug: "fix-it",
+            source: .cli,
+            resolved: TaskFields(agent: "cursor", skill: TaskPrompt.defaultStartSkill, startPrompt: "Ask for a review first.")
+        )
+        let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
+        #expect(fresh.hasSuffix("cannot continue.\n\nAsk for a review first.\n\nFix it"))
+    }
+
+    @Test
     func onlyAFreshMovedSessionGetsTheStartSkillAgain() {
         let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
         let record = TaskRecord(

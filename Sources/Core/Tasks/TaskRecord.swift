@@ -386,6 +386,9 @@ public struct TaskFields: Codable, Equatable, Sendable {
     /// The skill the first message names before everything else:
     /// `start_skill`, or `release_skill` for a release.
     public var skill: String?
+    /// `start_prompt` from tasks.toml, sent after the skill line. A release
+    /// has none: its `release_prompt` is its first prompt.
+    public var startPrompt: String?
 
     public init(
         workspaceID: UUID? = nil,
@@ -395,7 +398,8 @@ public struct TaskFields: Codable, Equatable, Sendable {
         prompt: String? = nil,
         title: String? = nil,
         slug: String? = nil,
-        skill: String? = nil
+        skill: String? = nil,
+        startPrompt: String? = nil
     ) {
         self.workspaceID = workspaceID
         self.agent = agent
@@ -405,6 +409,7 @@ public struct TaskFields: Codable, Equatable, Sendable {
         self.title = title
         self.slug = slug
         self.skill = skill
+        self.startPrompt = startPrompt
     }
 }
 

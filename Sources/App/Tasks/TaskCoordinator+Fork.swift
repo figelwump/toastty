@@ -35,11 +35,18 @@ extension TaskCoordinator {
         agent: String,
         workspaceID: UUID,
         parentTask: TaskRecord?,
-        skill: String?
+        skill: String?,
+        startPrompt: String?
     ) throws -> TaskFields {
         let profile = try checkedProfile(agent)
         let inherited = parentTask?.resolved?.agent == agent ? parentTask?.resolved : nil
-        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt, skill: pinned.skill ?? skill)
+        var fields = TaskFields(
+            workspaceID: workspaceID,
+            agent: agent,
+            prompt: pinned.prompt,
+            skill: pinned.skill ?? skill,
+            startPrompt: startPrompt
+        )
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model
