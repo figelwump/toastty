@@ -89,6 +89,18 @@ struct TaskAlertDetectorTests {
         #expect(run(from: .running, initialMerging: true, held(.needsYou(.agentNeedsInput))).isEmpty)
     }
 
+    /// A merge that fails at once, such as Toastty's own merge refused by
+    /// GitHub, ends before its merging stage settles.
+    @Test func aMergeThatEndsBeforeItSettlesStillCounts() {
+        let short: [(TaskStage, Bool)] = [(.running, true), (.running, true)]
+        #expect(run(from: .needsYou(.review), short + held(.needsYou(.review))) == [.mergeStopped])
+        #expect(run(from: .needsYou(.review), short + held(.needsYou(.agentError))) == [.mergeStopped])
+        #expect(run(from: .needsYou(.review), short + held(.done)).isEmpty)
+        // Once the outcome settled, the next review is a plain review again.
+        let again = held(.running) + held(.needsYou(.review))
+        #expect(run(from: .needsYou(.review), short + held(.needsYou(.review)) + again) == [.mergeStopped, .review])
+    }
+
     @Test func aNewTaskThatFailedFiresAtOnceAndADeletedTaskIsForgotten() {
         var detector = TaskAlertDetector()
         _ = detector.observe([:], now: t0)
@@ -187,6 +199,61 @@ struct RemoteTaskAlertsPlannerTests {
         #expect(notification.conversationID == conversation)
     }
 
+    /// A finished turn asks GitHub about the pull request. A slow answer that
+    /// turns the task into a review still replaces the turn's alert.
+    @Test func aTurnAlertWaitsForAnOutstandingPullRequestAnswer() throws {
+        let alerts = planner()
+        let task = record("Jump-to-next-active fix")
+        #expect(alerts.pass(items: [item(task, .running, pullRequest: 263)]) { _ in nil }.isEmpty)
+        let turn = turnAlert()
+        alerts.hold(turn, taskID: task.id)
+        var deliveries: [RemoteTaskAlerts.Delivery] = []
+        // The draft answer from before the turn: an unread finish for 20 s
+        // while `gh` runs, then the answer says it is ready for review.
+        for second in 1...30 {
+            clock.advance(1)
+            let stage: TaskStage = second <= 20 ? .needsYou(.agentFinished) : .needsYou(.review)
+            deliveries += alerts.pass(
+                items: [item(task, stage, pullRequest: 263)], isAwaitingPullRequest: { _ in second <= 20 }
+            ) { _ in nil }
+        }
+        let taskAlerts = deliveries.compactMap { if case .task(let alert) = $0 { alert } else { nil } }
+        #expect(taskAlerts.map(\.notification.reason) == [.review])
+        #expect(taskAlerts.first?.replaced == [turn])
+        #expect(deliveries.contains(.session(turn)) == false)
+
+        // An answer that changes nothing releases the alert once it settles,
+        // and a request that never ends releases it at the maximum hold.
+        let quiet = planner()
+        #expect(quiet.pass(items: [item(task, .running, pullRequest: 263)]) { _ in nil }.isEmpty)
+        let other = turnAlert()
+        quiet.hold(other, taskID: task.id)
+        var released: [Int] = []
+        for second in 1...80 {
+            clock.advance(1)
+            let out = quiet.pass(items: [item(task, .needsYou(.agentFinished), pullRequest: 263)],
+                                 isAwaitingPullRequest: { _ in true }) { _ in nil }
+            if out.contains(.session(other)) { released.append(second) }
+        }
+        #expect(released == [75])
+    }
+
+    @Test func aTaskAlertOpensTheTasksOwnAgentBeforeTheSessionItReplaced() throws {
+        let alerts = planner()
+        let asking = record("Task", question: "Q?")
+        #expect(alerts.pass(items: [item(asking, .running)]) { _ in nil }.isEmpty)
+        alerts.hold(turnAlert(), taskID: asking.id)
+        let owner = RemoteConversationID()
+        var found: [RemotePushTaskNotification] = []
+        for _ in 0..<5 {
+            clock.advance(1)
+            for case .task(let alert) in alerts.pass(items: [item(asking, .needsYou(.awaitingReply))], conversationID: { _ in owner }) {
+                found.append(alert.notification)
+            }
+        }
+        #expect(found.map(\.conversationID) == [owner])
+    }
+
     @Test func theStartupDelayHoldsAlertsBackButNotHeldTurnAlerts() {
         let alerts = planner(startupDelay: 10)
         let asking = record("Task", question: "Q?")
@@ -275,6 +342,17 @@ struct RemoteTaskAlertServiceTests {
         harness.finishTurn(asking: "Ship it?")
         harness.macInUse = true
         await harness.pass(seconds: 12)
+        #expect(harness.relay.calls.isEmpty)
+    }
+
+    /// The user came back to the Mac while the Ready alert was held.
+    @Test func aMacInUseWhenTheHoldEndsSendsNoReadyAlert() async throws {
+        let harness = try await Harness()
+        defer { harness.removeRuntimeFiles() }
+        harness.finishTurn(asking: nil)
+        await harness.pass(seconds: 4)
+        harness.macInUse = true
+        await harness.pass(seconds: 10)
         #expect(harness.relay.calls.isEmpty)
     }
 }

@@ -42,12 +42,16 @@ struct TaskAlertDetector {
 
     private var settled: [UUID: Observation]?
     private var candidates: [UUID: (key: Key, since: Date)] = [:]
+    /// Tasks seen merging since their last settled stage. A merge that ends
+    /// before it settles, such as one that fails at once, still counts.
+    private var mergeAttempts: Set<UUID> = []
 
     var isPrimed: Bool { settled != nil }
 
     mutating func reset() {
         settled = nil
         candidates = [:]
+        mergeAttempts = []
     }
 
     mutating func observe(
@@ -71,7 +75,12 @@ struct TaskAlertDetector {
                 continue
             }
             let key = observation.key
-            if previous.key == key {
+            if observation.isMerging { mergeAttempts.insert(id) }
+            // A merge that started and ended between settled samples comes
+            // back to the same stage: its outcome is still a change.
+            let unsettledMergeEnded = mergeAttempts.contains(id) && observation.isMerging == false
+                && previous.isMerging == false
+            if previous.key == key, unsettledMergeEnded == false {
                 candidates[id] = nil
                 settled[id] = observation
                 continue
@@ -84,13 +93,19 @@ struct TaskAlertDetector {
             }
             candidates[id] = nil
             settled[id] = observation
-            if let reason = Self.reason(from: previous, to: observation) {
+            var from = previous
+            if mergeAttempts.contains(id) {
+                from.isMerging = true
+                if observation.isMerging == false { mergeAttempts.remove(id) }
+            }
+            if let reason = Self.reason(from: from, to: observation) {
                 triggers.append(Trigger(taskID: id, reason: reason))
             }
         }
         for id in settled.keys where current[id] == nil {
             settled[id] = nil
             candidates[id] = nil
+            mergeAttempts.remove(id)
         }
         self.settled = settled
         return triggers
@@ -128,8 +143,9 @@ struct TaskAlertDetector {
 /// for `sessionHold`. When its task settles into Needs you for a reason
 /// with an alert in that time, the task alert replaces the held alert, so
 /// one event sends one alert. Otherwise the held alert goes out as before.
-/// The hold covers the settle window plus the pull request check that a
-/// finished turn starts.
+/// A finished turn asks GitHub about the task's pull request, and its answer
+/// can turn the task into a review: while that answer is outstanding, and
+/// for a settle window after it, the alert stays held, up to `maximumHold`.
 @MainActor
 final class RemoteTaskAlerts {
     struct Timing {
@@ -141,6 +157,8 @@ final class RemoteTaskAlerts {
         var startupDelay: TimeInterval = 10
         var settleInterval: TimeInterval = TaskAlertDetector.defaultSettleInterval
         var sessionHold: TimeInterval = 8
+        /// `gh pr view` can take two 30-second attempts.
+        var maximumHold: TimeInterval = 75
     }
 
     /// A task alert, with the session alerts it replaces. A relay that
@@ -162,6 +180,8 @@ final class RemoteTaskAlerts {
     private var startedAt: Date?
     private typealias HeldAlert = (notification: RemotePushSessionNotification, at: Date)
     private var held: [UUID: [HeldAlert]] = [:]
+    /// When each task with a held alert last waited for a pull request answer.
+    private var pullRequestPendingAt: [UUID: Date] = [:]
 
     init(timing: Timing = Timing(), now: @escaping () -> Date = Date.init) {
         self.timing = timing
@@ -182,12 +202,17 @@ final class RemoteTaskAlerts {
         detector.reset()
         startedAt = nil
         held = [:]
+        pullRequestPendingAt = [:]
     }
 
-    /// One sample of the task board. `conversationID` finds the session a
-    /// tap opens for a task that held no alert.
+    /// One sample of the task board. `conversationID` finds the task's own
+    /// agent session, which a tap opens; without one, the tap opens the
+    /// session whose alert the task alert replaced. `isAwaitingPullRequest`
+    /// says whether GitHub's answer about the task's pull request is
+    /// outstanding.
     func pass(
         items: [TaskBoardItem],
+        isAwaitingPullRequest: (TaskBoardItem) -> Bool = { _ in false },
         conversationID: (TaskBoardItem) -> RemoteConversationID?
     ) -> [Delivery] {
         let at = now()
@@ -205,11 +230,12 @@ final class RemoteTaskAlerts {
             for trigger in detector.observe(observations, now: at, settleInterval: timing.settleInterval) {
                 guard let item = itemsByID[trigger.taskID], let record = item.record else { continue }
                 let replaced = (held.removeValue(forKey: trigger.taskID) ?? []).map(\.notification)
+                pullRequestPendingAt[trigger.taskID] = nil
                 deliveries.append(.task(TaskAlert(
                     notification: RemotePushTaskNotification(
                         eventID: UUID(),
                         taskID: record.id,
-                        conversationID: replaced.last?.conversationID ?? conversationID(item),
+                        conversationID: conversationID(item) ?? replaced.last?.conversationID,
                         reason: trigger.reason,
                         taskTitle: item.title,
                         detail: record.replyRequest?.question,
@@ -219,16 +245,26 @@ final class RemoteTaskAlerts {
                 )))
             }
         }
+        for item in items {
+            guard let id = item.record?.id, held[id] != nil, isAwaitingPullRequest(item) else { continue }
+            pullRequestPendingAt[id] = at
+        }
         for (taskID, alerts) in held {
+            // The answer must also settle before the task's stage counts.
+            let awaitingAnswer = pullRequestPendingAt[taskID].map {
+                at.timeIntervalSince($0) <= timing.settleInterval + 1
+            } ?? false
             var waiting: [HeldAlert] = []
             for alert in alerts {
-                if at.timeIntervalSince(alert.at) >= timing.sessionHold {
+                let elapsed = at.timeIntervalSince(alert.at)
+                if elapsed >= timing.maximumHold || (elapsed >= timing.sessionHold && awaitingAnswer == false) {
                     deliveries.append(.session(alert.notification))
                 } else {
                     waiting.append(alert)
                 }
             }
             held[taskID] = waiting.isEmpty ? nil : waiting
+            if waiting.isEmpty { pullRequestPendingAt[taskID] = nil }
         }
         return deliveries
     }

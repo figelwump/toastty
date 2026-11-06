@@ -1517,9 +1517,15 @@ final class RemoteAccessService: ObservableObject {
             taskAlerts.reset()
             return
         }
-        let deliveries = taskAlerts.pass(items: taskBoard.items()) { [weak self] item in
-            self?.taskConversationID(item)
-        }
+        let pullRequests = taskBoard.pullRequests
+        let deliveries = taskAlerts.pass(
+            items: taskBoard.items(),
+            isAwaitingPullRequest: { item in item.pullRequest.map { pullRequests?.isRefreshing($0) == true } ?? false },
+            conversationID: { [weak self] item in self?.taskConversationID(item) }
+        )
+        // As for session alerts: drop alerts while the Mac is in use. A held
+        // alert whose user came back to the Mac during the hold goes too.
+        guard deliveries.isEmpty == false, pushMacPresence().allowsPush else { return }
         for delivery in deliveries {
             switch delivery {
             case .session(let notification):
@@ -1527,9 +1533,6 @@ final class RemoteAccessService: ObservableObject {
                     await self?.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
                 }
             case .task(let alert):
-                // As for session alerts: drop it while the Mac is in use,
-                // with the alerts it replaces.
-                guard pushMacPresence().allowsPush else { continue }
                 startPushDelivery(eventID: alert.notification.eventID, configuration: pushConfiguration) { [weak self] registration in
                     await self?.deliverTaskAlert(alert, to: registration, configuration: pushConfiguration)
                 }
@@ -1537,13 +1540,11 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    /// The session a task alert opens: the task's own agent pane when it
-    /// has a conversation, else another in its task space.
+    /// The conversation of the task's own agent, which a task alert opens.
     private func taskConversationID(_ item: TaskBoardItem) -> RemoteConversationID? {
-        guard let workspaceID = item.taskSpaceWorkspaceID else { return nil }
-        let candidates = scanConversationCandidates(mintingIDs: false).filter { $0.workspaceID == workspaceID }
-        let panelID = item.record?.operation.taskSpace?.panelID
-        return (candidates.first { $0.panelID == panelID } ?? candidates.first)?.conversationID
+        guard let record = item.record,
+              let session = taskBoard?.coordinator?.liveAgentSession(of: record) else { return nil }
+        return scanConversationCandidates(mintingIDs: false).first { $0.panelID == session.panelID }?.conversationID
     }
 
     private func retryPushCleanup() {
