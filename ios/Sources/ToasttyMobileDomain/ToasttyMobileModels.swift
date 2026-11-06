@@ -564,6 +564,9 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let primaryAnnotationKey: String?
     /// The subspace's done mark on the Mac.
     public let isDone: Bool
+    /// Whether the Mac takes a done mark for the subspace. False for a task
+    /// with an open pull request, which finishes through Merge.
+    public let acceptsDoneMark: Bool
 
     public init(
         id: UUID,
@@ -574,7 +577,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         parentWorkspaceID: UUID? = nil,
         spawningConversationID: UUID? = nil,
         primaryAnnotationKey: String? = nil,
-        isDone: Bool = false
+        isDone: Bool = false,
+        acceptsDoneMark: Bool = true
     ) {
         self.id = id
         self.title = title
@@ -585,6 +589,7 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.spawningConversationID = spawningConversationID
         self.primaryAnnotationKey = primaryAnnotationKey
         self.isDone = isDone
+        self.acceptsDoneMark = acceptsDoneMark
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -603,7 +608,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             parentWorkspaceID: parentWorkspaceID,
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
-            isDone: isDone
+            isDone: isDone,
+            acceptsDoneMark: acceptsDoneMark
         )
     }
 
@@ -617,7 +623,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             parentWorkspaceID: parentWorkspaceID,
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
-            isDone: isDone
+            isDone: isDone,
+            acceptsDoneMark: acceptsDoneMark
         )
     }
 }
@@ -885,6 +892,13 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
             case .ready, .idle: false
             }
         } == false
+    }
+
+    /// Whether the status mark is a done checkbox: the row is quiet, and the
+    /// Mac takes the change. A task with an open pull request offers only to
+    /// clear a mark.
+    public var showsDoneToggle: Bool {
+        status.showsDoneToggle && (workspace.isDone || workspace.acceptsDoneMark)
     }
 
     /// The one chip the row shows: the primary annotation, or the pull

@@ -78,6 +78,8 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
         case flagChanged(conversationID: UUID, isFlagged: Bool)
         /// A session started on the Mac but has not reached the list yet.
         case sessionStarted
+        /// The Mac saved a task from this phone and is setting it up.
+        case taskCreated
         case sessionClosed
         /// The Mac ran a task action, or started it.
         case taskAction
@@ -91,7 +93,7 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     var canUndo: Bool {
         switch kind {
         case .changed, .flagChanged: true
-        case .sessionStarted, .sessionClosed, .taskAction, .failed: false
+        case .sessionStarted, .taskCreated, .sessionClosed, .taskAction, .failed: false
         }
     }
 }
@@ -111,6 +113,10 @@ final class HomeScreenController {
     private(set) var hostSupportsConversationFlag: Bool
     /// Whether the connected Mac accepts new sessions from this device.
     private(set) var hostSupportsSessionStart: Bool
+    /// Whether the connected Mac accepts new tasks from this device. Home's
+    /// ＋ and shared content open New Task when it does, New Session when
+    /// it does not.
+    private(set) var hostSupportsTaskCreate: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
     /// Whether the connected Mac takes task actions from this device. The
@@ -132,8 +138,8 @@ final class HomeScreenController {
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
-    /// Whether a new-session sheet is on screen. Content shared from another
-    /// app waits for it to close instead of replacing its draft.
+    /// Whether a new-session or new-task sheet is on screen. Content shared
+    /// from another app waits for it to close instead of replacing its draft.
     var isShowingNewSessionForm = false
     private var onConversationOpened: @MainActor (UUID) -> Void = { _ in }
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
@@ -148,6 +154,10 @@ final class HomeScreenController {
     private var closingConversationIDs: Set<UUID> = []
     private var loadSessionStartOptions: (@MainActor (UUID) async -> ToasttySessionStartOptionsOutcome)?
     private var sendSessionStart: (@MainActor (RemoteSessionStartRequest) async -> ToasttySessionStartOutcome)?
+    private var loadTaskCreateOptions: (@MainActor () async -> ToasttyTaskCreateOptionsOutcome)?
+    private var sendTaskCreate: (@MainActor (RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome)?
+    /// Tasks a fixture "created", newest last, for tests.
+    private(set) var fixtureCreatedTasks: [RemoteTaskCreateRequest] = []
     /// Flag states the user asked for that the Mac's snapshot does not show
     /// yet, by conversation, with the same rules as `pendingSubspaceDone`.
     private var pendingConversationFlag: [UUID: PendingSubspaceDone] = [:]
@@ -194,6 +204,7 @@ final class HomeScreenController {
         hostSupportsSubspaceDone = runtimeMode == .fixture
         hostSupportsConversationFlag = runtimeMode == .fixture
         hostSupportsSessionStart = runtimeMode == .fixture
+        hostSupportsTaskCreate = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
         hostSupportsConversationClose = runtimeMode == .fixture
         hostSupportsTaskActions = runtimeMode == .fixture
         self.connectionState = connectionState
@@ -224,6 +235,7 @@ final class HomeScreenController {
         hostSupportsSubspaceDone: Bool? = nil,
         hostSupportsConversationFlag: Bool? = nil,
         hostSupportsSessionStart: Bool? = nil,
+        hostSupportsTaskCreate: Bool? = nil,
         hostSupportsConversationClose: Bool? = nil,
         hostSupportsTaskActions: Bool? = nil,
         hostSnapshotStamp: Date? = nil
@@ -237,6 +249,9 @@ final class HomeScreenController {
         }
         if let hostSupportsSessionStart {
             self.hostSupportsSessionStart = hostSupportsSessionStart
+        }
+        if let hostSupportsTaskCreate {
+            self.hostSupportsTaskCreate = hostSupportsTaskCreate
         }
         if let hostSupportsConversationClose {
             self.hostSupportsConversationClose = hostSupportsConversationClose
@@ -595,6 +610,68 @@ final class HomeScreenController {
         return .answered(.started(conversationID: RemoteConversationID(rawValue: conversation.id)))
     }
 
+    // MARK: - New task
+
+    /// New tasks go only to a live Mac that accepts them from this device.
+    /// Whether this device's start permission is on is a separate answer
+    /// that the create options carry.
+    var canCreateTasks: Bool {
+        hostSupportsTaskCreate && freshness == .live
+    }
+
+    /// A fixture launch with this set to "unsupported" stands in for a Mac
+    /// without task creation.
+    private static var fixtureSupportsTaskCreate: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_TASK_CREATE"] != "unsupported"
+#else
+        true
+#endif
+    }
+
+    func setHostSupportsTaskCreate(_ isSupported: Bool) {
+        hostSupportsTaskCreate = isSupported
+    }
+
+    func installTaskCreate(
+        options: @escaping @MainActor () async -> ToasttyTaskCreateOptionsOutcome,
+        create: @escaping @MainActor (RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome
+    ) {
+        loadTaskCreateOptions = options
+        sendTaskCreate = create
+    }
+
+    func taskCreateOptions() async -> ToasttyTaskCreateOptionsOutcome {
+        if let loadTaskCreateOptions {
+            return await loadTaskCreateOptions()
+        }
+        guard runtimeMode == .fixture else { return .unreachable }
+        return .loaded(ToasttyMobileFixture.taskCreateOptions(workspaces: hostSnapshot.topLevelWorkspaces))
+    }
+
+    func createTask(_ request: RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome {
+        if let sendTaskCreate {
+            return await sendTaskCreate(request)
+        }
+        guard runtimeMode == .fixture else { return .unconfirmed }
+        // A pause that stands in for the Mac saving the task.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard hostSnapshot.topLevelWorkspaces.contains(where: { $0.id == request.workspaceID }) else {
+            return .answered(.rejected(reason: .workspaceNotFound, message: nil))
+        }
+        fixtureCreatedTasks.append(request)
+        return .answered(.created(taskID: UUID()))
+    }
+
+    /// Says that the Mac has the task. Its task space appears in the list
+    /// once setup makes it.
+    func announceTaskCreated() {
+        subspaceDoneNotice = SubspaceDoneNotice(
+            kind: .taskCreated,
+            message: "Task saved on your Mac. It's setting up now."
+        )
+    }
+
     func installSubspaceDone(
         _ send: @escaping @MainActor (UUID, Bool) async -> SubspaceDoneOutcome
     ) {
@@ -607,7 +684,8 @@ final class HomeScreenController {
         guard canMarkSubspacesDone,
               sendSubspaceDone != nil || runtimeMode == .fixture,
               let row = snapshot.subspaceRow(id: workspaceID),
-              row.workspace.isDone != isDone else { return }
+              row.workspace.isDone != isDone,
+              isDone == false || row.workspace.acceptsDoneMark else { return }
         subspaceDoneNotice = announces
             ? SubspaceDoneNotice(
                 kind: .changed(workspaceID: workspaceID, isDone: isDone),
@@ -691,7 +769,7 @@ final class HomeScreenController {
         case .flagChanged(let conversationID, let isFlagged)?:
             subspaceDoneNotice = nil
             setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
-        case .sessionStarted?, .sessionClosed?, .taskAction?, .failed?, nil:
+        case .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?, .failed?, nil:
             break
         }
     }

@@ -386,6 +386,9 @@ public struct TaskFields: Codable, Equatable, Sendable {
     /// The skill the first message names before everything else:
     /// `start_skill`, or `release_skill` for a release.
     public var skill: String?
+    /// `start_prompt` from tasks.toml, sent after the skill line. A release
+    /// has none: its `release_prompt` is its first prompt.
+    public var startPrompt: String?
 
     public init(
         workspaceID: UUID? = nil,
@@ -395,7 +398,8 @@ public struct TaskFields: Codable, Equatable, Sendable {
         prompt: String? = nil,
         title: String? = nil,
         slug: String? = nil,
-        skill: String? = nil
+        skill: String? = nil,
+        startPrompt: String? = nil
     ) {
         self.workspaceID = workspaceID
         self.agent = agent
@@ -405,6 +409,7 @@ public struct TaskFields: Codable, Equatable, Sendable {
         self.title = title
         self.slug = slug
         self.skill = skill
+        self.startPrompt = startPrompt
     }
 }
 
@@ -435,6 +440,9 @@ public enum TaskSource: Codable, Equatable, Sendable {
     /// Made for a task space that existed before it had a record, when the
     /// user or an agent chose to track it.
     case adopted
+    /// A paired device, such as Toastty Mobile, through Remote Access.
+    /// Builds before this case read it as `.cli`.
+    case remoteDevice(deviceID: UUID)
 
     private enum Kind: String, Codable {
         case cli
@@ -442,11 +450,13 @@ public enum TaskSource: Codable, Equatable, Sendable {
         case quickEntry
         case recovered
         case adopted
+        case remoteDevice
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case sessionID
+        case deviceID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -464,6 +474,8 @@ public enum TaskSource: Codable, Equatable, Sendable {
             self = .recovered
         case .adopted:
             self = .adopted
+        case .remoteDevice:
+            self = .remoteDevice(deviceID: try container.decode(UUID.self, forKey: .deviceID))
         }
     }
 
@@ -481,6 +493,9 @@ public enum TaskSource: Codable, Equatable, Sendable {
             try container.encode(Kind.recovered, forKey: .kind)
         case .adopted:
             try container.encode(Kind.adopted, forKey: .kind)
+        case .remoteDevice(let deviceID):
+            try container.encode(Kind.remoteDevice, forKey: .kind)
+            try container.encode(deviceID, forKey: .deviceID)
         }
     }
 }

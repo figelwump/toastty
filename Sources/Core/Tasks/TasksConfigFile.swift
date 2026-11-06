@@ -19,7 +19,8 @@ public struct TasksConfigParseError: LocalizedError, Equatable, Sendable {
 ///
 /// The `*_skill` keys name the skill Toastty points an agent to at each
 /// task event: the first message, Merge and Release. Toastty does not check
-/// that the agent has the skill.
+/// that the agent has the skill. Without `start_skill`, the first message
+/// names the shipped `TaskPrompt.defaultStartSkill`.
 public struct TasksConfig: Equatable, Sendable {
     public enum MergeMode: String, Equatable, Sendable {
         /// Merge sends `merge_prompt` to the task's agent, which checks the
@@ -60,6 +61,7 @@ public struct TasksConfig: Equatable, Sendable {
         public var effort: String?
         public var merge: MergeMode?
         public var mergePrompt: String?
+        public var startPrompt: String?
         public var startSkill: String?
         public var mergeSkill: String?
         public var releaseSkill: String?
@@ -70,6 +72,7 @@ public struct TasksConfig: Equatable, Sendable {
             effort: String? = nil,
             merge: MergeMode? = nil,
             mergePrompt: String? = nil,
+            startPrompt: String? = nil,
             startSkill: String? = nil,
             mergeSkill: String? = nil,
             releaseSkill: String? = nil
@@ -79,6 +82,7 @@ public struct TasksConfig: Equatable, Sendable {
             self.effort = effort
             self.merge = merge
             self.mergePrompt = mergePrompt
+            self.startPrompt = startPrompt
             self.startSkill = startSkill
             self.mergeSkill = mergeSkill
             self.releaseSkill = releaseSkill
@@ -107,6 +111,7 @@ public struct TasksConfig: Equatable, Sendable {
         public var releasePrompt: String?
         public var merge: MergeMode?
         public var mergePrompt: String?
+        public var startPrompt: String?
         public var startSkill: String?
         public var mergeSkill: String?
         public var releaseSkill: String?
@@ -120,6 +125,7 @@ public struct TasksConfig: Equatable, Sendable {
             releasePrompt: String? = nil,
             merge: MergeMode? = nil,
             mergePrompt: String? = nil,
+            startPrompt: String? = nil,
             startSkill: String? = nil,
             mergeSkill: String? = nil,
             releaseSkill: String? = nil
@@ -132,6 +138,7 @@ public struct TasksConfig: Equatable, Sendable {
             self.releasePrompt = releasePrompt
             self.merge = merge
             self.mergePrompt = mergePrompt
+            self.startPrompt = startPrompt
             self.startSkill = startSkill
             self.mergeSkill = mergeSkill
             self.releaseSkill = releaseSkill
@@ -168,10 +175,22 @@ public struct TasksConfig: Equatable, Sendable {
     }
 
     /// The skill a task's first message names: the project's own, else
-    /// `[defaults]`.
+    /// `[defaults]`, else the shipped start skill. `"none"` names no skill.
     public func startSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
-        workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.startSkill ?? defaults.startSkill
+        let skill = workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.startSkill
+            ?? defaults.startSkill
+            ?? TaskPrompt.defaultStartSkill
+        return skill.lowercased() == Self.noSkill ? nil : skill
     }
+
+    /// Text a task's first message gives after the skill line: the
+    /// project's own `start_prompt`, else `[defaults]`.
+    public func startPrompt(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
+        workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.startPrompt ?? defaults.startPrompt
+    }
+
+    /// The `start_skill` value that turns the shipped start skill off.
+    static let noSkill = "none"
 
     /// The skill a release task's first message names: the project's own,
     /// else `[defaults]`.
@@ -409,7 +428,10 @@ private struct TasksConfigParser {
         try Self.rejectUnknownKeys(
             entries,
             table: table,
-            allowed: ["agent", "model", "effort", "merge", "merge_prompt", "start_skill", "merge_skill", "release_skill"]
+            allowed: [
+                "agent", "model", "effort", "merge", "merge_prompt", "start_prompt", "start_skill", "merge_skill",
+                "release_skill",
+            ]
         )
         return TasksConfig.Defaults(
             agent: try Self.selection("agent", in: entries, table: table, maximumLength: 64),
@@ -417,6 +439,7 @@ private struct TasksConfigParser {
             effort: try Self.selection("effort", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength),
             merge: try Self.mergeMode(in: entries, table: table),
             mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
+            startPrompt: try Self.text("start_prompt", in: entries, table: table),
             startSkill: try Self.skill("start_skill", in: entries, table: table),
             mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
             releaseSkill: try Self.skill("release_skill", in: entries, table: table)
@@ -446,7 +469,7 @@ private struct TasksConfigParser {
             table: table,
             allowed: [
                 "guidelines", "create_hook", "branch_prefix", "release_tags", "release_prompt", "merge", "merge_prompt",
-                "start_skill", "merge_skill", "release_skill",
+                "start_prompt", "start_skill", "merge_skill", "release_skill",
             ]
         )
         let branchPrefix = try Self.string("branch_prefix", in: entries, table: table)
@@ -465,6 +488,7 @@ private struct TasksConfigParser {
             releasePrompt: try Self.text("release_prompt", in: entries, table: table),
             merge: try Self.mergeMode(in: entries, table: table),
             mergePrompt: try Self.text("merge_prompt", in: entries, table: table),
+            startPrompt: try Self.text("start_prompt", in: entries, table: table),
             startSkill: try Self.skill("start_skill", in: entries, table: table),
             mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
             releaseSkill: try Self.skill("release_skill", in: entries, table: table)

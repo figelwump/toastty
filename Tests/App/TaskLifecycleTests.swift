@@ -301,7 +301,7 @@ struct TaskLifecycleTests {
         releaseSkill: String? = nil,
         releasePrompt: String? = "Use toastty-release."
     ) throws -> TaskRecord {
-        fixture.config.defaults = TasksConfig.Defaults(agent: "claude", startSkill: "task-start")
+        fixture.config.defaults = TasksConfig.Defaults(agent: "claude", startPrompt: "Ask for a review first.", startSkill: "task-start")
         fixture.config.workspaces = [TasksConfig.Workspace(
             path: fixture.repository.project,
             releaseTags: "v*",
@@ -351,6 +351,7 @@ struct TaskLifecycleTests {
         #expect(launch.prompt.contains("Use toastty-release."))
         // A release names the release skill, never the start skill.
         #expect(launch.prompt.contains("Use the task-start skill.") == false)
+        #expect(launch.prompt.contains("Ask for a review first.") == false)
         #expect(launch.prompt.contains("- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"))
 
         // One release per project at a time.
@@ -403,6 +404,7 @@ struct TaskLifecycleTests {
         let launch = try #require(fixture.launcher.calls.last)
         #expect(launch.prompt.contains("Use toastty-release."))
         #expect(launch.prompt.contains("Use the task-start skill.") == false)
+        #expect(launch.prompt.contains("Ask for a review first.") == false)
     }
 
     @Test func onlyATagTheRemoteHasShipsATaskAndItsRelease() async throws {

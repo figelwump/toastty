@@ -74,6 +74,12 @@ protocol LiveConnectionRuntime: Sendable {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse?
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse?
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -134,6 +140,17 @@ extension LiveConnectionRuntime {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse? {
+        nil
+    }
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        nil
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
         nil
     }
 
@@ -309,6 +326,17 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteTaskArchiveCheckResponse? {
         try await coordinator.taskArchiveCheck(request)
     }
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        try await coordinator.taskCreateOptions(request)
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        try await coordinator.createTask(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -379,7 +407,7 @@ final class LiveSessionsController {
                 )
                 switch response?.result {
                 case .updated?, .unchanged?: return .applied
-                case .notSubspace?, .workspaceNotFound?, .workInProgress?: return .refused
+                case .notSubspace?, .workspaceNotFound?, .workInProgress?, .hasOpenPullRequest?: return .refused
                 // The connection dropped or the Mac stopped accepting the
                 // change between the tap and the request.
                 case nil: return .failed
@@ -464,6 +492,26 @@ final class LiveSessionsController {
                     return response.map { .answered($0.result) } ?? .unreachable
                 } catch {
                     return .unreachable
+                }
+            }
+        )
+        homeController.installTaskCreate(
+            options: { [runtime] in
+                do {
+                    let response = try await runtime.taskCreateOptions(RemoteTaskCreateOptionsRequest())
+                    return response.map(ToasttyTaskCreateOptionsOutcome.loaded) ?? .unreachable
+                } catch {
+                    return .unreachable
+                }
+            },
+            create: { [runtime] request in
+                // Any failure leaves it unknown whether the Mac saved the
+                // task, so the caller retries with the same request ID.
+                do {
+                    let response = try await runtime.createTask(request)
+                    return response.map { .answered($0.result) } ?? .unconfirmed
+                } catch {
+                    return .unconfirmed
                 }
             }
         )
@@ -670,6 +718,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
         homeController.setHostSupportsTaskActions(acceptsTaskActions)
+        homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -685,6 +734,11 @@ final class LiveSessionsController {
     /// checked when the request arrives.
     private var acceptsTaskActions: Bool {
         coordinatorState.capabilities.contains(.taskActions) && deviceScopes.contains(.send)
+    }
+    /// A task starts an agent with the task as its first message, so it is
+    /// gated like a session start.
+    private var acceptsTaskCreate: Bool {
+        coordinatorState.capabilities.contains(.taskCreate) && deviceScopes.contains(.send)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -825,6 +879,7 @@ final class LiveSessionsController {
             hostSupportsSubspaceDone: acceptsSubspaceDone,
             hostSupportsConversationFlag: acceptsConversationFlag,
             hostSupportsSessionStart: acceptsSessionStart,
+            hostSupportsTaskCreate: acceptsTaskCreate,
             hostSupportsConversationClose: acceptsConversationClose,
             hostSupportsTaskActions: acceptsTaskActions,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt

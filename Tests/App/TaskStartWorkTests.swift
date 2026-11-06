@@ -631,7 +631,7 @@ struct TaskStartWorkTests {
             let launch = try #require(fixture.launcher.calls.first { $0.workspaceID == task.taskSpaceWorkspaceID })
             #expect(launch.cwd == worktree.path)
             #expect(launch.forkFromSessionID == nil)
-            #expect(launch.prompt.hasPrefix("You are in the git worktree \(worktree.path), on branch \(worktree.branch)"))
+            #expect(launch.prompt.hasPrefix("Use the toastty-task-start skill.\n\nYou are in the git worktree \(worktree.path), on branch \(worktree.branch)"))
             let taskSpace = try #require(task.operation.taskSpace)
             #expect(fixture.terminalCWD(workspaceID: taskSpace.workspaceID, panelID: taskSpace.panelID) == worktree.path)
         }
@@ -775,7 +775,7 @@ struct TaskStartWorkTests {
         )
         #expect(created.parentTaskID == nil)
         #expect(created.workspaceID == fixture.workspaceID)
-        #expect(created.resolved == TaskFields(workspaceID: fixture.workspaceID, agent: "codex"))
+        #expect(created.resolved == TaskFields(workspaceID: fixture.workspaceID, agent: "codex", skill: TaskPrompt.defaultStartSkill))
 
         // The caller is idle, so the fork launches at once.
         await fixture.waitUntil("the fork launches") { fixture.launcher.calls.count == 1 }
@@ -977,7 +977,7 @@ struct TaskStartWorkTests {
         #expect(record.triageNote == "Toastty left out triage's first prompt, which made the agent's first message longer than 64 KB.")
         let launch = try #require(fixture.launcher.calls.last)
         let worktree = try #require(record.worktree)
-        #expect(launch.prompt.hasPrefix("You are in the git worktree \(worktree.path)"))
+        #expect(launch.prompt.hasPrefix("Use the toastty-task-start skill.\n\nYou are in the git worktree \(worktree.path)"))
         #expect(launch.prompt.contains("Start with the composer views.") == false)
         #expect(launch.prompt.utf8.count <= limit)
     }

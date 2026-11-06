@@ -105,7 +105,14 @@ extension TaskCoordinator {
                 slug: slug,
                 titleSetByUser: request.title.flatMap(taskNonEmpty) != nil,
                 source: .agent(sessionID: sessionID),
-                resolved: TaskFields(workspaceID: ownerID, agent: session.agent.rawValue),
+                // A fresh session that continues the move, used when the
+                // agent cannot be forked, gets the start skill and prompt.
+                resolved: TaskFields(
+                    workspaceID: ownerID,
+                    agent: session.agent.rawValue,
+                    skill: config.startSkill(forProjectRoot: root.path, homeDirectoryPath: homeDirectoryPath),
+                    startPrompt: config.startPrompt(forProjectRoot: root.path, homeDirectoryPath: homeDirectoryPath)
+                ),
                 workspaceID: ownerID,
                 projectRoot: root.path,
                 setup: .started,

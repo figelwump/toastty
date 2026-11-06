@@ -49,6 +49,10 @@ public final class RemoteGatewayRequestHandler {
         /// with `resolveTaskAction` and `resolveTaskArchiveCheck`.
         case deferredTaskAction(deviceID: UUID, request: RemoteTaskActionRequest)
         case deferredTaskArchiveCheck(deviceID: UUID, request: RemoteTaskArchiveCheckRequest)
+        case deferredTaskCreateAttachments(deviceID: UUID, body: Data)
+        /// A validated create request. Saving the task copies files off the
+        /// main thread, so the transport resolves it with `resolveTaskCreate`.
+        case deferredTaskCreate(deviceID: UUID, request: RemoteTaskCreateRequest)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -59,6 +63,12 @@ public final class RemoteGatewayRequestHandler {
     private enum SessionStartAttachmentDecode: Sendable {
         case request(RemoteSessionStartRequest)
         case rejected(RemoteSessionStartRejectionReason)
+        case protocolMismatch
+    }
+
+    private enum TaskCreateAttachmentDecode: Sendable {
+        case request(RemoteTaskCreateRequest)
+        case rejected(RemoteTaskCreateRejectionReason)
         case protocolMismatch
     }
 
@@ -97,6 +107,10 @@ public final class RemoteGatewayRequestHandler {
         RemoteSessionStartOptionsRequest,
         RemoteDeviceRecord
     ) -> RemoteSessionStartOptionsResponse
+    public typealias TaskCreateOptionsHandler = (
+        RemoteTaskCreateOptionsRequest,
+        RemoteDeviceRecord
+    ) -> RemoteTaskCreateOptionsResponse
 
     private enum AuthResult {
         case success(RemoteDeviceRecord)
@@ -249,11 +263,87 @@ public final class RemoteGatewayRequestHandler {
         return sessionStartResponse(.rejected(reason: reason))
     }
 
+    /// Describes the workspaces and agents a task can use. Installing a
+    /// create handler is what advertises `RemoteGatewayCapability.taskCreate`.
+    public var taskCreateOptionsHandler: TaskCreateOptionsHandler?
+    /// Saves the task and starts its setup. Invoked only by the main-actor
+    /// transport, after `resolveTaskCreate` re-checks the device.
+    public var taskCreateHandler: (@MainActor (RemoteTaskCreateRequest, RemoteDeviceRecord) async -> RemoteTaskCreateResult)?
+
+    /// The device's permission can change between the request and this
+    /// call, so it is read again here. The create handler reads it once
+    /// more before it saves the task.
+    @MainActor
+    public func resolveTaskCreate(deviceID: UUID, request: RemoteTaskCreateRequest) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteTaskCreateResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), device.canStartSessions {
+            if let taskCreateHandler {
+                result = await taskCreateHandler(request, device)
+            } else {
+                result = .rejected(reason: .createFailed, message: nil)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied, message: nil)
+        }
+        switch result {
+        case .created:
+            auditLog.record(.init(at: Date(), action: .taskCreateAccepted, deviceID: deviceID))
+        case .rejected(let reason, _):
+            auditLog.record(.init(at: Date(), action: .taskCreateRejected, deviceID: deviceID, detail: reason.rawValue))
+        case .unrecognized:
+            // A decoding outcome on the client; the host never produces it.
+            break
+        }
+        return taskCreateResponse(result)
+    }
+
+    private func taskCreateResponse(_ result: RemoteTaskCreateResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteTaskCreateResponse(result: result))) ?? Data())
+    }
+
+    private func taskCreateRejection(_ reason: RemoteTaskCreateRejectionReason, deviceID: UUID) -> RemoteGatewayHTTPResponse {
+        auditLog.record(.init(at: Date(), action: .taskCreateRejected, deviceID: deviceID, detail: reason.rawValue))
+        return taskCreateResponse(.rejected(reason: reason, message: nil))
+    }
+
+    @MainActor
+    public func resolveTaskCreateAttachments(
+        deviceID: UUID,
+        body: Data,
+        onDecoded: @MainActor () -> Void = {}
+    ) async -> RemoteGatewayHTTPResponse {
+        // Large JSON and file-content checks do not block the Mac's UI.
+        let decoded = await Task.detached(priority: .userInitiated) {
+            () -> TaskCreateAttachmentDecode in
+            guard body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes,
+                  let request = try? ConversationEventCoding.makeDecoder().decode(RemoteTaskCreateRequest.self, from: body)
+            else { return .rejected(.invalidAttachments) }
+            guard request.protocolVersion == RemoteGatewayProtocol.version else { return .protocolMismatch }
+            guard !request.attachments.isEmpty,
+                  RemoteAttachmentPolicy.validationError(for: request.attachments) == nil
+            else { return .rejected(.invalidAttachments) }
+            guard RemoteGatewayRequestHandler.isValidTaskCreate(request) else { return .rejected(.invalidRequest) }
+            return .request(request)
+        }.value
+        // Release the upload slot before the task's files are copied.
+        onDecoded()
+        guard !Task.isCancelled else { return taskCreateResponse(.rejected(reason: .permissionDenied, message: nil)) }
+        let request: RemoteTaskCreateRequest
+        switch decoded {
+        case .request(let value): request = value
+        case .rejected(let reason): return taskCreateRejection(reason, deviceID: deviceID)
+        case .protocolMismatch:
+            return errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version")
+        }
+        return await resolveTaskCreate(deviceID: deviceID, request: request)
+    }
+
     /// Uses precisely the same method/origin/credential/scope policy as final
     /// dispatch, before the listener admits a large request body.
     public func authorizeAttachmentUpload(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
         guard let policy = RemoteGatewayRoutePolicy.policy(for: request.path),
-              policy.route == .messageSendWithAttachments || policy.route == .sessionStartWithAttachments else {
+              policy.route == .messageSendWithAttachments || policy.route == .sessionStartWithAttachments
+                || policy.route == .taskCreateWithAttachments else {
             return .respond(.text(status: 400, reason: "Bad Request", "Invalid upload route"))
         }
         return handle(request, policy: policy, at: date, headersOnly: true)
@@ -550,6 +640,10 @@ public final class RemoteGatewayRequestHandler {
                     }
                     return .respond(taskArchiveCheckResponse(.rejected(reason: .permissionDenied, message: nil)))
                 }
+                if policy.route == .taskCreate || policy.route == .taskCreateWithAttachments {
+                    // As for a start: a typed refusal the client decodes.
+                    return .respond(taskCreateRejection(.permissionDenied, deviceID: authenticated.id))
+                }
                 if policy.route == .conversationInterrupt {
                     auditLog.record(RemoteAccessAuditEntry(
                         at: date,
@@ -653,6 +747,19 @@ public final class RemoteGatewayRequestHandler {
                 return .respond(.text(status: 413, reason: "Content Too Large", "Attachment request is too large"))
             }
             return .deferredSessionStartAttachments(deviceID: authenticated.id, body: request.body)
+        case .taskCreateOptions:
+            return handleTaskCreateOptions(request, device: authenticated)
+        case .taskCreate:
+            return handleTaskCreate(request, device: authenticated, at: date)
+        case .taskCreateWithAttachments:
+            guard authenticated.canStartSessions else {
+                return .respond(taskCreateRejection(.permissionDenied, deviceID: authenticated.id))
+            }
+            if headersOnly { return .attachmentUploadAuthorized(deviceID: authenticated.id) }
+            guard request.body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes else {
+                return .respond(.text(status: 413, reason: "Content Too Large", "Attachment request is too large"))
+            }
+            return .deferredTaskCreateAttachments(deviceID: authenticated.id, body: request.body)
         case .questionAnswer:
             return handleQuestionAnswer(request, device: authenticated, at: date)
         case .messageSendWithAttachments:
@@ -694,6 +801,7 @@ public final class RemoteGatewayRequestHandler {
     private func handleHello() -> Outcome {
         var response = RemoteGatewayHelloResponse()
         if configuration.pushConfiguration != nil { response.capabilities.append(.pushNotifications) }
+        if taskCreateHandler != nil { response.capabilities.append(.taskCreate) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
@@ -1287,6 +1395,106 @@ public final class RemoteGatewayRequestHandler {
             return false
         }
         if let effort = request.reasoningEffort,
+           RemoteSessionStartPolicy.isValidSelectionValue(
+               effort,
+               maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength
+           ) == false {
+            return false
+        }
+        return true
+    }
+
+    private func handleTaskCreateOptions(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord
+    ) -> Outcome {
+        guard request.body.count <= RemoteTaskCreatePolicy.maximumOptionsBodyBytes,
+              let optionsRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteTaskCreateOptionsRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected task create options JSON"
+            ))
+        }
+        guard optionsRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let response = taskCreateOptionsHandler?(optionsRequest, device)
+            ?? RemoteTaskCreateOptionsResponse(permission: Self.sessionStartPermission(for: device))
+        return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
+    }
+
+    private func handleTaskCreate(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            return .respond(.text(status: 413, reason: "Content Too Large", "Create request is too large"))
+        }
+        guard let createRequest = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteTaskCreateRequest.self,
+            from: request.body
+        ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected task create JSON"
+            ))
+        }
+        guard createRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        func reject(_ reason: RemoteTaskCreateRejectionReason) -> Outcome {
+            auditLog.record(.init(at: date, action: .taskCreateRejected, deviceID: device.id, detail: reason.rawValue))
+            return .respond(taskCreateResponse(.rejected(reason: reason, message: nil)))
+        }
+        guard device.canStartSessions else { return reject(.permissionDenied) }
+        guard createRequest.attachments.isEmpty else { return reject(.invalidAttachments) }
+        guard Self.isValidTaskCreate(createRequest) else { return reject(.invalidRequest) }
+        return .deferredTaskCreate(deviceID: device.id, request: createRequest)
+    }
+
+    /// Bounds every field before anything reaches the task coordinator. The
+    /// workspace and the profile are resolved against live state later.
+    static func isValidTaskCreate(_ request: RemoteTaskCreateRequest) -> Bool {
+        // A task's title comes from its text, so files alone are not enough.
+        guard RemoteTaskCreatePolicy.isValidClientRequestID(request.clientRequestID),
+              !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes,
+              request.text.contains("\u{0}") == false else {
+            return false
+        }
+        if let profileID = request.profileID, profileID.isEmpty || profileID.count > 64 {
+            return false
+        }
+        // A model or effort belongs to an agent.
+        if request.profileID == nil, request.model != nil || request.effort != nil {
+            return false
+        }
+        if let model = request.model,
+           RemoteSessionStartPolicy.isValidSelectionValue(
+               model,
+               maximumLength: RemoteSessionStartPolicy.maximumModelLength
+           ) == false {
+            return false
+        }
+        if let effort = request.effort,
            RemoteSessionStartPolicy.isValidSelectionValue(
                effort,
                maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength

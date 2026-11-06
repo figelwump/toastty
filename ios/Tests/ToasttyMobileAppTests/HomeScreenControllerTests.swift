@@ -668,6 +668,39 @@ final class SubspaceDoneControllerTests: XCTestCase {
         }
     }
 
+    /// A task with an open pull request finishes through Merge on the Mac:
+    /// the phone neither shows nor sends a done mark for it, but can still
+    /// clear one.
+    func testASubspaceTheMacWillNotMarkDoneSendsOnlyAClear() async throws {
+        func blocked(isDone: Bool) -> MobileHomeSnapshot {
+            MobileHomeSnapshot(hostName: "Mac", workspaces: [
+                MobileWorkspace(id: parentID, title: "parent", conversations: []),
+                MobileWorkspace(
+                    id: subspaceID, title: "task", conversations: [],
+                    parentWorkspaceID: parentID, isDone: isDone, acceptsDoneMark: false
+                ),
+            ])
+        }
+        let controller = liveController()
+        controller.update(snapshot: blocked(isDone: false), connectionState: .live, freshness: .live)
+        var requests: [Bool] = []
+        controller.installSubspaceDone { _, isDone in
+            requests.append(isDone)
+            return .applied
+        }
+        XCTAssertEqual(controller.snapshot.subspaceRow(id: subspaceID)?.showsDoneToggle, false)
+
+        controller.setSubspaceDone(subspaceID, isDone: true)
+        XCTAssertEqual(isShownDone(controller), false)
+        XCTAssertNil(controller.subspaceDoneNotice)
+
+        controller.update(snapshot: blocked(isDone: true), connectionState: .live, freshness: .live)
+        XCTAssertEqual(controller.snapshot.subspaceRow(id: subspaceID)?.showsDoneToggle, true)
+        controller.setSubspaceDone(subspaceID, isDone: false)
+        XCTAssertEqual(isShownDone(controller), false)
+        try await waitUntil { requests == [false] }
+    }
+
     func testUndoSendsTheOppositeStateWithoutAnotherNotice() async throws {
         let controller = liveController()
         var requests: [Bool] = []

@@ -5,8 +5,8 @@ it, makes a task space for it under a workspace, and starts the agent there.
 The task keeps its own record, so it exists before its task space is ready and
 after setup fails.
 
-This page covers the quick entry panel, creating tasks from the CLI or from
-an agent, moving a task into its own git worktree, task stages with the
+This page covers the quick entry panel, creating tasks from the CLI, from
+an agent, or from Toastty Mobile, moving a task into its own git worktree, task stages with the
 Status sidebar and the Tasks view, `~/.toastty/tasks.toml`, and optional
 triage.
 
@@ -107,6 +107,12 @@ Reload Configuration. The shortcut needs no Accessibility permission. If
 another app already uses it, Reload Configuration says so, and the shortcut
 still works inside Toastty from the File menu. Smoke runs and test hosts do
 not register it.
+
+Toastty Mobile has the same form: **+** on its Home screen and content shared
+from another app open **New Task**, with this panel's workspaces, Frequent
+presets and `[defaults]`. A task created there counts toward Frequent and the
+last workspace here. See
+[Creating a task](remote-access.md#creating-a-task) in Remote Access.
 
 ## Create a task
 
@@ -413,7 +419,9 @@ for a merge when you say so. It uses the same CLI:
   --request-id <key>` makes the task. A repeated request ID returns the
   first task. The Tasks view shows the issue as **Source**.
 - `task list --changed-since <cursor> --include-reply` and
-  `task watch <task-id> --until idle --wait` follow the tasks.
+  `task watch <task-id> --until idle --wait` follow the tasks. A coordinator
+  that can receive an HTTPS request can also get a
+  [webhook](#webhooks-for-task-events), so nothing has to keep watching.
 - `task send` passes your answers.
 - `task request-merge <task-id>` accepts a merge for you; the task's agent
   still checks the pull request first.
@@ -431,6 +439,80 @@ rules on for commands that merge, archive or delete. Issue text comes from
 other people, so the skill treats it as data, not instructions. Toastty still
 shows Needs you and sends its own alerts, and a task agent's permission
 prompts can be answered only in Toastty or Toastty Mobile.
+
+## Webhooks for task events
+
+A coordinator that can receive an HTTPS request, such as a bot that wakes
+when something POSTs to its URL, can get task events from Toastty instead of
+keeping a watch running:
+
+```bash
+toastty webhook add grok https://hooks.example.com/wake --auth bearer \
+  --secret-hint "In the bot's routine panel, open Webhook and copy the Sender key." --wait
+```
+
+1. `webhook add` registers the webhook. It waits for your approval and
+   receives nothing until then. The key (the secret the receiver checks) can
+   come on stdin with `--secret-stdin`. Without it, you paste the key when
+   you approve, and `--secret-hint` tells you where to find it.
+2. The sidebar shows **1 webhook** next to Tasks, and the Tasks view shows a
+   banner. **Review…** shows where events go, which events, for which tasks,
+   and how requests sign in, and asks for the key when Toastty has none. The
+   hint shows under the key field as the requester wrote it; Toastty does not
+   check it. The key is kept in the login Keychain. Only **Approve** in that
+   sheet approves the webhook; no command can. **Deny** removes the webhook
+   and its key.
+   `webhook add --wait` waits for your decision: it exits 0 when you approve,
+   3 when you deny, and 4 when `--timeout` runs out.
+3. Toastty then POSTs a small JSON event when a task enters Needs you, or
+   needs you for a new reason (`task.needs_you`), merges (`task.merged`),
+   finishes (`task.done`), or is archived or deleted. `--events` can also add
+   `running` and `idle`. `--root` and `--external-ref-prefix` limit the
+   events to some tasks.
+
+Each event has `eventID`, `type`, `occurredAt`, `webhook`, and `task` with
+its `id`, `title`, `projectRoot`, `externalRef`, `stage` (`group` and
+`attention`), `question`, `pullRequestURL` and `mergedAt`. It never carries
+an agent's reply, the prompt or attachments; read those with `task get`. The
+`Toastty-Event-ID` header repeats the event ID, so a receiver can drop a
+duplicate.
+
+`--auth` sets how a request proves it came from Toastty:
+
+- `bearer`: `Authorization: Bearer <secret>`.
+- `header:<Name>`: `<Name>: <secret>`.
+- `hmac` (the default): `Toastty-Signature: t=<unix>,v1=<hex>`, an HMAC-SHA256
+  of `<t>.<body>` with the secret. Reject a `t` older than a few minutes.
+- `none`: only for `http://127.0.0.1` and `localhost`, for tests.
+
+Addresses must use HTTPS, except 127.0.0.1 and localhost. Toastty does not
+follow redirects. Logs and `webhook list` show only the host, since a path
+can hold a token, and never the secret.
+
+Delivery:
+
+- A stage that comes from the agent's status counts after it holds for 3
+  seconds, so a passing status sends nothing. Merges, Done, archives and
+  deletions count at once. A review stage and a merge made on GitHub show
+  after the next pull request check, up to 2 minutes later.
+- Toastty saves each event before it sends it, sends one at a time to each
+  webhook, and retries failures after 5 s, 15 s, 45 s and so on, up to 10
+  minutes apart, for a day. A newer stage replaces an older one still
+  waiting for the same task; merged, done, archived and deleted events are
+  kept. Retries start again when the Mac wakes.
+- After a relaunch, Toastty sends the events still waiting, does not repeat
+  changes it already sent, and reports changes it missed while it was quit,
+  such as a merge on GitHub.
+- HTTP 401, 403 or 410 stops the webhook, and the Tasks view shows a banner.
+  **Enter new key…** there, or `webhook rotate-secret`, sets a new key and
+  starts it again; changes made while it was stopped are not sent.
+- An event is a wake-up hint. `task list --changed-since` stays the source of
+  truth; run it when an event arrives and from time to time.
+
+Changing a webhook's address, events, filters or `--auth` with `webhook set`,
+or editing `~/.toastty/task-webhooks.json`, needs approval again. A new
+key or hint does not. A workspace-scoped session cannot manage webhooks.
+Toastty checks for task changes only while a webhook is approved.
 
 ## Starting tasks
 
@@ -597,6 +679,15 @@ or move failed, offers Retry and Delete. A task space row keeps its workspace it
 **Move to top level** and **Close workspace**, below a divider. It has no
 **Mark as done** item, since a task is done when it merges or you mark it done.
 
+The status mark at the start of a task space row is also a done checkbox, on
+the Mac and on iPhone. While the task has an open pull request, or a merge is
+under way, the mark only shows the status: the task finishes through Merge or
+Archive, as the detail pane offers. iPhone hides its Done swipe too. The Mac
+refuses a done mark that any phone sends for such a task; an older iPhone
+reports that it could not update the task. A done mark the task already
+has can still be cleared. A subspace without a task record keeps the
+checkbox.
+
 ## Merge a task
 
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
@@ -751,15 +842,15 @@ adds, such as the task text or the pull request.
 
 | Event | Triggered by | Setting | Default |
 |---|---|---|---|
-| Task starts (first message) | Create Task | `start_skill` | none |
-| Move into a worktree | the agent, from its start skill | none: the shipped `toastty-task-start` | |
+| Task starts (first message) | Create Task | `start_skill` | `toastty-task-start` (shipped) |
+| Move into a worktree | the agent, when you ask it to implement the work | none: part of the shipped `toastty-task-start` | |
 | Merge | the Merge button or the palette | `merge_skill` | `toastty-task-merge` (shipped) |
 | Release | **Release…**, the palette or `toastty task release` | `release_skill` | none |
 | Archive, clean up, done | Toastty itself | none | |
 
 ```toml
 [defaults]
-start_skill = "task-start"
+start_prompt = "Ask me before you open a pull request."  # optional extra text
 merge_skill = "toastty-task-merge"
 
 [workspace."~/GiantThings/repos/emptyos"]
@@ -767,6 +858,20 @@ release_skill = "emptyos-release"
 release_prompt = "Wait for my approval before any production change."  # optional extra text
 ```
 
+- The shipped `toastty-task-start` takes a task from your request to your
+  review. Its agent clarifies the request, moves implementation into its own
+  worktree, verifies the work, publishes the pull request and a Scratchpad
+  report, and sets the task's status. The repository's own instructions, such
+  as `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
+  line.
+- `start_prompt` is text the first message gives after the skill line, for
+  rules that apply only to tasks. It adds to the start skill and does not
+  replace it. Rules for all agent work, such as code review, belong in your
+  global agent instructions (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`),
+  which the agent reads already.
+- A first message that does not name the shipped start skill ends with one
+  line that tells the agent to run `task needs-reply` before it ends a turn
+  with a question. The shipped skill already says this.
 - `start_skill` also starts a first message that triage or `--prompt` wrote,
   and the first message of a fresh session that continues a moved task in its
   worktree. A forked session already has the conversation, so it gets no
@@ -836,11 +941,13 @@ branch_prefix = "feat"
   [Merge a task](#merge-a-task).
 - `merge_prompt` is text Merge sends to the task's agent after the merge skill
   line. Set alone, it replaces the default message.
+- `start_prompt` is text a task's first message gives after the start skill
+  line; see [Skills for task events](#skills-for-task-events).
 - `start_skill`, `merge_skill` and `release_skill` name skills; see
   [Skills for task events](#skills-for-task-events). A skill name is one word
   with no spaces.
 
-`merge`, `merge_prompt` and the three skill keys can also go in `[defaults]`;
+`merge`, `merge_prompt`, `start_prompt` and the three skill keys can also go in `[defaults]`;
 a workspace's own value wins. A `release_skill` in `[defaults]` lets every
 project release.
 
@@ -911,6 +1018,9 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   the files were removed; such a task can no longer be retried.
 - `~/.toastty/recent-workspaces.json`: the last closed top-level workspaces,
   for the workspace picker.
+- `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`:
+  task webhooks and the events waiting to send. Webhook secrets and approvals
+  are in the login Keychain.
 
 Deleting a task does not remove its worktree or branch; archiving it does.
 

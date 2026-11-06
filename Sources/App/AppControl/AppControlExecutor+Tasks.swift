@@ -6,7 +6,8 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment: true
+             .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
+             .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
         default: false
         }
     }
@@ -15,7 +16,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isTaskQuery: Bool {
         switch self {
-        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches: true
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches, .webhookList: true
         default: false
         }
     }
@@ -623,6 +624,7 @@ extension AppControlExecutor {
         case .quickEntry: source = "quickEntry"
         case .recovered: source = "recovered"
         case .adopted: source = "adopted"
+        case .remoteDevice: source = "remoteDevice"
         }
         var snapshot: [String: AutomationJSONValue] = [
             "taskID": .string(record.id.uuidString),

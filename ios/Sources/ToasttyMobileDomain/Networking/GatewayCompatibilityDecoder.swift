@@ -228,7 +228,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             // Only the mark's presence is shown, so a time this client
             // cannot read still counts as done.
             doneAt: (try? object.requiredDate("doneAt"))
-                ?? object.lossyString("doneAt").map { _ in Date.distantPast })
+                ?? object.lossyString("doneAt").map { _ in Date.distantPast },
+            // Absent from older hosts, whose subspaces all take the mark.
+            acceptsDoneMark: ((try? object.optionalBool("acceptsDoneMark")) ?? nil) ?? true)
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

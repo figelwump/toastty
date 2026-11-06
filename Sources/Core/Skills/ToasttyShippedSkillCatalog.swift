@@ -38,7 +38,7 @@ public enum ToasttyShippedSkillCatalog {
         ),
         ToasttyShippedSkillDescriptor(
             name: "toastty-task-start",
-            summary: "Move a task into its own git worktree, or split it into new tasks."
+            summary: "Take a task from request to review: clarify, work in its own worktree, verify, and hand off."
         ),
     ]
 }

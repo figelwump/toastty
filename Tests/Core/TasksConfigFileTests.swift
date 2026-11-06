@@ -39,6 +39,7 @@ struct TasksConfigFileTests {
         effort = "high"
         merge = "agent"
         merge_prompt = "Use toastty-task-merge."
+        start_prompt = "Ask for a review before a PR."
         start_skill = "task-start"
         merge_skill = "toastty-task-merge"
         release_skill = "toastty-release"
@@ -55,6 +56,7 @@ struct TasksConfigFileTests {
 
         [workspace."/srv/website"]
         merge = "direct"
+        start_prompt = "Deploy previews only."
         start_skill = "website-start"
         merge_skill = "website-merge"
         release_skill = "website-release"
@@ -71,6 +73,7 @@ struct TasksConfigFileTests {
             effort: "high",
             merge: .agent,
             mergePrompt: "Use toastty-task-merge.",
+            startPrompt: "Ask for a review before a PR.",
             startSkill: "task-start",
             mergeSkill: "toastty-task-merge",
             releaseSkill: "toastty-release"
@@ -88,6 +91,7 @@ struct TasksConfigFileTests {
             TasksConfig.Workspace(
                 path: "/srv/website",
                 merge: .direct,
+                startPrompt: "Deploy previews only.",
                 startSkill: "website-start",
                 mergeSkill: "website-merge",
                 releaseSkill: "website-release"
@@ -186,6 +190,27 @@ struct TasksConfigFileTests {
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home)?.releaseTags == "v*")
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty/", homeDirectoryPath: home) != nil)
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
+    func startSkillDefaultsToTheShippedSkillAndNoneTurnsItOff() throws {
+        let config = try parse("""
+        [defaults]
+        start_prompt = "Ask for a review before a PR."
+
+        [workspace."~/repos/plain"]
+        start_skill = "None"
+
+        [workspace."~/repos/site"]
+        start_prompt = "Deploy previews only."
+        """)
+        #expect(TasksConfig.empty.startSkill(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == TaskPrompt.defaultStartSkill)
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == TaskPrompt.defaultStartSkill)
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/plain", homeDirectoryPath: home) == nil)
+        // A project's own start_prompt replaces the default one.
+        #expect(config.startPrompt(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "Deploy previews only.")
+        #expect(config.startPrompt(forProjectRoot: "/Users/tester/repos/plain", homeDirectoryPath: home) == "Ask for a review before a PR.")
+        #expect(TasksConfig.empty.startPrompt(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == nil)
     }
 
     @Test

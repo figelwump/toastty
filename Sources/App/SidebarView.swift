@@ -1062,7 +1062,8 @@ struct SidebarView: View {
             newTask: newTask.map { action in { action() } },
             selectSegment: { segment in
                 _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
-            }
+            },
+            webhooks: taskBoard.coordinator?.webhooks
         )
     }
 
@@ -3765,6 +3766,7 @@ struct SidebarView: View {
             isLinkedChild: isLinkedChild,
             childProgressLabel: boardItem?.taskID.flatMap(childProgressLabel(ofTaskID:)),
             doneAt: workspace.doneAt,
+            acceptsDoneMark: boardItem?.acceptsDoneMark ?? true,
             annotations: workspace.annotations,
             primaryAnnotationKey: workspace.primaryAnnotationKey,
             // While setup or the move into a worktree runs or has failed,
@@ -4321,8 +4323,12 @@ struct SidebarView: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, select)
-        .accessibilityAction(named: Text(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))) {
-            toggleSubspaceDone(row)
+        .accessibilityActions {
+            if SidebarSubspacePresentation.canToggleDone(row) {
+                Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
+                    toggleSubspaceDone(row)
+                }
+            }
         }
         .accessibilityAction(named: Text("Move to top level")) {
             _ = store.send(
@@ -4497,6 +4503,7 @@ struct SidebarView: View {
 
     private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {
         let isDone = store.state.workspacesByID[row.id]?.doneAt != nil
+        guard isDone || sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: row.id) else { return }
         _ = store.send(
             .setWorkspaceDone(workspaceID: row.id, doneAt: isDone ? nil : Date()),
             source: .ui("sidebar_subspace_toggle_done")

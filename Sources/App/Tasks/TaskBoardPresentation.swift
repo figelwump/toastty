@@ -199,9 +199,7 @@ enum TaskBoardPresentation {
             return []
         }
         var actions: [DetailAction] = []
-        let hasOpenPullRequest = item.pullRequest != nil && item.pullRequestState?.state != .merged
-            && item.pullRequestState?.state != .closed
-        if hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
+        if item.hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
             actions += [.merge, .mergeWithoutChecks]
         } else if record.release == nil {
             actions.append(.markDone)
@@ -324,6 +322,7 @@ enum TaskBoardPresentation {
         case .recovered: source = "Rebuilt from its task space"
         case .adopted: source = "Tracked from an existing task space"
         case .quickEntry: source = "Created from quick entry"
+        case .remoteDevice: source = "Created from Toastty Mobile"
         }
         let age = TaskAge.label(since: record.createdAt, now: now)
         return [source, age == "now" ? "just now" : "\(age) ago", item.projectTitle].compactMap { $0 }.joined(separator: " · ")

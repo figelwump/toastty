@@ -121,6 +121,10 @@ struct TaskCreateRequest: Equatable {
     var text: String
     /// Absolute paths of files to attach.
     var files: [String] = []
+    /// Names to show for `files`, in the same order, when the files' own
+    /// names are not meaningful, as for an upload Remote Access stored
+    /// under a random name. The copies keep the files' own names.
+    var fileDisplayNames: [String]?
     var clientRequestID: String?
     var title: String?
     var slug: String?
@@ -155,11 +159,18 @@ struct TaskCaller: Equatable {
     var workspaceID: UUID?
     /// The quick entry panel, rather than the CLI.
     var isQuickEntry = false
+    /// A paired device, through Remote Access. Its request IDs are its own.
+    var remoteDeviceID: UUID?
 
     static let unmanaged = TaskCaller()
     static let quickEntry = TaskCaller(isQuickEntry: true)
 
+    static func remoteDevice(_ deviceID: UUID) -> TaskCaller {
+        TaskCaller(remoteDeviceID: deviceID)
+    }
+
     var source: TaskSource {
+        if let remoteDeviceID { return .remoteDevice(deviceID: remoteDeviceID) }
         if let sessionID { return .agent(sessionID: sessionID) }
         return isQuickEntry ? .quickEntry : .cli
     }
@@ -244,6 +255,9 @@ final class TaskCoordinator {
     /// The live view of every task's stage, for queries that report it and
     /// for stage watches.
     weak var board: TaskBoardStore?
+    /// Sends task events to approved webhooks, and holds the webhooks
+    /// waiting for approval. Set once it exists.
+    weak var webhooks: TaskWebhookService?
     /// The one owner of merges and their cleanup. Set once it exists.
     weak var merges: WorkspaceMergeCoordinator?
     /// Unsaved local documents in a workspace, which closing it would lose.
@@ -302,9 +316,15 @@ final class TaskCoordinator {
     /// Checks the request, copies the files, saves the record and starts
     /// setup. Returns as soon as the record is saved; setup continues in the
     /// background.
+    /// `beforeSave` runs after the files are copied, directly before the
+    /// record is saved; a throw there saves nothing and removes the copies.
     @discardableResult
-    func create(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) async throws -> TaskRecord {
-        try await finishCreate(try prepareCreate(request, caller: caller))
+    func create(
+        _ request: TaskCreateRequest,
+        caller: TaskCaller = .unmanaged,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
+        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
     }
 
     /// Every check that needs app state, done before any file is copied.
@@ -325,6 +345,9 @@ final class TaskCoordinator {
         }
         guard request.files.count <= TaskRecord.maximumAttachmentCount else {
             throw TaskError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
+        }
+        guard request.fileDisplayNames.map({ $0.count == request.files.count }) ?? true else {
+            throw TaskError("Give one display name for each attached file.")
         }
         let sources = try request.files.map(attachableFile)
         let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
@@ -391,6 +414,7 @@ final class TaskCoordinator {
         )
         let parentTaskID = caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID }
         let startSkill = projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+        let startPrompt = projectRoot.flatMap { config.startPrompt(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
         if let forkSource {
             guard let workspaceID else {
                 throw TaskError("--fork needs the calling session's workspace, and it has closed.")
@@ -400,7 +424,8 @@ final class TaskCoordinator {
                 agent: forkSource.agent.rawValue,
                 workspaceID: workspaceID,
                 parentTask: parentTaskID.flatMap { records.record(id: $0) },
-                skill: startSkill
+                skill: startSkill,
+                startPrompt: startPrompt
             )
             setup = .settingUp
         } else if missing.isEmpty == false, isTriageEnabled(config) {
@@ -410,7 +435,8 @@ final class TaskCoordinator {
                 pinned: pinned,
                 workspaceID: workspaceID,
                 defaults: config.defaults,
-                skill: startSkill
+                skill: startSkill,
+                startPrompt: startPrompt
             )
             setup = .settingUp
         } else {
@@ -449,13 +475,16 @@ final class TaskCoordinator {
         var usedNames: Set<String> = []
         var copies: [(source: String, destination: String)] = []
         var attachments: [TaskAttachment] = []
-        for (requestedPath, resolvedPath) in zip(request.files, sources) {
+        for (index, (requestedPath, resolvedPath)) in zip(request.files, sources).enumerated() {
             let originalName = (requestedPath as NSString).lastPathComponent
             let name = Self.uniqueFileName(originalName, taken: usedNames)
             usedNames.insert(name)
             let destination = directoryURL.appending(path: name, directoryHint: .notDirectory).path(percentEncoded: false)
             copies.append((resolvedPath, destination))
-            attachments.append(TaskAttachment(path: destination, displayName: originalName))
+            attachments.append(TaskAttachment(
+                path: destination,
+                displayName: request.fileDisplayNames?[index] ?? originalName
+            ))
         }
 
         var record = TaskRecord(
@@ -488,10 +517,13 @@ final class TaskCoordinator {
         }
         // The launcher refuses a first message it cannot pass, and every
         // retry would fail the same way, so the request fails now. A fork's
-        // message names its task space, which setup makes later.
+        // message names its task space, which setup makes later. While triage
+        // routes the task, `resolved` is empty, so the check uses the
+        // project's start skill and prompt, which setup adds later.
         let firstMessage = record.forkSource == nil
             ? TaskPrompt.compose(
-                skill: resolved?.skill,
+                skill: resolved?.skill ?? pinned.skill ?? startSkill,
+                startPrompt: resolved?.startPrompt ?? startPrompt,
                 firstPrompt: prompt,
                 text: text,
                 attachmentPaths: attachments.map(\.path)
@@ -530,7 +562,10 @@ final class TaskCoordinator {
 
     /// Copies the files off the main thread, then saves the record and
     /// starts setup.
-    func finishCreate(_ preparation: TaskCreatePreparation) async throws -> TaskRecord {
+    func finishCreate(
+        _ preparation: TaskCreatePreparation,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
         if let existing = preparation.existing {
             return existing
         }
@@ -560,6 +595,12 @@ final class TaskCoordinator {
         if let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] == nil {
             try? fileManager.removeItem(at: directoryURL)
             throw TaskError("The task's workspace closed before the task was saved.")
+        }
+        do {
+            try beforeSave?()
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw error
         }
         record.createdAt = now()
         do {
@@ -1135,6 +1176,7 @@ final class TaskCoordinator {
         var firstPrompt = resolved.prompt
         var prompt = TaskPrompt.compose(
             skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
             firstPrompt: firstPrompt,
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
@@ -1149,6 +1191,7 @@ final class TaskCoordinator {
             firstPrompt = nil
             prompt = TaskPrompt.compose(
                 skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
                 firstPrompt: nil,
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
@@ -1428,10 +1471,14 @@ final class TaskCoordinator {
                 // A release that comes back here keeps to its release skill.
                 skill: current.release == nil
                     ? config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil,
+                startPrompt: current.release == nil
+                    ? config.startPrompt(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
                     : nil
             )
             let firstMessage = TaskPrompt.compose(
                 skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
                 firstPrompt: resolved.prompt,
                 text: current.text,
                 attachmentPaths: current.attachments.map(\.path)
@@ -1682,18 +1729,26 @@ final class TaskCoordinator {
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
     /// chosen agent is left out.
-    /// `skill` is the project's start skill, used when `pinned` names none.
+    /// `skill` is the project's start skill, used when `pinned` names none,
+    /// and `startPrompt` its `start_prompt`.
     func resolvedFields(
         pinned: TaskFields,
         workspaceID: UUID?,
         defaults: TasksConfig.Defaults,
-        skill: String? = nil
+        skill: String? = nil,
+        startPrompt: String? = nil
     ) throws -> TaskFields {
         guard let agent = pinned.agent ?? defaults.agent else {
             throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
         }
         let profile = try checkedProfile(agent)
-        var fields = TaskFields(workspaceID: workspaceID, agent: agent, prompt: pinned.prompt, skill: pinned.skill ?? skill)
+        var fields = TaskFields(
+            workspaceID: workspaceID,
+            agent: agent,
+            prompt: pinned.prompt,
+            skill: pinned.skill ?? skill,
+            startPrompt: startPrompt
+        )
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model

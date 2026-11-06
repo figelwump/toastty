@@ -71,7 +71,11 @@ struct RemoteMessageAttachmentTests {
         #expect(try JSONDecoder().decode(RemoteSessionStartRequest.self, from: body) == request)
     }
 
-    @Test(arguments: [RemoteAttachmentPolicy.sendPath, RemoteSessionStartPolicy.startWithAttachmentsPath])
+    @Test(arguments: [
+        RemoteAttachmentPolicy.sendPath,
+        RemoteSessionStartPolicy.startWithAttachmentsPath,
+        RemoteTaskCreatePolicy.createWithAttachmentsPath,
+    ])
     func headerOnlyParsingUsesCanonicalAttachmentRouteAndStrictFraming(route: String) {
         let length = RemoteAttachmentPolicy.maximumEncodedBodyBytes
         let head = "POST \(route)?x=1 HTTP/1.1\r\nContent-Length: \(length)\r\n\r\n"
@@ -82,7 +86,10 @@ struct RemoteMessageAttachmentTests {
         #expect(request.path == route)
         #expect(request.body.isEmpty)
         #expect(RemoteGatewayHTTPRequest.parse(Data(head.utf8)) == .needMoreData)
-        for path in [route + "/", "/api/conversation.message.send", RemoteSessionStartPolicy.startPath, "/api/hello", "/api/.." + route] {
+        for path in [
+            route + "/", "/api/conversation.message.send", RemoteSessionStartPolicy.startPath,
+            RemoteTaskCreatePolicy.createPath, "/api/hello", "/api/.." + route,
+        ] {
             let raw = "POST \(path) HTTP/1.1\r\nContent-Length: \(length)\r\n\r\n"
             #expect(RemoteGatewayHTTPRequest.parse(Data(raw.utf8), headersOnly: true) == .invalid)
         }

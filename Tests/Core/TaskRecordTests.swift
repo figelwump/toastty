@@ -97,6 +97,43 @@ struct TaskRecordTests {
     }
 
     @Test
+    func startPromptFollowsTheWorktreeAndTheShippedSkillDropsTheReplyLine() {
+        let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
+        #expect(TaskPrompt.compose(
+            skill: TaskPrompt.defaultStartSkill,
+            startPrompt: "Ask for a review first.",
+            firstPrompt: "Start with the views.",
+            text: "Fix it",
+            attachmentPaths: [],
+            worktree: worktree
+        ) == """
+        Use the toastty-task-start skill.
+
+        You are in the git worktree /w/fix, on branch fix/composer.
+
+        Ask for a review first.
+
+        Start with the views.
+
+        The task, as written:
+
+        Fix it
+        """)
+
+        // A fresh session that continues a move gets the same start prompt.
+        let record = TaskRecord(
+            createdAt: Date(),
+            text: "Fix it",
+            title: "Fix it",
+            slug: "fix-it",
+            source: .cli,
+            resolved: TaskFields(agent: "cursor", skill: TaskPrompt.defaultStartSkill, startPrompt: "Ask for a review first.")
+        )
+        let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
+        #expect(fresh.hasSuffix("cannot continue.\n\nAsk for a review first.\n\nFix it"))
+    }
+
+    @Test
     func onlyAFreshMovedSessionGetsTheStartSkillAgain() {
         let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
         let record = TaskRecord(
@@ -156,10 +193,20 @@ struct TaskRecordTests {
         #expect(record.taskSpaceWorkspaceID == record.operation.taskSpace?.workspaceID)
     }
 
-    @Test(arguments: [TaskSource.cli, .agent(sessionID: "s1"), .quickEntry, .recovered])
+    @Test(arguments: [
+        TaskSource.cli, .agent(sessionID: "s1"), .quickEntry, .recovered, .adopted,
+        .remoteDevice(deviceID: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!),
+    ])
     func sourceRoundTripsThroughJSON(source: TaskSource) throws {
         let data = try JSONEncoder().encode(source)
         #expect(try JSONDecoder().decode(TaskSource.self, from: data) == source)
+    }
+
+    /// Builds before a source kind existed read it as `.cli` and keep the
+    /// record, so a newer kind such as `remoteDevice` is safe to write.
+    @Test func aSourceKindFromANewerBuildReadsAsCLI() throws {
+        let newer = Data(#"{"kind":"carrierPigeon","deviceID":"66666666-6666-6666-6666-666666666666"}"#.utf8)
+        #expect(try JSONDecoder().decode(TaskSource.self, from: newer) == .cli)
     }
 
     @Test

@@ -8,19 +8,27 @@ public enum TaskPrompt {
     }
 
     /// Tells the agent how to keep a question it asks in Needs you: without
-    /// the mark, the task looks idle once the user reads the turn.
+    /// the mark, the task looks idle once the user reads the turn. The
+    /// shipped start skill says the same, so a message that names it leaves
+    /// the line out.
     public static let replyLine = "If you end a turn with a question for the user, first run "
         + "`toastty task needs-reply --question \"<the question in a few words>\"`, "
         + "so the task waits in Needs you until the user answers."
 
-    /// The skill line, when there is a skill, then the worktree, the first
-    /// prompt, the task text exactly as written, the attached files, and
-    /// `replyLine`.
+    /// The skill a task's first message names when tasks.toml sets no
+    /// `start_skill`.
+    public static let defaultStartSkill = "toastty-task-start"
+
+    /// The skill line, when there is a skill, then the worktree,
+    /// `start_prompt`, the first prompt, the task text exactly as written,
+    /// the attached files, and `replyLine` unless the skill is the shipped
+    /// start skill.
     /// Toastty adds the text and files itself, so nothing that writes the
     /// first prompt can drop or reword them. The text keeps its own spacing
     /// and indentation.
     public static func compose(
         skill: String? = nil,
+        startPrompt: String? = nil,
         firstPrompt: String?,
         text: String,
         attachmentPaths: [String],
@@ -33,6 +41,30 @@ public enum TaskPrompt {
         }
         if let worktree {
             sections.append(worktreeLine(worktree, base: base))
+        }
+        sections += taskSections(
+            skill: skill,
+            startPrompt: startPrompt,
+            firstPrompt: firstPrompt,
+            text: text,
+            attachmentPaths: attachmentPaths
+        )
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// `start_prompt`, the first prompt, the task text, the attached files
+    /// and `replyLine`: the part of a first message that follows what
+    /// Toastty says about where the agent is.
+    private static func taskSections(
+        skill: String?,
+        startPrompt: String?,
+        firstPrompt: String?,
+        text: String,
+        attachmentPaths: [String]
+    ) -> [String] {
+        var sections: [String] = []
+        if let startPrompt = startPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), startPrompt.isEmpty == false {
+            sections.append(startPrompt)
         }
         let trimmedPrompt = firstPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -47,8 +79,20 @@ public enum TaskPrompt {
                 "Attached files:\n" + attachmentPaths.map { "- \($0)" }.joined(separator: "\n")
             )
         }
-        sections.append(replyLine)
-        return sections.joined(separator: "\n\n")
+        if skill != defaultStartSkill {
+            sections.append(replyLine)
+        }
+        return sections
+    }
+
+    private static func taskSections(_ record: TaskRecord, skill: String?) -> [String] {
+        taskSections(
+            skill: skill,
+            startPrompt: record.resolved?.startPrompt,
+            firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path)
+        )
     }
 
     /// The first message of the session that continues a moved task in its
@@ -75,11 +119,7 @@ public enum TaskPrompt {
                 "Toastty moved the task \"\(record.title)\" here. The conversation that shaped it "
                     + "stays in the previous session, which this agent cannot continue."
             )
-            sections.append(compose(
-                firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
-                text: record.text,
-                attachmentPaths: record.attachments.map(\.path)
-            ))
+            sections += taskSections(record, skill: skill)
         }
         return sections.joined(separator: "\n\n")
     }
@@ -114,11 +154,7 @@ public enum TaskPrompt {
                 + "do not do them, and do not act for the session that created this task. "
                 + forkReportLine(record, sourceWorkspaceID: sourceWorkspaceID)
         )
-        sections.append(compose(
-            firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
-            text: record.text,
-            attachmentPaths: record.attachments.map(\.path)
-        ))
+        sections += taskSections(record, skill: skill)
         return sections.joined(separator: "\n\n")
     }
 

@@ -92,6 +92,10 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
     case taskAdopt = "task.adopt"
+    case webhookAdd = "webhook.add"
+    case webhookSet = "webhook.set"
+    case webhookRemove = "webhook.remove"
+    case webhookTest = "webhook.test"
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
     case windowSidebarSetSegment = "window.sidebar.set-segment"
@@ -673,6 +677,46 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Give a task space without a task record one, so Toastty tracks it as a task: its stage, its pull request, and its Done history after it closes. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. Returns the existing task when it has one.",
                 selectors: [.windowID, .workspaceID]
             )
+        case .webhookAdd:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Register an HTTPS address that receives task events: a POST with a small JSON body when a task needs the user, merges, finishes, or is archived or deleted. The webhook waits for the user's approval in the Tasks view and receives nothing until then; no command can approve it. Each event includes the task's ID, title, project root, external reference, stage, the question an agent asked, the pull request URL and mergedAt, never the agent's reply or attachments. auth is bearer (Authorization: Bearer <secret>), header:<Name> (<Name>: <secret>), hmac (Toastty-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>), or none for 127.0.0.1 and localhost only. The secret is kept in the Keychain and never returned. Without a secret, the user enters it in the approval sheet; pass secretHint to tell them where to find it. Refused for workspace-scoped sessions.",
+                selectors: [],
+                parameters: [
+                    .webhookName(required: true), .webhookURL(required: true), .webhookEvents(required: false),
+                    .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
+                ]
+            )
+        case .webhookSet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Change a webhook from webhook.add. A change to its URL, events, filters or auth sends it back to the user for approval. A new secret alone keeps the approval and resumes a webhook that stopped after HTTP 401, 403 or 410. An empty externalRefPrefix or secretHint clears it.",
+                selectors: [],
+                parameters: [
+                    .webhookName(required: true), .webhookURL(required: false), .webhookEvents(required: false),
+                    .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
+                ]
+            )
+        case .webhookRemove:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Remove a webhook, its Keychain secret, and its unsent events.",
+                selectors: [],
+                parameters: [.webhookName(required: true)]
+            )
+        case .webhookTest:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Send an approved webhook a task.test event now and return the HTTP status, or the class of failure.",
+                selectors: [],
+                parameters: [.webhookName(required: true)]
+            )
         case .windowTasksShow:
             return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
         case .windowTasksHide:
@@ -722,6 +766,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskList = "task.list"
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
+    case webhookList = "webhook.list"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -837,6 +882,14 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "List watches from task.watch: pending ones, and fired ones for a while after they fire, with the reason and whether the message was delivered. Filter by watchID, by the watched taskID, or by notifyTaskID.",
                 selectors: [],
                 parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
+            )
+        case .webhookList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List task webhooks with their status (pendingApproval, approved, disabled), shortened URL, events, filters, auth mode and last delivery. Never returns a secret or the full URL path. With name, only that webhook.",
+                selectors: [],
+                parameters: [.webhookName(required: false)]
             )
         }
     }
@@ -1101,6 +1154,45 @@ private extension AppControlParameterDescriptor {
 
     static func taskHead(required: Bool) -> Self {
         .init(name: "head", summary: "The commit the merge checks ran on; the merge is refused if the checkout moved.", valueType: .string, required: required)
+    }
+
+    static func webhookName(required: Bool) -> Self {
+        .init(name: "name", summary: "The webhook's name: lowercase letters, digits, - and _.", valueType: .string, required: required)
+    }
+
+    static func webhookURL(required: Bool) -> Self {
+        .init(name: "url", summary: "An https:// URL; http:// only for 127.0.0.1 and localhost.", valueType: .string, required: required)
+    }
+
+    static func webhookEvents(required: Bool) -> Self {
+        .init(
+            name: "events",
+            summary: "Events to send. Defaults to needs_you, merged, done, archived, deleted.",
+            valueType: .string,
+            required: required,
+            repeatable: true,
+            allowedValues: TaskWebhookEventType.allCases.map(\.rawValue)
+        )
+    }
+
+    static func webhookRoots(required: Bool) -> Self {
+        .init(name: "roots", summary: "Only tasks under these project roots. Defaults to every root.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func webhookExternalRefPrefix(required: Bool) -> Self {
+        .init(name: "externalRefPrefix", summary: "Only tasks whose externalRef ID starts with this.", valueType: .string, required: required)
+    }
+
+    static func webhookAuth(required: Bool) -> Self {
+        .init(name: "auth", summary: "bearer, header:<Name>, hmac (default), or none (loopback only).", valueType: .string, required: required)
+    }
+
+    static func webhookSecret(required: Bool) -> Self {
+        .init(name: "secret", summary: "The shared secret or sender key, 16 to 4096 printable ASCII bytes. Kept in the Keychain.", valueType: .string, required: required)
+    }
+
+    static func webhookSecretHint(required: Bool) -> Self {
+        .init(name: "secretHint", summary: "Where the user finds the key, shown under the key field of the approval sheet, such as the receiving service's menu path and settings URL. One line, at most 300 characters. Not part of the approval.", valueType: .string, required: required)
     }
 
     static func taskID(required: Bool) -> Self {
