@@ -530,6 +530,9 @@ final class RemoteAccessService: ObservableObject {
     private var storeActionObserverToken: UUID?
     private var conversationTrackingGeneration: UInt64 = 0
     private var sessionListBroadcastTask: Task<Void, Never>?
+    /// The task spaces the last broadcast session list told clients to hide
+    /// the done checkbox for.
+    private var publishedDoneMarkRefusals: Set<UUID> = []
     private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
@@ -1031,6 +1034,19 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
+        // A pull request answer from GitHub, such as a close, can change
+        // which task spaces take a done mark without touching AppState.
+        sessionRuntimeStore.taskCoordinator?.board?.pullRequests?.objectWillChange
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation,
+                      self.doneMarkRefusals() != self.publishedDoneMarkRefusals else { return }
+                self.scheduleSessionListBroadcast()
+            }
+            .store(in: &conversationTrackingCancellables)
+
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
@@ -1368,6 +1384,7 @@ final class RemoteAccessService: ObservableObject {
         let associations = Self.scratchpadConversationAssociations(
             state: store.state, registry: sessionRuntimeStore.sessionRegistry,
             conversations: conversations)
+        let refusals = doneMarkRefusals()
         return RemoteSessionListSnapshot(
             projectionRunID: projectionStore.runID,
             conversations: conversations,
@@ -1377,8 +1394,16 @@ final class RemoteAccessService: ObservableObject {
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
                     activeSessionIDByConversationID, listed: conversations),
-                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID:))
+                acceptsDoneMark: { refusals.contains($0) == false })
         )
+    }
+
+    /// The task spaces whose done checkbox clients hide; see
+    /// `TaskBoardItem.acceptsDoneMark`.
+    private func doneMarkRefusals() -> Set<UUID> {
+        Set(store.state.subspaceParentIDsByWorkspaceID().keys.filter {
+            sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: $0) == false
+        })
     }
 
     /// Maps each managed session to its conversation, limited to the
@@ -2895,6 +2920,7 @@ final class RemoteAccessService: ObservableObject {
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
         let snapshot = makeSessionList(at: Date())
+        publishedDoneMarkRefusals = Set(snapshot.workspaces.filter { $0.acceptsDoneMark == false }.map(\.id))
         logRemotePresentationChanges(in: snapshot)
         server.broadcast(.sessionList(snapshot))
     }

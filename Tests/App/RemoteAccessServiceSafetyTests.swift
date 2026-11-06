@@ -1175,9 +1175,18 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
 
         // Once the pull request is closed without a merge, the box returns.
+        // Only GitHub's answer changed, and clients still hear of it.
+        try await Task.sleep(for: .milliseconds(300))
+        server.removeAllBroadcasts()
         gitHub.answer(pullRequestURL, state: "CLOSED")
         await board.pullRequests?.refresh(link).value
         #expect(try summary(taskSpace).acceptsDoneMark)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, server.sessionListSnapshots.last?
+            .workspaces.first(where: { $0.id == taskSpace })?.acceptsDoneMark != true {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(server.sessionListSnapshots.last?.workspaces.first { $0.id == taskSpace }?.acceptsDoneMark == true)
         #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device) == .updated)
         #expect(board.items().first { $0.id == .task(taskID) }?.stage == .done)
     }

@@ -123,7 +123,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation()
 
         XCTAssertEqual(presentation.topLevelWorkspaces.map(\.id), [parentID])
-        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first)
+        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == subspaceID })
         XCTAssertEqual(row.id, subspaceID)
         XCTAssertEqual(row.status, .done)
         XCTAssertEqual(row.chip?.text, "TOAST-7")
