@@ -143,17 +143,22 @@ public struct TaskWatchFacts: Equatable, Sendable {
     /// The stage conditions the task meets now; see
     /// `TaskWatchEvaluation.stageConditions(stage:merged:)`.
     public var stages: Set<TaskWatchCondition>
+    /// Why Toastty's last merge of the task stopped without merging, when
+    /// no merge was started since.
+    public var mergeFailure: String?
 
     public init(
         activity: TaskAgentState,
         activityChangedAt: Date?,
         turnEndedAt: Date? = nil,
-        stages: Set<TaskWatchCondition> = []
+        stages: Set<TaskWatchCondition> = [],
+        mergeFailure: String? = nil
     ) {
         self.activity = activity
         self.activityChangedAt = activityChangedAt
         self.turnEndedAt = turnEndedAt
         self.stages = stages
+        self.mergeFailure = mergeFailure
     }
 }
 
@@ -211,10 +216,18 @@ public enum TaskWatchEvaluation {
     }
 
     /// Why a watch can never fire now, if so: its task is archived and the
-    /// watch waits for something else.
+    /// watch waits for something else, or the task's merge stopped and the
+    /// watch waits for the merge. A caller waiting for a merge learns that
+    /// it failed instead of waiting until someone merges again.
     public static func impossibility(_ condition: TaskWatchCondition, facts: TaskWatchFacts) -> String? {
-        guard facts.stages.contains(.archived), condition != .archived else { return nil }
-        return "was archived"
+        if facts.stages.contains(.archived), condition != .archived {
+            return "was archived"
+        }
+        if let reason = facts.mergeFailure, [.merged, .toShip].contains(condition),
+           facts.stages.contains(condition) == false {
+            return "was not merged: \(reason)"
+        }
+        return nil
     }
 }
 

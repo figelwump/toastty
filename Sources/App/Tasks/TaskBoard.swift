@@ -675,6 +675,7 @@ final class TaskBoardStore: ObservableObject {
                     next.mergedAt = nil
                     next.mergeCommit = nil
                     next.mergeRequestedAt = nil
+                    next.mergeFailure = nil
                 }
                 let request = sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
                 if TaskBoard.isInMergeFlow(next, request: request) == false {
@@ -686,6 +687,7 @@ final class TaskBoardStore: ObservableObject {
                let answer = pullRequests?.state(for: link), answer.state == .merged {
                 next.mergedAt = now()
                 next.mergeCommit = answer.mergeCommit
+                next.mergeFailure = nil
             }
             if next != record {
                 _ = records.update(id: record.id) { $0 = next }

@@ -226,7 +226,9 @@ extension TaskCoordinator {
             activity: status.activity,
             activityChangedAt: status.changedAt,
             turnEndedAt: status.session?.lastTurnEndedAt,
-            stages: record.archivedAt != nil ? [.archived] : stages[record.id] ?? []
+            stages: record.archivedAt != nil ? [.archived] : stages[record.id] ?? [],
+            // A pull request merged on GitHub after a failed merge.
+            mergeFailure: record.mergedAt == nil ? record.mergeFailure?.reason : nil
         )
     }
 

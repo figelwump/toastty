@@ -375,7 +375,7 @@ struct TaskStageTests {
         var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
         for key in [
             "pullRequestURL", "readyForReviewAt", "mergedAt", "mergeCommit", "shippedAt", "releaseTag", "archivedAt", "doneAt",
-            "mergeRequestedAt", "mergeCancelledAt", "cleanup", "release",
+            "mergeRequestedAt", "mergeCancelledAt", "mergeFailure", "cleanup", "release",
         ] {
             object.removeValue(forKey: key)
         }
