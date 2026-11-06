@@ -266,7 +266,8 @@ struct ToasttyHomeView: View {
                 ToasttyTaskDetailSheet(
                     task: task,
                     canOpenTaskSpace: task.taskSpaceWorkspaceID.map { controller.snapshot.subspaceRow(id: $0) != nil } ?? false,
-                    openTaskSpace: openWorkspace
+                    openTaskSpace: openWorkspace,
+                    controller: controller
                 )
             }
         }
@@ -297,6 +298,7 @@ struct ToasttyHomeView: View {
         }
         .background(ToasttyDesignTokens.background)
         .toasttySubspaceDoneNotice(controller)
+        .toasttyTaskActionPresenter(controller)
         .toolbar(.hidden, for: .navigationBar)
         .sensoryFeedback(.warning, trigger: needsApprovalCount) { old, new in
             new > old

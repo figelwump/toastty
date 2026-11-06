@@ -255,6 +255,35 @@ private extension RemoteProtocolGoldenTests {
                 RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
             ),
             try fixture(
+                "task-action-request.json",
+                RemoteTaskActionRequest(
+                    taskID: numberedUUID(302),
+                    action: .archive,
+                    clientRequestID: "ios-task-0001",
+                    expectedPullRequestNumber: 263,
+                    closePullRequest: true
+                )
+            ),
+            try fixture(
+                "task-action-response-rejected.json",
+                RemoteTaskActionResponse(result: .rejected(reason: .notOffered, message: "Merging…"))
+            ),
+            try fixture(
+                "task-archive-check-response.json",
+                RemoteTaskArchiveCheckResponse(result: .ready(RemoteTaskArchiveCheck(
+                    closesTaskSpace: true,
+                    agentSessions: 1,
+                    removesWorktree: true,
+                    uncommittedFiles: 0,
+                    branch: "fix/website-hero",
+                    unpushedCommits: 2,
+                    orphanedCommits: 0,
+                    unsavedDocuments: 0,
+                    pullRequest: RemoteTaskPullRequest(number: 258, url: URL(string: "https://github.com/example/site/pull/258")!),
+                    blockedReason: nil
+                )))
+            ),
+            try fixture(
                 "events-request.json",
                 RemoteGatewayEventsRequest(
                     conversationID: conversationID,
@@ -505,7 +534,15 @@ private extension RemoteProtocolGoldenTests {
                     rowSummary: "Asks: Badge counts tasks or sessions?",
                     stageTitle: "Needs you", stageReason: "the agent asked a question",
                     projectWorkspaceID: projectID, projectTitle: "toastty",
-                    taskSpaceWorkspaceID: questionSpaceID, activityAt: timestamp
+                    taskSpaceWorkspaceID: questionSpaceID, activityAt: timestamp,
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .archive, title: "Archive Task…",
+                        action: RemoteTaskActionItem(action: .archive, title: "Archive Task…")
+                    ),
+                    actions: [
+                        RemoteTaskActionItem(action: .markDone, title: "Mark Done"),
+                        RemoteTaskActionItem(action: .archive, title: "Archive…"),
+                    ]
                 ),
                 RemoteTaskSummary(
                     id: child, title: "Split the parser", group: .running, mark: .starting,
@@ -520,7 +557,16 @@ private extension RemoteProtocolGoldenTests {
                     pullRequest: RemoteTaskPullRequest(
                         number: 263, url: URL(string: "https://github.com/example/toastty/pull/263")!, state: .open
                     ),
-                    activityAt: timestamp.addingTimeInterval(-60)
+                    activityAt: timestamp.addingTimeInterval(-60),
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .merge, title: "Merge PR #263",
+                        action: RemoteTaskActionItem(action: .merge, title: "Merge PR #263"),
+                        menu: [RemoteTaskActionItem(action: .archive, title: "Archive Task…")]
+                    ),
+                    actions: [
+                        RemoteTaskActionItem(action: .merge, title: "Merge"),
+                        RemoteTaskActionItem(action: .archive, title: "Archive…"),
+                    ]
                 ),
                 RemoteTaskSummary(
                     id: watchedSpaceID, hasRecord: false, title: "Website hero refresh", group: .idle,
@@ -533,7 +579,11 @@ private extension RemoteProtocolGoldenTests {
                     statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
                     stageTitle: "Needs you", stageReason: "create_hook exited 1",
                     projectWorkspaceID: projectID, projectTitle: "toastty",
-                    activityAt: timestamp.addingTimeInterval(-180)
+                    activityAt: timestamp.addingTimeInterval(-180),
+                    actions: [
+                        RemoteTaskActionItem(action: .retry, title: "Retry Setup"),
+                        RemoteTaskActionItem(action: .delete, title: "Delete Task"),
+                    ]
                 ),
                 RemoteTaskSummary(
                     id: shipped, title: "Parent task rollup", group: .toShip, mark: .toShip,

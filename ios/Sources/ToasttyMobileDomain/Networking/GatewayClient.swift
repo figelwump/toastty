@@ -108,6 +108,12 @@ public protocol GatewayClientProtocol: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse
 }
 
 public extension GatewayClientProtocol {
@@ -179,6 +185,18 @@ public extension GatewayClientProtocol {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -526,6 +544,32 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         let response = try await sendTransportRequest(urlRequest)
         guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
         return try decodeVersioned(RemoteSessionStartResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.actionPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskActionResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.archiveCheckPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskArchiveCheckResponse.self, from: response.body) {
             $0.protocolVersion
         }
     }

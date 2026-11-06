@@ -411,6 +411,7 @@ struct RemoteGatewayRequestHandlerTests {
             .conversationInputControl,
             .localDraftRelease,
             .tasks,
+            .taskActions,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))

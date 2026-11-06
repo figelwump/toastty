@@ -183,8 +183,31 @@ public struct GatewayCompatibilityDecoder: Sendable {
             projectTitle: object.lossyString("projectTitle"),
             taskSpaceWorkspaceID: (try? object.optionalUUID("taskSpaceWorkspaceID")) ?? nil,
             pullRequest: pullRequest,
-            activityAt: (try? object.requiredDate("activityAt")) ?? .distantPast
+            activityAt: (try? object.requiredDate("activityAt")) ?? .distantPast,
+            mergeControl: object.lossyObject("mergeControl").flatMap(decodeTaskMergeControl),
+            actions: ((try? object.requiredArray("actions")) ?? []).compactMap(decodeTaskActionItem)
         )
+    }
+
+    /// A control of a kind this client does not know reads as none, so the
+    /// task bar shows no control rather than a wrong one.
+    private func decodeTaskMergeControl(_ object: JSONObject) -> RemoteTaskMergeControl? {
+        guard let kind = object.lossyString("kind").flatMap(RemoteTaskMergeControlKind.init(rawValue:)),
+              let title = object.lossyString("title") else { return nil }
+        return RemoteTaskMergeControl(
+            kind: kind,
+            title: title,
+            detail: object.lossyString("detail"),
+            action: object.lossyObject("action").flatMap(decodeTaskActionItem),
+            menu: ((try? object.requiredArray("menu")) ?? []).compactMap(decodeTaskActionItem)
+        )
+    }
+
+    /// An action this client does not know is left out of its list.
+    private func decodeTaskActionItem(_ object: JSONObject) -> RemoteTaskActionItem? {
+        guard let action = object.lossyString("action").flatMap(RemoteTaskAction.init(rawValue:)),
+              let title = object.lossyString("title") else { return nil }
+        return RemoteTaskActionItem(action: action, title: title)
     }
 
     private func decodeWorkspaceSummary(_ object: JSONObject) throws -> RemoteWorkspaceSummary {

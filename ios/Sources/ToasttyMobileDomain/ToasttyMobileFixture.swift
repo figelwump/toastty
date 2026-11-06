@@ -200,6 +200,8 @@ public enum ToasttyMobileFixture {
     /// asks a question, ios-subspaces is working, and sidebar-done-subspaces
     /// is done. A review task holds PR #36; one task's setup failed; one
     /// starts under the question task; one merged and waits for a release.
+    /// The emptyos project holds one task space for each other Merge
+    /// control state; see `taskActionTasks`.
     public static let taskHome: MobileHomeSnapshot = {
         let toasttyID = previewWorkspaceID
         let now = Date()
@@ -216,13 +218,20 @@ public enum ToasttyMobileFixture {
                     rowSummary: "Asks: Should the badge count tasks or sessions?",
                     stageTitle: "Needs you", stageReason: "the agent asked a question",
                     projectWorkspaceID: toasttyID, projectTitle: "toastty",
-                    taskSpaceWorkspaceID: readySubspaceID, activityAt: now
+                    taskSpaceWorkspaceID: readySubspaceID, pullRequest: pullRequest(45, .open), activityAt: now,
+                    // GitHub reports a blocker, so the control opens the PR.
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .openPullRequest, title: "Open PR #45", detail: "Checks failing",
+                        menu: [RemoteTaskActionItem(action: .merge, title: "Merge PR #45"), archiveTaskItem]
+                    ),
+                    actions: [mergeItem, archiveItem]
                 ),
                 RemoteTaskSummary(
                     id: startingTaskID, title: "Split the parser", group: .running, mark: .starting,
                     statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
                     stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
-                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now,
+                    actions: [deleteItem]
                 ),
                 RemoteTaskSummary(
                     id: reviewTaskID, title: "compact-session-rows", group: .needsYou,
@@ -230,13 +239,16 @@ public enum ToasttyMobileFixture {
                     stageTitle: "Needs you", stageReason: "the agent asked for input",
                     projectWorkspaceID: toasttyID, projectTitle: "toastty",
                     taskSpaceWorkspaceID: needsApprovalSubspaceID, pullRequest: pullRequest(36, .open),
-                    activityAt: now
+                    activityAt: now,
+                    mergeControl: mergeControl(pullRequest: 36),
+                    actions: [mergeItem, archiveItem]
                 ),
                 RemoteTaskSummary(
                     id: setupFailedTaskID, title: "Composer blank line", group: .needsYou,
                     statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
                     stageTitle: "Needs you", stageReason: "create_hook exited 1: tuist install failed",
-                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now,
+                    actions: [RemoteTaskActionItem(action: .retry, title: "Retry Setup"), deleteItem]
                 ),
                 RemoteTaskSummary(
                     id: workingSubspaceID, hasRecord: false, title: "ios-subspaces", group: .running,
@@ -257,19 +269,29 @@ public enum ToasttyMobileFixture {
                     projectWorkspaceID: toasttyID, projectTitle: "toastty",
                     pullRequest: pullRequest(259, .merged), activityAt: now
                 ),
-            ],
+            ] + taskActionTasks(now: now),
             needsYou: [
                 RemoteTaskBoardEntry(taskID: questionTaskID),
                 RemoteTaskBoardEntry(taskID: startingTaskID, isLinkedChild: true, isContext: true),
                 RemoteTaskBoardEntry(taskID: reviewTaskID),
                 RemoteTaskBoardEntry(taskID: setupFailedTaskID),
+                RemoteTaskBoardEntry(taskID: completeTaskID),
+                RemoteTaskBoardEntry(taskID: cleanupStoppedTaskID),
             ],
-            running: [RemoteTaskBoardEntry(taskID: workingSubspaceID)],
+            running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: archiveTaskID)],
             toShip: [RemoteTaskShipLane(id: "toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shippedTaskID])],
-            doneCount: 12,
-            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: toasttyID, toShipCount: 3, doneCount: 12)]
+            doneCount: 14,
+            finishedByProject: [
+                RemoteTaskProjectTally(projectWorkspaceID: toasttyID, toShipCount: 3, doneCount: 12),
+                RemoteTaskProjectTally(projectWorkspaceID: emptyosWorkspaceID, toShipCount: 0, doneCount: 2),
+            ]
         )
-        return MobileHomeSnapshot(hostName: home.hostName, workspaces: home.workspaces, taskBoard: MobileTaskBoard(board))
+        return MobileHomeSnapshot(
+            hostName: home.hostName,
+            workspaces: home.workspaces + taskActionWorkspaces(),
+            taskBoard: MobileTaskBoard(board)
+        )
     }()
 
     /// Task worktrees spawned from the toastty workspace, one in each state
@@ -403,7 +425,7 @@ public enum ToasttyMobileFixture {
         )
     }
 
-    private static func conversation(
+    static func conversation(
         _ number: Int,
         workspaceID: UUID,
         workspaceTitle: String,

@@ -22,6 +22,16 @@ final class MobileTaskBoardTests: XCTestCase {
             number: 263, url: URL(string: "https://github.com/example/toastty/pull/263")!, state: .open
         ))
         XCTAssertEqual(board.task(id: uuid(203))?.hasRecord, false)
+        // The Mac's Merge control and action list for each task.
+        XCTAssertEqual(review.mergeControl?.kind, .merge)
+        XCTAssertEqual(review.mergeControl?.title, "Merge PR #263")
+        XCTAssertEqual(review.mergeControl?.action?.action, .merge)
+        XCTAssertEqual(review.mergeControl?.menu.map(\.action), [.archive])
+        XCTAssertEqual(review.actions.map(\.action), [.merge, .archive])
+        XCTAssertEqual(question.mergeControl?.kind, .archive)
+        XCTAssertEqual(question.actions.map(\.action), [.markDone, .archive])
+        XCTAssertEqual(board.task(id: uuid(304))?.actions.map(\.title), ["Retry Setup", "Delete Task"])
+        XCTAssertNil(board.task(id: uuid(304))?.mergeControl)
 
         XCTAssertEqual(board.needsYou.map(\.taskID), [uuid(301), uuid(305), uuid(302), uuid(304)])
         XCTAssertEqual(board.needsYou[1], RemoteTaskBoardEntry(taskID: uuid(305), isLinkedChild: true, isContext: true))
@@ -72,6 +82,63 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(board.task(id: known)?.pullRequest?.number, 7)
         XCTAssertNil(board.task(id: known)?.pullRequest?.state)
         XCTAssertEqual(board.doneCount, 2)
+    }
+
+    /// The Merge control and the actions come from the Mac. A newer Mac may
+    /// add control kinds and actions: an unknown kind shows no control, and
+    /// an unknown action is left out of its list and menu.
+    func testMergeControlAndActionsDecodeAndUnknownOnesAreLeftOut() throws {
+        let merge = UUID(), newer = UUID(), older = UUID()
+        func task(_ id: UUID, extra: [String: Any]) -> [String: Any] {
+            [
+                "id": id.uuidString, "hasRecord": true, "title": "Task", "group": "needs_you",
+                "statusLine": "Ready for your review", "stageTitle": "Review", "stageReason": "PR open, agent idle",
+                "activityAt": "2026-11-06T12:00:00.000Z",
+            ].merging(extra) { _, new in new }
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["protocolVersion": "1.0", "snapshot": [
+            "projectionRunID": UUID().uuidString, "conversations": [], "generatedAt": "2026-11-06T12:00:00.000Z",
+            "tasks": [
+                "tasks": [
+                    task(merge, extra: [
+                        "mergeControl": [
+                            "kind": "open_pull_request", "title": "Open PR #263", "detail": "Checks failing",
+                            "menu": [
+                                ["action": "merge", "title": "Merge PR #263"],
+                                ["action": "merge_without_checks", "title": "Merge Without Checks"],
+                                ["action": "archive", "title": "Archive Task…"],
+                            ],
+                        ],
+                        "actions": [
+                            ["action": "merge", "title": "Merge"],
+                            ["action": "release", "title": "Release"],
+                            ["action": "archive", "title": "Archive…"],
+                        ],
+                    ]),
+                    task(newer, extra: ["mergeControl": ["kind": "queued", "title": "Queued", "menu": []]]),
+                    task(older, extra: [:]),
+                ],
+                "needsYou": [["taskID": merge.uuidString]], "running": [], "idle": [], "toShip": [],
+                "doneCount": 0, "finishedByProject": [],
+            ],
+        ]])
+        let board = try XCTUnwrap(GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation().taskBoard)
+        let task = try XCTUnwrap(board.task(id: merge))
+        XCTAssertEqual(task.mergeControl, RemoteTaskMergeControl(
+            kind: .openPullRequest,
+            title: "Open PR #263",
+            detail: "Checks failing",
+            menu: [
+                RemoteTaskActionItem(action: .merge, title: "Merge PR #263"),
+                RemoteTaskActionItem(action: .archive, title: "Archive Task…"),
+            ]
+        ))
+        XCTAssertEqual(task.actions.map(\.action), [.merge, .archive])
+        XCTAssertTrue(task.offers(.merge))
+        XCTAssertFalse(task.offers(.delete))
+        XCTAssertNil(board.task(id: newer)?.mergeControl)
+        XCTAssertNil(board.task(id: older)?.mergeControl)
+        XCTAssertEqual(board.task(id: older)?.actions, [])
     }
 
     /// The Mac sidebar's rule: an agent that works or wants the user shows

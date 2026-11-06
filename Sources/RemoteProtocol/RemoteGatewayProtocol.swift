@@ -61,6 +61,11 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// The session snapshot carries the Mac's task board while the task
     /// system is on.
     case tasks
+    /// A native device may run a task's actions: merge, mark done, archive,
+    /// and the others each task's summary offers. The device also needs
+    /// send access and its Task actions switch on the Mac; without them the
+    /// Mac refuses each request.
+    case taskActions = "task_actions"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -89,6 +94,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .conversationInputControl,
             .localDraftRelease,
             .tasks,
+            .taskActions,
         ]
     ) {
         self.protocolVersion = protocolVersion

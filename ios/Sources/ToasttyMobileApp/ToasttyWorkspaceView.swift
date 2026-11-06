@@ -52,6 +52,7 @@ struct ToasttyWorkspaceView: View {
         }
         .background(ToasttyDesignTokens.background)
         .toasttySubspaceDoneNotice(controller)
+        .toasttyTaskActionPresenter(controller)
         .sheet(item: $infoConversation) { selection in
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }

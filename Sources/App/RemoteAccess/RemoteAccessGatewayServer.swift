@@ -460,6 +460,29 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }
+            case .deferredTaskAction(let deviceID, let actionRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // An archive waits on git before it answers.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveTaskAction(deviceID: deviceID, request: actionRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredTaskArchiveCheck(let deviceID, let checkRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveTaskArchiveCheck(deviceID: deviceID, request: checkRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .deferredSessionStartAttachments(let deviceID, let body):
                 guard connection.admittedAttachmentUpload else { drop(connectionID); return }
                 connection.previewTask = Task { @MainActor [weak self] in

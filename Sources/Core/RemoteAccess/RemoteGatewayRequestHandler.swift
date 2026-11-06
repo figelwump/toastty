@@ -44,6 +44,11 @@ public final class RemoteGatewayRequestHandler {
         /// A validated start request. The launch is asynchronous, so the
         /// transport resolves it with `resolveSessionStart`.
         case deferredSessionStart(deviceID: UUID, request: RemoteSessionStartRequest)
+        /// A validated task action or archive check from a device allowed to
+        /// act on tasks. Both may wait on git, so the transport resolves them
+        /// with `resolveTaskAction` and `resolveTaskArchiveCheck`.
+        case deferredTaskAction(deviceID: UUID, request: RemoteTaskActionRequest)
+        case deferredTaskArchiveCheck(deviceID: UUID, request: RemoteTaskArchiveCheckRequest)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -145,6 +150,68 @@ public final class RemoteGatewayRequestHandler {
     /// Opens a terminal and launches the agent. Invoked only by the
     /// main-actor transport, after `resolveSessionStart` re-checks the device.
     public var sessionStartHandler: (@MainActor (RemoteSessionStartRequest, RemoteDeviceRecord) async -> RemoteSessionStartResult)?
+
+    /// Runs a task action. Invoked only by the main-actor transport, after
+    /// `resolveTaskAction` reads the device's permission again.
+    public var taskActionHandler: (@MainActor (RemoteTaskActionRequest, RemoteDeviceRecord) async -> RemoteTaskActionResult)?
+    /// Reads what archiving a task would end and lose.
+    public var taskArchiveCheckHandler: (
+        @MainActor (RemoteTaskArchiveCheckRequest, RemoteDeviceRecord) async -> RemoteTaskArchiveCheckResult
+    )?
+
+    /// The device's Task actions switch can change between the request and
+    /// this call, so it is read again here.
+    @MainActor
+    public func resolveTaskAction(deviceID: UUID, request: RemoteTaskActionRequest) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteTaskActionResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), device.canActOnTasks {
+            if let taskActionHandler {
+                result = await taskActionHandler(request, device)
+            } else {
+                result = .rejected(reason: .tasksUnavailable, message: nil)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied, message: nil)
+        }
+        recordTaskAction(result, action: request.action, deviceID: deviceID, at: Date())
+        return taskActionResponse(result)
+    }
+
+    @MainActor
+    public func resolveTaskArchiveCheck(deviceID: UUID, request: RemoteTaskArchiveCheckRequest) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteTaskArchiveCheckResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), device.canActOnTasks {
+            if let taskArchiveCheckHandler {
+                result = await taskArchiveCheckHandler(request, device)
+            } else {
+                result = .rejected(reason: .tasksUnavailable, message: nil)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied, message: nil)
+        }
+        return taskArchiveCheckResponse(result)
+    }
+
+    private func recordTaskAction(_ result: RemoteTaskActionResult, action: RemoteTaskAction, deviceID: UUID, at date: Date) {
+        switch result {
+        case .performed:
+            auditLog.record(.init(at: date, action: .taskActionPerformed, deviceID: deviceID, detail: action.rawValue))
+        case .rejected(let reason, _):
+            auditLog.record(.init(
+                at: date, action: .taskActionRejected, deviceID: deviceID, detail: "\(action.rawValue):\(reason.rawValue)"
+            ))
+        case .unrecognized:
+            break
+        }
+    }
+
+    private func taskActionResponse(_ result: RemoteTaskActionResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteTaskActionResponse(result: result))) ?? Data())
+    }
+
+    private func taskArchiveCheckResponse(_ result: RemoteTaskArchiveCheckResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteTaskArchiveCheckResponse(result: result))) ?? Data())
+    }
 
     /// The device's permission can change between the request and this call,
     /// so it is read again here. The launch handler reads it once more just
@@ -472,6 +539,17 @@ public final class RemoteGatewayRequestHandler {
                     ))
                     return .respond(sessionStartResponse(.rejected(reason: .permissionDenied)))
                 }
+                if policy.route == .taskAction || policy.route == .taskArchiveCheck {
+                    // Each task route answers with its own refusal, which
+                    // the native client decodes.
+                    if policy.route == .taskAction {
+                        auditLog.record(.init(
+                            at: date, action: .taskActionRejected, deviceID: authenticated.id, detail: "send_scope_denied"
+                        ))
+                        return .respond(taskActionResponse(.rejected(reason: .permissionDenied, message: nil)))
+                    }
+                    return .respond(taskArchiveCheckResponse(.rejected(reason: .permissionDenied, message: nil)))
+                }
                 if policy.route == .conversationInterrupt {
                     auditLog.record(RemoteAccessAuditEntry(
                         at: date,
@@ -601,6 +679,10 @@ public final class RemoteGatewayRequestHandler {
             return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
         case .nativePushRegistration:
             return handlePushRegistration(request, device: authenticated)
+        case .taskAction:
+            return handleTaskAction(request, device: authenticated, at: date)
+        case .taskArchiveCheck:
+            return handleTaskArchiveCheck(request, device: authenticated)
         case .hello, .browserPair, .nativePairingExchange:
             assertionFailure("Unauthenticated route reached authenticated dispatch")
             return .respond(errorResponse(status: 500, reason: "Internal Server Error", code: "internal_error", message: "Internal error"))
@@ -1096,6 +1178,52 @@ public final class RemoteGatewayRequestHandler {
                 workspace: .notFound
             )
         return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
+    }
+
+    private func handleTaskAction(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= RemoteTaskActionPolicy.maximumBodyBytes,
+              let actionRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteTaskActionRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected task action JSON"))
+        }
+        guard actionRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version"))
+        }
+        func reject(_ reason: RemoteTaskActionRejectionReason) -> Outcome {
+            let result = RemoteTaskActionResult.rejected(reason: reason, message: nil)
+            recordTaskAction(result, action: actionRequest.action, deviceID: device.id, at: date)
+            return .respond(taskActionResponse(result))
+        }
+        guard device.canActOnTasks else { return reject(.permissionDenied) }
+        guard RemoteTaskActionPolicy.isValidClientRequestID(actionRequest.clientRequestID),
+              actionRequest.expectedPullRequestNumber.map({ $0 > 0 }) ?? true,
+              actionRequest.closePullRequest == false || actionRequest.action == .archive else {
+            return reject(.invalidRequest)
+        }
+        return .deferredTaskAction(deviceID: device.id, request: actionRequest)
+    }
+
+    private func handleTaskArchiveCheck(_ request: RemoteGatewayHTTPRequest, device: RemoteDeviceRecord) -> Outcome {
+        guard request.body.count <= RemoteTaskActionPolicy.maximumBodyBytes,
+              let checkRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteTaskArchiveCheckRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected archive check JSON"))
+        }
+        guard checkRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version"))
+        }
+        guard device.canActOnTasks else {
+            return .respond(taskArchiveCheckResponse(.rejected(reason: .permissionDenied, message: nil)))
+        }
+        return .deferredTaskArchiveCheck(deviceID: device.id, request: checkRequest)
     }
 
     public static func sessionStartPermission(for device: RemoteDeviceRecord) -> RemoteSessionStartPermission {

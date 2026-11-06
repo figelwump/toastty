@@ -25,6 +25,13 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     /// do before. An absent value, including on records written before the
     /// permission existed, means not allowed.
     public var permissionApprovalEnabled: Bool
+    /// True when "Task actions" is turned on for this device on the Mac.
+    ///
+    /// Opt-in for the same reasons as approving: merging, archiving and
+    /// deleting tasks are writes no device could make before. A stored flag
+    /// rather than a `RemoteDeviceScope`, so older Macs and phones still
+    /// decode the device record. An absent value means not allowed.
+    public var taskActionsEnabled: Bool
     public var authKind: RemoteDeviceAuthKind
     /// Exact Tailscale identity for a native credential. It is confined to the
     /// protected 0600 store and must never enter client responses, routine
@@ -42,6 +49,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         scopes: Set<RemoteDeviceScope> = [.read],
         sessionStartDisabled: Bool = false,
         permissionApprovalEnabled: Bool = false,
+        taskActionsEnabled: Bool = false,
         authKind: RemoteDeviceAuthKind = .browser,
         tailscaleLogin: String? = nil,
         createdAt: Date,
@@ -53,6 +61,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         self.scopes = scopes
         self.sessionStartDisabled = sessionStartDisabled
         self.permissionApprovalEnabled = permissionApprovalEnabled
+        self.taskActionsEnabled = taskActionsEnabled
         self.authKind = authKind
         self.tailscaleLogin = tailscaleLogin
         self.createdAt = createdAt
@@ -61,8 +70,8 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, scopes, sessionStartDisabled, permissionApprovalEnabled, authKind, tailscaleLogin, createdAt,
-             lastSeenAt, revokedAt
+        case id, name, scopes, sessionStartDisabled, permissionApprovalEnabled, taskActionsEnabled, authKind, tailscaleLogin,
+             createdAt, lastSeenAt, revokedAt
     }
 
     /// Starting a session sends a first message, so it needs the send scope
@@ -77,6 +86,12 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         isRevoked == false && authKind == .native && scopes.contains(.send) && permissionApprovalEnabled
     }
 
+    /// Acting on a task changes it on the Mac, so it needs the send scope as
+    /// well as the opt-in. Only native clients have the routes.
+    public var canActOnTasks: Bool {
+        isRevoked == false && authKind == .native && scopes.contains(.send) && taskActionsEnabled
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -84,6 +99,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         scopes = try container.decode(Set<RemoteDeviceScope>.self, forKey: .scopes)
         sessionStartDisabled = try container.decodeIfPresent(Bool.self, forKey: .sessionStartDisabled) ?? false
         permissionApprovalEnabled = try container.decodeIfPresent(Bool.self, forKey: .permissionApprovalEnabled) ?? false
+        taskActionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .taskActionsEnabled) ?? false
         authKind = try container.decodeIfPresent(RemoteDeviceAuthKind.self, forKey: .authKind) ?? .browser
         tailscaleLogin = try container.decodeIfPresent(String.self, forKey: .tailscaleLogin)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -115,6 +131,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         try container.encode(scopes, forKey: .scopes)
         if sessionStartDisabled { try container.encode(true, forKey: .sessionStartDisabled) }
         if permissionApprovalEnabled { try container.encode(true, forKey: .permissionApprovalEnabled) }
+        if taskActionsEnabled { try container.encode(true, forKey: .taskActionsEnabled) }
         try container.encode(authKind, forKey: .authKind)
         try container.encodeIfPresent(tailscaleLogin, forKey: .tailscaleLogin)
         try container.encode(createdAt, forKey: .createdAt)

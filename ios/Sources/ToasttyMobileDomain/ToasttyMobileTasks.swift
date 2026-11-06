@@ -11,11 +11,14 @@ public struct MobileTaskBoard: Equatable, Sendable {
     public let idle: [RemoteTaskBoardEntry]
     public let toShip: [RemoteTaskShipLane]
     public let doneCount: Int
+    /// The board as the Mac sent it.
+    public let source: RemoteTaskBoard
     private let tasksByID: [UUID: RemoteTaskSummary]
     private let taskIDsByTaskSpaceID: [UUID: UUID]
     private let tallyByProjectID: [UUID: RemoteTaskProjectTally]
 
     public init(_ board: RemoteTaskBoard) {
+        source = board
         tasks = board.tasks
         tasksByID = Dictionary(board.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // An entry or lane that names no listed task is left out, so every

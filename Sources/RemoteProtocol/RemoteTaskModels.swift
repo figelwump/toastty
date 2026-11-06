@@ -156,6 +156,14 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     public var pullRequest: RemoteTaskPullRequest?
     /// The latest change the Mac knows of.
     public var activityAt: Date
+    /// The Merge control under the task space's title, as the Mac's top bar
+    /// shows it. Present while the task space is open; absent from older
+    /// hosts.
+    public var mergeControl: RemoteTaskMergeControl?
+    /// The actions the Mac's task menu and detail offer now, in its order.
+    /// Actions that stay on the Mac are left out. A client acts only on a
+    /// host that advertises `task_actions`.
+    public var actions: [RemoteTaskActionItem]
 
     public init(
         id: UUID,
@@ -171,7 +179,9 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         projectTitle: String? = nil,
         taskSpaceWorkspaceID: UUID? = nil,
         pullRequest: RemoteTaskPullRequest? = nil,
-        activityAt: Date
+        activityAt: Date,
+        mergeControl: RemoteTaskMergeControl? = nil,
+        actions: [RemoteTaskActionItem] = []
     ) {
         self.id = id
         self.hasRecord = hasRecord
@@ -187,6 +197,59 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         self.taskSpaceWorkspaceID = taskSpaceWorkspaceID
         self.pullRequest = pullRequest
         self.activityAt = activityAt
+        self.mergeControl = mergeControl
+        self.actions = actions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, hasRecord, title, group, mark, statusLine, rowSummary, stageTitle, stageReason
+        case projectWorkspaceID, projectTitle, taskSpaceWorkspaceID, pullRequest, activityAt, mergeControl, actions
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        hasRecord = try container.decode(Bool.self, forKey: .hasRecord)
+        title = try container.decode(String.self, forKey: .title)
+        group = try container.decode(RemoteTaskGroup.self, forKey: .group)
+        mark = try container.decodeIfPresent(RemoteTaskMark.self, forKey: .mark)
+        statusLine = try container.decode(String.self, forKey: .statusLine)
+        rowSummary = try container.decodeIfPresent(String.self, forKey: .rowSummary)
+        stageTitle = try container.decode(String.self, forKey: .stageTitle)
+        stageReason = try container.decode(String.self, forKey: .stageReason)
+        projectWorkspaceID = try container.decodeIfPresent(UUID.self, forKey: .projectWorkspaceID)
+        projectTitle = try container.decodeIfPresent(String.self, forKey: .projectTitle)
+        taskSpaceWorkspaceID = try container.decodeIfPresent(UUID.self, forKey: .taskSpaceWorkspaceID)
+        pullRequest = try container.decodeIfPresent(RemoteTaskPullRequest.self, forKey: .pullRequest)
+        activityAt = try container.decode(Date.self, forKey: .activityAt)
+        mergeControl = try container.decodeIfPresent(RemoteTaskMergeControl.self, forKey: .mergeControl)
+        actions = try container.decodeIfPresent([RemoteTaskActionItem].self, forKey: .actions) ?? []
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(hasRecord, forKey: .hasRecord)
+        try container.encode(title, forKey: .title)
+        try container.encode(group, forKey: .group)
+        try container.encodeIfPresent(mark, forKey: .mark)
+        try container.encode(statusLine, forKey: .statusLine)
+        try container.encodeIfPresent(rowSummary, forKey: .rowSummary)
+        try container.encode(stageTitle, forKey: .stageTitle)
+        try container.encode(stageReason, forKey: .stageReason)
+        try container.encodeIfPresent(projectWorkspaceID, forKey: .projectWorkspaceID)
+        try container.encodeIfPresent(projectTitle, forKey: .projectTitle)
+        try container.encodeIfPresent(taskSpaceWorkspaceID, forKey: .taskSpaceWorkspaceID)
+        try container.encodeIfPresent(pullRequest, forKey: .pullRequest)
+        try container.encode(activityAt, forKey: .activityAt)
+        try container.encodeIfPresent(mergeControl, forKey: .mergeControl)
+        if actions.isEmpty == false { try container.encode(actions, forKey: .actions) }
+    }
+
+    /// Whether the Mac offers `action` for this task now: in its action
+    /// list or in its Merge control.
+    public func offers(_ action: RemoteTaskAction) -> Bool {
+        actions.contains { $0.action == action } || mergeControl?.offeredActions.contains(action) == true
     }
 
     /// Cuts text past the limit and ends it with "…".

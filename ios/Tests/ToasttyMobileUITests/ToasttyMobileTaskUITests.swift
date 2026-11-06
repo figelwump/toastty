@@ -23,7 +23,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         // The Mac's segments replace All | Active, and Status counts the
         // tasks that need the user.
         XCTAssertFalse(app.segmentedControls["toastty-mobile-workspace-session-filter"].exists)
-        XCTAssertTrue(segment.buttons["Status 3"].exists)
+        XCTAssertTrue(segment.buttons["Status 5"].exists)
         select("Projects", in: segment)
 
         let group = app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"]
@@ -51,14 +51,14 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         attachScreenshot(named: "tasks-projects-footer", of: app)
         // The footer shows the finished tasks in Status.
         footer.tap()
-        XCTAssertTrue(segment.buttons["Status 3"].waitForSelection())
+        XCTAssertTrue(segment.buttons["Status 5"].waitForSelection())
     }
 
     func testStatusGroupsTasksAndATaskWithoutATaskSpaceOpensItsDetail() {
         let app = launchTaskFixture()
         let segment = app.segmentedControls["toastty-mobile-home-segment"]
         XCTAssertTrue(segment.waitForExistence(timeout: 10))
-        select("Status 3", in: segment)
+        select("Status 5", in: segment)
 
         // Rows with an open task space are that task space's row.
         let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
