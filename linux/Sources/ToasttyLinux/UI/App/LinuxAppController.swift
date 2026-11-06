@@ -1,0 +1,259 @@
+import CGtk
+import CoreState
+import Foundation
+
+/// Owns the `AdwApplication`, the store binding, panel hosts and one
+/// window controller per `WindowState`.
+@MainActor
+public final class LinuxAppController {
+    public static let applicationID = "com.GiantThings.toastty"
+
+    public let application: OpaquePointer
+    public let store: any LinuxStoreBinding
+    public let hosts: PanelHostRegistry
+    public let preferences: LinuxUIPreferences
+    public private(set) var windows: [UUID: LinuxWindowController] = [:]
+    private var windowOrder: [UUID] = []
+    private var observation: LinuxObservation?
+    private var sessionObservation: LinuxObservation?
+    private var hasActivated = false
+    public var automation: AutomationScript?
+    /// Marks unread panels read once seen (macOS WorkspaceView behavior).
+    public private(set) lazy var seenUnreadClearer = SeenUnreadClearScheduler(store: store) { [weak self] in
+        self?.isApplicationActive ?? false
+    }
+
+    /// Whether a Toastty window has focus (`NSApp.isActive`).
+    public var isApplicationActive: Bool {
+        windows.values.contains { gtk_window_is_active(cast($0.window)).bool }
+    }
+
+    /// Called when Toastty as a whole gains or loses focus (not when focus
+    /// only moves between Toastty windows). The app-logic frontend posts
+    /// AppKit's `didBecomeActive` / `didResignActive` from it.
+    public var onApplicationActivityChange: ((Bool) -> Void)?
+    private var reportedApplicationActive = false
+    private var activityCheckScheduled = false
+
+    /// Window `is-active` changes arrive one window at a time (the old
+    /// window resigns before the new one activates), so the app-level state
+    /// is read once they have settled.
+    private func scheduleApplicationActivityCheck() {
+        guard activityCheckScheduled == false else { return }
+        activityCheckScheduled = true
+        _ = MainLoop.idle { [weak self] in
+            guard let self else { return }
+            self.activityCheckScheduled = false
+            let active = self.isApplicationActive
+            guard active != self.reportedApplicationActive else { return }
+            self.reportedApplicationActive = active
+            self.onApplicationActivityChange?(active)
+        }
+    }
+
+    /// `preferences` defaults to in-memory ones; the app-logic frontend
+    /// passes persistent ones (loaded before `startup` applies the style).
+    public init(
+        store: any LinuxStoreBinding,
+        hosts: PanelHostRegistry = PanelHostRegistry(),
+        preferences: LinuxUIPreferences? = nil,
+        nonUnique: Bool
+    ) {
+        self.store = store
+        self.hosts = hosts
+        self.preferences = preferences ?? LinuxUIPreferences()
+        let flags = GApplicationFlags(rawValue: nonUnique ? 1 << 5 : 0) // G_APPLICATION_NON_UNIQUE
+        application = OpaquePointer(adw_application_new(Self.applicationID, flags))
+
+        Signal.connect(application, "startup") { [weak self] in self?.startup() }
+        Signal.connect(application, "activate") { [weak self] in self?.activate() }
+    }
+
+    public func run(arguments: [String]) -> Int32 {
+        var cArguments = arguments.map { strdup($0) }
+        defer { cArguments.forEach { free($0) } }
+        let status = cArguments.withUnsafeMutableBufferPointer { buffer in
+            g_application_run(cast(application), Int32(buffer.count), buffer.baseAddress)
+        }
+        GhosttyRuntime.shutdown()
+        return status
+    }
+
+    private func startup() {
+        LinuxTheme.install()
+        AppIcon.install()
+        LinuxTheme.apply(preferences.colorScheme)
+        registerAccelerators()
+    }
+
+    private func activate() {
+        if hasActivated {
+            windowOrder.first.flatMap { windows[$0] }?.present()
+            return
+        }
+        hasActivated = true
+        observation = store.observe { [weak self] state in self?.stateChanged(state) }
+        sessionObservation = store.sessions.observe { [weak self] in
+            self?.windows.values.forEach { $0.scheduleRender() }
+        }
+        reconcileWindows(store.state)
+        reconcileUnreadAttention(store.state)
+        automation?.start(app: self)
+    }
+
+    /// Registers GTK accelerators for global shortcuts that are safe in any
+    /// focus context (so menus show them and they work with GTK's own
+    /// accelerator handling). Arrow, Page and Alt-only chords stay with the
+    /// capture-phase controller, which steps aside while a dialog's text
+    /// entry has focus.
+    private func registerAccelerators() {
+        for binding in LinuxCommandTable.globalBindings where Self.isSafeAccelerator(binding.accelerators) {
+            var cStrings: [UnsafeMutablePointer<CChar>?] = binding.accelerators.map { strdup($0) }
+            cStrings.append(nil)
+            cStrings.withUnsafeBufferPointer { buffer in
+                buffer.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buffer.count) { pointer in
+                    gtk_application_set_accels_for_action(cast(application), "win.\(binding.actionName)", pointer)
+                }
+            }
+            cStrings.forEach { free($0) }
+        }
+    }
+
+    public static func isSafeAccelerator(_ accelerators: [String]) -> Bool {
+        accelerators.allSatisfy { accelerator in
+            let unsafeKeys = ["Left", "Right", "Up", "Down", "Page_Up", "Page_Down", "Home", "End", "Insert"]
+            if unsafeKeys.contains(where: { accelerator.hasSuffix(">\($0)") }) { return false }
+            let usesControlOrFKey = accelerator.contains("<Control>") || accelerator.range(of: #"^(<Shift>)?F\d+$"#, options: .regularExpression) != nil
+            return usesControlOrFKey
+        }
+    }
+
+    // MARK: State → windows
+
+    private func stateChanged(_ state: AppState) {
+        reconcileWindows(state)
+        for controller in windows.values { controller.scheduleRender() }
+        collectClosedPanels(state)
+        reconcileUnreadAttention(state)
+        if state.windows.isEmpty, hasActivated {
+            g_application_quit(cast(application))
+        }
+    }
+
+    /// Seen panels become read (after the macOS delay), and desktop
+    /// notifications for panels that are no longer unread are withdrawn so
+    /// the dock's notification count follows the unread marks down to zero.
+    func reconcileUnreadAttention(_ state: AppState) {
+        seenUnreadClearer.refresh(state)
+        existingDesktopNotifications?.withdrawObsolete(in: state)
+    }
+
+    /// Creating a window controller renders its panels, and restoring a
+    /// terminal can apply a store action synchronously. The state observer
+    /// then calls back in here before the new controller is registered, which
+    /// built a second window for the same `WindowState` (two windows sharing,
+    /// and stealing, the same terminal widgets). Nested calls are deferred
+    /// until the outer pass finishes.
+    private var isReconcilingWindows = false
+    private var needsWindowReconcile = false
+
+    private func reconcileWindows(_ state: AppState) {
+        guard isReconcilingWindows == false else {
+            needsWindowReconcile = true
+            return
+        }
+        isReconcilingWindows = true
+        defer { isReconcilingWindows = false }
+        reconcileWindowsOnce(state)
+        while needsWindowReconcile {
+            needsWindowReconcile = false
+            reconcileWindowsOnce(store.state)
+        }
+    }
+
+    private func reconcileWindowsOnce(_ state: AppState) {
+        let liveIDs = state.windows.map(\.id)
+        for windowID in liveIDs where windows[windowID] == nil {
+            let controller = LinuxWindowController(
+                application: application,
+                windowID: windowID,
+                store: store,
+                hosts: hosts,
+                preferences: preferences
+            )
+            controller.onAppCommand = { [weak self] id, windowID in self?.performAppCommand(id, windowID: windowID) }
+            // Toastty gaining focus makes the focused unread panels seen
+            // (macOS reschedules on didBecomeActive / didResignActive).
+            Signal.notify(controller.window, "is-active") { [weak self] in
+                guard let self else { return }
+                self.seenUnreadClearer.refresh(self.store.state)
+                self.scheduleApplicationActivityCheck()
+            }
+            windows[windowID] = controller
+            windowOrder.append(windowID)
+            controller.present()
+        }
+        for windowID in windowOrder where liveIDs.contains(windowID) == false {
+            windows.removeValue(forKey: windowID)?.destroy()
+        }
+        windowOrder.removeAll { liveIDs.contains($0) == false }
+    }
+
+    /// Releases host widgets for panels that left state entirely (panels
+    /// that only moved between windows keep their widget).
+    private func collectClosedPanels(_ state: AppState) {
+        var live = Set<UUID>()
+        for workspace in state.workspacesByID.values {
+            live.formUnion(workspace.allPanelsByID.keys)
+        }
+        for panelID in hosts.livePanelIDs where live.contains(panelID) == false {
+            hosts.close(panelID: panelID)
+        }
+    }
+
+    public func performAppCommand(_ id: String, windowID: UUID) {
+        switch id {
+        case "window.create":
+            store.send(.createWindow(seed: nil, initialFrame: nil))
+        case "window.close":
+            if store.state.windows.count <= 1 {
+                requestQuit(from: windowID)
+            } else {
+                store.send(.closeWindow(windowID: windowID))
+            }
+        case "app.quit":
+            requestQuit(from: windowID)
+        default:
+            break
+        }
+    }
+
+    private func requestQuit(from windowID: UUID) {
+        let quit = { [weak self] in
+            guard let self else { return }
+            for controller in self.windows.values { controller.destroy() }
+            self.windows.removeAll()
+            g_application_quit(cast(self.application))
+        }
+        guard preferences.askBeforeQuitting, let controller = windows[windowID] else {
+            quit()
+            return
+        }
+        Dialogs.confirm(
+            parent: controller.window,
+            heading: "Quit Toastty?",
+            body: "All terminals and running agents in every window will close.",
+            confirmLabel: "_Quit",
+            confirmIsDefault: true
+        ) { quit() }
+    }
+
+    public var orderedWindows: [LinuxWindowController] {
+        windowOrder.compactMap { windows[$0] }
+    }
+
+    public func selectedWindowController() -> LinuxWindowController? {
+        if let id = store.state.selectedWindowID, let controller = windows[id] { return controller }
+        return orderedWindows.first
+    }
+}

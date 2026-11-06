@@ -590,6 +590,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return GhosttySurfaceSemanticState.promptState(
             for: runtimeStore.currentGhosttySurface(for: panelID)
         )
+        #elseif os(Linux)
+        return runtimeStore.existingController(for: panelID)?.promptState ?? .unavailable
         #else
         return .unavailable
         #endif
@@ -726,6 +728,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return nil
         }
         return assessment
+        #elseif os(Linux)
+        return runtimeStore.existingController(for: panelID)?.closeConfirmationAssessment
         #else
         return nil
         #endif
@@ -1175,7 +1179,11 @@ extension TerminalRuntimeRegistry {
         )
     }
     #endif
+}
+#endif
 
+#if TOASTTY_HAS_GHOSTTY_KIT || os(Linux)
+extension TerminalRuntimeRegistry {
     func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
@@ -1650,7 +1658,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func consumeSplitSource(forNewPanelID panelID: UUID) {
         consumeSplitSource(for: panelID)
     }
+    #endif
 
+    // Linux's terminal frontend (no GhosttyKit host view yet) uses the same
+    // launch-environment and restored-launch logic; see docs/linux.md.
+    #if TOASTTY_HAS_GHOSTTY_KIT || os(Linux)
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
         let baseEnvironmentVariables = launchContextEnvironment(for: panelID)
         logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
@@ -2064,7 +2076,9 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             focusPolicy: .focusTarget
         )
     }
+    #endif
 
+    #if TOASTTY_HAS_GHOSTTY_KIT
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {
         register(surface: surface, for: panelID)
     }

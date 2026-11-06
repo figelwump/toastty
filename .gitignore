@@ -24,3 +24,13 @@ workers/diagnostics/.wrangler/
 workers/push/.wrangler/
 workers/diagnostics/.dev.vars
 workers/diagnostics/.dev.vars.*
+
+# Linux port
+/linux/.sysroot/
+/linux/.build/
+/linux/.build-*/
+/linux/.deps/
+/linux/.generated/
+/linux/.shared-only/
+/linux/.app-logic-only/
+/linux/artifacts/

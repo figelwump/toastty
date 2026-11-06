@@ -797,9 +797,13 @@ private extension CodexSessionLogWatcher {
         var lastLineHash: UInt64?
         var lastLineByteCount: UInt64?
 
-        while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
-            let lineData = Data(bufferedRemainder.prefix(upTo: newlineIndex))
-            bufferedRemainder.removeSubrange(...newlineIndex)
+        // Advance past consumed lines and trim them once per delta. Removing
+        // each line from the front shifts the whole remainder, which is
+        // quadratic when a fresh watcher reads a large rollout in one delta.
+        var lineStart = bufferedRemainder.startIndex
+        while let newlineIndex = bufferedRemainder[lineStart...].firstIndex(of: newlineByte) {
+            let lineData = Data(bufferedRemainder[lineStart..<newlineIndex])
+            lineStart = bufferedRemainder.index(after: newlineIndex)
             consumedByteCount += UInt64(lineData.count) + 1
             lastLineHash = completeLineHash(lineData)
             lastLineByteCount = UInt64(lineData.count)
@@ -838,6 +842,7 @@ private extension CodexSessionLogWatcher {
                 await eventHandler(event)
             }
         }
+        bufferedRemainder.removeSubrange(bufferedRemainder.startIndex..<lineStart)
 
         if let pendingHistoryUpdate {
             await eventHandler(pendingHistoryUpdate)

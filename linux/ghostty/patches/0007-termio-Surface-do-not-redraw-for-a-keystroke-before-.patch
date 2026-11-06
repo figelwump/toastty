@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Wed, 21 Oct 2026 11:50:03 -0700
+Subject: [PATCH 7/7] termio, Surface: do not redraw for a keystroke before its
+ echo
+
+Every typed key woke the renderer twice before the child had a chance to
+echo it: the termio thread redraws after draining any mailbox message,
+including the write that sends the key to the pty, and
+Surface.keyCallback queued a render so that clearing the selection or
+scrolling to the bottom is drawn. The renderer redraws on every wakeup,
+so in the common case this produced a frame identical to the previous
+one a few milliseconds before the frame with the echo. Hosts that
+present each exported frame on the next display refresh (the GTK apprt,
+the embedded Linux platform) painted the identical frame first and
+showed the echo one paint later, which adds up to a frame of keystroke
+latency.
+
+Do not redraw for pty writes, and have keyCallback wake the renderer
+only when it cleared a selection or moved the viewport. The echo and the
+cursor blink reset arrive with the pty output, which already schedules a
+render.
+
+diff --git a/src/Surface.zig b/src/Surface.zig
+index aefbf175e..c883ede31 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -2988,19 +2988,34 @@ pub fn keyCallback(
+     // If our event is any keypress that isn't a modifier and we generated
+     // some data to send to the pty, then we move the viewport down to the
+     // bottom. We also clear the selection for any key other then modifiers.
++    //
++    // Only wake the renderer when that changed something. The keypress
++    // itself changes nothing on screen: the echo (and the cursor blink
++    // reset) arrives with the pty output, which schedules its own render.
++    // An unconditional render here produces a frame identical to the
++    // previous one a few milliseconds before the echo frame; hosts that
++    // present frames on the next display refresh (GTK, the embedded Linux
++    // platform) then show the echo one refresh later.
+     if (!event.key.modifier()) {
+         self.renderer_state.mutex.lockUncancelable(global.io());
+         defer self.renderer_state.mutex.unlock(global.io());
+ 
++        var changed = false;
+         if (self.config.selection_clear_on_typing or
+             event.key == .escape)
+         {
++            if (self.io.terminal.screens.active.selection != null) changed = true;
+             try self.setSelection(null);
+         }
+ 
+-        if (self.config.scroll_to_bottom.keystroke) self.io.terminal.scrollViewport(.bottom);
++        if (self.config.scroll_to_bottom.keystroke and
++            !self.io.terminal.screens.active.viewportIsBottom())
++        {
++            self.io.terminal.scrollViewport(.bottom);
++            changed = true;
++        }
+ 
+-        try self.queueRender();
++        if (changed) try self.queueRender();
+     }
+ 
+     return .consumed;
+diff --git a/src/termio/Thread.zig b/src/termio/Thread.zig
+index de268350b..a8bacc4a7 100644
+--- a/src/termio/Thread.zig
++++ b/src/termio/Thread.zig
+@@ -307,8 +307,15 @@ fn drainMailbox(
+     // ENOUGH to not mess up throughput on producers.
+     var redraw: bool = false;
+     while (mailbox.pop(global.io())) |message| {
+-        // If we have a message we always redraw
+-        redraw = true;
++        // If we have a message we always redraw, except for writes to the
++        // pty: they change nothing on screen, and whatever the child
++        // echoes back arrives as pty output, which schedules its own
++        // render. Redrawing here would present a frame identical to the
++        // previous one just before the echo frame on every keystroke.
++        switch (message) {
++            .write_small, .write_stable, .write_alloc => {},
++            else => redraw = true,
++        }
+ 
+         log.debug("mailbox message={s}", .{@tagName(message)});
+         switch (message) {

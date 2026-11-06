@@ -712,7 +712,9 @@ struct AgentLaunchServiceTests {
         #expect(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"] == "0")
     }
 
-    @Test
+    // The fixture cwd is a literal /tmp path; a host with /tmp/.git makes it
+    // resolve a repository root.
+    @Test(.disabled(if: FileManager.default.fileExists(atPath: "/tmp/.git")))
     func launchQuotesDirectLaunchEnvironmentAndArgv() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()

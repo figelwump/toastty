@@ -3,6 +3,7 @@ import {
   LocalDocumentPanelSearchCommand,
   LocalDocumentPanelSearchState
 } from "./bootstrap";
+import type { LocalDocumentLineEditorHandle } from "./LineEditor";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 const MATCH_HIGHLIGHT_NAME = "toastty-local-document-find-match";
@@ -27,6 +28,9 @@ interface EditorSelectionSnapshot {
 }
 
 export type EditorSearchMode = "interactive" | "passive";
+
+// Edit-mode search runs against the textarea or the line editor's handle.
+export type EditorSearchTarget = HTMLTextAreaElement | LocalDocumentLineEditorHandle;
 
 interface CustomHighlightRegistry {
   set(name: string, highlight: object): void;
@@ -505,7 +509,7 @@ function resolvedEditorLineHeight(textarea: HTMLTextAreaElement): number {
 }
 
 function restoreEditorSelection(
-  textarea: HTMLTextAreaElement | null,
+  textarea: EditorSearchTarget | null,
   selectionSnapshot: EditorSelectionSnapshot | null
 ) {
   if (!textarea) {
@@ -521,7 +525,12 @@ function restoreEditorSelection(
   textarea.setSelectionRange(caret, caret, "none");
 }
 
-function scrollEditorMatchIntoView(textarea: HTMLTextAreaElement, matchStart: number) {
+function scrollEditorMatchIntoView(textarea: EditorSearchTarget, matchStart: number) {
+  if ("revealOffset" in textarea) {
+    textarea.revealOffset(matchStart);
+    return;
+  }
+
   const contentBeforeMatch = textarea.value.slice(0, matchStart);
   const lineIndex = contentBeforeMatch.split("\n").length - 1;
   const lineHeight = resolvedEditorLineHeight(textarea);
@@ -533,7 +542,7 @@ function scrollEditorMatchIntoView(textarea: HTMLTextAreaElement, matchStart: nu
 }
 
 function applyEditorSearch(
-  textarea: HTMLTextAreaElement | null,
+  textarea: EditorSearchTarget | null,
   command: LocalDocumentPanelSearchCommand,
   currentState: LocalDocumentPanelSearchState,
   selectionSnapshotRef: React.MutableRefObject<EditorSelectionSnapshot | null>,
@@ -593,7 +602,7 @@ function applyEditorSearch(
 }
 
 export function applyEditorSearchForTesting(
-  textarea: HTMLTextAreaElement | null,
+  textarea: EditorSearchTarget | null,
   command: LocalDocumentPanelSearchCommand,
   currentState: LocalDocumentPanelSearchState,
   selectionSnapshotRef: React.MutableRefObject<EditorSelectionSnapshot | null>,
@@ -613,7 +622,7 @@ export function useLocalDocumentSearchController(options: {
   isEditing: boolean;
   previewRootRef: React.RefObject<HTMLElement | null>;
   previewContentRef: React.RefObject<HTMLElement | null>;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  textareaRef: React.RefObject<EditorSearchTarget | null>;
 }) {
   const { content, isEditing, previewRootRef, previewContentRef, textareaRef } = options;
   const searchStateRef = React.useRef<LocalDocumentPanelSearchState>(

@@ -262,9 +262,13 @@ struct DiagnosticsSocketProbe {
     }
 
     private func socketDirectoryURL(environment: [String: String]) -> URL {
+        #if os(Linux)
+        return AutomationSocketLocator.socketDirectoryURL(environment: environment)
+        #else
         let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
         return URL(fileURLWithPath: tempDirectory, isDirectory: true)
             .appendingPathComponent("toastty-\(getuid())", isDirectory: true)
+        #endif
     }
 
     private func pidFromSocketFilename(_ filename: String) -> Int32? {

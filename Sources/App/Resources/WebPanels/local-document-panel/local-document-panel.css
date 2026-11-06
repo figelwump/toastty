@@ -516,7 +516,8 @@ body {
   resize: none;
   outline: none;
   background: transparent;
-  color: var(--text);
+  color: var(--pre-text);
+  caret-color: var(--pre-text);
   font:
     500
     calc(13px * var(--toastty-markdown-text-scale))
@@ -528,6 +529,13 @@ body {
   white-space: pre;
   tab-size: 2;
   cursor: text;
+}
+
+.local-document-line-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 :root[data-theme="light"] .local-document-editor-status-error {

@@ -49,11 +49,19 @@ struct RemotePushRelayClientTests {
         let grant = RemoteDevicePushRegistration(deviceID: UUID(), registration: .init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: relay.relayID), configuration: relay)
         let notification = RemotePushSessionNotification(eventID: UUID(), conversationID: RemoteConversationID(), sessionTitle: String(repeating: "\"\\/", count: 170), status: .ready)
         #expect(try JSONEncoder().encode(notification).count <= RemotePushPolicy.maximumBodyBytes)
+        #if os(macOS)
+        // swift-corelibs-foundation traps when a custom URLProtocol reports a
+        // redirect (URLSessionTask.swift "doesn't currently handle redirects
+        // directly"); its built-in HTTP protocol still consults the delegate.
         PushRelayTestURLProtocol.state.reset(status: 307, redirectURL: URL(string: "https://other.example.com/leak"))
         #expect(await RemotePushRelayClient(session: session).send(notification, to: grant) == .dropped)
         #expect(PushRelayTestURLProtocol.state.requests.count == 1)
         #expect(PushRelayTestURLProtocol.state.requests.first?.url?.host == "push.example.com")
         #expect(PushRelayTestURLProtocol.state.requests.first?.url?.path == "/v1/registrations/\(grant.registrationID.uuidString.lowercased())/notifications")
+        #else
+        _ = notification
+        _ = grant
+        #endif
     }
 }
 

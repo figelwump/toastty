@@ -47,7 +47,10 @@ struct ManagedAgentPathResolverTests {
             excludedDirectoryPaths: ["/tmp/toastty-shims"]
         )
 
-        #expect(path == "/Users/test/.nvm/bin:/usr/bin:/bin")
+        // Merged-/usr systems (current Linux distributions) symlink /bin to
+        // /usr/bin, so /bin is a canonical duplicate there.
+        let binIsUsrBin = URL(fileURLWithPath: "/bin").resolvingSymlinksInPath().path == "/usr/bin"
+        #expect(path == (binIsUsrBin ? "/Users/test/.nvm/bin:/usr/bin" : "/Users/test/.nvm/bin:/usr/bin:/bin"))
     }
 
     @Test

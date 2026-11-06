@@ -1,0 +1,9 @@
+// Swift module for Ghostty on Linux: libghostty's embedder API (ghostty.h)
+// plus the Toastty GTK4 widget (toastty-ghostty-gtk.h). Used as a SwiftPM
+// systemLibrary target with pkgConfig "toastty-ghostty"; see ../README.md.
+module GhosttyKit [system] {
+    header "GhosttyKit.h"
+    link "toastty-ghostty-gtk"
+    link "ghostty"
+    export *
+}

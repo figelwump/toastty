@@ -88,6 +88,8 @@ final class AutomationSocketServerBrowserPanelTargetingTests: AutomationSocketSe
         }
     }
 
+    #if os(macOS)
+    // Linux: needs a live browser host (WebKitGTK runtime, panels workstream).
     func testBrowserPanelStateReportsPersistedAndRuntimeZoom() async throws {
         let fixture = makeSingleWindowFixture()
         var state = fixture.state
@@ -135,7 +137,10 @@ final class AutomationSocketServerBrowserPanelTargetingTests: AutomationSocketSe
             XCTAssertNotNil(response.result["title"])
         }
     }
+    #endif
 
+    #if os(macOS)
+    // Linux: needs a live browser host (WebKitGTK runtime, panels workstream).
     func testBrowserPanelStateSerializesInvalidURLErrorWithoutSelectingWorkspace() async throws {
         let fixture = makeTwoWindowFixture()
         var state = fixture.state
@@ -168,6 +173,7 @@ final class AutomationSocketServerBrowserPanelTargetingTests: AutomationSocketSe
             XCTAssertEqual(windows, expectedWindows)
         }
     }
+    #endif
 
     func testBrowserZoomActionUsesExplicitPanelSelection() async throws {
         let fixture = makeTwoWindowFixture()

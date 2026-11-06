@@ -51,6 +51,8 @@ export interface LocalDocumentPanelBootstrap {
   saveErrorMessage: string | null;
   theme: LocalDocumentPanelTheme;
   textScale: number;
+  // Edit-mode editor; hosts that omit it get the textarea.
+  editorEngine?: "textarea" | "codemirror";
 }
 
 type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;

@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:16:07 -0700
+Subject: [PATCH 4/6] embedded: accept an explicit key for remapped key events
+
+The GTK apprt remaps the physical key through the keyval for keys
+outside the writing system (XKB options such as caps:escape, keypad
+navigation keys). The embedded key event only carries a native keycode,
+which cannot express keys without a physical code. Add
+ghostty_surface_key_ex and ghostty_surface_key_is_binding_ex, which take
+a ghostty_input_key_e that replaces the keycode lookup.
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index e527d83cb..54431ff30 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1295,6 +1295,15 @@ GHOSTTY_API void ghostty_surface_set_color_scheme(ghostty_surface_t,
+ GHOSTTY_API ghostty_input_mods_e ghostty_surface_key_translation_mods(ghostty_surface_t,
+                                                                          ghostty_input_mods_e);
+ GHOSTTY_API bool ghostty_surface_key(ghostty_surface_t, ghostty_input_key_s);
++// Like ghostty_surface_key / _key_is_binding but with an explicit key that
++// replaces the keycode lookup (hosts that apply XKB remapping).
++GHOSTTY_API bool ghostty_surface_key_ex(ghostty_surface_t,
++                                        ghostty_input_key_s,
++                                        ghostty_input_key_e);
++GHOSTTY_API bool ghostty_surface_key_is_binding_ex(ghostty_surface_t,
++                                                   ghostty_input_key_s,
++                                                   ghostty_input_key_e,
++                                                   ghostty_binding_flags_e*);
+ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
+                                                    ghostty_input_key_s,
+                                                    ghostty_binding_flags_e*);
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 9444c6220..74dc0c0df 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -114,6 +114,12 @@ pub const App = struct {
+         unshifted_codepoint: u32,
+         composing: bool,
+ 
++        /// If set, use this key instead of looking up `keycode`. Hosts
++        /// whose input system remaps physical keys (XKB on Linux, see
++        /// the GTK apprt's `remapKey`) pass the remapped key here via
++        /// `ghostty_surface_key_ex`.
++        key_override: ?input.Key = null,
++
+         /// Convert a libghostty key event into a core key event.
+         fn core(self: KeyEvent) ?input.KeyEvent {
+             const text: []const u8 = if (self.text) |v| v else "";
+@@ -123,9 +129,10 @@ pub const App = struct {
+             ) orelse 0;
+ 
+             // We want to get the physical unmapped key to process keybinds.
+-            const physical_key = keycode: for (input.keycodes.entries) |entry| {
+-                if (entry.native == self.keycode) break :keycode entry.key;
+-            } else .unidentified;
++            const physical_key = self.key_override orelse
++                keycode: for (input.keycodes.entries) |entry| {
++                    if (entry.native == self.keycode) break :keycode entry.key;
++                } else .unidentified;
+ 
+             // Build our final key event
+             return .{
+@@ -2232,6 +2239,49 @@ pub const CAPI = struct {
+         return true;
+     }
+ 
++    /// Like ghostty_surface_key, but with an explicit key instead of the
++    /// native keycode lookup. Used by hosts that apply keyboard layout
++    /// remapping (e.g. XKB caps:escape) to the physical key, matching
++    /// the GTK apprt. `key` is a ghostty_input_key_e value; invalid
++    /// values fall back to the keycode lookup.
++    export fn ghostty_surface_key_ex(
++        surface: *Surface,
++        event: KeyEvent,
++        key: c_int,
++    ) bool {
++        var zig_event = event.keyEvent();
++        zig_event.key_override = std.enums.fromInt(input.Key, key);
++        return surface.app.keyEvent(
++            .{ .surface = surface },
++            zig_event,
++        ) catch |err| {
++            log.warn("error processing key event err={}", .{err});
++            return false;
++        };
++    }
++
++    /// Like ghostty_surface_key_is_binding, with an explicit key (see
++    /// ghostty_surface_key_ex).
++    export fn ghostty_surface_key_is_binding_ex(
++        surface: *Surface,
++        event: KeyEvent,
++        key: c_int,
++        c_flags: ?*input.Binding.Flags.C,
++    ) bool {
++        var zig_event = event.keyEvent();
++        zig_event.key_override = std.enums.fromInt(input.Key, key);
++        const core_event = zig_event.core() orelse {
++            log.warn("error processing key event", .{});
++            return false;
++        };
++
++        const flags = surface.core_surface.keyEventIsBinding(
++            core_event,
++        ) orelse return false;
++        if (c_flags) |ptr| ptr.* = flags.cval();
++        return true;
++    }
++
+     /// Send raw text to the terminal. This is treated like a paste
+     /// so this isn't useful for sending escape sequences. For that,
+     /// individual key input should be used.

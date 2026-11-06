@@ -6,6 +6,8 @@ import Foundation
 import XCTest
 
 final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServerWindowTargetingTestCase {
+    #if os(macOS)
+    // Linux: needs the local-document runtime's document loading (WebKitGTK runtime, panels workstream).
     func testMarkdownPanelAutomationCreatesSelectedTabAndExposesBootstrapState() async throws {
         let fixture = makeSingleWindowFixture()
         let fileManager = FileManager.default
@@ -89,7 +91,10 @@ final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServe
             XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
         }
     }
+    #endif
 
+    #if os(macOS)
+    // Linux: needs the local-document runtime's document loading (WebKitGTK runtime, panels workstream).
     func testMarkdownAutomationAliasesStillCreateAndInspectLocalDocumentPanel() async throws {
         let fixture = makeSingleWindowFixture()
         let fileManager = FileManager.default
@@ -143,7 +148,10 @@ final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServe
             XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
         }
     }
+    #endif
 
+    #if os(macOS)
+    // Linux: needs the local-document runtime's document loading (WebKitGTK runtime, panels workstream).
     func testJsonPanelAutomationCreatesSelectedTabAndExposesBootstrapState() async throws {
         let fixture = makeSingleWindowFixture()
         let fileManager = FileManager.default
@@ -208,7 +216,10 @@ final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServe
             XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
         }
     }
+    #endif
 
+    #if os(macOS)
+    // Linux: needs the local-document runtime's document loading (WebKitGTK runtime, panels workstream).
     func testLocalDocumentSearchActionsExposeSearchState() async throws {
         let fixture = makeSingleWindowFixture()
         let fileManager = FileManager.default
@@ -384,5 +395,6 @@ final class AutomationSocketServerLocalDocumentPanelTests: AutomationSocketServe
             XCTAssertTrue(hiddenSnapshot.result["searchLastMatchFound"] is NSNull)
         }
     }
+    #endif
 
 }

@@ -1,0 +1,6 @@
+module CWebKitGtk [system] {
+    umbrella header "CWebKitGtk.h"
+    link "webkitgtk-6.0"
+    link "javascriptcoregtk-6.0"
+    export *
+}

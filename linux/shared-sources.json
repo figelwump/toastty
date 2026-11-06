@@ -1,0 +1,383 @@
+{
+  "targets": {
+    "RemoteProtocol": {
+      "source": "Sources/RemoteProtocol",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "CoreState": {
+      "source": "Sources/Core",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "CodexReconciliation": {
+      "source": "Sources/CodexReconciliation",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "ToasttyCLIKit": {
+      "source": "Sources/CLIKit",
+      "implicitImports": [
+        "ToasttyFoundationShim",
+        "FoundationNetworking"
+      ]
+    },
+    "toastty": {
+      "source": "Sources/CLI",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "toastty-agent-shim": {
+      "source": "Sources/AgentShim",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "CoreStateTests": {
+      "source": "Tests/Core",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "ToasttyCLITests": {
+      "source": "Tests/CLI",
+      "implicitImports": [
+        "ToasttyFoundationShim",
+        "FoundationNetworking"
+      ]
+    },
+    "CodexReconciliationTests": {
+      "source": "Tests/CodexReconciliation",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "ToasttyAppLogic": {
+      "source": "Sources/App",
+      "exclude": [
+        "Agents/ToasttySkillsManagementSheet.swift",
+        "AppWindowSceneHostView.swift",
+        "AppWindowSceneObserver.swift",
+        "AppWindowSceneView.swift",
+        "AppWindowView.swift",
+        "BoundaryInteractionOverlay.swift",
+        "CommandPalette/CommandPaletteActionHandler.swift",
+        "CommandPalette/CommandPaletteCatalog.swift",
+        "CommandPalette/CommandPaletteController.swift",
+        "CommandPalette/CommandPalettePanel.swift",
+        "CommandPalette/CommandPaletteView.swift",
+        "CommandPalette/CommandPaletteViewModel.swift",
+        "CommandPalette/PaletteSearchField.swift",
+        "Commands/DisplayShortcutInterceptor.swift",
+        "Commands/NavigationMouseInterceptor.swift",
+        "Commands/ToasttyCommandMenus.swift",
+        "Commands/WindowCommandController.swift",
+        "DiagnosticsPresenter.swift",
+        "DisplayShortcutConfig.swift",
+        "EmptyStateView.swift",
+        "HoverTipPresenter.swift",
+        "ModifierKeyPressObserver.swift",
+        "NonWindowDraggableRegion.swift",
+        "PointerInteractionRegion.swift",
+        "RemoteAccess/RemoteAccessPairingQRCode.swift",
+        "RemoteAccess/RemoteAccessSettingsView.swift",
+        "RightAuxPanelView.swift",
+        "SessionActivityRail.swift",
+        "SidebarView.swift",
+        "Terminal/GhosttyClipboardBridge.swift",
+        "Terminal/GhosttyHostStyleStore.swift",
+        "Terminal/GhosttyRuntimeManager.swift",
+        "Terminal/GhosttySurfaceSemanticState.swift",
+        "Terminal/TerminalHostGhosttySupport.swift",
+        "Terminal/TerminalHostView.swift",
+        "Terminal/TerminalPanelHeaderSearchBar.swift",
+        "Terminal/TerminalPanelHostView.swift",
+        "Terminal/TerminalReadActivityIndicator.swift",
+        "Terminal/TerminalSurfaceController.swift",
+        "Terminal/TerminalSurfaceDiagnostics.swift",
+        "Terminal/TerminalSurfaceScrollView.swift",
+        "TextInputResponderPolicy.swift",
+        "Theme.swift",
+        "ToasttyApp.swift",
+        "ToasttyApplicationIconPolicy.swift",
+        "Updates/SparkleUpdateDiagnostics.swift",
+        "Updates/SparkleUpdaterBridge.swift",
+        "Updates/SparkleUpdaterDiagnosticsLogger.swift",
+        "WebPanels/BrowserAddressTextField.swift",
+        "WebPanels/BrowserAnnotatedScreenshotRenderer.swift",
+        "WebPanels/BrowserAnnotationCommentPopover.swift",
+        "WebPanels/BrowserAnnotationModeToolbar.swift",
+        "WebPanels/BrowserAnnotationOverlayView.swift",
+        "WebPanels/BrowserLinkRoutingRules.swift",
+        "WebPanels/BrowserPanelHostView.swift",
+        "WebPanels/BrowserPanelRuntime.swift",
+        "WebPanels/BrowserPanelView.swift",
+        "WebPanels/LocalDocumentOpenPanel.swift",
+        "WebPanels/LocalDocumentPanelHostView.swift",
+        "WebPanels/LocalDocumentPanelRuntime.swift",
+        "WebPanels/LocalDocumentPanelSearchBar.swift",
+        "WebPanels/LocalDocumentPanelView.swift",
+        "WebPanels/ScratchpadPanelHostView.swift",
+        "WebPanels/ScratchpadPanelRuntime.swift",
+        "WebPanels/ScratchpadPanelView.swift",
+        "WebPanels/ToasttyPageSchemeHandler.swift",
+        "WebPanels/WebPanelAnnotationHeaderAccessory.swift",
+        "WebPanels/WebPanelAnnotationSurface.swift",
+        "WebPanels/WebPanelContainerView.swift",
+        "WindowMovementSuppression.swift",
+        "WorkspaceHeaderMergeControl.swift",
+        "WorkspaceRenameTextField.swift",
+        "WorkspaceView.swift"
+      ],
+      "extraSources": [
+        "linux/Sources/ToasttyAppLogic"
+      ],
+      "implicitImports": [
+        "ToasttyFoundationShim",
+        "FoundationNetworking",
+        "OpenCombine",
+        "OpenCombineFoundation",
+        "OpenCombineDispatch",
+        "ToasttyAppKitShim"
+      ],
+      "importRewrites": {
+        "SwiftUI": [
+          "ToasttyAppKitShim"
+        ]
+      },
+      "darwinQualifier": "ToasttyAppKitShim",
+      "textRewrites": [
+        [
+          ".st_mtimespec",
+          ".st_mtim"
+        ],
+        [
+          ".st_ctimespec",
+          ".st_ctim"
+        ],
+        [
+          ".st_atimespec",
+          ".st_atim"
+        ],
+        [
+          ".receive(on: RunLoop.main)",
+          ".receive(on: DispatchQueue.main)"
+        ],
+        [
+          "scheduler: RunLoop.main)",
+          "scheduler: DispatchQueue.main)"
+        ]
+      ]
+    },
+    "ToasttyAppLogicTests": {
+      "source": "Tests/App",
+      "include": [
+        "AgentCommandShimInstallerTests.swift",
+        "AgentHookDispatcherTests.swift",
+        "AgentHookTemplateFileTests.swift",
+        "AgentLaunchArgumentOverrideAdapterTests.swift",
+        "AgentLaunchInstrumentationTests.swift",
+        "AgentLaunchServiceTests.swift",
+        "AgentProfileStateAppControlTests.swift",
+        "AgentShimExecutableTests.swift",
+        "AlertButtonConfigurationTests.swift",
+        "AnnotationStyleStoreTests.swift",
+        "BrowserAnnotationModelTests.swift",
+        "AppQuitConfirmationTests.swift",
+        "AppStoreCommandCreationTests.swift",
+        "AppStoreCommandTestCase.swift",
+        "AppStoreNavigationHistoryTests.swift",
+        "AppStorePanelCommandTests.swift",
+        "AppStoreUnreadNavigationAvailabilityTests.swift",
+        "AppStoreUnreadNavigationCycleTests.swift",
+        "AppStoreUnreadNavigationFocusModeTests.swift",
+        "AppStoreUnreadNavigationPriorityTests.swift",
+        "AppStoreUnreadNavigationSpatialOrderTests.swift",
+        "AppStoreUnreadNavigationStateChangeTests.swift",
+        "AppStoreUnreadNavigationTestSupport.swift",
+        "AppStoreWindowSelectionTests.swift",
+        "AppStoreWorkspaceCommandTests.swift",
+        "AppURLRouterTests.swift",
+        "AppWindowSceneCoordinatorTests.swift",
+        "AutomationLifecycleTests.swift",
+        "AutomationSocketServerAppControlTests.swift",
+        "AutomationSocketServerBackgroundActivityTests.swift",
+        "AutomationSocketServerBrowserPanelTargetingTests.swift",
+        "AutomationSocketServerCodexHookTests.swift",
+        "AutomationSocketServerCursorHookTests.swift",
+        "AutomationSocketServerDiagnosticsTests.swift",
+        "AutomationSocketServerGrokHookTests.swift",
+        "AutomationSocketServerLocalDocumentPanelTests.swift",
+        "AutomationSocketServerManagedLaunchTests.swift",
+        "AutomationSocketServerResumeRecordTests.swift",
+        "AutomationSocketServerTerminalTargetingTests.swift",
+        "AutomationSocketServerTestSupport.swift",
+        "AutomationSocketServerTests.swift",
+        "AutomationSocketServerTransportTests.swift",
+        "AutomationSocketServerUnreadNavigationTests.swift",
+        "AutomationSocketServerWindowTargetingTestSupport.swift",
+        "AutomationSocketServerWindowTargetingTests.swift",
+        "AutomationSocketServerWorkspaceTabTests.swift",
+        "ClaudeQuestionBrokerTests.swift",
+        "ClaudeSkillsBundleManagerTests.swift",
+        "CodexIntegrationManagerTests.swift",
+        "CodexManagedLaunchIntegrationResolverTests.swift",
+        "CodexManagedSessionResolverTests.swift",
+        "CodexPluginCLIClientTests.swift",
+        "CodexRootProgressCharacterizationTests.swift",
+        "CodexSessionBehaviorCharacterizationTests.swift",
+        "CodexSessionIntegrationTests.swift",
+        "CodexSessionLogWatcherTests.swift",
+        "CodexSkillsManagementSheetTests.swift",
+        "CodexStatusHookInstallerTests.swift",
+        "CodexSubagentProfileResolverTests.swift",
+        "CodexSubagentReconciliationCharacterizationTests.swift",
+        "CodexVisibleTextStatusParserTests.swift",
+        "CommandPaletteFileOpenProviderTests.swift",
+        "CommandPaletteFileSearchEngineTests.swift",
+        "CommandPaletteUsageTrackerTests.swift",
+        "CursorConversationFeedTests.swift",
+        "DiagnosticsSkillHandoffGeneratorTests.swift",
+        "FocusedPanelCommandControllerTests.swift",
+        "FuzzyScorerTests.swift",
+        "GettingStartedEligibilityTests.swift",
+        "GettingStartedPageDriftTests.swift",
+        "GettingStartedPanelTests.swift",
+        "GhosttyDebugLoginShellOverrideTests.swift",
+        "GrokHookStateTests.swift",
+        "GrokLaunchInstrumentationTests.swift",
+        "LayoutAuditTests.swift",
+        "ManagedAgentHelperInstallerTests.swift",
+        "ManagedAgentLaunchArtifactStoreTests.swift",
+        "ManagedAgentLaunchPlannerTests.swift",
+        "ManagedAgentNativeSessionObserverTests.swift",
+        "ManagedAgentResumeResolverTests.swift",
+        "PanelHeaderSearchLayoutTests.swift",
+        "ProcessWatchCommandControllerTests.swift",
+        "ProfileShellIntegrationInstallerTests.swift",
+        "ProviderSessionNameReaderTests.swift",
+        "RemoteAccessGatewayServerTests.swift",
+        "RemoteAccessPairingPresentationTests.swift",
+        "RemoteAccessPreferencesTests.swift",
+        "RemoteAccessServiceSafetyTests.swift",
+        "RemoteAccessSettingsPresentationTests.swift",
+        "RemotePanelMetadataCacheTests.swift",
+        "RemotePreviewProviderTests.swift",
+        "RemotePushMacPresenceTests.swift",
+        "RemotePushRelayClientTests.swift",
+        "RemoteSessionStarterTests.swift",
+        "RemoteTranscriptTailerTests.swift",
+        "RightPanelRecentItemsAppStoreTests.swift",
+        "RightPanelRecentItemsStoreTests.swift",
+        "ScratchpadAppControlTests.swift",
+        "ScratchpadDocumentStoreTests.swift",
+        "SessionRuntimeStoreAgentHookTests.swift",
+        "SessionRuntimeStoreBackgroundActivityTests.swift",
+        "SessionRuntimeStoreCodexApprovalContextTests.swift",
+        "SessionRuntimeStoreCodexApprovalDeferralTests.swift",
+        "SessionRuntimeStoreCodexApprovalOverrideTests.swift",
+        "SessionRuntimeStoreCodexCompletionRoutingTests.swift",
+        "SessionRuntimeStoreCodexHookLifecycleTests.swift",
+        "SessionRuntimeStoreCodexRootProgressIntegrationTests.swift",
+        "SessionRuntimeStoreCodexRootTurnContextCharacterizationTests.swift",
+        "SessionRuntimeStoreCodexRootTurnIntegrationTests.swift",
+        "SessionRuntimeStoreCodexSubagentCorrelationTests.swift",
+        "SessionRuntimeStoreNotificationTests.swift",
+        "SessionRuntimeStoreTests.swift",
+        "SessionRuntimeStoreUnreadFocusTests.swift",
+        "SessionRuntimeStoreVisibleTextTests.swift",
+        "SetupResourcesDriftTests.swift",
+        "SidebarSessionPresentationTests.swift",
+        "SidebarSubspacePresentationTests.swift",
+        "Support/AgentHookTestSupport.swift",
+        "Support/AnnotationTestSupport.swift",
+        "Support/CodexLegacyScenarioDriver.swift",
+        "Support/SessionRuntimeStoreTestSupport.swift",
+        "SystemNotificationResponseCoordinatorTests.swift",
+        "SystemNotificationSenderTests.swift",
+        "TailscaleServeSetupTests.swift",
+        "TailscaleTailnetOriginDetectorTests.swift",
+        "TerminalAppControlTests.swift",
+        "TerminalCommandClickTargetResolverTests.swift",
+        "TerminalCreationAppControlTests.swift",
+        "TerminalFileDropAppControlTests.swift",
+        "TerminalMetadataServiceTests.swift",
+        "TerminalPanelHostStateTests.swift",
+        "TerminalProcessWorkingDirectoryResolverTests.swift",
+        "TerminalProfileLaunchResolverTests.swift",
+        "TerminalProfileStoreTests.swift",
+        "TerminalProgramStatusRuntimeTests.swift",
+        "TerminalRuntimeRegistryInputAuthorityTests.swift",
+        "TerminalRuntimeRegistryManagedAgentResumeTests.swift",
+        "TerminalRuntimeRegistryStoreBindingTests.swift",
+        "TerminalRuntimeRegistryWorkspaceOwnershipTests.swift",
+        "TerminalStoreActionCoordinatorTests.swift",
+        "TerminalSurfaceLaunchConfigurationTests.swift",
+        "TerminalWorkspaceMaintenanceServiceTests.swift",
+        "TestAgentCatalogProvider.swift",
+        "TestTerminalCommandRouter.swift",
+        "ToasttyAppDefaultsTests.swift",
+        "ToasttyAppFontMigrationTests.swift",
+        "ToasttyAppLaunchEnvironmentTests.swift",
+        "ToasttyConfigStoreTests.swift",
+        "ToasttyKeyboardShortcutTests.swift",
+        "ToasttyRuntimeInstanceRecorderTests.swift",
+        "ToasttySettingsStoreTests.swift",
+        "ToasttySkillArtifactSweeperTests.swift",
+        "ToasttyUserSkillCatalogTests.swift",
+        "WebPanelRuntimeRegistryTests.swift",
+        "WorkspaceAnnotationAppControlTests.swift",
+        "WorkspaceLayoutDiagnosticsLoggingTests.swift",
+        "WorkspaceLayoutPersistenceLocationTests.swift",
+        "WorkspaceLayoutResumeRecordLoggingTests.swift",
+        "WorkspaceListAppControlTests.swift",
+        "WorkspaceMergeCoordinatorTests.swift",
+        "WorkspaceMergeEndToEndTests.swift",
+        "WorkspaceMergeTests.swift",
+        "WorkspaceSubspaceAppControlTests.swift",
+        "WorkspaceTabCloseConfirmationTests.swift",
+        "WorktreeCreateSkillScriptTests.swift"
+      ],
+      "extraSources": [
+        "linux/Tests/ToasttyAppLogicTests",
+        "Tests/Core/RemoteAccess/CodexRolloutFixtures.swift",
+        "Tests/Core/RemoteAccess/ClaudeTranscriptFixtures.swift"
+      ],
+      "implicitImports": [
+        "ToasttyFoundationShim",
+        "FoundationNetworking",
+        "OpenCombine",
+        "OpenCombineFoundation",
+        "OpenCombineDispatch",
+        "ToasttyAppKitShim"
+      ],
+      "importRewrites": {
+        "ToasttyApp": [
+          "ToasttyAppLogic"
+        ],
+        "SwiftUI": [
+          "ToasttyAppKitShim"
+        ]
+      },
+      "darwinQualifier": "ToasttyAppKitShim",
+      "textRewrites": [
+        [
+          ".st_mtimespec",
+          ".st_mtim"
+        ],
+        [
+          ".st_ctimespec",
+          ".st_ctim"
+        ],
+        [
+          ".st_atimespec",
+          ".st_atim"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Toastty
+GenericName=Terminal Workspace
+Comment=Terminal workspaces for running and following coding agents
+Keywords=terminal;shell;agent;claude;codex;workspace;tmux;
+Icon=com.GiantThings.toastty
+# scripts/linux/install.sh rewrites Exec to the installed absolute path.
+Exec=toastty-linux
+TryExec=toastty-linux
+Terminal=false
+Categories=System;TerminalEmulator;GTK;
+StartupNotify=true
+StartupWMClass=com.GiantThings.toastty
+SingleMainWindow=false
+X-GNOME-UsesNotifications=true

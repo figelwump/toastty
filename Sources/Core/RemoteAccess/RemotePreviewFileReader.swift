@@ -38,9 +38,12 @@ public enum RemotePreviewFileReader {
             recordedPath.utf8.count <= 4096
         else { throw RemotePreviewError.denied }
         var components = recordedPath.split(separator: "/").map(String.init)
+        #if !os(Linux)
+        // Linux has no /private system aliases; /tmp, /var and /etc are real.
         if let first = components.first, ["tmp", "var", "etc"].contains(first) {
             components.insert("private", at: 0)
         }
+        #endif
         var normalized: [String] = []
         for component in components {
             switch component {
@@ -240,7 +243,13 @@ public enum RemotePreviewFileReader {
 
     private static func descriptorPath(_ descriptor: Int32) throws -> String {
         var bytes = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        #if os(Linux)
+        // Linux has no F_GETPATH; the kernel exposes the open file's path here.
+        let count = readlink("/proc/self/fd/\(descriptor)", &bytes, bytes.count - 1)
+        guard count > 0 else { throw RemotePreviewError.stale }
+        #else
         guard fcntl(descriptor, F_GETPATH, &bytes) == 0 else { throw RemotePreviewError.stale }
+        #endif
         return String(
             decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
