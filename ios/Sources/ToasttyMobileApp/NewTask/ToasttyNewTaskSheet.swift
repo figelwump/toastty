@@ -106,6 +106,18 @@ struct ToasttyNewTaskSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 if let blocking = model.blockingMessage {
                     note(blocking, tone: .warning, identifier: "toastty-mobile-new-task-blocked")
+                    // The fix happens on the Mac, so the draft waits here.
+                    Button {
+                        Task { await model.reloadOptions() }
+                    } label: {
+                        if model.isReloadingOptions {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Check again")
+                        }
+                    }
+                    .disabled(model.isReloadingOptions)
+                    .accessibilityIdentifier("toastty-mobile-new-task-check-again")
                 }
                 if let error = model.errorMessage {
                     note(error, tone: .error, identifier: "toastty-mobile-new-task-error")
@@ -125,7 +137,9 @@ struct ToasttyNewTaskSheet: View {
                         removeAttachment: model.removeAttachment
                     )
                 }
-                HStack(spacing: 8) {
+                // A long workspace or model moves the Agent pill to its own
+                // line before either pill truncates.
+                ToasttyChipFlowLayout(spacing: 8, lineSpacing: 8) {
                     workspacePill
                     agentPill
                 }
@@ -255,14 +269,11 @@ struct ToasttyNewTaskSheet: View {
                 .font(.caption2.monospaced())
                 .tracking(0.8)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    ForEach(Array(model.frequentPresets.enumerated()), id: \.element) { index, preset in
-                        frequentChip(preset, index: index)
-                    }
+            ToasttyChipFlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(Array(model.frequentPresets.enumerated()), id: \.element) { index, preset in
+                    frequentChip(preset, index: index)
                 }
             }
-            .scrollIndicators(.hidden)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Frequent")
@@ -313,6 +324,8 @@ struct ToasttyNewTaskSheet: View {
                 .font(.caption2.monospaced())
                 .tracking(0.6)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .lineLimit(1)
+                .fixedSize()
             Text(value)
                 .font(.subheadline)
                 .foregroundStyle(ToasttyDesignTokens.primaryText)

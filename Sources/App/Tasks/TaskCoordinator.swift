@@ -313,9 +313,15 @@ final class TaskCoordinator {
     /// Checks the request, copies the files, saves the record and starts
     /// setup. Returns as soon as the record is saved; setup continues in the
     /// background.
+    /// `beforeSave` runs after the files are copied, directly before the
+    /// record is saved; a throw there saves nothing and removes the copies.
     @discardableResult
-    func create(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) async throws -> TaskRecord {
-        try await finishCreate(try prepareCreate(request, caller: caller))
+    func create(
+        _ request: TaskCreateRequest,
+        caller: TaskCaller = .unmanaged,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
+        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
     }
 
     /// Every check that needs app state, done before any file is copied.
@@ -547,7 +553,10 @@ final class TaskCoordinator {
 
     /// Copies the files off the main thread, then saves the record and
     /// starts setup.
-    func finishCreate(_ preparation: TaskCreatePreparation) async throws -> TaskRecord {
+    func finishCreate(
+        _ preparation: TaskCreatePreparation,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
         if let existing = preparation.existing {
             return existing
         }
@@ -577,6 +586,12 @@ final class TaskCoordinator {
         if let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] == nil {
             try? fileManager.removeItem(at: directoryURL)
             throw TaskError("The task's workspace closed before the task was saved.")
+        }
+        do {
+            try beforeSave?()
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw error
         }
         record.createdAt = now()
         do {

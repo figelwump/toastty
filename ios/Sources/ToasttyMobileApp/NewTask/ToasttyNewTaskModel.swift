@@ -65,11 +65,15 @@ final class ToasttyNewTaskModel: Identifiable {
     private(set) var isLoadingAttachments = false
     /// Why the last create or edit did not work. Cleared by any edit.
     private(set) var errorMessage: String?
+    /// The form is asking the Mac for its options again.
+    private(set) var isReloadingOptions = false
 
     @ObservationIgnored private let host: any ToasttyNewTaskHost
     @ObservationIgnored private let makeRequestID: () -> String
-    /// A request the Mac did not answer. The Mac keeps each request ID with
-    /// its task, so sending it again can never make a second task.
+    /// The request ID of this unchanged draft, once sent. The Mac keeps each
+    /// request ID with its task, so sending it again can never make a
+    /// second task. Only an edit or a created task clears it: a refusal
+    /// can follow an attempt whose answer was lost after the Mac saved it.
     @ObservationIgnored private var unconfirmedRequestID: String?
     /// Late import or options answers must not restore a canceled draft.
     @ObservationIgnored private var isDiscarded = false
@@ -152,6 +156,7 @@ final class ToasttyNewTaskModel: Identifiable {
     var canCreate: Bool {
         allowsEditing
             && isLoadingAttachments == false
+            && isReloadingOptions == false
             && blockingMessage == nil
             && workspaces.contains { $0.id == workspaceID }
             && selectedAgent != nil
@@ -192,6 +197,23 @@ final class ToasttyNewTaskModel: Identifiable {
             phase = .form
         case .unreachable:
             phase = .unreachable
+        }
+    }
+
+    /// Asks the Mac again, as after opening a project there, and keeps the
+    /// draft and any choice that is still offered.
+    func reloadOptions() async {
+        guard allowsEditing, isReloadingOptions == false else { return }
+        isReloadingOptions = true
+        let outcome = await host.taskCreateOptions()
+        isReloadingOptions = false
+        guard allowsEditing else { return }
+        switch outcome {
+        case .loaded(let response):
+            apply(response)
+            if errorMessage == Self.unreachableMessage { errorMessage = nil }
+        case .unreachable:
+            errorMessage = Self.unreachableMessage
         }
     }
 
@@ -332,10 +354,14 @@ final class ToasttyNewTaskModel: Identifiable {
             unconfirmedRequestID = nil
             phase = .created
         case .answered(.rejected(let reason, let message)):
-            // Nothing was saved, so the next create is a new request.
-            unconfirmedRequestID = nil
+            // This attempt saved nothing, but an earlier one with the same
+            // ID may have, so the unchanged draft keeps its ID.
             errorMessage = Self.message(for: reason, macMessage: message, agentName: agent.displayName)
             phase = .form
+            // The pickers may list a project or agent the Mac no longer has.
+            if reason == .workspaceNotFound || reason == .agentUnavailable {
+                await reloadOptions()
+            }
         case .answered(.unrecognized):
             // The Mac's answer could mean the task was saved. Keep the
             // request ID, so another Create cannot make a second one.

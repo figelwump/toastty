@@ -24,10 +24,14 @@ struct RemoteTaskCreatorTests {
             real.existingTask(clientRequestID: clientRequestID, source: source)
         }
 
-        func create(_ request: TaskCreateRequest, caller: TaskCaller) async throws -> TaskRecord {
+        func create(
+            _ request: TaskCreateRequest,
+            caller: TaskCaller,
+            beforeSave: (@MainActor () throws -> Void)?
+        ) async throws -> TaskRecord {
             createCount += 1
             while isOpen == false { try await Task.sleep(for: .milliseconds(10)) }
-            return try await real.create(request, caller: caller)
+            return try await real.create(request, caller: caller, beforeSave: beforeSave)
         }
     }
 
@@ -146,10 +150,13 @@ struct RemoteTaskCreatorTests {
         #expect(record.text == "Composer keeps a blank line after send")
         await harness.fixture.waitForSetup(taskID)
 
-        // A retry after a lost answer returns the same task.
+        // A retry after a lost answer returns the same task, also after
+        // Toastty restarts, because the request ID is saved with the task.
         #expect(await harness.creator.create(request, device: harness.device) == .created(taskID: taskID))
         #expect(harness.records.count == 1)
         #expect(harness.coordinator.createCount == 1)
+        let relaunched = harness.fixture.makeCoordinator(records: TaskRecordStore(fileURL: harness.fixture.recordsFile))
+        #expect(relaunched.existingTask(clientRequestID: request.clientRequestID, source: .remoteDevice(deviceID: harness.device.id))?.id == taskID)
 
         // Request IDs belong to their device.
         var otherDevice = harness.device
@@ -207,6 +214,23 @@ struct RemoteTaskCreatorTests {
         #expect(harness.records.isEmpty)
         #expect(harness.coordinator.createCount == 0)
         #expect(harness.uploadDirectories().isEmpty)
+    }
+
+    /// The permission can be turned off while the task's files are copied;
+    /// it is read again directly before the record is saved.
+    @Test func permissionLostWhileTheCreateIsUnderWaySavesNothing() async throws {
+        let harness = try Harness()
+        harness.coordinator.isOpen = false
+        let attachment = RemoteMessageAttachment(filename: "screen.png", data: Self.png)
+        let pending = Task { await harness.creator.create(harness.request(attachments: [attachment]), device: harness.device) }
+        await harness.fixture.waitUntil("the create reaches the coordinator") { harness.coordinator.createCount == 1 }
+        harness.deviceMayCreate = false
+        harness.coordinator.isOpen = true
+        #expect(await pending.value == .rejected(reason: .permissionDenied, message: nil))
+        #expect(harness.records.isEmpty)
+        #expect(harness.uploadDirectories().isEmpty)
+        let taskFiles = (try? FileManager.default.contentsOfDirectory(atPath: harness.fixture.attachmentsDirectory.path)) ?? []
+        #expect(taskFiles.isEmpty, "The task's copies are removed too")
     }
 
     @Test func aCoordinatorRefusalCarriesItsMessageOnOneLine() async throws {

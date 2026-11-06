@@ -77,6 +77,49 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         }
     }
 
+    /// A sheet blocked by the Mac's state, such as no open project, can ask
+    /// again once that is fixed, keeping a shared draft.
+    func testABlockedSheetReloadsTheMacsOptionsAndKeepsTheDraft() async {
+        let host = FakeNewTaskHost(options: .loaded(RemoteTaskCreateOptionsResponse(
+            permission: .allowed, workspaces: [], agents: agents()
+        )))
+        let file = RemoteMessageAttachment(filename: "screen.png", data: Data([137, 80, 78, 71, 13, 10, 26, 10]))
+        let model = ToasttyNewTaskModel(host: host, text: "Fix the composer", attachments: [file])
+        await model.loadOptions()
+        XCTAssertNotNil(model.blockingMessage)
+        XCTAssertFalse(model.canCreate)
+
+        host.options = .unreachable
+        await model.reloadOptions()
+        XCTAssertEqual(model.errorMessage, ToasttyNewTaskModel.unreachableMessage)
+        host.options = options(defaultPreset: sol)
+        await model.reloadOptions()
+        XCTAssertNil(model.blockingMessage)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.workspaceID, toastty.id)
+        XCTAssertEqual(model.preset, sol)
+        XCTAssertEqual(model.text, "Fix the composer")
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertTrue(model.canCreate)
+    }
+
+    /// After the Mac says the project closed, the picker lists what it
+    /// has now.
+    func testAClosedWorkspaceRefusalReloadsThePickers() async {
+        let host = FakeNewTaskHost(options: options(defaultWorkspaceID: emptyos.id))
+        let model = ToasttyNewTaskModel(host: host, text: "Fix the composer")
+        await model.loadOptions()
+        XCTAssertEqual(model.workspaceID, emptyos.id)
+        host.options = .loaded(RemoteTaskCreateOptionsResponse(
+            permission: .allowed, workspaces: [toastty], agents: agents(), supportsAttachments: true
+        ))
+        host.outcomes = [.answered(.rejected(reason: .workspaceNotFound, message: nil))]
+        await model.create()
+        XCTAssertEqual(model.workspaces, [toastty])
+        XCTAssertEqual(model.workspaceID, toastty.id)
+        XCTAssertEqual(model.errorMessage, ToasttyNewTaskModel.message(for: .workspaceNotFound, macMessage: nil, agentName: "Codex"))
+    }
+
     func testUnreachableOptionsCanBeRetried() async {
         let host = FakeNewTaskHost(options: .unreachable)
         let model = ToasttyNewTaskModel(host: host)
@@ -190,7 +233,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(model.phase, .created)
     }
 
-    func testARefusalExplainsItselfAndTheNextCreateIsANewRequest() async {
+    func testARefusalExplainsItselfAndTheUnchangedDraftKeepsItsRequestID() async {
         let host = FakeNewTaskHost(options: options())
         var nextID = 0
         let model = ToasttyNewTaskModel(host: host, text: "Fix the composer", makeRequestID: {
@@ -207,7 +250,12 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "Your Mac couldn't create the task: tasks.toml: line 3: unknown key")
         await model.create()
         XCTAssertEqual(model.errorMessage, "Your Mac is still saving another task from this iPhone. Try again in a moment.")
-        XCTAssertEqual(host.requests.map(\.clientRequestID), ["request-1", "request-2"])
+        // An earlier attempt may have saved the task before its answer was
+        // lost, so only an edit makes a new request.
+        model.updateText("Fix the composer on iPad")
+        host.outcomes = [.answered(.created(taskID: UUID()))]
+        await model.create()
+        XCTAssertEqual(host.requests.map(\.clientRequestID), ["request-1", "request-1", "request-2"])
 
         for reason in [RemoteTaskCreateRejectionReason.permissionDenied, .workspaceNotFound, .agentUnavailable,
                        .invalidRequest, .invalidAttachments, .attachmentStorageUnavailable, .unknown] {

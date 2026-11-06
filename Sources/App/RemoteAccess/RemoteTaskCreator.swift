@@ -8,7 +8,13 @@ import RemoteProtocol
 protocol RemoteTaskCreating: AnyObject {
     /// The task a caller already made with this request ID, if any.
     func existingTask(clientRequestID: String, source: TaskSource) -> TaskRecord?
-    func create(_ request: TaskCreateRequest, caller: TaskCaller) async throws -> TaskRecord
+    /// `beforeSave` runs after the files are copied, directly before the
+    /// record is saved; a throw there saves nothing.
+    func create(
+        _ request: TaskCreateRequest,
+        caller: TaskCaller,
+        beforeSave: (@MainActor () throws -> Void)?
+    ) async throws -> TaskRecord
 }
 
 extension TaskCoordinator: RemoteTaskCreating {
@@ -31,6 +37,9 @@ final class RemoteTaskCreator {
         var deviceID: UUID
         var clientRequestID: String
     }
+
+    /// The device lost its permission while the task's files were copied.
+    private struct PermissionRevoked: Error {}
 
     private weak var coordinator: (any RemoteTaskCreating)?
     /// Quick entry's choices, limited to agents the device can follow.
@@ -201,7 +210,14 @@ final class RemoteTaskCreator {
         )
         let record: TaskRecord
         do {
-            record = try await coordinator.create(createRequest, caller: .remoteDevice(deviceID))
+            // Copying the files suspends, so the permission is read once
+            // more directly before the record is saved.
+            record = try await coordinator.create(createRequest, caller: .remoteDevice(deviceID)) { [deviceMayCreate] in
+                guard deviceMayCreate(deviceID) else { throw PermissionRevoked() }
+            }
+        } catch is PermissionRevoked {
+            await discardStaged()
+            return .rejected(reason: .permissionDenied, message: nil)
         } catch {
             await discardStaged()
             ToasttyLog.info("A paired device's task was refused", category: .tasks, metadata: [
