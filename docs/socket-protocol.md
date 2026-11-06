@@ -729,7 +729,9 @@ and `setup` with
 with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
-`replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`, `shippedAt`, `releaseTag`, `doneAt`,
+`replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`,
+`mergeFailure` (`at` and `reason` of Toastty's last merge that stopped without
+merging, cleared when a new merge starts, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
 `group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`; a task that
 is starting reports `running`), `needsUser`, and for Needs you `attention` and, for failures and a stopped

@@ -94,6 +94,7 @@ extension TaskCoordinator {
         try saveMergeState(taskID: taskID) {
             $0.mergeRequestedAt = requestedAt
             $0.mergeCancelledAt = nil
+            $0.mergeFailure = nil
         }
         mergeDeliveryTasks.removeValue(forKey: taskID)?.cancel()
         do {
@@ -258,6 +259,19 @@ extension TaskCoordinator {
     func mergeCleanupEvent(workspaceID: UUID, event: WorkspaceMergeCoordinator.CleanupEvent) {
         guard let record = records.record(taskSpaceWorkspaceID: workspaceID) else { return }
         switch event {
+        case .mergeFailed(let reason):
+            // The acceptance ends with the merge, as with Cancel Merge, so
+            // the task no longer shows a merge under way and offers Merge
+            // again. The reason stays for `task get`, the task's row, and
+            // watches until merged.
+            saveOrDefer(taskID: record.id) {
+                $0.mergeRequestedAt = nil
+                $0.mergeFailure = TaskMergeFailure(at: self.now(), reason: reason)
+            }
+            ToasttyLog.info("A task's merge stopped without merging", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "reason": reason,
+            ])
         case .merged(let state):
             // Saved before anything closes, so the task keeps its merge if
             // the cleanup or the app stops partway. A task in a project with
@@ -268,6 +282,7 @@ extension TaskCoordinator {
                     $0.mergedAt = $0.mergedAt ?? self.now()
                     $0.mergeCommit = state?.mergeCommit ?? $0.mergeCommit
                     $0.mergeRequestedAt = $0.mergeRequestedAt ?? self.now()
+                    $0.mergeFailure = nil
                     $0.cleanup = TaskCleanup(kind: .merge)
                 }
                 try records.flush()
@@ -460,6 +475,7 @@ extension TaskCoordinator {
         try saveMergeState(taskID: record.id) {
             $0.mergeRequestedAt = $0.mergeRequestedAt ?? self.now()
             $0.mergeCancelledAt = nil
+            $0.mergeFailure = nil
         }
         guard merges.merge(
             workspaceID: target.taskSpaceID,

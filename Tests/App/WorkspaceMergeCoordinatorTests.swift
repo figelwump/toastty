@@ -73,7 +73,11 @@ private final class MergeFixture {
     let userDefaults: UserDefaults
     let taskWorkspaceID: UUID
     var notifications: [(title: String, body: String)] = []
-    var failureAlerts: [(title: String, message: String)] = []
+    /// What the coordinator told the task that owns the workspace.
+    var events: [WorkspaceMergeCoordinator.CleanupEvent] = []
+    var mergeFailures: [String] {
+        events.compactMap { if case .mergeFailed(let reason) = $0 { reason } else { nil } }
+    }
     private(set) var coordinator: WorkspaceMergeCoordinator!
 
     init() throws {
@@ -106,9 +110,9 @@ private final class MergeFixture {
             scriptPath: #filePath,
             userDefaults: userDefaults,
             pollInterval: .milliseconds(10),
-            notify: { [unowned self] title, body in notifications.append((title, body)) },
-            presentFailure: { [unowned self] title, message in failureAlerts.append((title, message)) }
+            notify: { [unowned self] title, body in notifications.append((title, body)) }
         )
+        coordinator.cleanupObserver = { [unowned self] _, event in events.append(event) }
     }
 
     var request: WorkspaceMergeRequest? {
@@ -216,7 +220,7 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.runner.scriptCalls.last == fixture.arguments("clean-up"))
         #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
         #expect(fixture.notifications.first?.body.hasPrefix("fix-question-lifetime: closed") == true)
-        #expect(fixture.failureAlerts.isEmpty)
+        #expect(fixture.mergeFailures.isEmpty)
     }
 
     @Test
@@ -231,7 +235,7 @@ struct WorkspaceMergeCoordinatorTests {
         try await Task.sleep(for: .milliseconds(30))
         #expect(fixture.runner.checkCalls.isEmpty)
         #expect(fixture.runner.scriptCalls.count == 1)
-        #expect(fixture.failureAlerts.isEmpty)
+        #expect(fixture.mergeFailures.isEmpty)
     }
 
     @Test
@@ -295,7 +299,8 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.isDone == false)
         #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
         #expect(fixture.notifications.first?.body.hasPrefix("new commits were pushed") == true)
-        #expect(fixture.failureAlerts.isEmpty)
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.mergeFailures.first?.hasPrefix("new commits were pushed") == true)
         #expect(fixture.savedRequests == nil)
     }
 
@@ -322,7 +327,8 @@ struct WorkspaceMergeCoordinatorTests {
         await fixture.merge(thenCleanUp: false)?.value
         #expect(fixture.request == nil)
         #expect(fixture.isDone == false)
-        #expect(fixture.failureAlerts.first?.message.contains("did not report its target branch") == true)
+        #expect(fixture.notifications.map(\.title) == ["Unable to Merge PR #59"])
+        #expect(fixture.mergeFailures.first?.contains("did not report its target branch") == true)
     }
 
     @Test
@@ -379,6 +385,25 @@ struct WorkspaceMergeCoordinatorTests {
     }
 
     @Test
+    func aRefusalForAPullRequestTheWorkspaceLeftIsNotRecordedOnItsTask() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("refused", "the PR head is not the checked commit")
+        fixture.runner.onScript["merge"] = {
+            fixture.store.send(.setWorkspaceAnnotation(
+                workspaceID: fixture.taskWorkspaceID,
+                key: "github-pr",
+                annotation: WorkspaceAnnotation.validated(text: "PR #60", url: "https://github.com/example/toastty/pull/60")!
+            ))
+        }
+
+        await fixture.merge(thenCleanUp: true)?.value
+
+        #expect(fixture.request == nil)
+        #expect(fixture.notifications.map(\.title) == ["Unable to Merge PR #59"])
+        #expect(fixture.mergeFailures.isEmpty)
+    }
+
+    @Test
     func refusedOrFailedMergeShowsWhyAndLeavesTheWorkspaceOpen() async throws {
         let fixture = try MergeFixture()
         fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport(
@@ -389,8 +414,11 @@ struct WorkspaceMergeCoordinatorTests {
 
         #expect(fixture.request == nil)
         #expect(fixture.isDone == false)
-        #expect(fixture.failureAlerts.map(\.title) == ["Unable to Merge PR #59"])
-        #expect(fixture.failureAlerts.first?.message.hasPrefix("the worktree has uncommitted changes") == true)
+        // A notification and the task's record, never a modal alert.
+        #expect(fixture.notifications.map(\.title) == ["Unable to Merge PR #59"])
+        #expect(fixture.notifications.first?.body.hasPrefix("the worktree has uncommitted changes") == true)
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.mergeFailures.first?.hasPrefix("the worktree has uncommitted changes") == true)
 
         fixture.runner.scriptResults["merge"] = WorkspaceMergeCommandResult(
             exitCode: 1,
@@ -399,7 +427,8 @@ struct WorkspaceMergeCoordinatorTests {
             failure: nil
         )
         await fixture.merge(thenCleanUp: false)?.value
-        #expect(fixture.failureAlerts.last?.message == "The pull request script failed: workspace-pull-request: gh pr view failed: HTTP 401")
+        #expect(fixture.notifications.last?.body == "The pull request script failed: workspace-pull-request: gh pr view failed: HTTP 401")
+        #expect(fixture.mergeFailures.last == "The pull request script failed: workspace-pull-request: gh pr view failed: HTTP 401")
         #expect(fixture.isDone == false)
         #expect(fixture.runner.checkCalls.isEmpty)
     }
@@ -535,7 +564,7 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.request == nil)
         #expect(fixture.runner.scriptCalls == [fixture.arguments("close")])
         #expect(fixture.notifications.map(\.title) == ["Closed PR #59 without merging"])
-        #expect(fixture.failureAlerts.isEmpty)
+        #expect(fixture.mergeFailures.isEmpty)
     }
 
     @Test
@@ -550,9 +579,10 @@ struct WorkspaceMergeCoordinatorTests {
 
         #expect(fixture.request == nil)
         #expect(fixture.store.state.workspacesByID[fixture.taskWorkspaceID] != nil)
-        #expect(fixture.notifications.isEmpty)
-        #expect(fixture.failureAlerts.map(\.title) == ["Unable to Close PR #59"])
-        #expect(fixture.failureAlerts.first?.message == "the worktree has uncommitted changes")
+        #expect(fixture.notifications.map(\.title) == ["Unable to Close PR #59"])
+        #expect(fixture.notifications.first?.body == "the worktree has uncommitted changes")
+        // A close is not a merge, so the task records no merge failure.
+        #expect(fixture.mergeFailures.isEmpty)
     }
 
     @Test

@@ -388,7 +388,9 @@ an agent works in the task space again.
 
 A watch is saved with the record of the task it notifies, so it survives a
 relaunch, and it fires once. A watch whose task is deleted, or archived while
-it waits for something else, fires with that reason. If the notified task's
+it waits for something else, fires with that reason. So does a watch for
+`merged` or `to-ship` when Toastty's last merge of the task stopped without
+merging, until a new merge starts; see [Merge a task](#merge-a-task). If the notified task's
 agent is not running when a watch fires, the message goes out once it runs
 again. `toastty task watches` lists watches, with `--task` or `--notify` to
 filter them, and `toastty task unwatch <watch-id>` cancels one. Fired watches
@@ -713,6 +715,16 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    Toastty saves the target branch with a waiting merge and stops if the pull
    request is retargeted. Older saved waits with no target require you to
    accept the merge again.
+
+   If the merge stops without merging, for example because the checkout is
+   no longer at the `--head` commit the skill checked, or a waiting merge is
+   refused, nothing changes on GitHub. Toastty shows no alert that you must
+   dismiss, since an agent or a shell may have started the merge. Instead it
+   sends a desktop notification and records the reason on the task: the
+   task's row shows **⚠ merge stopped**, the Tasks view gives the reason, and
+   **Merge** is offered again. `toastty task get` reports it as
+   `mergeFailure` until a new merge starts, and a `task watch --until merged`
+   or `--until to-ship` then ends as one that can never fire.
 4. Toastty records the merge on the task first. Once the agent's turn ends, it
    closes the task space, removes the worktree and deletes the branch, the same
    way as the Merge button does for any task space. In a project with
