@@ -21,7 +21,6 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
                 repoPath: scenario.worktree,
                 thenCleanUp: true
             )?.value
-            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
             #expect(FileManager.default.fileExists(atPath: scenario.mergedPullRequestMarker))
 
             // The first check after the merge finds it merged and cleans up.
@@ -56,7 +55,6 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
             )?.value
 
             #expect(scenario.sessionRuntimeStore.workspaceMergeRequests[scenario.taskWorkspaceID] == nil)
-            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
             #expect(
                 scenario.notifications.first?.hasPrefix("Closed PR #7 without merging: task-7: closed PR #7; closed task-7") == true,
                 "\(scenario.notifications)"
@@ -85,7 +83,6 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
         let taskWorkspaceID: UUID
         var coordinator: WorkspaceMergeCoordinator!
         var notifications: [String] = []
-        var failureAlerts: [String] = []
 
         init(
             repo: String,
@@ -203,8 +200,7 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
                 pathOverride: "\(fakeBin.path):/usr/bin:/bin"
             ),
             userDefaults: nil,
-            notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") },
-            presentFailure: { [scenario] title, message in scenario.failureAlerts.append("\(title): \(message)") }
+            notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") }
         )
         try await body(scenario)
     }

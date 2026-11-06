@@ -661,6 +661,9 @@ extension AppControlExecutor {
             } ?? .null,
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),
+            "mergeFailure": record.mergeFailure.map {
+                .object(["at": date($0.at), "reason": .string($0.reason)])
+            } ?? .null,
             "shippedAt": date(record.shippedAt),
             "releaseTag": optional(record.releaseTag),
             "doneAt": date(record.doneAt),

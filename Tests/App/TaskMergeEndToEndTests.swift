@@ -33,7 +33,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
             #expect(scenario.record?.mergeRequestedAt != nil)
-            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
             // No release_tags: a merged task is done.
             #expect(scenario.boardItem?.stage == .done)
             #expect(scenario.fired(merged))
@@ -75,7 +75,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
             #expect(scenario.boardItem?.stage == .toShip)
-            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
             #expect(scenario.fired(toShip))
             #expect(scenario.fired(done) == false)
 
@@ -162,7 +162,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
             #expect(scenario.boardItem?.stage == .toShip)
-            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
             if worktreeAlreadyRemoved {
                 // Workspace-only cleanup does not delete branch references.
                 #expect(try scenario.git(["rev-parse", "fix/task-7"], in: scenario.repo) == scenario.head)
@@ -183,15 +183,70 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// A refused `--expect-head` merge, as when a coordinator passes the
+    /// wrong commit: nothing merges, no modal alert holds the main thread,
+    /// and the task, `task get` and a waiting `task watch` all say why.
     @Test
     func aPushAfterTheChecksIsNotMerged() async throws {
         try await withScenario { scenario in
+            let taskID = scenario.taskID.uuidString
+            // A coordinator watches for the merge before it starts.
+            let merged = try scenario.watch(.merged)
             let checked = try scenario.git(["rev-parse", "HEAD~1"], in: scenario.worktree)
             try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: checked, caller: scenario.agentCaller)
-            await scenario.waitUntil("the merge is refused") { scenario.failureAlerts.isEmpty == false }
-            #expect(scenario.failureAlerts.first?.contains("not the checked commit") == true, "\(scenario.failureAlerts)")
+            await scenario.waitUntil("the merge is refused") { scenario.record?.mergeFailure != nil }
+            let reason = try #require(scenario.record?.mergeFailure?.reason)
+            #expect(reason.contains("not the checked commit"), "\(reason)")
             #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            // A desktop notification instead of an alert to dismiss.
+            #expect(scenario.notifications == ["Unable to Merge PR #7: \(reason)"])
+
+            // The acceptance ended with the merge; the task offers Merge again
+            // and shows why the last one stopped.
+            #expect(scenario.record?.mergeRequestedAt == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            let item = try #require(scenario.boardItem)
+            #expect(item.stage == .needsYou(.review))
+            #expect(item.merge == nil)
+            #expect(TaskBoardPresentation.statusLine(item) == "⚠ merge stopped")
+            #expect(TaskBoardPresentation.stageDescription(item).why == "the last merge stopped: \(reason)")
+            #expect(TaskBoardPresentation.detailActions(item).contains(.merge))
+            if case .ready? = scenario.headerPresentation {} else {
+                Issue.record("The header should offer Merge again: \(String(describing: scenario.headerPresentation))")
+            }
+
+            // The watch ends instead of waiting for a merge nobody started.
+            #expect(scenario.fired(merged))
+            if case .fired(_, let firedReason, let impossible, _)? = scenario.tasks.waitWatches[merged]?.watch.state {
+                #expect(impossible)
+                #expect(firedReason == "was not merged: \(reason)")
+            } else {
+                Issue.record("The merged watch did not fire")
+            }
+
+            // The automation socket keeps answering, and a CLI caller reads
+            // the failure. As in the app, the CLI talks to a server that has
+            // the task coordinator.
+            let taskSocketPath = temporarySocketPath()
+            let taskServer = try makeTaskServer(scenario, socketPath: taskSocketPath)
+            defer { withExtendedLifetime(taskServer) {} }
+            try waitForSocket(at: taskSocketPath)
+            scenario.socketPath = taskSocketPath
+            let get = try await scenario.cli(["--json", "task", "get", taskID])
+            #expect(get.status == 0, "\(get.output)")
+            #expect(get.output.contains("\"mergeFailure\""), "\(get.output)")
+            #expect(get.output.contains("not the checked commit"), "\(get.output)")
+            let watch = try await scenario.cli(["task", "watch", taskID, "--until", "merged", "--wait", "--timeout", "10"])
+            #expect(watch.status != 0)
+            #expect(watch.output.contains("was not merged"), "\(watch.output)")
+
+            // Accepting the right commit merges, and clears the failure.
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            #expect(scenario.record?.mergeFailure == nil)
+            await scenario.waitUntil("the merge and cleanup finish") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
         }
     }
 
@@ -512,7 +567,6 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         var pullRequests: PullRequestStateCache!
         let fakeSessions = TaskStartWorkTests.FakeSessions()
         var notifications: [String] = []
-        var failureAlerts: [String] = []
         let git: (_ arguments: [String], _ directory: String) throws -> String
 
         init(
@@ -598,7 +652,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             let deadline = ContinuousClock.now.advanced(by: timeout)
             while condition() == false {
                 guard ContinuousClock.now < deadline else {
-                    Issue.record("Timed out waiting until \(description); alerts: \(failureAlerts); notes: \(notifications)")
+                    Issue.record("Timed out waiting until \(description); notes: \(notifications)")
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(50))
@@ -715,8 +769,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             runner: runner,
             userDefaults: nil,
             pollInterval: .milliseconds(200),
-            notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") },
-            presentFailure: { [scenario] title, message in scenario.failureAlerts.append("\(title): \(message)") }
+            notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") }
         )
         scenario.tasks = TaskCoordinator(
             records: TaskRecordStore.inMemory(),
