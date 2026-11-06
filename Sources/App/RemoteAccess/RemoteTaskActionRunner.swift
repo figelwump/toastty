@@ -166,7 +166,9 @@ final class RemoteTaskActionRunner {
         } catch let error as TaskError {
             return .rejected(reason: .failed, message: error.message)
         } catch {
-            return .rejected(reason: .failed, message: error.localizedDescription)
+            // Only the task code's own messages go to the device; another
+            // error can carry paths or system detail.
+            return .rejected(reason: .failed, message: nil)
         }
         ToasttyLog.info("Ran a task action from a remote device", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
@@ -188,7 +190,7 @@ final class RemoteTaskActionRunner {
         } catch let error as TaskError {
             return .rejected(reason: .failed, message: error.message)
         } catch {
-            return .rejected(reason: .failed, message: error.localizedDescription)
+            return .rejected(reason: .failed, message: nil)
         }
         let record = coordinator.records.record(id: request.taskID)
         return .ready(RemoteTaskArchiveCheck(
