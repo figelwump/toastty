@@ -244,6 +244,9 @@ final class TaskCoordinator {
     /// The live view of every task's stage, for queries that report it and
     /// for stage watches.
     weak var board: TaskBoardStore?
+    /// Sends task events to approved webhooks, and holds the webhooks
+    /// waiting for approval. Set once it exists.
+    weak var webhooks: TaskWebhookService?
     /// The one owner of merges and their cleanup. Set once it exists.
     weak var merges: WorkspaceMergeCoordinator?
     /// Unsaved local documents in a workspace, which closing it would lose.

@@ -46,6 +46,23 @@ public enum TaskStage: Equatable, Sendable {
         /// merge, an archive or a release: "Merged · clean up?".
         case cleanupStopped(reason: String)
 
+        /// The case's name, as `task get` and webhook events report it.
+        public var name: String {
+            switch self {
+            case .pickWorkspace: "pickWorkspace"
+            case .setupFailed: "setupFailed"
+            case .moveFailed: "moveFailed"
+            case .taskSpaceClosed: "taskSpaceClosed"
+            case .agentNeedsInput: "agentNeedsInput"
+            case .awaitingReply: "awaitingReply"
+            case .agentError: "agentError"
+            case .review: "review"
+            case .readyForReview: "readyForReview"
+            case .agentFinished: "agentFinished"
+            case .cleanupStopped: "cleanupStopped"
+            }
+        }
+
         /// Whether the task has not reached its task space yet: setup or
         /// the move into a worktree failed.
         public var isBeforeStart: Bool {

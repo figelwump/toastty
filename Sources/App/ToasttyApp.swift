@@ -686,6 +686,7 @@ struct ToasttyApp: App {
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
     private let taskBoard: TaskBoardStore
+    private let taskWebhooks: TaskWebhookService
     private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -1081,6 +1082,13 @@ struct ToasttyApp: App {
         )
         taskCoordinator.board = taskBoard
         self.taskBoard = taskBoard
+        let taskWebhooks = TaskWebhookService(runtimePaths: runtimePaths)
+        taskWebhooks.taskStates = { [weak taskBoard] in
+            TaskWebhookService.taskStates(taskBoard?.items() ?? [])
+        }
+        taskCoordinator.webhooks = taskWebhooks
+        self.taskWebhooks = taskWebhooks
+        taskWebhooks.start()
         taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
         sessionRuntimeStore.workspaceMergeCoordinator?.cleanupObserver = { [weak taskCoordinator] workspaceID, event in
             taskCoordinator?.mergeCleanupEvent(workspaceID: workspaceID, event: event)

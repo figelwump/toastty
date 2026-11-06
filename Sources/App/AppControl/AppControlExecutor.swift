@@ -816,6 +816,9 @@ final class AppControlExecutor {
              .taskArchive:
             return try runTaskAction(action, args: args)
 
+        case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:
+            return try runWebhookAction(action, args: args)
+
         case .taskRelease:
             return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
 
@@ -863,6 +866,10 @@ final class AppControlExecutor {
                 return try prepareTaskCreate(args: args)
             }
             return try await finishTaskCreate(coordinator, preparation)
+        }
+        if AppControlActionID.resolve(rawID) == .webhookTest {
+            let (service, name) = try withRequestContext(context) { try prepareWebhookTest(args: args) }
+            return try await runWebhookTest(service: service, name: name)
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {
             let (coordinator, taskID, options) = try withRequestContext(context) {
@@ -1039,6 +1046,9 @@ final class AppControlExecutor {
 
         case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
             return try runTaskQuery(query, args: args)
+
+        case .webhookList:
+            return try runWebhookList(args: args)
         }
         }
     }

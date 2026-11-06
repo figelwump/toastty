@@ -971,6 +971,31 @@ Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait
 ```
 
+### `webhook`
+
+```text
+toastty webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
+toastty webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
+toastty webhook rotate-secret <name> --secret-stdin
+toastty webhook list [<name>]
+toastty webhook test|remove <name>
+```
+
+Webhooks receive task events over HTTPS; see
+[Webhooks for task events](tasks.md#webhooks-for-task-events). A new webhook,
+or one whose address, events, filters or auth changed, waits for approval in
+the Tasks view; no command approves it. `add --wait` exits 0 when it is
+approved, 3 when it is denied, and 4 when `--timeout` (default 600) runs out.
+`test` sends a `task.test` event to an approved webhook and prints the HTTP
+status. Events are `needs_you`, `merged`, `done`, `archived`, `deleted`
+(the default), `running` and `idle`; an empty `--external-ref-prefix` clears
+that filter. The secret only comes from stdin. Without one, the user pastes
+it in the approval sheet; `--secret-hint` (one line, up to 300 characters)
+tells them where to find it, and an empty hint clears it.
+
+These commands are short forms of `action run webhook.add|webhook.set|webhook.remove|webhook.test`
+and `query run webhook.list`.
+
 ### `notify`
 
 Emit a macOS desktop notification.

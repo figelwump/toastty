@@ -33,6 +33,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let recentWorkspacesFileName = "recent-workspaces.json"
     private static let taskRecordsFileName = "task-records.json"
     private static let taskAttachmentsDirectoryName = "task-attachments"
+    private static let taskWebhooksFileName = "task-webhooks.json"
+    private static let taskWebhookOutboxFileName = "task-webhook-outbox.json"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -106,6 +108,18 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     /// Toastty's copies of task attachments, in one folder per task.
     public var taskAttachmentsDirectoryURL: URL {
         configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// Webhooks that receive task events. Runtime-isolated runs get their
+    /// own, so a dev run never sends to a real coordinator.
+    public var taskWebhooksFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskWebhooksFileName, directoryHint: .notDirectory)
+    }
+
+    /// Task webhook events waiting to send, and the task states they were
+    /// worked out from.
+    public var taskWebhookOutboxFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskWebhookOutboxFileName, directoryHint: .notDirectory)
     }
 
     public var defaultLogFileURL: URL {

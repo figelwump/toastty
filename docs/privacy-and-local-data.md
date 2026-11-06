@@ -69,6 +69,18 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.
+- `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`
+  - The task webhooks you added, their status and the requester's hint on
+    where to find the key, and the events waiting to send with the task
+    states they came from. Webhook secrets and approvals
+    are in the login Keychain, not in these files.
+- Task webhooks
+  - After you approve a webhook in the Tasks view, Toastty POSTs to its HTTPS
+    address when a task needs you, merges, finishes, or is archived or
+    deleted. Each event carries the task's ID, title, project path, external
+    reference, stage, the question an agent asked you, the pull request URL
+    and merge time. It never carries an agent's reply, the task's prompt or
+    its attachments. See [Webhooks for task events](tasks.md#webhooks-for-task-events).
 - Task triage
   - When you set `[triage] command` in `~/.toastty/tasks.toml`, Toastty sends
     each task's text and file names, the titles, root directories and
@@ -178,6 +190,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/task-records.json`
   - `<runtime-home>/task-attachments/`
   - `<runtime-home>/recent-workspaces.json`
+  - `<runtime-home>/task-webhooks.json` and `<runtime-home>/task-webhook-outbox.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`
