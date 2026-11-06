@@ -68,6 +68,12 @@ protocol LiveConnectionRuntime: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse?
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse?
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse?
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse?
@@ -125,6 +131,17 @@ extension LiveConnectionRuntime {
         nil
     }
 
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        nil
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        nil
+    }
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse? {
@@ -298,6 +315,17 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         try await coordinator.startSession(request)
     }
 
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        try await coordinator.taskAction(request)
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        try await coordinator.taskArchiveCheck(request)
+    }
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse? {
@@ -445,6 +473,25 @@ final class LiveSessionsController {
                     return response.map { .answered($0.result) } ?? .unconfirmed
                 } catch {
                     return .unconfirmed
+                }
+            }
+        )
+        homeController.installTaskActions(
+            perform: { [runtime] request in
+                do {
+                    let response = try await runtime.taskAction(request)
+                    return response.map { .answered($0.result) } ?? .notSent
+                } catch {
+                    // Whether the Mac ran it is not known.
+                    return .unconfirmed
+                }
+            },
+            archiveCheck: { [runtime] request in
+                do {
+                    let response = try await runtime.taskArchiveCheck(request)
+                    return response.map { .answered($0.result) } ?? .unreachable
+                } catch {
+                    return .unreachable
                 }
             }
         )
@@ -670,6 +717,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
+        homeController.setHostSupportsTaskActions(acceptsTaskActions)
         homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         await runtime.updateDeviceScopes(scopes)
     }
@@ -681,6 +729,12 @@ final class LiveSessionsController {
         coordinatorState.capabilities.contains(.sessionStart) && deviceScopes.contains(.send)
     }
 
+    /// A task action changes the Mac, so only a device allowed to send
+    /// sees the controls. The Mac's per-device Task actions switch is
+    /// checked when the request arrives.
+    private var acceptsTaskActions: Bool {
+        coordinatorState.capabilities.contains(.taskActions) && deviceScopes.contains(.send)
+    }
     /// A task starts an agent with the task as its first message, so it is
     /// gated like a session start.
     private var acceptsTaskCreate: Bool {
@@ -827,6 +881,7 @@ final class LiveSessionsController {
             hostSupportsSessionStart: acceptsSessionStart,
             hostSupportsTaskCreate: acceptsTaskCreate,
             hostSupportsConversationClose: acceptsConversationClose,
+            hostSupportsTaskActions: acceptsTaskActions,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { RelayAPNsClient } from "./relay-apns";
 import {
-  base64url, bearerHash, capability, digest, enrollment, failure, json, policy,
-  readObject, RelayError, sameHash, sessionAlert, uuid, diagnosticHeaders, type VerificationOutcome
+  alertText, base64url, bearerHash, capability, digest, enrollment, failure, json, notificationAlert, policy,
+  readObject, RelayError, sameHash, uuid, diagnosticHeaders, type VerificationOutcome
 } from "./relay-protocol";
 import { RelayStore, type RegistrationRow } from "./relay-store";
 
@@ -149,7 +149,7 @@ export class PushRelayState extends DurableObject<RelayEnv> {
   }
 
   private async send(request: Request, store: RelayStore, apns: RelayAPNsClient, original: RegistrationRow): Promise<Response> {
-    const alert = await sessionAlert(request);
+    const alert = await notificationAlert(request);
     const timestamp = now();
     const prepared = store.transaction(() => {
       const row = store.registration(original.id);
@@ -169,10 +169,13 @@ export class PushRelayState extends DurableObject<RelayEnv> {
     });
     if (prepared.duplicate) return json({ result: "duplicate" }, 202);
     const row = prepared.row;
+    const routing = alert.kind === "session"
+      ? { kind: "session", registrationID: row.id, pairingID: row.pairing_id, conversationID: alert.conversationID, eventID: alert.eventID }
+      : { kind: "task", registrationID: row.id, pairingID: row.pairing_id, taskID: alert.taskID,
+          ...(alert.conversationID === null ? {} : { conversationID: alert.conversationID }), eventID: alert.eventID };
     const result = await apns.send(row.token, {
-      aps: { alert: { title: alert.sessionTitle, body: alert.status === "ready" ? "Ready" : "Needs approval" }, sound: "default" },
-      toastty: { version: 1, kind: "session", registrationID: row.id, pairingID: row.pairing_id,
-        conversationID: alert.conversationID, eventID: alert.eventID }
+      aps: { alert: alertText(alert), sound: "default" },
+      toastty: { version: 1, ...routing }
     }, timestamp + 300, alert.eventID);
     store.transaction(() => {
       store.finishEvent(row.id, alert.eventID, result === "accepted" ? "accepted" : result === "unknown" ? "unknown" : "rejected");

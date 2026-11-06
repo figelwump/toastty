@@ -104,8 +104,110 @@ public struct GatewayCompatibilityDecoder: Sendable {
             workspaces: ((try? object.requiredArray("workspaces")) ?? []).compactMap {
                 try? decodeWorkspaceSummary($0)
             },
-            generatedAt: try object.requiredDate("generatedAt")
+            generatedAt: try object.requiredDate("generatedAt"),
+            // Tasks are presentation, so a malformed board shows no tasks
+            // rather than failing the snapshot.
+            tasks: object.lossyObject("tasks").map(decodeTaskBoard)
         )
+    }
+
+    /// Reads the task board leniently: a task this client cannot read, such
+    /// as one in a group added later, is left out with its entries, and an
+    /// unknown mark or pull request state reads as none.
+    private func decodeTaskBoard(_ object: JSONObject) -> RemoteTaskBoard {
+        let tasks = ((try? object.requiredArray("tasks")) ?? []).compactMap(decodeTaskSummary)
+        let known = Set(tasks.map(\.id))
+        func entries(_ key: String) -> [RemoteTaskBoardEntry] {
+            ((try? object.requiredArray(key)) ?? []).compactMap { entry in
+                guard let taskID = (try? entry.optionalUUID("taskID")) ?? nil, known.contains(taskID) else { return nil }
+                return RemoteTaskBoardEntry(
+                    taskID: taskID,
+                    isLinkedChild: ((try? entry.optionalBool("isLinkedChild")) ?? nil) ?? false,
+                    isContext: ((try? entry.optionalBool("isContext")) ?? nil) ?? false
+                )
+            }
+        }
+        return RemoteTaskBoard(
+            tasks: tasks,
+            needsYou: entries("needsYou"),
+            running: entries("running"),
+            idle: entries("idle"),
+            toShip: ((try? object.requiredArray("toShip")) ?? []).compactMap { lane in
+                guard let id = lane.lossyString("id"), let count = try? lane.requiredInt("count") else { return nil }
+                return RemoteTaskShipLane(
+                    id: id,
+                    projectTitle: lane.lossyString("projectTitle") ?? "Other",
+                    count: count,
+                    recentTaskIDs: ((try? lane.requiredStringArray("recentTaskIDs")) ?? [])
+                        .compactMap(UUID.init(uuidString:))
+                        .filter(known.contains)
+                )
+            },
+            doneCount: (try? object.requiredInt("doneCount")) ?? 0,
+            finishedByProject: ((try? object.requiredArray("finishedByProject")) ?? []).compactMap { tally in
+                guard let projectID = (try? tally.optionalUUID("projectWorkspaceID")) ?? nil else { return nil }
+                return RemoteTaskProjectTally(
+                    projectWorkspaceID: projectID,
+                    toShipCount: (try? tally.requiredInt("toShipCount")) ?? 0,
+                    doneCount: (try? tally.requiredInt("doneCount")) ?? 0
+                )
+            }
+        )
+    }
+
+    private func decodeTaskSummary(_ object: JSONObject) -> RemoteTaskSummary? {
+        guard let id = (try? object.optionalUUID("id")) ?? nil,
+              let title = object.lossyString("title"),
+              let group = object.lossyString("group").flatMap(RemoteTaskGroup.init(rawValue:)),
+              let statusLine = object.lossyString("statusLine") else { return nil }
+        let pullRequest = object.lossyObject("pullRequest").flatMap { pullRequest -> RemoteTaskPullRequest? in
+            guard let number = try? pullRequest.requiredInt("number"),
+                  let url = pullRequest.lossyString("url").flatMap(URL.init(string:)) else { return nil }
+            return RemoteTaskPullRequest(
+                number: number,
+                url: url,
+                state: pullRequest.lossyString("state").flatMap(RemoteTaskPullRequestState.init(rawValue:))
+            )
+        }
+        return RemoteTaskSummary(
+            id: id,
+            hasRecord: ((try? object.optionalBool("hasRecord")) ?? nil) ?? true,
+            title: title,
+            group: group,
+            mark: object.lossyString("mark").flatMap(RemoteTaskMark.init(rawValue:)),
+            statusLine: statusLine,
+            rowSummary: object.lossyString("rowSummary"),
+            stageTitle: object.lossyString("stageTitle") ?? "",
+            stageReason: object.lossyString("stageReason") ?? "",
+            projectWorkspaceID: (try? object.optionalUUID("projectWorkspaceID")) ?? nil,
+            projectTitle: object.lossyString("projectTitle"),
+            taskSpaceWorkspaceID: (try? object.optionalUUID("taskSpaceWorkspaceID")) ?? nil,
+            pullRequest: pullRequest,
+            activityAt: (try? object.requiredDate("activityAt")) ?? .distantPast,
+            mergeControl: object.lossyObject("mergeControl").flatMap(decodeTaskMergeControl),
+            actions: ((try? object.requiredArray("actions")) ?? []).compactMap(decodeTaskActionItem)
+        )
+    }
+
+    /// A control of a kind this client does not know reads as none, so the
+    /// task bar shows no control rather than a wrong one.
+    private func decodeTaskMergeControl(_ object: JSONObject) -> RemoteTaskMergeControl? {
+        guard let kind = object.lossyString("kind").flatMap(RemoteTaskMergeControlKind.init(rawValue:)),
+              let title = object.lossyString("title") else { return nil }
+        return RemoteTaskMergeControl(
+            kind: kind,
+            title: title,
+            detail: object.lossyString("detail"),
+            action: object.lossyObject("action").flatMap(decodeTaskActionItem),
+            menu: ((try? object.requiredArray("menu")) ?? []).compactMap(decodeTaskActionItem)
+        )
+    }
+
+    /// An action this client does not know is left out of its list.
+    private func decodeTaskActionItem(_ object: JSONObject) -> RemoteTaskActionItem? {
+        guard let action = object.lossyString("action").flatMap(RemoteTaskAction.init(rawValue:)),
+              let title = object.lossyString("title") else { return nil }
+        return RemoteTaskActionItem(action: action, title: title)
     }
 
     private func decodeWorkspaceSummary(_ object: JSONObject) throws -> RemoteWorkspaceSummary {

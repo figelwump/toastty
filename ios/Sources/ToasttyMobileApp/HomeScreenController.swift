@@ -81,6 +81,8 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
         /// The Mac saved a task from this phone and is setting it up.
         case taskCreated
         case sessionClosed
+        /// The Mac ran a task action, or started it.
+        case taskAction
         case failed
     }
 
@@ -91,7 +93,7 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     var canUndo: Bool {
         switch kind {
         case .changed, .flagChanged: true
-        case .sessionStarted, .taskCreated, .sessionClosed, .failed: false
+        case .sessionStarted, .taskCreated, .sessionClosed, .taskAction, .failed: false
         }
     }
 }
@@ -117,6 +119,18 @@ final class HomeScreenController {
     private(set) var hostSupportsTaskCreate: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
+    /// Whether the connected Mac takes task actions from this device. The
+    /// Mac's per-device Task actions switch is checked per request.
+    var hostSupportsTaskActions: Bool
+    /// Tasks with an action on its way to the Mac.
+    var tasksWithActionInFlight: Set<UUID> = []
+    @ObservationIgnored
+    var sendTaskAction: (@MainActor (RemoteTaskActionRequest) async -> ToasttyTaskActionSendOutcome)?
+    @ObservationIgnored
+    var loadTaskArchiveCheck: (@MainActor (RemoteTaskArchiveCheckRequest) async -> ToasttyTaskArchiveCheckOutcome)?
+    /// How long a task action waits before its one retry.
+    @ObservationIgnored
+    var taskActionRetryDelay: Duration = .seconds(1)
     private(set) var closeConfirmation: ConversationCloseConfirmation?
     private(set) var subspaceDoneNotice: SubspaceDoneNotice?
     var connectionState: MobileConnectionState
@@ -124,6 +138,9 @@ final class HomeScreenController {
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
+    /// A task whose detail Home should show, as a tapped task alert asks.
+    /// Home clears it once the detail is open.
+    var requestedTaskDetailID: UUID?
     /// Whether a new-session or new-task sheet is on screen. Content shared
     /// from another app waits for it to close instead of replacing its draft.
     var isShowingNewSessionForm = false
@@ -192,6 +209,7 @@ final class HomeScreenController {
         hostSupportsSessionStart = runtimeMode == .fixture
         hostSupportsTaskCreate = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
         hostSupportsConversationClose = runtimeMode == .fixture
+        hostSupportsTaskActions = runtimeMode == .fixture
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -212,6 +230,27 @@ final class HomeScreenController {
         selectConversation(nil)
     }
 
+    /// Where a tapped task alert goes: the task's session while the
+    /// snapshot has it, which means its task space is open, else the task's
+    /// detail. A restored snapshot can lack what the live one has, so the
+    /// tap waits for a live snapshot before it falls back or gives up.
+    func taskAlertRoute(taskID: UUID, conversationID: UUID?) -> TaskAlertRoute {
+        if let conversationID {
+            if conversation(id: conversationID) != nil { return .conversation(conversationID) }
+            if freshness != .live { return .waitForLiveSnapshot }
+        }
+        if snapshot.taskBoard?.task(id: taskID) != nil { return .taskDetail(taskID) }
+        return freshness == .live ? .unavailable : .waitForLiveSnapshot
+    }
+
+    enum TaskAlertRoute: Equatable {
+        case conversation(UUID)
+        case taskDetail(UUID)
+        case waitForLiveSnapshot
+        /// The task is gone, or the Mac no longer runs the task system.
+        case unavailable
+    }
+
     func update(
         snapshot newSnapshot: MobileHomeSnapshot,
         connectionState: MobileConnectionState,
@@ -222,6 +261,7 @@ final class HomeScreenController {
         hostSupportsSessionStart: Bool? = nil,
         hostSupportsTaskCreate: Bool? = nil,
         hostSupportsConversationClose: Bool? = nil,
+        hostSupportsTaskActions: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -239,6 +279,9 @@ final class HomeScreenController {
         }
         if let hostSupportsConversationClose {
             self.hostSupportsConversationClose = hostSupportsConversationClose
+        }
+        if let hostSupportsTaskActions {
+            self.hostSupportsTaskActions = hostSupportsTaskActions
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
@@ -374,15 +417,12 @@ final class HomeScreenController {
 
     private static func applyingFlags(_ flags: [UUID: Bool], to snapshot: MobileHomeSnapshot) -> MobileHomeSnapshot {
         guard flags.isEmpty == false else { return snapshot }
-        return MobileHomeSnapshot(
-            hostName: snapshot.hostName,
-            workspaces: snapshot.workspaces.map { workspace in
-                guard workspace.conversations.contains(where: { flags[$0.id] != nil }) else { return workspace }
-                return workspace.withConversations(workspace.conversations.map { conversation in
-                    flags[conversation.id].map(conversation.withFlaggedForLater) ?? conversation
-                })
-            }
-        )
+        return snapshot.withWorkspaces(snapshot.workspaces.map { workspace in
+            guard workspace.conversations.contains(where: { flags[$0.id] != nil }) else { return workspace }
+            return workspace.withConversations(workspace.conversations.map { conversation in
+                flags[conversation.id].map(conversation.withFlaggedForLater) ?? conversation
+            })
+        })
     }
 
     // MARK: - Close session
@@ -497,17 +537,14 @@ final class HomeScreenController {
         from snapshot: MobileHomeSnapshot
     ) -> MobileHomeSnapshot {
         guard conversationIDs.isEmpty == false else { return snapshot }
-        return MobileHomeSnapshot(
-            hostName: snapshot.hostName,
-            workspaces: snapshot.workspaces.map { workspace in
-                guard workspace.conversations.contains(where: { conversationIDs.contains($0.id) }) else {
-                    return workspace
-                }
-                return workspace.withConversations(
-                    workspace.conversations.filter { conversationIDs.contains($0.id) == false }
-                )
+        return snapshot.withWorkspaces(snapshot.workspaces.map { workspace in
+            guard workspace.conversations.contains(where: { conversationIDs.contains($0.id) }) else {
+                return workspace
             }
-        )
+            return workspace.withConversations(
+                workspace.conversations.filter { conversationIDs.contains($0.id) == false }
+            )
+        })
     }
 
     // MARK: - New session
@@ -590,12 +627,9 @@ final class HomeScreenController {
             agentDisplayName: agent.displayName,
             workspace: workspace
         )
-        hostSnapshot = MobileHomeSnapshot(
-            hostName: hostSnapshot.hostName,
-            workspaces: hostSnapshot.workspaces.map {
-                $0.id == workspace.id ? $0.withConversations([conversation] + $0.conversations) : $0
-            }
-        )
+        hostSnapshot = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map {
+            $0.id == workspace.id ? $0.withConversations([conversation] + $0.conversations) : $0
+        })
         presentSnapshot()
         return .answered(.started(conversationID: RemoteConversationID(rawValue: conversation.id)))
     }
@@ -684,12 +718,9 @@ final class HomeScreenController {
             : nil
         guard let sendSubspaceDone else {
             // Fixture mode: there is no Mac, so the change is the snapshot.
-            hostSnapshot = MobileHomeSnapshot(
-                hostName: hostSnapshot.hostName,
-                workspaces: hostSnapshot.workspaces.map {
-                    $0.id == workspaceID ? $0.withDone(isDone) : $0
-                }
-            )
+            hostSnapshot = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map {
+                $0.id == workspaceID ? $0.withDone(isDone) : $0
+            })
             presentSnapshot()
             return
         }
@@ -762,7 +793,7 @@ final class HomeScreenController {
         case .flagChanged(let conversationID, let isFlagged)?:
             subspaceDoneNotice = nil
             setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
-        case .sessionStarted?, .taskCreated?, .sessionClosed?, .failed?, nil:
+        case .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?, .failed?, nil:
             break
         }
     }
@@ -773,18 +804,27 @@ final class HomeScreenController {
         }
     }
 
+    /// Fixture mode has no Mac, so a task action changes the snapshot
+    /// itself.
+    func applyFixtureHostSnapshot(_ transform: (MobileHomeSnapshot) -> MobileHomeSnapshot) {
+        guard runtimeMode == .fixture else { return }
+        hostSnapshot = transform(hostSnapshot)
+        presentSnapshot()
+    }
+
+    func announceTaskAction(_ message: String) {
+        subspaceDoneNotice = SubspaceDoneNotice(kind: .taskAction, message: message)
+    }
+
     private func presentSnapshot() {
         guard pendingSubspaceDone.isEmpty == false || pendingConversationFlag.isEmpty == false
             || closingConversationIDs.isEmpty == false else {
             if snapshot != hostSnapshot { snapshot = hostSnapshot }
             return
         }
-        let withDone = MobileHomeSnapshot(
-            hostName: hostSnapshot.hostName,
-            workspaces: hostSnapshot.workspaces.map { workspace in
-                pendingSubspaceDone[workspace.id].map { workspace.withDone($0.isDone) } ?? workspace
-            }
-        )
+        let withDone = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map { workspace in
+            pendingSubspaceDone[workspace.id].map { workspace.withDone($0.isDone) } ?? workspace
+        })
         snapshot = Self.removingConversations(
             closingConversationIDs,
             from: Self.applyingFlags(pendingConversationFlag.mapValues(\.isDone), to: withDone)

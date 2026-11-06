@@ -65,8 +65,14 @@ extension TaskCoordinator {
     /// closes the pull request only when asked. The checks run first and
     /// refuse with a reason; the steps then run in the background, each
     /// saved as it finishes, and running it again continues them.
+    /// `finalCheck` runs after the git checks, just before the archive is
+    /// saved, so a caller can refuse on what changed while git ran.
     @discardableResult
-    func archive(taskID: UUID, options: TaskArchiveOptions) async throws -> TaskRecord {
+    func archive(
+        taskID: UUID,
+        options: TaskArchiveOptions,
+        finalCheck: () throws -> Void = {}
+    ) async throws -> TaskRecord {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
@@ -98,6 +104,7 @@ extension TaskCoordinator {
                 throw TaskError("\(record.title) started merging. Cancel the merge first.")
             }
         }
+        try finalCheck()
         // Nothing that started before the archive may make more of the task.
         setupAttempts[taskID] = nil
         setupTasks.removeValue(forKey: taskID)?.cancel()

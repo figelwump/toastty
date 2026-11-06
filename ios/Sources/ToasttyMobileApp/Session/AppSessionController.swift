@@ -92,11 +92,13 @@ final class AppSessionController {
 
     /// Unknown data must not clear the badge retained by iOS. Count only a
     /// complete live projection, or explicitly clear when pairing is unusable.
+    /// While the Mac runs the task system, the badge counts the tasks that
+    /// need the user, as the Mac's Tasks row and the Status segment do.
     var appIconBadgeCount: Int? {
         switch state {
         case .paired(.live):
             homeController.freshness == .live
-                ? homeController.sessionsNeedingAttention().count
+                ? homeController.snapshot.taskBoard?.count(.needsYou) ?? homeController.sessionsNeedingAttention().count
                 : nil
         case .restoring, .keychainLocked, .repairNeeded(.unavailable),
              .paired(.connecting), .paired(.reconnecting), .paired(.unreachable):

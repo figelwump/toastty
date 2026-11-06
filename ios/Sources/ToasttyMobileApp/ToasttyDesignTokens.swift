@@ -41,6 +41,11 @@ enum ToasttyDesignTokens {
     static let waitingBorder = Color(red: 193 / 255, green: 170 / 255, blue: 138 / 255).opacity(0.42)
     private static let sessionWorking = Color(red: 193 / 255, green: 138 / 255, blue: 74 / 255)
     private static let sessionNeedsApproval = Color(red: 232 / 255, green: 166 / 255, blue: 53 / 255)
+    /// Task marks, as the Mac sidebar draws them: a question waits for the
+    /// user's reply, a review for their look, and a merged task for a release.
+    static let taskQuestion = Color(red: 232 / 255, green: 166 / 255, blue: 53 / 255)
+    static let taskReview = Color(red: 110 / 255, green: 159 / 255, blue: 230 / 255)
+    static let taskToShip = Color(red: 185 / 255, green: 140 / 255, blue: 224 / 255)
 
     /// Corner scale: cards and bubbles, inset controls, and chips.
     static let cardCornerRadius: CGFloat = 14

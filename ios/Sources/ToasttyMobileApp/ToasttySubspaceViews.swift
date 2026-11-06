@@ -56,10 +56,13 @@ enum ToasttySubspaceGroupPresentation {
     static func statusLabel(_ status: MobileSubspaceStatus) -> String {
         switch status {
         case .ready: "ready"
+        case .question: "asks a question"
         case .needsApproval: "needs approval"
         case .error: "error"
+        case .review: "ready for review"
         case .working: "working"
         case .idle: "idle"
+        case .toShip: "to ship"
         case .done: "done"
         }
     }
@@ -177,7 +180,7 @@ struct ToasttySubspaceGroup: View {
     }
 
     private var tallyCounts: [(status: MobileSubspaceStatus, count: Int)] {
-        [MobileSubspaceStatus.ready, .needsApproval, .error].compactMap { status in
+        [MobileSubspaceStatus.ready, .question, .needsApproval, .error, .review].compactMap { status in
             let count = rows.filter { $0.status == status }.count
             return count == 0 ? nil : (status, count)
         }
@@ -235,19 +238,24 @@ enum ToasttySubspaceStatusStyle {
         guard freshness == .live else { return ToasttyDesignTokens.mutedText }
         return switch status {
         case .ready, .done: ToasttyDesignTokens.color(for: .ready)
+        case .question: ToasttyDesignTokens.taskQuestion
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval)
         case .error: ToasttyDesignTokens.color(for: .error)
+        case .review: ToasttyDesignTokens.taskReview
         case .working: ToasttyDesignTokens.color(for: .working)
         case .idle: ToasttyDesignTokens.mutedText
+        case .toShip: ToasttyDesignTokens.taskToShip
         }
     }
 
     static func rowTint(_ status: MobileSubspaceStatus) -> Color {
         switch status {
         case .ready: ToasttyDesignTokens.color(for: .ready).opacity(0.16)
+        case .question: ToasttyDesignTokens.taskQuestion.opacity(0.13)
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval).opacity(0.13)
         case .error: ToasttyDesignTokens.color(for: .error).opacity(0.13)
-        case .working, .idle, .done: .clear
+        case .review: ToasttyDesignTokens.taskReview.opacity(0.13)
+        case .working, .idle, .toShip, .done: .clear
         }
     }
 }
@@ -283,6 +291,25 @@ struct ToasttySubspaceRailMark: View {
                 .frame(width: Self.boxSize, height: Self.boxSize)
         case .ready:
             square(color)
+        case .question:
+            tintedBox(color) {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(color)
+            }
+        case .review:
+            // The pull request waits for the user's review.
+            tintedBox(color) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+            }
+        case .toShip:
+            tintedBox(color) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(color)
+            }
         case .done:
             box.fill(color.opacity(0.22))
                 .overlay { box.strokeBorder(color.opacity(0.55), lineWidth: 1.2) }
@@ -297,6 +324,13 @@ struct ToasttySubspaceRailMark: View {
 
     private var box: RoundedRectangle {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
+    }
+
+    /// The task marks: a tinted box with a glyph, as on the Mac.
+    private func tintedBox(_ color: Color, @ViewBuilder glyph: () -> some View) -> some View {
+        box.fill(color.opacity(0.22))
+            .overlay { glyph() }
+            .frame(width: Self.boxSize, height: Self.boxSize)
     }
 
     private func square(_ color: Color) -> some View {
@@ -315,6 +349,8 @@ struct ToasttySubspaceRow: View {
     let parentTitle: String
     let controller: HomeScreenController
     let openWorkspace: (UUID) -> Void
+    /// The project, where rows from several projects share a list.
+    var projectTag: String? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private static let railWidth: CGFloat = 16
@@ -340,7 +376,7 @@ struct ToasttySubspaceRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(ToasttySubspaceGroupPresentation.doneActionTitle(isDone: row.workspace.isDone))
-                .accessibilityValue(row.workspace.title)
+                .accessibilityValue(row.title)
                 .accessibilityIdentifier("toastty-subspace-done-\(row.id.uuidString)")
             }
         }
@@ -354,6 +390,9 @@ struct ToasttySubspaceRow: View {
                     systemImage: row.workspace.isDone ? "square" : "checkmark.square",
                     action: toggleDone
                 )
+            }
+            if let task = row.task {
+                ToasttyTaskActionMenuItems(task: task, controller: controller)
             }
         } preview: {
             ToasttySubspaceDetailCard(
@@ -401,15 +440,29 @@ struct ToasttySubspaceRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 titleLine
-                if let summary = row.summary {
-                    Text(summary)
-                        .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
-                        .foregroundStyle(row.status == .done
-                            ? ToasttyDesignTokens.mutedText
-                            : ToasttyDesignTokens.secondaryText)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+                if row.summary != nil || projectTag != nil {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if let summary = row.summary {
+                            Text(summary)
+                                .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
+                                .foregroundStyle(row.status == .done
+                                    ? ToasttyDesignTokens.mutedText
+                                    : ToasttyDesignTokens.secondaryText)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                                .truncationMode(.tail)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let projectTag {
+                            Spacer(minLength: 0)
+                            // The summary shortens first; the tag says
+                            // which project the row is in.
+                            Text(projectTag)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
                 }
             }
         }
@@ -438,7 +491,7 @@ struct ToasttySubspaceRow: View {
     }
 
     private var titleText: some View {
-        Text(row.workspace.title)
+        Text(row.title)
             .font(titleFont)
             .foregroundStyle(row.status == .done
                 ? ToasttyDesignTokens.mutedText
@@ -478,18 +531,14 @@ struct ToasttySubspaceRow: View {
     }
 
     private var badge: String? {
-        switch row.status {
-        case .needsApproval: "approval"
-        case .error: "error"
-        case .ready, .working, .idle, .done: nil
-        }
+        row.status.pillLabel
     }
 
     private var titleFont: Font {
         let weight: Font.Weight = switch row.status {
-        case .ready, .needsApproval, .error: .bold
+        case .ready, .question, .needsApproval, .error, .review: .bold
         case .working, .idle: .medium
-        case .done: .regular
+        case .toShip, .done: .regular
         }
         let font = Font.subheadline.weight(weight)
         return row.status == .working ? font.italic() : font
@@ -499,7 +548,7 @@ struct ToasttySubspaceRow: View {
         let status = controller.freshness == .live
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
-        return ([row.workspace.title, "task space", status, row.summary]
+        return ([row.title, "task space", status, row.summary, projectTag]
             + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))])
             .compactMap { $0 }
             .filter { $0.isEmpty == false }
@@ -524,7 +573,7 @@ struct ToasttySubspaceDetailCard: View {
                     .font(.headline)
                     .frame(width: 16)
                     .overlay { ToasttySubspaceRailMark(status: row.status, freshness: freshness) }
-                Text(row.workspace.title)
+                Text(row.title)
                     .font(.headline)
                     .foregroundStyle(ToasttyDesignTokens.primaryText)
                     .lineLimit(2)
@@ -661,7 +710,7 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .sessionClosed?: .success
+                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?: .success
                 case .failed?: .error
                 case nil: nil
                 }

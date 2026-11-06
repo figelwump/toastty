@@ -46,7 +46,10 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
             let conversations = conversations(in: workspace)
             let rows = subspaceRows(of: workspace.id, in: snapshot)
             let keepsPanelOnlyWorkspace = self == .all && !workspace.panels.isEmpty
-            guard !conversations.isEmpty || !rows.isEmpty || keepsPanelOnlyWorkspace else {
+            // A project whose tasks all finished still shows, for the
+            // footer that counts them.
+            let hasFinishedTasks = snapshot.taskBoard?.finished(projectID: workspace.id) != nil
+            guard !conversations.isEmpty || !rows.isEmpty || keepsPanelOnlyWorkspace || hasFinishedTasks else {
                 return nil
             }
             return ToasttyHomeSection(
@@ -192,6 +195,7 @@ struct ToasttyHomeView: View {
     let retryNotifications: () -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
+    @AppStorage private var storedHomeSegment: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
     @State private var isRetryingConnection = false
     /// The ⑂ chip whose subspaces its group is limited to.
@@ -199,6 +203,10 @@ struct ToasttyHomeView: View {
     /// The session whose detail card the Info swipe opened.
     @State private var infoConversation: ToasttySessionInfoSelection?
     @State private var newSession: ToasttyNewSessionModel?
+    @State private var taskDetail: ToasttyTaskDetailSelection?
+    /// The task the detail sheet opened on, kept for when the Mac stops
+    /// listing it while the sheet is open.
+    @State private var taskDetailFallback: RemoteTaskSummary?
     @State private var newTask: ToasttyNewTaskModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let defaults: UserDefaults
@@ -222,6 +230,11 @@ struct ToasttyHomeView: View {
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
+            store: defaults
+        )
+        _storedHomeSegment = AppStorage(
+            wrappedValue: ToasttyHomeSegment.defaultSegment.rawValue,
+            ToasttyHomeSegment.preferenceKey,
             store: defaults
         )
     }
@@ -249,7 +262,22 @@ struct ToasttyHomeView: View {
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
         .toasttyNewSessionSheet($newSession, controller: controller)
+        .sheet(item: $taskDetail) { selection in
+            if let task = controller.snapshot.taskBoard?.task(id: selection.id) ?? taskDetailFallback {
+                ToasttyTaskDetailSheet(
+                    task: task,
+                    canOpenTaskSpace: task.taskSpaceWorkspaceID.map { controller.snapshot.subspaceRow(id: $0) != nil } ?? false,
+                    openTaskSpace: openWorkspace,
+                    controller: controller
+                )
+            }
+        }
         .toasttyNewTaskSheet($newTask, controller: controller)
+        .onChange(of: controller.requestedTaskDetailID, initial: true) { _, taskID in
+            guard let taskID else { return }
+            controller.requestedTaskDetailID = nil
+            openTask(taskID)
+        }
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
@@ -263,7 +291,11 @@ struct ToasttyHomeView: View {
                     ToasttyNotificationErrorBanner(message: notificationError, retry: retryNotifications)
                 }
                 connectionNotice
-                workspaceSessionFilterPicker
+                if let board = controller.snapshot.taskBoard {
+                    homeSegmentPicker(board)
+                } else {
+                    workspaceSessionFilterPicker
+                }
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: 560)
@@ -273,6 +305,7 @@ struct ToasttyHomeView: View {
         }
         .background(ToasttyDesignTokens.background)
         .toasttySubspaceDoneNotice(controller)
+        .toasttyTaskActionPresenter(controller)
         .toolbar(.hidden, for: .navigationBar)
         .sensoryFeedback(.warning, trigger: needsApprovalCount) { old, new in
             new > old
@@ -286,13 +319,45 @@ struct ToasttyHomeView: View {
     }
 
     private var orderedRowIDs: [UUID] {
-        sections.flatMap { section in
+        if let board = statusBoard {
+            return [RemoteTaskGroup.needsYou, .running, .idle].flatMap { board.entries($0).map(\.taskID) }
+        }
+        return sections.flatMap { section in
             [section.id] + section.workspace.conversations.map(\.id) + section.subspaceRows.map(\.id)
         }
     }
 
+    /// With the Mac's task system, Projects lists every session, as All
+    /// did; Status replaces Active.
     private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
-        ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+        guard controller.snapshot.taskBoard == nil else { return .all }
+        return ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+    }
+
+    private var selectedHomeSegment: ToasttyHomeSegment {
+        ToasttyHomeSegment(rawValue: storedHomeSegment) ?? .defaultSegment
+    }
+
+    /// The board, while the Status segment shows.
+    private var statusBoard: MobileTaskBoard? {
+        selectedHomeSegment == .status ? controller.snapshot.taskBoard : nil
+    }
+
+    private func homeSegmentPicker(_ board: MobileTaskBoard) -> some View {
+        Picker("Home", selection: Binding(
+            get: { selectedHomeSegment },
+            set: { storedHomeSegment = $0.rawValue }
+        )) {
+            Text(ToasttyHomeSegment.projects.title).tag(ToasttyHomeSegment.projects)
+            Text(ToasttyHomeSegment.statusTitle(needsYouCount: board.count(.needsYou))).tag(ToasttyHomeSegment.status)
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("toastty-mobile-home-segment")
+    }
+
+    private func openTask(_ taskID: UUID) {
+        taskDetailFallback = controller.snapshot.taskBoard?.task(id: taskID)
+        taskDetail = ToasttyTaskDetailSelection(id: taskID)
     }
 
     private var workspaceSessionFilterSelection: Binding<ToasttyWorkspaceSessionFilter> {
@@ -314,6 +379,20 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
+        if let board = statusBoard {
+            ToasttyTaskStatusList(
+                board: board,
+                controller: controller,
+                openWorkspace: openWorkspace,
+                openTask: openTask
+            )
+        } else {
+            projectContent(proxy)
+        }
+    }
+
+    @ViewBuilder
+    private func projectContent(_ proxy: ScrollViewProxy) -> some View {
         if sections.isEmpty {
             workspaceEmptyState
                 .toasttyListRow()
@@ -357,6 +436,12 @@ struct ToasttyHomeView: View {
                             openWorkspace: openWorkspace
                         )
                         .id(Self.subspaceGroupID(section.id))
+                    }
+                    if let tally = controller.snapshot.taskBoard?.finished(projectID: section.id) {
+                        ToasttyProjectFinishedFooter(tally: tally) {
+                            storedHomeSegment = ToasttyHomeSegment.status.rawValue
+                        }
+                        .toasttyListRow()
                     }
                 }
             }

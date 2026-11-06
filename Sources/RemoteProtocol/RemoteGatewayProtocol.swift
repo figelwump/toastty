@@ -58,6 +58,14 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case localDraftRelease = "local_draft_release"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
+    /// The session snapshot carries the Mac's task board while the task
+    /// system is on.
+    case tasks
+    /// A native device may run a task's actions: merge, mark done, archive,
+    /// and the others each task's summary offers. The device also needs
+    /// send access and its Task actions switch on the Mac; without them the
+    /// Mac refuses each request.
+    case taskActions = "task_actions"
     /// A native client may create a task, as the Mac's quick entry does.
     /// It uses the device's session start permission, which the create
     /// options report.
@@ -89,6 +97,8 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .sessionStart,
             .conversationInputControl,
             .localDraftRelease,
+            .tasks,
+            .taskActions,
         ]
     ) {
         self.protocolVersion = protocolVersion

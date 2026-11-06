@@ -108,6 +108,12 @@ public protocol GatewayClientProtocol: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse
@@ -188,6 +194,17 @@ public extension GatewayClientProtocol {
         throw GatewayFailure.invalidResponse
     }
 
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
+        throw GatewayFailure.invalidResponse
+    }
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse {
@@ -548,6 +565,18 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         }
     }
 
+    public func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.actionPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskActionResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
     public func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse {
@@ -561,6 +590,18 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         }
     }
 
+    public func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.archiveCheckPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskArchiveCheckResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
     /// Uses the upload route when files are attached, as a session start
     /// does, so the Mac authorizes the headers before it reads the body.
     public func createTask(

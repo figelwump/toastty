@@ -188,6 +188,7 @@ struct ToasttyMobileRootView: View {
         }
         .onChange(of: sessionController.pushController?.canIntroduce) { presentNotificationIntroIfNeeded() }
         .onChange(of: sessionController.pushController?.pendingConversationID) { handleNotificationTap() }
+        .onChange(of: sessionController.pushController?.pendingTaskTap) { handleNotificationTap() }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
@@ -374,6 +375,32 @@ struct ToasttyMobileRootView: View {
             routedDestinationSinceActivation = true
         case .sharedDraft(let draftID):
             routeSharedDraft(draftID)
+        case .task(let taskID, let conversationID):
+            routeTaskAlert(taskID: taskID, conversationID: conversationID)
+        }
+    }
+
+    /// A task alert opens the task's session while its task space is open,
+    /// else the task's detail.
+    private func routeTaskAlert(taskID: UUID, conversationID: UUID?) {
+        let home = sessionController.homeController
+        switch home.taskAlertRoute(taskID: taskID, conversationID: conversationID) {
+        case .conversation(let id):
+            guard home.openConversation(id: id) else { return }
+            pendingDeepLinkDestination = nil
+            presentedSheet = nil
+            routedDestinationSinceActivation = true
+        case .taskDetail(let id):
+            pendingDeepLinkDestination = nil
+            home.dismissConversation()
+            navigationPath = []
+            presentedSheet = nil
+            home.requestedTaskDetailID = id
+            routedDestinationSinceActivation = true
+        case .waitForLiveSnapshot:
+            break
+        case .unavailable:
+            pendingDeepLinkDestination = nil
         }
     }
 
@@ -427,6 +454,7 @@ struct ToasttyMobileRootView: View {
         guard pendingDeepLinkDestination == nil,
               routedDestinationSinceActivation == false,
               sessionController.pushController?.pendingConversationID == nil,
+              sessionController.pushController?.pendingTaskTap == nil,
               let draftID = sharedDraftStore.waitingDraftID() else { return }
         pendingDeepLinkDestination = .sharedDraft(draftID)
         routePendingDeepLinkIfAvailable()
@@ -439,9 +467,16 @@ struct ToasttyMobileRootView: View {
     }
 
     private func handleNotificationTap() {
-        guard let push = sessionController.pushController, let id = push.pendingConversationID else { return }
-        pendingDeepLinkDestination = .conversation(id)
-        push.consumedConversationTap()
+        guard let push = sessionController.pushController else { return }
+        if let tap = push.pendingTaskTap {
+            pendingDeepLinkDestination = .task(tap.taskID, conversationID: tap.conversationID)
+            push.consumedTaskTap()
+        } else if let id = push.pendingConversationID {
+            pendingDeepLinkDestination = .conversation(id)
+            push.consumedConversationTap()
+        } else {
+            return
+        }
         routePendingDeepLinkIfAvailable()
     }
 
@@ -1200,7 +1235,7 @@ struct ToasttyMobileRootView: View {
             })
         }
         home.update(
-            snapshot: MobileHomeSnapshot(hostName: home.snapshot.hostName, workspaces: workspaces),
+            snapshot: home.snapshot.withWorkspaces(workspaces),
             connectionState: home.connectionState, freshness: home.freshness
         )
     }

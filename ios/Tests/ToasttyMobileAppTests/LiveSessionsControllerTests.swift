@@ -662,6 +662,61 @@ final class LiveSessionsControllerTests: XCTestCase {
         withExtendedLifetime(subject) {}
     }
 
+    func testTaskActionsNeedTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        func connect(capabilities: Set<RemoteGatewayCapability>) {
+            subject.consumeSessionsState(SessionsRuntime.State(
+                connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+            ))
+            subject.consumeCoordinatorState(ConnectionCoordinator.State(
+                connectionGeneration: 7, phase: .live, capabilities: capabilities
+            ))
+        }
+
+        connect(capabilities: [.tasks, .taskActions])
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.canActOnTasks, "A read-only device cannot change the Mac")
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.canActOnTasks)
+        connect(capabilities: [.tasks])
+        XCTAssertFalse(home.canActOnTasks, "An older Mac keeps the read-only task bar")
+    }
+
+    func testATaskActionWithoutAnAnswerIsUnconfirmedAndOneNeverSentSaysSo() async throws {
+        let runtime = LiveRuntimeSpy()
+        await runtime.scriptTaskActions([
+            .success(RemoteTaskActionResponse(result: .performed)),
+            // The coordinator refused to send: not live, or no capability.
+            .success(nil),
+            .failure(.network(reason: .timedOut)),
+        ])
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        let send = try XCTUnwrap(home.sendTaskAction)
+        let request = RemoteTaskActionRequest(taskID: UUID(), action: .merge, clientRequestID: "request-1")
+
+        var outcomes: [ToasttyTaskActionSendOutcome] = []
+        for _ in 0..<3 {
+            outcomes.append(await send(request))
+        }
+
+        XCTAssertEqual(outcomes, [.answered(.performed), .notSent, .unconfirmed])
+        withExtendedLifetime(subject) {}
+    }
+
     func testSubspaceDoneNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
@@ -970,6 +1025,7 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     private var sends: [SendCall] = []
     private var dismissals: [DismissCall] = []
     private var sessionStartScripts: [Result<RemoteSessionStartResponse?, GatewayFailure>] = []
+    private var taskActionScripts: [Result<RemoteTaskActionResponse?, GatewayFailure>] = []
 
     func currentCoordinatorState() -> ConnectionCoordinator.State {
         ConnectionCoordinator.State()
@@ -1082,6 +1138,16 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse? {
         try sessionStartScripts.removeFirst().get()
+    }
+
+    func scriptTaskActions(_ scripts: [Result<RemoteTaskActionResponse?, GatewayFailure>]) {
+        taskActionScripts = scripts
+    }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        try taskActionScripts.removeFirst().get()
     }
 
     func activeConversationIDs() -> Set<RemoteConversationID> {

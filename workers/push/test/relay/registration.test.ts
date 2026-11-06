@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sessionFixture from "../../../../Tests/RemoteProtocol/Fixtures/v1/push-session.json";
+import taskFixture from "../../../../Tests/RemoteProtocol/Fixtures/v1/push-task.json";
 import { policy } from "../../src/relay-protocol";
 import { RelayStore } from "../../src/relay-store";
 import verificationFixture from "../../../../Tests/RemoteProtocol/Fixtures/v1/push-verification.json";
@@ -50,6 +51,20 @@ function send(value: Attempt, overrides: Record<string, unknown> = {}) {
     status: "ready", ...overrides
   }, value.sendToken);
 }
+
+function sendTask(value: Attempt, overrides: Record<string, unknown> = {}) {
+  return call(`${registrationPath(value)}/notifications`, "POST", {
+    kind: "task",
+    eventID: taskFixture.toastty.eventID,
+    taskID: taskFixture.toastty.taskID,
+    conversationID: taskFixture.toastty.conversationID,
+    reason: "question",
+    taskTitle: "iOS task support",
+    detail: "Should the badge count tasks or sessions?",
+    pullRequestNumber: null, ...overrides
+  }, value.sendToken);
+}
+function lastPayload() { return JSON.parse(String(outbound.mock.calls.at(-1)?.[1]?.body)); }
 
 let publicKey: CryptoKey;
 beforeEach(async () => {
@@ -404,6 +419,89 @@ describe("account-free registration and session alerts", () => {
     expect((await send(value, { sessionTitle: "😀".repeat(128) })).status).toBe(202);
     expect(new TextEncoder().encode(String(outbound.mock.calls.at(-1)?.[1]?.body)).byteLength).toBeLessThan(4096);
     expect(outbound).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Task alerts: the relay words each alert from a fixed reason, so a send
+// credential chooses only the task title, a question, and a PR number. A Mac
+// that predates them keeps sending session alerts unchanged.
+describe("task alerts", () => {
+  it("matches the shared task payload and keeps session alerts unchanged", async () => {
+    const { value } = await enroll();
+    expect((await sendTask(value)).status).toBe(202);
+    expect(lastPayload()).toEqual({ ...taskFixture, toastty: { ...taskFixture.toastty, registrationID: value.registrationID } });
+    const headers = new Headers(outbound.mock.calls.at(-1)?.[1]?.headers);
+    expect(headers.get("apns-collapse-id")).toBe(taskFixture.toastty.eventID);
+    expect((await send(value)).status).toBe(202);
+    expect(lastPayload()).toEqual({ ...sessionFixture, toastty: { ...sessionFixture.toastty, registrationID: value.registrationID } });
+  });
+
+  it("words each reason with fixed text and omits a missing conversation", async () => {
+    const { value } = await enroll();
+    const cases: [Record<string, unknown>, { title: string; body: string }][] = [
+      [{ detail: null }, { title: "iOS task support asks", body: "Waiting for your reply" }],
+      [{ reason: "review", detail: null, pullRequestNumber: 263 }, { title: "PR #263 is ready for review", body: "iOS task support" }],
+      [{ reason: "review", detail: null }, { title: "Ready for review", body: "iOS task support" }],
+      [{ reason: "merge_stopped", detail: null, pullRequestNumber: 7 }, { title: "Merge stopped", body: "iOS task support · PR #7" }],
+      [{ reason: "merge_stopped", detail: null }, { title: "Merge stopped", body: "iOS task support" }],
+      [{ reason: "setup_failed", detail: null }, { title: "Setup failed", body: "iOS task support" }],
+      [{ reason: "move_failed", detail: null }, { title: "Move to worktree failed", body: "iOS task support" }],
+      [{ reason: "cleanup_stopped", detail: null, conversationID: null }, { title: "Cleanup stopped", body: "iOS task support" }]
+    ];
+    for (const [overrides, text] of cases) {
+      expect((await sendTask(value, { eventID: crypto.randomUUID(), ...overrides })).status).toBe(202);
+      expect(lastPayload().aps.alert).toEqual(text);
+    }
+    expect(lastPayload().toastty).not.toHaveProperty("conversationID");
+    expect(lastPayload().toastty.taskID).toBe(taskFixture.toastty.taskID);
+  });
+
+  it("rejects task fields a reason does not carry and malformed task content", async () => {
+    const { value } = await enroll();
+    const rejected: Record<string, unknown>[] = [
+      { kind: "session" }, { kind: "Task" }, { reason: "agent_finished" }, { reason: null },
+      { taskID: "not-a-uuid" }, { conversationID: "" }, { eventID: null },
+      { taskTitle: "" }, { taskTitle: "bad\u0000title" }, { taskTitle: "line\u2028break" }, { taskTitle: "😀".repeat(129) },
+      { detail: "" }, { detail: "two\nlines" }, { detail: "x".repeat(513) }, { detail: 42 },
+      { reason: "setup_failed", detail: "create_hook exited 1 in /Users/someone/repo" },
+      { pullRequestNumber: 12 }, { reason: "setup_failed", detail: null, pullRequestNumber: 12 },
+      { reason: "review", detail: null, pullRequestNumber: 0 }, { reason: "review", detail: null, pullRequestNumber: 1.5 },
+      { reason: "review", detail: null, pullRequestNumber: "263" }, { reason: "review", detail: null, pullRequestNumber: 2 ** 31 }
+    ];
+    for (const overrides of rejected) {
+      expect((await sendTask(value, { eventID: crypto.randomUUID(), ...overrides })).status, JSON.stringify(overrides)).toBe(400);
+    }
+    const body = { kind: "task", eventID: crypto.randomUUID(), taskID: crypto.randomUUID(), conversationID: null,
+      reason: "review", taskTitle: "Title", detail: null, pullRequestNumber: null };
+    const { pullRequestNumber: _omitted, ...missing } = body;
+    expect((await call(`${registrationPath(value)}/notifications`, "POST", missing, value.sendToken)).status).toBe(400);
+    expect((await call(`${registrationPath(value)}/notifications`, "POST", { ...body, sessionTitle: "x" }, value.sendToken)).status).toBe(400);
+    // A session alert must not carry task fields either.
+    expect((await send(value, { taskID: crypto.randomUUID() })).status).toBe(400);
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates a task event across alert kinds without spending quota", async () => {
+    const { value } = await enroll();
+    expect((await sendTask(value)).status).toBe(202);
+    expect((await sendTask(value)).status).toBe(202);
+    expect(outbound).toHaveBeenCalledTimes(2);
+    // An event ID names one alert, whatever its kind.
+    expect((await send(value, { eventID: taskFixture.toastty.eventID })).status).toBe(202);
+    expect(outbound).toHaveBeenCalledTimes(2);
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      const [limit] = state.storage.sql.exec("SELECT count FROM limits WHERE key LIKE 'send:%'").toArray();
+      expect(limit.count).toBe(1);
+    });
+  });
+
+  it("keeps the largest task alert within Apple's payload limit", async () => {
+    const { value } = await enroll();
+    const quote = "\"".repeat(policy.titleBytes);
+    expect((await sendTask(value, { taskTitle: "😀".repeat(128), detail: quote })).status).toBe(202);
+    expect(new TextEncoder().encode(String(outbound.mock.calls.at(-1)?.[1]?.body)).byteLength).toBeLessThan(4096);
+    expect((await sendTask(value, { eventID: crypto.randomUUID(), taskTitle: quote, detail: quote })).status).toBe(202);
+    expect(new TextEncoder().encode(String(outbound.mock.calls.at(-1)?.[1]?.body)).byteLength).toBeLessThan(4096);
   });
 });
 
