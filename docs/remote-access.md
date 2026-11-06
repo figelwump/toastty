@@ -542,6 +542,34 @@ each conversation summary. It advertises the `workspace_done` capability for
 omits them, so the phone lists every workspace at the top level and shows no
 checkbox. An older phone ignores them and keeps its flat list.
 
+### Tasks
+
+When the Mac runs the task system (see [Tasks](tasks.md)), Home's **All |
+Active** switch becomes **Projects | Status**, as in the Mac sidebar.
+
+- **Projects** lists every workspace with its sessions and task spaces, as
+  **All** did. A task space shows its task's mark: a question, a review, or
+  To ship. The agent's question replaces the row's summary, and the row shows
+  a **question** pill, as the Mac does for **approval** and **error**. An agent
+  that is working, waiting for approval, or failed still shows first. A
+  finished task leaves the list unless an agent in its task space is still
+  busy. A line under the project counts the tasks that are To ship and Done;
+  tap it to open Status.
+- **Status** lists only tasks, grouped as the Mac's Status segment groups them:
+  **Needs you**, **Running** and **Idle**, then **To ship** collapsed to one
+  line per project, then the **Done** count. A task that another task started
+  lists under it, dimmed when its own stage is calmer. The segment's title
+  counts the tasks that need you. A task with an open task space shows that
+  task space's row. Any other task, such as one whose setup failed, opens its
+  detail: the stage and why, the status line, the pull request, and the
+  project.
+
+The Mac computes every stage, group and line, so both apps show the same
+thing. It sends a `tasks` board in the session snapshot and advertises the
+`tasks` capability. The phone switches to Projects | Status only when a
+snapshot carries the board. An older Mac omits it, and the phone keeps **All |
+Active**. An older phone ignores the board.
+
 ### Starting a session
 
 Tap **+** on the Home screen or on a workspace screen to start a new agent

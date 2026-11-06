@@ -359,15 +359,12 @@ final class HomeScreenController {
 
     private static func applyingFlags(_ flags: [UUID: Bool], to snapshot: MobileHomeSnapshot) -> MobileHomeSnapshot {
         guard flags.isEmpty == false else { return snapshot }
-        return MobileHomeSnapshot(
-            hostName: snapshot.hostName,
-            workspaces: snapshot.workspaces.map { workspace in
-                guard workspace.conversations.contains(where: { flags[$0.id] != nil }) else { return workspace }
-                return workspace.withConversations(workspace.conversations.map { conversation in
-                    flags[conversation.id].map(conversation.withFlaggedForLater) ?? conversation
-                })
-            }
-        )
+        return snapshot.withWorkspaces(snapshot.workspaces.map { workspace in
+            guard workspace.conversations.contains(where: { flags[$0.id] != nil }) else { return workspace }
+            return workspace.withConversations(workspace.conversations.map { conversation in
+                flags[conversation.id].map(conversation.withFlaggedForLater) ?? conversation
+            })
+        })
     }
 
     // MARK: - Close session
@@ -482,17 +479,14 @@ final class HomeScreenController {
         from snapshot: MobileHomeSnapshot
     ) -> MobileHomeSnapshot {
         guard conversationIDs.isEmpty == false else { return snapshot }
-        return MobileHomeSnapshot(
-            hostName: snapshot.hostName,
-            workspaces: snapshot.workspaces.map { workspace in
-                guard workspace.conversations.contains(where: { conversationIDs.contains($0.id) }) else {
-                    return workspace
-                }
-                return workspace.withConversations(
-                    workspace.conversations.filter { conversationIDs.contains($0.id) == false }
-                )
+        return snapshot.withWorkspaces(snapshot.workspaces.map { workspace in
+            guard workspace.conversations.contains(where: { conversationIDs.contains($0.id) }) else {
+                return workspace
             }
-        )
+            return workspace.withConversations(
+                workspace.conversations.filter { conversationIDs.contains($0.id) == false }
+            )
+        })
     }
 
     // MARK: - New session
@@ -575,12 +569,9 @@ final class HomeScreenController {
             agentDisplayName: agent.displayName,
             workspace: workspace
         )
-        hostSnapshot = MobileHomeSnapshot(
-            hostName: hostSnapshot.hostName,
-            workspaces: hostSnapshot.workspaces.map {
-                $0.id == workspace.id ? $0.withConversations([conversation] + $0.conversations) : $0
-            }
-        )
+        hostSnapshot = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map {
+            $0.id == workspace.id ? $0.withConversations([conversation] + $0.conversations) : $0
+        })
         presentSnapshot()
         return .answered(.started(conversationID: RemoteConversationID(rawValue: conversation.id)))
     }
@@ -606,12 +597,9 @@ final class HomeScreenController {
             : nil
         guard let sendSubspaceDone else {
             // Fixture mode: there is no Mac, so the change is the snapshot.
-            hostSnapshot = MobileHomeSnapshot(
-                hostName: hostSnapshot.hostName,
-                workspaces: hostSnapshot.workspaces.map {
-                    $0.id == workspaceID ? $0.withDone(isDone) : $0
-                }
-            )
+            hostSnapshot = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map {
+                $0.id == workspaceID ? $0.withDone(isDone) : $0
+            })
             presentSnapshot()
             return
         }
@@ -701,12 +689,9 @@ final class HomeScreenController {
             if snapshot != hostSnapshot { snapshot = hostSnapshot }
             return
         }
-        let withDone = MobileHomeSnapshot(
-            hostName: hostSnapshot.hostName,
-            workspaces: hostSnapshot.workspaces.map { workspace in
-                pendingSubspaceDone[workspace.id].map { workspace.withDone($0.isDone) } ?? workspace
-            }
-        )
+        let withDone = hostSnapshot.withWorkspaces(hostSnapshot.workspaces.map { workspace in
+            pendingSubspaceDone[workspace.id].map { workspace.withDone($0.isDone) } ?? workspace
+        })
         snapshot = Self.removingConversations(
             closingConversationIDs,
             from: Self.applyingFlags(pendingConversationFlag.mapValues(\.isDone), to: withDone)

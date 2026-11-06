@@ -41,6 +41,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
 #if DEBUG
     let pushFixtureMode: ToasttyPushFixtureMode?
     let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
+    /// The fixture Mac sends a task board, as one with the task system does.
+    let usesTaskFixture: Bool
 #endif
     let enablesSystemAppIconBadge: Bool
 
@@ -68,6 +70,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             ? environment["TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS"].flatMap(ToasttyPushFixtureMode.init(rawValue:)) : nil
         entryLoadFixture = runtimeMode == .fixture
             ? environment["TOASTTY_MOBILE_FIXTURE_ENTRY_LOAD"].flatMap(ToasttyConversationFixture.EntryLoad.init(rawValue:)) : nil
+        usesTaskFixture = runtimeMode == .fixture && environment["TOASTTY_MOBILE_FIXTURE_TASKS"] == "1"
 #endif
         if runtimeMode == .fixture {
             fixtureScenario = environment["TOASTTY_MOBILE_FIXTURE_SCENARIO"]
@@ -97,6 +100,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     var initialSnapshot: MobileHomeSnapshot {
 #if DEBUG
         if entryLoadFixture != nil { return ToasttyConversationFixture.entryLoadHome() }
+        if usesTaskFixture { return ToasttyMobileFixture.taskHome }
 #endif
         return switch runtimeMode {
         case .fixture:

@@ -58,6 +58,9 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case localDraftRelease = "local_draft_release"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
+    /// The session snapshot carries the Mac's task board while the task
+    /// system is on.
+    case tasks
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -85,6 +88,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .sessionStart,
             .conversationInputControl,
             .localDraftRelease,
+            .tasks,
         ]
     ) {
         self.protocolVersion = protocolVersion

@@ -251,6 +251,10 @@ private extension RemoteProtocolGoldenTests {
             ),
             try fixture("session-list-response.json", RemoteGatewaySessionListResponse(snapshot: sessionSnapshot)),
             try fixture(
+                "session-list-with-tasks.json",
+                RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
+            ),
+            try fixture(
                 "events-request.json",
                 RemoteGatewayEventsRequest(
                     conversationID: conversationID,
@@ -479,6 +483,83 @@ private extension RemoteProtocolGoldenTests {
                 RemoteWorkspaceSummary(id: numberedUUID(100), title: "No annotations", panels: []),
             ]
         )
+    }
+
+    /// The baseline snapshot with a task board: a task space whose agent
+    /// asks a question, one in review with a pull request, a watched task
+    /// space, a task whose setup failed before it had a task space, a task
+    /// that started another, and a To ship lane.
+    static func makeTaskSessionSnapshot() -> RemoteSessionListSnapshot {
+        var snapshot = makeSessionSnapshot()
+        let projectID = numberedUUID(200)
+        let questionSpaceID = numberedUUID(201)
+        let reviewSpaceID = numberedUUID(202)
+        let watchedSpaceID = numberedUUID(203)
+        let question = numberedUUID(301), review = numberedUUID(302), failed = numberedUUID(304)
+        let child = numberedUUID(305), shipped = numberedUUID(306)
+        snapshot.tasks = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: question, title: "iOS task support", group: .needsYou, mark: .question,
+                    statusLine: "Asks: Badge counts tasks or sessions?",
+                    rowSummary: "Asks: Badge counts tasks or sessions?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: questionSpaceID, activityAt: timestamp
+                ),
+                RemoteTaskSummary(
+                    id: child, title: "Split the parser", group: .running, mark: .starting,
+                    statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", activityAt: timestamp
+                ),
+                RemoteTaskSummary(
+                    id: review, title: "Jump-to-next-active fix", group: .needsYou, mark: .review,
+                    statusLine: "Ready for your review", stageTitle: "Review", stageReason: "PR open, agent idle",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", taskSpaceWorkspaceID: reviewSpaceID,
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 263, url: URL(string: "https://github.com/example/toastty/pull/263")!, state: .open
+                    ),
+                    activityAt: timestamp.addingTimeInterval(-60)
+                ),
+                RemoteTaskSummary(
+                    id: watchedSpaceID, hasRecord: false, title: "Website hero refresh", group: .idle,
+                    statusLine: "Codex · idle", stageTitle: "Idle", stageReason: "Codex · idle",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", taskSpaceWorkspaceID: watchedSpaceID,
+                    activityAt: timestamp.addingTimeInterval(-120)
+                ),
+                RemoteTaskSummary(
+                    id: failed, title: "Composer blank line", group: .needsYou,
+                    statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
+                    stageTitle: "Needs you", stageReason: "create_hook exited 1",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    activityAt: timestamp.addingTimeInterval(-180)
+                ),
+                RemoteTaskSummary(
+                    id: shipped, title: "Parent task rollup", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 259, url: URL(string: "https://github.com/example/toastty/pull/259")!, state: .merged
+                    ),
+                    activityAt: timestamp.addingTimeInterval(-240)
+                ),
+            ],
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: question),
+                RemoteTaskBoardEntry(taskID: child, isLinkedChild: true, isContext: true),
+                RemoteTaskBoardEntry(taskID: review),
+                RemoteTaskBoardEntry(taskID: failed),
+            ],
+            idle: [RemoteTaskBoardEntry(taskID: watchedSpaceID)],
+            toShip: [
+                RemoteTaskShipLane(id: "/Users/example/toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shipped]),
+            ],
+            doneCount: 12,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
+        )
+        return snapshot
     }
 
     static func makeEventPage() -> ConversationEventPage {

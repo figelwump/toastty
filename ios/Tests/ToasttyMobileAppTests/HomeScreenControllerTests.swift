@@ -19,6 +19,34 @@ final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
         )
     }
 
+    /// Projects keeps a project whose tasks all finished and whose own
+    /// sessions closed, so its footer still counts them.
+    func testProjectsKeepsAProjectWhoseTasksAllFinished() {
+        let projectID = UUID(), taskSpaceID = UUID()
+        let project = MobileWorkspace(id: projectID, title: "site", conversations: [])
+        let taskSpace = MobileWorkspace(
+            id: taskSpaceID, title: "hero", conversations: [], parentWorkspaceID: projectID, isDone: true
+        )
+        let board = RemoteTaskBoard(
+            tasks: [RemoteTaskSummary(
+                id: UUID(), title: "hero", group: .done, mark: .done, statusLine: "Done",
+                stageTitle: "Done", stageReason: "marked done", projectWorkspaceID: projectID,
+                taskSpaceWorkspaceID: taskSpaceID, activityAt: Date()
+            )],
+            doneCount: 1,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 0, doneCount: 1)]
+        )
+        let withBoard = MobileHomeSnapshot(
+            hostName: "Mac", workspaces: [project, taskSpace], taskBoard: MobileTaskBoard(board)
+        )
+        let sections = ToasttyWorkspaceSessionFilter.all.sections(in: withBoard)
+        XCTAssertEqual(sections.map(\.id), [projectID])
+        XCTAssertEqual(sections.first?.subspaceRows, [])
+        // Without the task system, the done task space keeps its project.
+        let withoutBoard = MobileHomeSnapshot(hostName: "Mac", workspaces: [project, taskSpace])
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.all.sections(in: withoutBoard).first?.subspaceRows.count, 1)
+    }
+
     func testActiveExcludesIdleSessionsAndWorkspacesWithNothingActive() throws {
         let activeConversation = try XCTUnwrap(
             ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket != .idle }
@@ -295,6 +323,24 @@ final class ConversationFlagControllerTests: XCTestCase {
         controller.update(snapshot: snapshot(isFlagged: false, generation: 2), connectionState: .live, freshness: .live)
         try await waitUntil { controller.hasPendingConversationFlag == false }
         XCTAssertEqual(isShownFlagged(controller), false)
+    }
+
+    /// While a flag waits for the Mac, Home shows a copy of the Mac's
+    /// snapshot; the copy keeps its task board, so Projects | Status stays.
+    func testAPendingFlagKeepsTheTaskBoard() async throws {
+        let controller = liveController()
+        let board = MobileTaskBoard(RemoteTaskBoard(doneCount: 3))
+        let withBoard = snapshot(isFlagged: false)
+        controller.update(
+            snapshot: MobileHomeSnapshot(hostName: withBoard.hostName, workspaces: withBoard.workspaces, taskBoard: board),
+            connectionState: .live, freshness: .live
+        )
+        controller.installConversationFlag { _, _ in .applied }
+
+        controller.setConversationFlag(conversationID, isFlagged: true)
+        XCTAssertTrue(controller.hasPendingConversationFlag)
+        XCTAssertEqual(isShownFlagged(controller), true)
+        XCTAssertEqual(controller.snapshot.taskBoard, board)
     }
 
     func testASnapshotThatClearsTheFlagBeforeTheReplyWins() async throws {

@@ -132,17 +132,21 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
     public var conversations: [CompatibleConversationSummary]
     public var workspaces: [RemoteWorkspaceSummary]
     public var generatedAt: Date
+    /// The Mac's task board; absent from hosts without the task system.
+    public var tasks: RemoteTaskBoard?
 
     public init(
         projectionRunID: RemoteProjectionRunID,
         conversations: [CompatibleConversationSummary],
         workspaces: [RemoteWorkspaceSummary] = [],
-        generatedAt: Date
+        generatedAt: Date,
+        tasks: RemoteTaskBoard? = nil
     ) {
         self.projectionRunID = projectionRunID
         self.conversations = conversations
         self.workspaces = workspaces
         self.generatedAt = generatedAt
+        self.tasks = tasks
     }
 
     public func presentation(
@@ -272,7 +276,7 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
             if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
             return $0.id.uuidString < $1.id.uuidString
         }
-        return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces)
+        return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: tasks.map(MobileTaskBoard.init))
     }
 
     private static func lastActivity(

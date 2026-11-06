@@ -189,6 +189,89 @@ public enum ToasttyMobileFixture {
         )
     }()
 
+    public static let questionTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000001")!
+    public static let reviewTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!
+    public static let setupFailedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000003")!
+    public static let startingTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000004")!
+    public static let shippedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000005")!
+
+    /// `home` from a Mac with the task system on. Its task spaces are
+    /// tasks: compact-session-rows waits for approval, early-session-titles
+    /// asks a question, ios-subspaces is working, and sidebar-done-subspaces
+    /// is done. A review task holds PR #36; one task's setup failed; one
+    /// starts under the question task; one merged and waits for a release.
+    public static let taskHome: MobileHomeSnapshot = {
+        let toasttyID = previewWorkspaceID
+        let now = Date()
+        func pullRequest(_ number: Int, _ state: RemoteTaskPullRequestState) -> RemoteTaskPullRequest {
+            RemoteTaskPullRequest(
+                number: number, url: URL(string: "https://github.com/example/toastty/pull/\(number)")!, state: state
+            )
+        }
+        let board = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: questionTaskID, title: "early-session-titles", group: .needsYou, mark: .question,
+                    statusLine: "Asks: Should the badge count tasks or sessions?",
+                    rowSummary: "Asks: Should the badge count tasks or sessions?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: readySubspaceID, activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: startingTaskID, title: "Split the parser", group: .running, mark: .starting,
+                    statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: reviewTaskID, title: "compact-session-rows", group: .needsYou,
+                    statusLine: "Claude is waiting for your input",
+                    stageTitle: "Needs you", stageReason: "the agent asked for input",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: needsApprovalSubspaceID, pullRequest: pullRequest(36, .open),
+                    activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: setupFailedTaskID, title: "Composer blank line", group: .needsYou,
+                    statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
+                    stageTitle: "Needs you", stageReason: "create_hook exited 1: tuist install failed",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: workingSubspaceID, hasRecord: false, title: "ios-subspaces", group: .running,
+                    statusLine: "Claude · working", stageTitle: "Running", stageReason: "Claude · working",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: workingSubspaceID, activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: doneSubspaceID, hasRecord: false, title: "sidebar-done-subspaces", group: .done, mark: .done,
+                    statusLine: "Done", stageTitle: "Done", stageReason: "marked done",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: doneSubspaceID, activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: shippedTaskID, title: "Parent task rollup", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(259, .merged), activityAt: now
+                ),
+            ],
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: questionTaskID),
+                RemoteTaskBoardEntry(taskID: startingTaskID, isLinkedChild: true, isContext: true),
+                RemoteTaskBoardEntry(taskID: reviewTaskID),
+                RemoteTaskBoardEntry(taskID: setupFailedTaskID),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: workingSubspaceID)],
+            toShip: [RemoteTaskShipLane(id: "toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shippedTaskID])],
+            doneCount: 12,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: toasttyID, toShipCount: 3, doneCount: 12)]
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: home.workspaces, taskBoard: MobileTaskBoard(board))
+    }()
+
     /// Task worktrees spawned from the toastty workspace, one in each state
     /// a subspace row shows. Three come from the first session and one from
     /// the second, so the ⑂ filter has something to leave out.

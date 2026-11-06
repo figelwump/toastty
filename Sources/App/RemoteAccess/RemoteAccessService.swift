@@ -473,6 +473,13 @@ final class RemoteAccessService: ObservableObject {
     private let previewScratchpadDirectory: URL
     private let store: AppStore
     private let annotationStyleStore: AnnotationStyleStore
+    /// The task board the snapshot projects for clients; `nil` without a
+    /// task system.
+    private let taskBoard: TaskBoardStore?
+    /// The board the last session list carried, so a board change that
+    /// alters nothing a client sees sends nothing.
+    private var lastBroadcastTaskBoard: RemoteTaskBoard?
+    private var taskBoardBroadcastTask: Task<Void, Never>?
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let deviceStore: RemoteDeviceStore
@@ -629,6 +636,7 @@ final class RemoteAccessService: ObservableObject {
     init(
         store: AppStore,
         annotationStyleStore: AnnotationStyleStore,
+        taskBoard: TaskBoardStore? = nil,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
@@ -660,6 +668,7 @@ final class RemoteAccessService: ObservableObject {
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.annotationStyleStore = annotationStyleStore
+        self.taskBoard = taskBoard
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionCloseController = sessionCloseController
@@ -1031,6 +1040,18 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
+        // Task records, pull request answers and merges change a task's
+        // stage without a session or workspace change. The board publishes
+        // before it changes, so it is read after a yield.
+        taskBoard?.objectWillChange
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.scheduleTaskBoardBroadcast()
+            }
+            .store(in: &conversationTrackingCancellables)
+
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
@@ -1100,6 +1121,9 @@ final class RemoteAccessService: ObservableObject {
         terminalRuntimeRegistry.localInputObserver = nil
         localDraftEpochBroadcastTask?.cancel()
         localDraftEpochBroadcastTask = nil
+        taskBoardBroadcastTask?.cancel()
+        taskBoardBroadcastTask = nil
+        lastBroadcastTaskBoard = nil
 
         let trackedConversationIDs = Set(tailersByConversationID.keys)
             .union(activeSessionIDByConversationID.keys)
@@ -1376,8 +1400,14 @@ final class RemoteAccessService: ObservableObject {
                 state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
-                    activeSessionIDByConversationID, listed: conversations))
+                    activeSessionIDByConversationID, listed: conversations)),
+            tasks: makeTaskBoard()
         )
+    }
+
+    private func makeTaskBoard() -> RemoteTaskBoard? {
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        return RemoteTaskBoardProjection.board(items: taskBoard.items(), state: store.state)
     }
 
     /// Maps each managed session to its conversation, limited to the
@@ -2887,6 +2917,7 @@ final class RemoteAccessService: ObservableObject {
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
         let snapshot = makeSessionList(at: Date())
+        lastBroadcastTaskBoard = snapshot.tasks
         logRemotePresentationChanges(in: snapshot)
         server.broadcast(.sessionList(snapshot))
     }
@@ -3615,6 +3646,20 @@ final class RemoteAccessService: ObservableObject {
             self.localDraftEpochBroadcastTask = nil
             guard self.isEnabled else { return }
             self.broadcastSessionList()
+        }
+    }
+
+    /// Sends the session list when the task board a client sees changed.
+    /// A board change often repeats one the session list already carried,
+    /// such as a pull request answer that did not change its state.
+    private func scheduleTaskBoardBroadcast() {
+        guard isEnabled, taskBoardBroadcastTask == nil else { return }
+        taskBoardBroadcastTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, Task.isCancelled == false else { return }
+            self.taskBoardBroadcastTask = nil
+            guard self.isEnabled, self.makeTaskBoard() != self.lastBroadcastTaskBoard else { return }
+            self.scheduleSessionListBroadcast()
         }
     }
 

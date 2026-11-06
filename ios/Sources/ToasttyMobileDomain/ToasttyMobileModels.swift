@@ -632,11 +632,15 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
     /// workspace's urgency counts its subspaces' sessions, so a parent whose
     /// only activity is in a subspace still ranks by it.
     public let topLevelWorkspaces: [MobileWorkspace]
+    /// The Mac's task board; `nil` from a Mac without the task system,
+    /// which keeps Home's All and Active filters.
+    public let taskBoard: MobileTaskBoard?
     private let subspaceRowsByParentID: [UUID: [MobileSubspaceRow]]
 
-    public init(hostName: String, workspaces: [MobileWorkspace]) {
+    public init(hostName: String, workspaces: [MobileWorkspace], taskBoard: MobileTaskBoard? = nil) {
         self.hostName = hostName
         self.workspaces = workspaces
+        self.taskBoard = taskBoard
         activitySessions = workspaces
             .flatMap(\.conversations)
             .sorted(by: MobileConversation.isOrderedBeforeInActivity)
@@ -661,7 +665,10 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         }
         var rows: [UUID: [MobileSubspaceRow]] = [:]
         for workspace in sorted where isSubspace(workspace) {
-            rows[workspace.parentWorkspaceID!, default: []].append(MobileSubspaceRow(workspace: workspace))
+            rows[workspace.parentWorkspaceID!, default: []].append(MobileSubspaceRow(
+                workspace: workspace,
+                task: taskBoard?.task(taskSpaceID: workspace.id)
+            ))
         }
         subspaceRowsByParentID = rows.mapValues { $0.sorted(by: MobileSubspaceRow.isOrderedBefore) }
         topLevelWorkspaces = sorted
@@ -675,9 +682,20 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
             .map(\.0)
     }
 
+    /// The same snapshot listing other workspaces, such as with a change the
+    /// phone shows before the Mac confirms it. The host and its task board
+    /// stay.
+    public func withWorkspaces(_ workspaces: [MobileWorkspace]) -> MobileHomeSnapshot {
+        MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: taskBoard)
+    }
+
     /// Subspaces nested under `parentID`, in the desktop sidebar's order.
+    /// With the task system, a finished task leaves its project's list, as
+    /// on the Mac; its project counts it instead.
     public func subspaceRows(of parentID: UUID) -> [MobileSubspaceRow] {
-        subspaceRowsByParentID[parentID] ?? []
+        let rows = subspaceRowsByParentID[parentID] ?? []
+        guard taskBoard != nil else { return rows }
+        return rows.filter { $0.isHiddenAsFinished == false }
     }
 
     /// The listed parent of a subspace, or `nil` for a top-level workspace.
@@ -723,10 +741,16 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
 /// on and done tasks sink to the bottom.
 public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     case ready
+    /// The task's agent asked a question and waits for the reply.
+    case question
     case needsApproval
     case error
+    /// The task's pull request, or work marked ready, waits for review.
+    case review
     case working
     case idle
+    /// The task merged and waits for a release.
+    case toShip
     case done
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -735,8 +759,8 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     /// the subspace or it wants the user.
     public var isActive: Bool {
         switch self {
-        case .ready, .needsApproval, .error, .working: true
-        case .idle, .done: false
+        case .ready, .question, .needsApproval, .error, .review, .working: true
+        case .idle, .toShip, .done: false
         }
     }
 
@@ -744,8 +768,19 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     /// or an approval or error mark says something the box would hide.
     public var showsDoneToggle: Bool {
         switch self {
-        case .idle, .ready, .done: true
-        case .needsApproval, .error, .working: false
+        case .idle, .ready, .done, .question, .review: true
+        case .needsApproval, .error, .working, .toShip: false
+        }
+    }
+
+    /// The pill a row shows beside its title, as Mac task rows do. Ready
+    /// and review show through the mark and the title's weight instead.
+    public var pillLabel: String? {
+        switch self {
+        case .question: "question"
+        case .needsApproval: "approval"
+        case .error: "error"
+        case .ready, .review, .working, .idle, .toShip, .done: nil
         }
     }
 
@@ -757,7 +792,7 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
         case .error: 3
         case .ready: 2
         case .working: 1
-        case .idle, .done: 0
+        case .idle, .question, .review, .toShip, .done: 0
         }
     }
 
@@ -778,15 +813,22 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
     public static let pullRequestAnnotationKey = "github-pr"
 
     public let workspace: MobileWorkspace
+    /// The task this subspace is the task space of, from the Mac's board.
+    public let task: RemoteTaskSummary?
     public let status: MobileSubspaceStatus
     /// From the session that sets the status, so the mark and the text
-    /// describe the same session.
+    /// describe the same session. A task's question or setup progress
+    /// replaces it.
     public let summary: String?
 
     public var id: UUID { workspace.id }
 
-    public init(workspace: MobileWorkspace) {
+    /// The task's title, as the Mac's row shows it, else the workspace's.
+    public var title: String { task?.title ?? workspace.title }
+
+    public init(workspace: MobileWorkspace, task: RemoteTaskSummary? = nil) {
         self.workspace = workspace
+        self.task = task
         let lead = workspace.conversations.max { lhs, rhs in
             let left = MobileSubspaceStatus(lhs.state.bucket).precedence
             let right = MobileSubspaceStatus(rhs.state.bucket).precedence
@@ -796,11 +838,47 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
             return MobileConversation.isMoreRecent(rhs, lhs)
         }
         let sessionStatus = lead.map { MobileSubspaceStatus($0.state.bucket) } ?? .idle
-        // The done mark replaces a quiet status, including the unread turn
-        // that set it. A session that is working or wants the user still
-        // shows, since the user may need to act.
-        status = workspace.isDone && sessionStatus.showsDoneToggle ? .done : sessionStatus
-        summary = lead?.lastActivity
+        status = Self.status(sessionStatus: sessionStatus, isDone: workspace.isDone, task: task)
+        summary = task?.rowSummary ?? lead?.lastActivity
+    }
+
+    /// The Mac sidebar's rule. A session that is working or wants the user
+    /// shows first, since the user may need to act. Otherwise a task shows
+    /// where it stands; without a task, the done mark replaces a quiet
+    /// status, including the unread turn that set it.
+    static func status(
+        sessionStatus: MobileSubspaceStatus,
+        isDone: Bool,
+        task: RemoteTaskSummary?
+    ) -> MobileSubspaceStatus {
+        switch sessionStatus {
+        case .needsApproval, .error, .working: return sessionStatus
+        case .ready, .question, .review, .idle, .toShip, .done: break
+        }
+        guard let task else { return isDone ? .done : sessionStatus }
+        switch task.mark {
+        case .question?: return .question
+        case .review?: return .review
+        case .toShip?: return .toShip
+        case .done?: return .done
+        // Setup or the move into a worktree runs, often before any agent
+        // in the task space reports.
+        case .starting?: return .working
+        // The task's stage already counts a done mark that finishes it.
+        case nil: return sessionStatus
+        }
+    }
+
+    /// A finished task whose task space has nothing running or waiting
+    /// for the user leaves its project's list, as on the Mac.
+    public var isHiddenAsFinished: Bool {
+        guard status == .done || status == .toShip else { return false }
+        return workspace.conversations.contains { conversation in
+            switch conversation.state.bucket {
+            case .working, .needsApproval, .error: true
+            case .ready, .idle: false
+            }
+        } == false
     }
 
     /// The one chip the row shows: the primary annotation, or the pull

@@ -1185,7 +1185,7 @@ struct ToasttyMobileRootView: View {
             })
         }
         home.update(
-            snapshot: MobileHomeSnapshot(hostName: home.snapshot.hostName, workspaces: workspaces),
+            snapshot: home.snapshot.withWorkspaces(workspaces),
             connectionState: home.connectionState, freshness: home.freshness
         )
     }
