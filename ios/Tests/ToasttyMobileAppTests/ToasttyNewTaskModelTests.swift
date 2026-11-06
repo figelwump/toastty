@@ -80,8 +80,10 @@ final class ToasttyNewTaskModelTests: XCTestCase {
     /// A sheet blocked by the Mac's state, such as no open project, can ask
     /// again once that is fixed, keeping a shared draft.
     func testABlockedSheetReloadsTheMacsOptionsAndKeepsTheDraft() async {
+        // The Mac has no project open; its agents and presets are known.
         let host = FakeNewTaskHost(options: .loaded(RemoteTaskCreateOptionsResponse(
-            permission: .allowed, workspaces: [], agents: agents()
+            permission: .allowed, workspaces: [], agents: agents(),
+            frequentPresets: [opus, sol], defaultPreset: sol, supportsAttachments: true
         )))
         let file = RemoteMessageAttachment(filename: "screen.png", data: Data([137, 80, 78, 71, 13, 10, 26, 10]))
         let model = ToasttyNewTaskModel(host: host, text: "Fix the composer", attachments: [file])
