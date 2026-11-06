@@ -1376,7 +1376,8 @@ final class RemoteAccessService: ObservableObject {
                 state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
-                    activeSessionIDByConversationID, listed: conversations))
+                    activeSessionIDByConversationID, listed: conversations),
+                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID:))
         )
     }
 
@@ -1402,7 +1403,8 @@ final class RemoteAccessService: ObservableObject {
         state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
         associations: [UUID: RemoteConversationID] = [:],
         annotationColorTokens: [String: AnnotationColorToken] = [:],
-        conversationIDsBySessionID: [String: RemoteConversationID] = [:]
+        conversationIDsBySessionID: [String: RemoteConversationID] = [:],
+        acceptsDoneMark: (UUID) -> Bool = { _ in true }
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
         var ids: [UUID] = []
@@ -1463,7 +1465,8 @@ final class RemoteAccessService: ObservableObject {
                     ? nil : workspace.spawningSessionID.flatMap { conversationIDsBySessionID[$0] },
                 primaryAnnotationKey: workspace.primaryAnnotationKey
                     .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
-                doneAt: parentID == nil ? nil : workspace.doneAt)
+                doneAt: parentID == nil ? nil : workspace.doneAt,
+                acceptsDoneMark: parentID == nil || acceptsDoneMark(id))
         }
     }
 
@@ -1775,7 +1778,8 @@ final class RemoteAccessService: ObservableObject {
                     case .working?, .needsApproval?, .error?: return true
                     case .ready?, .idle?, nil: return false
                     }
-                }
+                },
+                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID)
             )
             if result == .updated {
                 let didChange = store.send(.setWorkspaceDone(
@@ -1888,17 +1892,21 @@ final class RemoteAccessService: ObservableObject {
     /// A client offers the checkbox only on a quiet subspace, so a request
     /// to mark one done while a session works, waits on approval, or failed
     /// is late: an agent started after the tap. Refusing it keeps a delayed
-    /// request from restoring a mark that new work just cleared. Opening a
-    /// task again is always allowed.
+    /// request from restoring a mark that new work just cleared. A task with
+    /// an open pull request finishes through Merge, so the Mac refuses its
+    /// mark even when a client offers the checkbox. Opening a task again is
+    /// always allowed.
     nonisolated static func workspaceDoneResult(
         requestedDone: Bool,
         isSubspace: Bool,
         isDone: Bool,
-        hasWorkInProgress: Bool
+        hasWorkInProgress: Bool,
+        acceptsDoneMark: Bool = true
     ) -> RemoteWorkspaceDoneResult {
         guard isSubspace else { return .notSubspace }
         guard isDone != requestedDone else { return .unchanged }
         if requestedDone, hasWorkInProgress { return .workInProgress }
+        if requestedDone, acceptsDoneMark == false { return .hasOpenPullRequest }
         return .updated
     }
 

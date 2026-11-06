@@ -265,7 +265,8 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 parentWorkspaceID: metadata[id]?.parentWorkspaceID,
                 spawningConversationID: metadata[id]?.spawningConversationID?.rawValue,
                 primaryAnnotationKey: metadata[id]?.primaryAnnotationKey,
-                isDone: metadata[id]?.doneAt != nil
+                isDone: metadata[id]?.doneAt != nil,
+                acceptsDoneMark: metadata[id]?.acceptsDoneMark ?? true
             )
         }.sorted {
             let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)

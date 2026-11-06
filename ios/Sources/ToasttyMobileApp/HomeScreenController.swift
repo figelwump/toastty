@@ -597,7 +597,8 @@ final class HomeScreenController {
         guard canMarkSubspacesDone,
               sendSubspaceDone != nil || runtimeMode == .fixture,
               let row = snapshot.subspaceRow(id: workspaceID),
-              row.workspace.isDone != isDone else { return }
+              row.workspace.isDone != isDone,
+              isDone == false || row.workspace.acceptsDoneMark else { return }
         subspaceDoneNotice = announces
             ? SubspaceDoneNotice(
                 kind: .changed(workspaceID: workspaceID, isDone: isDone),

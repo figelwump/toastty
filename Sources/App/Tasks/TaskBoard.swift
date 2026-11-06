@@ -43,6 +43,21 @@ struct TaskBoardItem: Identifiable, Equatable {
     var hasMerged: Bool {
         record?.mergedAt != nil || pullRequestState?.state == .merged || finishedThroughChildren
     }
+
+    /// Whether the task has a pull request GitHub has not merged or closed.
+    /// A link Toastty has not asked about yet counts as open.
+    var hasOpenPullRequest: Bool {
+        pullRequest != nil && pullRequestState?.state != .merged && pullRequestState?.state != .closed
+    }
+
+    /// Whether the task space's done checkbox may mark the task done. A
+    /// task with an open pull request, or a merge under way, finishes
+    /// through Merge or Archive, so a done mark would skip the merge and
+    /// To ship. Clearing a mark is always allowed. A task space without a
+    /// task record keeps the checkbox.
+    var acceptsDoneMark: Bool {
+        record == nil || (hasOpenPullRequest == false && merge == nil)
+    }
 }
 
 /// Builds the board from what Toastty already holds: task records, the
@@ -699,6 +714,15 @@ extension SessionRuntimeStore {
               let workspace = taskCoordinator?.store.state.workspacesByID[workspaceID],
               workspace.taskID != nil else { return false }
         return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))?.merge == .checking
+    }
+
+    /// Whether a task space takes a done mark from its checkbox, on the Mac
+    /// or from a remote client; see `TaskBoardItem.acceptsDoneMark`.
+    func taskSpaceAcceptsDoneMark(workspaceID: UUID) -> Bool {
+        guard let board = taskCoordinator?.board,
+              let workspace = taskCoordinator?.store.state.workspacesByID[workspaceID],
+              workspace.taskID != nil else { return true }
+        return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))?.acceptsDoneMark ?? true
     }
 
     /// Whether a task space's task has merged, through Toastty or on

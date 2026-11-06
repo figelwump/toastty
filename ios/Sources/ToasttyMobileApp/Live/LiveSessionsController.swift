@@ -349,7 +349,7 @@ final class LiveSessionsController {
                 )
                 switch response?.result {
                 case .updated?, .unchanged?: return .applied
-                case .notSubspace?, .workspaceNotFound?, .workInProgress?: return .refused
+                case .notSubspace?, .workspaceNotFound?, .workInProgress?, .hasOpenPullRequest?: return .refused
                 // The connection dropped or the Mac stopped accepting the
                 // change between the tap and the request.
                 case nil: return .failed

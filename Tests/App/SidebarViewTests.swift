@@ -3564,6 +3564,62 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-reopened")
     }
 
+    /// A task in Ready for review with an open pull request finishes through
+    /// Merge: its rail mark shows the status but is no done checkbox.
+    func testATaskWithAnOpenPullRequestHasNoDoneCheckbox() throws {
+        let (harness, _) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.taskCoordinator = coordinator
+        coordinator.board = try XCTUnwrap(harness.taskBoard)
+        let rootView = harness.hostingView
+        let now = Date().addingTimeInterval(-100)
+        let taskSpace = try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space 1" }?.id)
+        let panelID = try XCTUnwrap(harness.store.state.workspacesByID[taskSpace]?.focusedPanelID)
+        var record = TaskRecord(
+            createdAt: now, text: "Review PR", title: "Review PR", slug: "review-pr",
+            titleSetByUser: true, source: .cli, resolved: TaskFields(agent: "codex"),
+            workspaceID: harness.store.state.workspacesByID[taskSpace]?.parentWorkspaceID, setup: .started,
+            operation: TaskOperation(taskSpace: .init(workspaceID: taskSpace, panelID: panelID))
+        )
+        record.readyForReviewAt = now
+        try coordinator.records.insert(record)
+        XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: taskSpace, taskID: record.id)))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        // Without a pull request, Mark Done is how the task finishes.
+        XCTAssertNotNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView))
+        try writeSidebarEvidence(rootView, name: "sidebar-no-pr-has-checkbox")
+
+        XCTAssertTrue(harness.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #7", url: "https://github.com/example/toastty/pull/7")
+        )))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review PR, task space, ready for review") }, "\(textValues)")
+        XCTAssertNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView), "The rail mark is no checkbox")
+        // A quiet subspace without a task keeps its box.
+        XCTAssertNotNil(try doneToggleFrame(forRowTitled: "Checklist", in: rootView))
+        try attachSidebarRender(rootView, name: "sidebar-open-pr-no-checkbox")
+        try writeSidebarEvidence(rootView, name: "sidebar-open-pr-no-checkbox")
+    }
+
+    /// The rail box nearest the row titled `title`, or nil when that row
+    /// draws none.
+    private func doneToggleFrame(forRowTitled title: String, in rootView: NSView) throws -> CGRect? {
+        let rowFrame = try semanticTextFrame(in: rootView, prefix: "\(title), task space")
+        return toolTipViews(in: rootView, toolTip: SidebarSubspacePresentation.doneToggleActionTitle(isDone: false))
+            .map { $0.convert($0.bounds, to: rootView) }
+            .filter { abs($0.midY - rowFrame.midY) < 20 }
+            .min { abs($0.midY - rowFrame.midY) < abs($1.midY - rowFrame.midY) }
+    }
+
     /// Clicks the rail box of the subspace row titled `title`. The box
     /// carries a click-through tooltip view, which is how the test finds it.
     private func clickDoneToggle(forRowTitled title: String, in rootView: NSView) throws {

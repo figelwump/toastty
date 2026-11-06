@@ -199,9 +199,7 @@ enum TaskBoardPresentation {
             return []
         }
         var actions: [DetailAction] = []
-        let hasOpenPullRequest = item.pullRequest != nil && item.pullRequestState?.state != .merged
-            && item.pullRequestState?.state != .closed
-        if hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
+        if item.hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
             actions += [.merge, .mergeWithoutChecks]
         } else if record.release == nil {
             actions.append(.markDone)
