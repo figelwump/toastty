@@ -652,9 +652,13 @@ Tapping a task alert opens the task's session while its task space is open,
 and the task's detail otherwise. The app icon badge counts the tasks that need
 you, as the Mac's Tasks row and the Status segment do, instead of sessions.
 
+A merge counts as stopped when Toastty records why its own merge stopped
+(**⚠ merge stopped** on the task's row), or when the merge skill ends its turn
+on a blocker. A merge you cancelled sends nothing.
+
 The alert text leaves the Mac: the task's title, the agent's question, and the
-pull request number. Error text from a failed setup or cleanup stays on the
-Mac. Task alerts follow the same rules as session alerts: the Mac sends them
+pull request number. Error text from a failed setup, merge or cleanup stays on
+the Mac; the task's detail on the phone shows it. Task alerts follow the same rules as session alerts: the Mac sends them
 only while you are away from it, and drops a held Ready alert when you come back
 during the hold.
 
