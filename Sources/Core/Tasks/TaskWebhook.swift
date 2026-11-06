@@ -20,6 +20,10 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
     /// Only tasks whose `externalRef.id` starts with this.
     public var externalRefPrefix: String?
     public var auth: TaskWebhookAuth
+    /// The requester's note on where to find the key, shown under the key
+    /// field of the approval sheet. Toastty does not check it, and it is not
+    /// part of the approval: it changes only what the sheet says.
+    public var secretHint: String?
     public var status: TaskWebhookStatus
     /// Why Toastty stopped sending, such as "HTTP 401".
     public var disabledReason: String?
@@ -36,6 +40,7 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         roots: [String] = [],
         externalRefPrefix: String? = nil,
         auth: TaskWebhookAuth,
+        secretHint: String? = nil,
         status: TaskWebhookStatus = .pendingApproval,
         disabledReason: String? = nil,
         requestedAt: Date,
@@ -50,6 +55,7 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         self.roots = roots
         self.externalRefPrefix = externalRefPrefix
         self.auth = auth
+        self.secretHint = secretHint
         self.status = status
         self.disabledReason = disabledReason
         self.requestedAt = requestedAt
@@ -115,7 +121,8 @@ public enum TaskWebhookStatus: String, Codable, Equatable, Sendable {
     case pendingApproval
     case approved
     /// Toastty stopped sending after the receiver refused the request
-    /// (HTTP 401, 403 or 410). A new secret resumes it.
+    /// (HTTP 401, 403 or 410). A new secret resumes it: from the CLI, or
+    /// entered in the approval sheet.
     case disabled
 }
 
@@ -259,6 +266,7 @@ public struct TaskWebhookValidationError: Error, Equatable, Sendable, LocalizedE
 public enum TaskWebhookValidation {
     public static let minimumSecretLength = 16
     public static let maximumSecretLength = 4096
+    public static let maximumSecretHintLength = 300
 
     /// Headers a webhook may not set with `header:<name>`: transport headers,
     /// `Authorization` (use bearer), and Toastty's own.
@@ -341,6 +349,20 @@ public enum TaskWebhookValidation {
         guard secret.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7E }) else {
             throw TaskWebhookValidationError("The secret must be printable ASCII without spaces, so it fits in a header.")
         }
+    }
+
+    /// Trims the hint; an empty one is no hint. One line of plain text, so
+    /// the sheet shows it as written.
+    public static func validateSecretHint(_ hint: String) throws -> String? {
+        let trimmed = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        guard trimmed.count <= maximumSecretHintLength else {
+            throw TaskWebhookValidationError("The secret hint must be at most \(maximumSecretHintLength) characters.")
+        }
+        guard trimmed.unicodeScalars.allSatisfy({ CharacterSet.controlCharacters.contains($0) == false }) else {
+            throw TaskWebhookValidationError("The secret hint must be one line of text.")
+        }
+        return trimmed
     }
 
     /// `https://host/…`: the host whole, the path and query hidden, since

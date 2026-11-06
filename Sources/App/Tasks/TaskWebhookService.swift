@@ -39,7 +39,9 @@ final class TaskWebhookService: ObservableObject {
         var settleInterval: TimeInterval = TaskWebhookEventDetector.defaultSettleInterval
     }
 
-    @Published private(set) var webhooks: [TaskWebhook]
+    @Published private(set) var webhooks: [TaskWebhook] {
+        didSet { updatePolling() }
+    }
 
     /// Every task's current state; set by the app from the task board.
     var taskStates: @MainActor () -> [UUID: TaskWebhookTaskState] = { [:] }
@@ -66,6 +68,7 @@ final class TaskWebhookService: ObservableObject {
     /// Webhooks whose Keychain item could not be read, such as while the
     /// Keychain is locked. They stay as they are and are read again later.
     private var unreadKeychainItems: Set<UUID> = []
+    private var started = false
     private var loop: Task<Void, Never>?
     private var wakeObserver: (any NSObjectProtocol)?
 
@@ -115,6 +118,17 @@ final class TaskWebhookService: ObservableObject {
         webhooks.filter { $0.status == .pendingApproval }
     }
 
+    /// Webhooks Toastty stopped after the receiver refused them.
+    var stoppedWebhooks: [TaskWebhook] {
+        webhooks.filter { $0.status == .disabled }
+    }
+
+    /// Whether Toastty holds the webhook's key, so the approval sheet asks
+    /// for one only when it is missing.
+    func hasSecret(_ id: UUID) -> Bool {
+        keychainItems[id]?.secret != nil
+    }
+
     func webhook(named name: String) -> TaskWebhook? {
         webhooks.first { $0.name == name }
     }
@@ -131,8 +145,35 @@ final class TaskWebhookService: ObservableObject {
 
     // MARK: - Lifecycle
 
+    /// Whether the once-a-second pass runs.
+    var isPolling: Bool { loop != nil }
+
     func start() {
-        guard loop == nil else { return }
+        started = true
+        updatePolling()
+    }
+
+    func stop() {
+        started = false
+        updatePolling()
+    }
+
+    /// The pass runs only while a webhook is approved, so a Mac with no
+    /// webhooks does no work for them after launch. Events for changes made
+    /// while it was stopped are not sent: approval starts from now.
+    private func updatePolling() {
+        let needed = started && webhooks.contains { $0.status == .approved }
+        if needed, loop == nil {
+            startPolling()
+        } else if needed == false, loop != nil {
+            loop?.cancel()
+            loop = nil
+            if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+            wakeObserver = nil
+        }
+    }
+
+    private func startPolling() {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -147,13 +188,6 @@ final class TaskWebhookService: ObservableObject {
                 self?.pass()
             }
         }
-    }
-
-    func stop() {
-        loop?.cancel()
-        loop = nil
-        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
-        wakeObserver = nil
     }
 
     /// One pass: detect changes, queue their events, and start sends.
@@ -327,6 +361,8 @@ final class TaskWebhookService: ObservableObject {
         /// `.some(nil)` clears the filter.
         var externalRefPrefix: String??
         var auth: TaskWebhookAuth?
+        /// `.some(nil)` clears the hint.
+        var secretHint: String??
     }
 
     func add(name: String, settings: Settings, secret: String?, requester: TaskWebhookRequester) throws -> TaskWebhook {
@@ -346,7 +382,7 @@ final class TaskWebhookService: ObservableObject {
             requestedBy: requester
         )
         try apply(settings, to: &webhook)
-        try checkSecret(secret, auth: webhook.auth)
+        try checkSecret(secret)
         try writeKeychainItem(TaskWebhookKeychainItem(secret: secret, approvedDigest: nil), for: webhook.id)
         webhooks.append(webhook)
         saveWebhooks()
@@ -364,11 +400,12 @@ final class TaskWebhookService: ObservableObject {
         guard let index = webhooks.firstIndex(where: { $0.name == name }) else {
             throw TaskWebhookValidationError("No webhook is named \(name).")
         }
+        let wasActive = activeWebhooks.isEmpty == false
         var webhook = webhooks[index]
         if let url = settings.url { webhook.url = try TaskWebhookValidation.validateURL(url) }
         try apply(settings, to: &webhook)
         var item = keychainItems[webhook.id] ?? TaskWebhookKeychainItem()
-        try checkSecret(secret ?? item.secret, auth: webhook.auth)
+        try checkSecret(secret)
         if let secret { item.secret = secret }
         if webhook.settingsDigest != webhooks[index].settingsDigest {
             guard webhooks[index].status == .pendingApproval || pendingWebhooks.count < TaskWebhook.maximumPending else {
@@ -390,6 +427,7 @@ final class TaskWebhookService: ObservableObject {
             saveOutbox()
         }
         webhooks[index] = webhook
+        startDetectingIfNoneWasActive(wasActive)
         saveWebhooks()
         return webhook
     }
@@ -406,9 +444,12 @@ final class TaskWebhookService: ObservableObject {
     /// Approves the webhook's current settings. Only the approval sheet
     /// calls this.
     /// `shownDigest` is the `settingsDigest` of the webhook the sheet showed;
-    /// settings that changed since are refused.
-    func approve(id: UUID, shownDigest: String) throws {
-        guard let index = webhooks.firstIndex(where: { $0.id == id }), webhooks[index].status == .pendingApproval else {
+    /// settings that changed since are refused. `secret` is a key the user
+    /// entered in the sheet; it replaces the saved one. A stopped webhook
+    /// is approved again the same way, usually with a new key.
+    func approve(id: UUID, shownDigest: String, secret: String? = nil) throws {
+        guard let index = webhooks.firstIndex(where: { $0.id == id }),
+              webhooks[index].status == .pendingApproval || webhooks[index].status == .disabled else {
             throw TaskWebhookValidationError("This webhook changed or was removed. Close the sheet and review it again.")
         }
         guard webhooks[index].settingsDigest == shownDigest else {
@@ -417,21 +458,20 @@ final class TaskWebhookService: ObservableObject {
         // Settings read from the file were never checked by add or set.
         _ = try TaskWebhookValidation.validateURL(webhooks[index].url)
         try TaskWebhookValidation.validateAuth(webhooks[index].auth, url: webhooks[index].url)
-        if webhooks[index].auth.needsSecret, keychainItems[id]?.secret == nil {
-            throw TaskWebhookValidationError("Toastty cannot read this webhook's secret from the Keychain. Set it again with webhook rotate-secret.")
+        try checkSecret(secret)
+        if webhooks[index].auth.needsSecret, secret == nil, keychainItems[id]?.secret == nil {
+            throw TaskWebhookValidationError("Paste the key for this webhook, then approve it.")
         }
         let wasActive = activeWebhooks.isEmpty == false
         var item = keychainItems[id] ?? TaskWebhookKeychainItem()
+        if let secret { item.secret = secret }
         item.approvedDigest = webhooks[index].settingsDigest
         try writeKeychainItem(item, for: id)
+        unreadKeychainItems.remove(id)
         webhooks[index].status = .approved
+        webhooks[index].disabledReason = nil
         webhooks[index].approvedAt = now()
-        if wasActive == false {
-            // Start from now: no events for what changed while nothing was
-            // listening.
-            detector.reset()
-            saveOutbox()
-        }
+        startDetectingIfNoneWasActive(wasActive)
         saveWebhooks()
         ToasttyLog.info("Approved a task webhook", category: .tasks, metadata: [
             "webhook": webhooks[index].name, "host": webhooks[index].host,
@@ -463,7 +503,7 @@ final class TaskWebhookService: ObservableObject {
         }
         guard isActive(webhook) else {
             if webhook.status == .disabled {
-                throw TaskWebhookValidationError("Webhook \(name) is stopped (\(webhook.disabledReason ?? "refused")). Set a new secret with webhook rotate-secret.")
+                throw TaskWebhookValidationError("Webhook \(name) is stopped (\(webhook.disabledReason ?? "refused")). Enter a new key in Toastty's Tasks view, or run webhook rotate-secret.")
             }
             throw TaskWebhookValidationError("Webhook \(name) is waiting for approval in Toastty; it cannot send events yet.")
         }
@@ -507,15 +547,23 @@ final class TaskWebhookService: ObservableObject {
         }
         if let auth = settings.auth { webhook.auth = auth }
         try TaskWebhookValidation.validateAuth(webhook.auth, url: webhook.url)
+        if let hint = settings.secretHint {
+            webhook.secretHint = try hint.flatMap(TaskWebhookValidation.validateSecretHint)
+        }
     }
 
-    private func checkSecret(_ secret: String?, auth: TaskWebhookAuth) throws {
-        if auth.needsSecret {
-            guard let secret else {
-                throw TaskWebhookValidationError("--auth \(auth.description) needs a secret: pass it on stdin with --secret-stdin.")
-            }
-            try TaskWebhookValidation.validateSecret(secret)
-        }
+    /// A webhook may wait for approval without its key: the user then
+    /// enters it in the approval sheet.
+    private func checkSecret(_ secret: String?) throws {
+        if let secret { try TaskWebhookValidation.validateSecret(secret) }
+    }
+
+    /// Detection starts from now when the first webhook becomes active:
+    /// changes made while no webhook listened are not sent.
+    private func startDetectingIfNoneWasActive(_ wasActive: Bool) {
+        guard wasActive == false, activeWebhooks.isEmpty == false else { return }
+        detector.reset()
+        saveOutbox()
     }
 
     private func writeKeychainItem(_ item: TaskWebhookKeychainItem, for id: UUID) throws {

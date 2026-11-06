@@ -441,16 +441,21 @@ when something POSTs to its URL, can get task events from Toastty instead of
 keeping a watch running:
 
 ```bash
-pbpaste | toastty webhook add grok https://hooks.example.com/wake --auth bearer --secret-stdin
+toastty webhook add grok https://hooks.example.com/wake --auth bearer \
+  --secret-hint "In the bot's routine panel, open Webhook and copy the Sender key." --wait
 ```
 
-1. `webhook add` registers the webhook. Its secret is read from stdin and
-   kept in the login Keychain. The webhook waits for your approval and
-   receives nothing until then.
+1. `webhook add` registers the webhook. It waits for your approval and
+   receives nothing until then. The key (the secret the receiver checks) can
+   come on stdin with `--secret-stdin`. Without it, you paste the key when
+   you approve, and `--secret-hint` tells you where to find it.
 2. The sidebar shows **1 webhook** next to Tasks, and the Tasks view shows a
    banner. **Review…** shows where events go, which events, for which tasks,
-   and how requests sign in. Only **Approve** in that sheet approves it; no
-   command can. **Deny** removes the webhook and its secret.
+   and how requests sign in, and asks for the key when Toastty has none. The
+   hint shows under the key field as the requester wrote it; Toastty does not
+   check it. The key is kept in the login Keychain. Only **Approve** in that
+   sheet approves the webhook; no command can. **Deny** removes the webhook
+   and its key.
    `webhook add --wait` waits for your decision: it exits 0 when you approve,
    3 when you deny, and 4 when `--timeout` runs out.
 3. Toastty then POSTs a small JSON event when a task enters Needs you, or
@@ -492,14 +497,16 @@ Delivery:
 - After a relaunch, Toastty sends the events still waiting, does not repeat
   changes it already sent, and reports changes it missed while it was quit,
   such as a merge on GitHub.
-- HTTP 401, 403 or 410 stops the webhook. `webhook rotate-secret` sets a new
-  secret and starts it again.
+- HTTP 401, 403 or 410 stops the webhook, and the Tasks view shows a banner.
+  **Enter new key…** there, or `webhook rotate-secret`, sets a new key and
+  starts it again; changes made while it was stopped are not sent.
 - An event is a wake-up hint. `task list --changed-since` stays the source of
   truth; run it when an event arrives and from time to time.
 
 Changing a webhook's address, events, filters or `--auth` with `webhook set`,
 or editing `~/.toastty/task-webhooks.json`, needs approval again. A new
-secret does not. A workspace-scoped session cannot manage webhooks.
+key or hint does not. A workspace-scoped session cannot manage webhooks.
+Toastty checks for task changes only while a webhook is approved.
 
 ## Starting tasks
 

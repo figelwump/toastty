@@ -681,24 +681,24 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Register an HTTPS address that receives task events: a POST with a small JSON body when a task needs the user, merges, finishes, or is archived or deleted. The webhook waits for the user's approval in the Tasks view and receives nothing until then; no command can approve it. Each event includes the task's ID, title, project root, external reference, stage, the question an agent asked, the pull request URL and mergedAt, never the agent's reply or attachments. auth is bearer (Authorization: Bearer <secret>), header:<Name> (<Name>: <secret>), hmac (Toastty-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>), or none for 127.0.0.1 and localhost only. The secret is kept in the Keychain and never returned. Refused for workspace-scoped sessions.",
+                summary: "Register an HTTPS address that receives task events: a POST with a small JSON body when a task needs the user, merges, finishes, or is archived or deleted. The webhook waits for the user's approval in the Tasks view and receives nothing until then; no command can approve it. Each event includes the task's ID, title, project root, external reference, stage, the question an agent asked, the pull request URL and mergedAt, never the agent's reply or attachments. auth is bearer (Authorization: Bearer <secret>), header:<Name> (<Name>: <secret>), hmac (Toastty-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>), or none for 127.0.0.1 and localhost only. The secret is kept in the Keychain and never returned. Without a secret, the user enters it in the approval sheet; pass secretHint to tell them where to find it. Refused for workspace-scoped sessions.",
                 selectors: [],
                 parameters: [
                     .webhookName(required: true), .webhookURL(required: true), .webhookEvents(required: false),
                     .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
-                    .webhookSecret(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
                 ]
             )
         case .webhookSet:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Change a webhook from webhook.add. A change to its URL, events, filters or auth sends it back to the user for approval. A new secret alone keeps the approval and resumes a webhook that stopped after HTTP 401, 403 or 410. An empty externalRefPrefix clears that filter.",
+                summary: "Change a webhook from webhook.add. A change to its URL, events, filters or auth sends it back to the user for approval. A new secret alone keeps the approval and resumes a webhook that stopped after HTTP 401, 403 or 410. An empty externalRefPrefix or secretHint clears it.",
                 selectors: [],
                 parameters: [
                     .webhookName(required: true), .webhookURL(required: false), .webhookEvents(required: false),
                     .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
-                    .webhookSecret(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
                 ]
             )
         case .webhookRemove:
@@ -1189,6 +1189,10 @@ private extension AppControlParameterDescriptor {
 
     static func webhookSecret(required: Bool) -> Self {
         .init(name: "secret", summary: "The shared secret or sender key, 16 to 4096 printable ASCII bytes. Kept in the Keychain.", valueType: .string, required: required)
+    }
+
+    static func webhookSecretHint(required: Bool) -> Self {
+        .init(name: "secretHint", summary: "Where the user finds the key, shown under the key field of the approval sheet, such as the receiving service's menu path and settings URL. One line, at most 300 characters. Not part of the approval.", valueType: .string, required: required)
     }
 
     static func taskID(required: Bool) -> Self {

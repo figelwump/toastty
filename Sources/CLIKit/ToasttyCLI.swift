@@ -983,8 +983,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
-      toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin] [--wait [--timeout <seconds>]]
-      toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin]
+      toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
       toastty [--json] [--socket-path <path>] webhook rotate-secret <name> --secret-stdin
       toastty [--json] [--socket-path <path>] webhook list [<name>]
       toastty [--json] [--socket-path <path>] webhook test|remove <name>
@@ -1836,7 +1836,7 @@ public enum ToasttyCLI {
         }
         let parsed = try parseCommandArguments(
             Array(arguments.dropFirst()),
-            valueOptions: ["--url", "--events", "--root", "--external-ref-prefix", "--auth", "--timeout"],
+            valueOptions: ["--url", "--events", "--root", "--external-ref-prefix", "--auth", "--secret-hint", "--timeout"],
             flagOptions: ["--secret-stdin", "--wait"]
         )
         func readSecret() throws -> String? {
@@ -1864,6 +1864,7 @@ public enum ToasttyCLI {
             }
             if let prefix = parsed.singleValue("--external-ref-prefix") { args["externalRefPrefix"] = .string(prefix) }
             if let auth = parsed.singleValue("--auth") { args["auth"] = .string(auth) }
+            if let hint = parsed.singleValue("--secret-hint") { args["secretHint"] = .string(hint) }
             if let secret = try readSecret() { args["secret"] = .string(secret) }
         }
         func requireName(count: Int, _ form: String) throws -> String {
@@ -2027,6 +2028,9 @@ public enum ToasttyCLI {
         case "pendingApproval":
             lines.append("Webhook \"\(name)\" is waiting for approval in Toastty.")
             lines.append("It receives no events until you approve it in the Tasks view (Review…).")
+            if result.string("auth") != "none", result["hasSecret"] == .bool(false) {
+                lines.append("Toastty has no key for it yet: the user pastes the key in the review sheet.")
+            }
         case "approved":
             lines.append("Webhook \"\(name)\" is approved.")
         case "disabled":

@@ -97,6 +97,30 @@ approved), you do not need the background watch: each POST names a task and
 its new `stage`, so run the sync above when one arrives. A webhook event is a
 hint, and the sync stays the source of truth.
 
+## Set up a webhook
+
+Set one up only when the user asks and your platform gives you an HTTPS URL
+that wakes you. The user approves it in Toastty and enters the key there;
+never ask for the key in chat, and never pass it on the command line.
+
+1. Find the URL and how the platform checks requests: a bearer token, a key in
+   a named header, or an HMAC signature. Ask the user when you do not know.
+2. Run `toastty webhook add <name> <url> --auth <bearer|header:<Name>|hmac>
+   --secret-hint "<where the user finds the key>" --wait`. Write the hint for
+   your platform: the menu path, and the settings page URL when you know it.
+   If you do not know where the key is, say that in the hint instead of
+   guessing.
+3. Tell the user to open the Tasks view in Toastty, click **Review…**, paste
+   the key and approve. `--wait` exits 0 when they approve, 3 when they deny,
+   and 4 after 10 minutes.
+4. Run `toastty webhook test <name>`. If it reports HTTP 401 or 403, the auth
+   mode is probably wrong: change it with `toastty webhook set <name> --auth
+   <mode>`, which needs the user's approval again, and test again.
+
+If a webhook later stops (`webhook list` shows it stopped), tell the user to
+enter a new key from the banner in the Tasks view, and keep the background
+watch until it is approved again.
+
 ## Answer a task
 
 `toastty task send <task-id> "<the user's answer>"`, then watch it again.

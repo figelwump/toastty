@@ -11,6 +11,7 @@ struct ToasttyCLIWebhookTests {
                 "webhook", "add", "grok", "https://hooks.example.com/w",
                 "--events", "needs_you,merged", "--root", "repo", "--root", "/abs",
                 "--external-ref-prefix", "grok:", "--auth", "header:X-Sender-Key",
+                "--secret-hint", "Copy the Sender key from Routines → Webhook",
                 "--wait", "--timeout", "30",
             ],
             environment: ["PWD": "/work"]
@@ -22,6 +23,7 @@ struct ToasttyCLIWebhookTests {
             "roots": .array([.string("/work/repo"), .string("/abs")]),
             "externalRefPrefix": .string("grok:"),
             "auth": .string("header:X-Sender-Key"),
+            "secretHint": .string("Copy the Sender key from Routines → Webhook"),
         ]))
         #expect(invocation.webhook == CLIWebhookOutput(kind: .saved, name: "grok", waitTimeout: 30))
     }

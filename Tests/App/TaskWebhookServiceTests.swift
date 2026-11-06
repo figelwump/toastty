@@ -32,6 +32,9 @@ struct TaskWebhookServiceTests {
 
         func answer(_ results: TaskWebhookSendResult...) { lock.withLock { answers += results } }
         var count: Int { lock.withLock { requests.count } }
+        func header(_ index: Int, _ name: String) -> String? {
+            lock.withLock { requests[index].value(forHTTPHeaderField: name) }
+        }
         func body(_ index: Int) -> [String: Any] {
             lock.withLock {
                 (try? JSONSerialization.jsonObject(with: requests[index].httpBody ?? Data())) as? [String: Any] ?? [:]
@@ -164,6 +167,62 @@ struct TaskWebhookServiceTests {
         #expect(transport.body(0)["type"] as? String == "task.needs_you")
     }
 
+    @Test func aWebhookAddedWithoutAKeyGetsItFromTheApprovalSheet() async throws {
+        let clock = Clock()
+        let transport = FakeTransport()
+        let current = States([task: state("running")])
+        let secrets = InMemoryTaskWebhookSecretStore()
+        let service = makeService(secrets: secrets, transport: transport, clock: clock) { current.value }
+        var withHint = settings("https://hooks.example.com/w", auth: .bearer)
+        withHint.secretHint = .some("  Copy the Sender key from Routines → Webhook. https://bot.example.com/r  ")
+        let webhook = try service.add(name: "grok", settings: withHint, secret: nil, requester: .init(agentSessionID: "agent-1"))
+        #expect(webhook.status == .pendingApproval)
+        #expect(webhook.secretHint == "Copy the Sender key from Routines → Webhook. https://bot.example.com/r")
+        #expect(service.hasSecret(webhook.id) == false)
+
+        #expect(throws: TaskWebhookValidationError.self) {
+            try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        }
+        #expect(throws: TaskWebhookValidationError.self) {
+            try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest, secret: "short")
+        }
+        #expect(service.webhook(named: "grok")?.status == .pendingApproval)
+
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest, secret: secret)
+        #expect(service.isActive(try #require(service.webhook(named: "grok"))))
+        #expect(try secrets.item(for: webhook.id)?.secret == secret)
+        service.pass()
+        current.value[task] = state("needsYou", "review")
+        service.pass()
+        await waitUntil("one event is sent") { transport.count == 1 }
+        #expect(transport.header(0, "Authorization") == "Bearer \(secret)")
+
+        // A new hint changes only what the sheet says, not the approval.
+        var newHint = TaskWebhookService.Settings()
+        newHint.secretHint = .some("Settings → Webhooks")
+        let updated = try service.update(name: "grok", settings: newHint, secret: nil, requester: .init())
+        #expect(updated.status == .approved)
+        #expect(updated.settingsDigest == webhook.settingsDigest)
+        var multiline = TaskWebhookService.Settings()
+        multiline.secretHint = .some("first line\nsecond line")
+        #expect(throws: TaskWebhookValidationError.self) {
+            _ = try service.update(name: "grok", settings: multiline, secret: nil, requester: .init())
+        }
+    }
+
+    @Test func pollingRunsOnlyWhileAWebhookIsApproved() throws {
+        let service = makeService(transport: FakeTransport(), clock: Clock()) { [:] }
+        service.start()
+        defer { service.stop() }
+        #expect(service.isPolling == false)
+        let webhook = try service.add(name: "grok", settings: settings("https://hooks.example.com/w"), secret: secret, requester: .init())
+        #expect(service.isPolling == false)
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        #expect(service.isPolling)
+        try service.remove(name: "grok")
+        #expect(service.isPolling == false)
+    }
+
     @Test func changingWhereEventsGoNeedsApprovalAgainButANewSecretDoesNot() async throws {
         let clock = Clock()
         let secrets = InMemoryTaskWebhookSecretStore()
@@ -216,8 +275,10 @@ struct TaskWebhookServiceTests {
         #expect(throws: TaskWebhookValidationError.self) {
             _ = try service.add(name: "grok", settings: settings("http://hooks.example.com/w"), secret: secret, requester: .init())
         }
+        var longHint = settings("https://hooks.example.com/w")
+        longHint.secretHint = .some(String(repeating: "x", count: TaskWebhookValidation.maximumSecretHintLength + 1))
         #expect(throws: TaskWebhookValidationError.self) {
-            _ = try service.add(name: "grok", settings: settings("https://hooks.example.com/w", auth: .bearer), secret: nil, requester: .init())
+            _ = try service.add(name: "grok", settings: longHint, secret: nil, requester: .init())
         }
         _ = try service.add(name: "local", settings: settings("http://127.0.0.1:9/w", auth: .none), secret: nil, requester: .init())
         #expect(throws: TaskWebhookValidationError.self) {
@@ -314,6 +375,36 @@ struct TaskWebhookServiceTests {
         let resumed = try service.update(name: "grok", settings: .init(), secret: "fresh-secret-0123456789", requester: .init())
         #expect(resumed.status == .approved)
         #expect(service.isActive(resumed))
+    }
+
+    @Test func aStoppedWebhookTurnsOnAgainWithAKeyFromTheSheetAndSkipsWhatChangedMeanwhile() async throws {
+        let clock = Clock()
+        let transport = FakeTransport()
+        transport.answer(TaskWebhookSendResult(statusCode: 401))
+        let current = States([task: state("running")])
+        let service = makeService(transport: transport, clock: clock) { current.value }
+        let webhook = try service.add(name: "grok", settings: settings("https://hooks.example.com/w", auth: .bearer), secret: secret, requester: .init())
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        service.pass()
+        current.value[task] = state("needsYou", "review")
+        service.pass()
+        await waitUntil("the webhook stops") { service.webhook(named: "grok")?.status == .disabled }
+        #expect(service.stoppedWebhooks.map(\.name) == ["grok"])
+
+        // Changes while it is stopped are not sent once it is on again.
+        current.value[task] = state("needsYou", "awaitingReply")
+        service.pass()
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest, secret: "fresh-secret-0123456789")
+        let resumed = try #require(service.webhook(named: "grok"))
+        #expect(service.isActive(resumed))
+        #expect(resumed.disabledReason == nil)
+        service.pass()
+        #expect(transport.count == 1)
+        current.value[task] = state("done")
+        service.pass()
+        await waitUntil("the next event is sent") { transport.count == 2 }
+        #expect(transport.body(1)["type"] as? String == "task.done")
+        #expect(transport.header(1, "Authorization") == "Bearer fresh-secret-0123456789")
     }
 
     @Test func aRelaunchSendsWaitingEventsAndDoesNotRepeatOldOnes() async throws {

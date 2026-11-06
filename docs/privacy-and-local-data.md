@@ -70,8 +70,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.
 - `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`
-  - The task webhooks you added and their status, and the events waiting to
-    send with the task states they came from. Webhook secrets and approvals
+  - The task webhooks you added, their status and the requester's hint on
+    where to find the key, and the events waiting to send with the task
+    states they came from. Webhook secrets and approvals
     are in the login Keychain, not in these files.
 - Task webhooks
   - After you approve a webhook in the Tasks view, Toastty POSTs to its HTTPS

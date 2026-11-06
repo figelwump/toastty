@@ -121,6 +121,9 @@ extension AppControlExecutor {
             }
             settings.auth = auth
         }
+        if case .string(let hint)? = args["secretHint"] {
+            settings.secretHint = .some(hint.isEmpty ? nil : hint)
+        }
         return settings
     }
 
@@ -161,6 +164,8 @@ extension AppControlExecutor {
             "roots": .array(webhook.roots.map(AutomationJSONValue.string)),
             "externalRefPrefix": webhook.externalRefPrefix.map(AutomationJSONValue.string) ?? .null,
             "auth": .string(webhook.auth.description),
+            "hasSecret": .bool(service.hasSecret(webhook.id)),
+            "secretHint": webhook.secretHint.map(AutomationJSONValue.string) ?? .null,
             "requestedAt": date(webhook.requestedAt),
             "approvedAt": date(webhook.approvedAt),
             "disabledReason": webhook.disabledReason.map(AutomationJSONValue.string) ?? .null,
