@@ -308,6 +308,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
+    typealias LinkOpener = @MainActor (UUID, URL) -> Bool
     typealias FilePathCopier = @MainActor @Sendable (String) -> Void
     typealias BridgeScriptCompletion = @MainActor @Sendable (Any?, Error?) -> Void
     typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
@@ -326,6 +327,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let documentSaver: DocumentSaver
     private let savedDocumentReader: SavedDocumentReader
     private let externalFileOpener: ExternalFileOpener
+    private let linkOpener: LinkOpener
     private let filePathCopier: FilePathCopier
     private let bridgeScriptEvaluator: BridgeScriptEvaluator
     private let searchExecutor: SearchExecutor
@@ -361,6 +363,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
+        linkOpener: @escaping LinkOpener = { _, _ in false },
         bundle: Bundle = .main,
         entryURL: URL? = nil,
         documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
@@ -412,6 +415,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
         self.externalFileOpener = externalFileOpener
+        self.linkOpener = linkOpener
         self.filePathCopier = filePathCopier
         self.searchExecutor = searchExecutor
         self.searchSessionResetter = searchSessionResetter
@@ -750,6 +754,34 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         }
 
         _ = externalFileOpener(URL(filePath: filePath))
+    }
+
+    /// Opens a link clicked in the formatted markdown view. Web and mail links
+    /// follow the app's URL routing; `file:` links open only when they resolve
+    /// to an existing local document, so a document cannot launch other files.
+    func openLink(_ rawURL: String) {
+        guard let url = Self.openableLinkURL(from: rawURL) else {
+            logDiagnostic(.debug, "Ignored local document link", metadata: ["link": clampedDiagnosticValue(rawURL) ?? "<empty>"])
+            return
+        }
+
+        _ = linkOpener(panelID, url)
+    }
+
+    static func openableLinkURL(from rawURL: String) -> URL? {
+        guard let url = URL(string: rawURL),
+              let scheme = url.scheme?.lowercased() else {
+            return nil
+        }
+
+        switch scheme {
+        case "http", "https", "mailto":
+            return url
+        case "file":
+            return LocalFileLinkResolver.resolvedLocalDocumentTarget(for: url) == nil ? nil : url
+        default:
+            return nil
+        }
     }
 
     func copyFullPath() {
@@ -1195,6 +1227,7 @@ private extension LocalDocumentPanelRuntime {
         case enterEdit
         case copyFullPath
         case openInDefaultApp
+        case openLink(url: String)
         case draftDidChange(content: String, baseContentRevision: Int)
         case save(baseContentRevision: Int)
         case cancelEdit(baseContentRevision: Int)
@@ -1244,6 +1277,11 @@ private extension LocalDocumentPanelRuntime {
                 self = .copyFullPath
             case "openInDefaultApp":
                 self = .openInDefaultApp
+            case "openLink":
+                guard let url = body["url"] as? String else {
+                    return nil
+                }
+                self = .openLink(url: url)
             case "draftDidChange":
                 guard let content = body["content"] as? String,
                       let baseContentRevision = body["baseContentRevision"] as? Int else {
@@ -1319,6 +1357,8 @@ private extension LocalDocumentPanelRuntime {
             copyFullPath()
         case .openInDefaultApp:
             openInDefaultApp()
+        case .openLink(let url):
+            openLink(url)
         case .draftDidChange(let content, let baseContentRevision):
             updateDraftContent(content, baseContentRevision: baseContentRevision)
         case .save(let baseContentRevision):

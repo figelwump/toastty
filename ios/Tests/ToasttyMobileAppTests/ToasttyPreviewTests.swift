@@ -115,7 +115,7 @@ final class ToasttyPreviewTests: XCTestCase {
         for event in ["enterEdit", "save", "cancelEdit", "draftDidChange", "overwriteAfterConflict", "openInDefaultApp"] {
             XCTAssertFalse(ToasttyBundledPreviewWebView.Coordinator.acceptsReadOnlyEvent(event, isMainFrame: true))
         }
-        for event in ["bridgeReady", "renderReady", "contentSize"] {
+        for event in ["bridgeReady", "renderReady", "contentSize", "openLink"] {
             XCTAssertTrue(ToasttyBundledPreviewWebView.Coordinator.acceptsReadOnlyEvent(event, isMainFrame: true))
             XCTAssertFalse(ToasttyBundledPreviewWebView.Coordinator.acceptsReadOnlyEvent(event, isMainFrame: false))
         }

@@ -23,6 +23,7 @@ import {
   renderPlainMarkdownSourceHtml,
 } from "./markdownSoftWrap.mjs";
 import { useLocalDocumentSearchController } from "./localDocumentSearch";
+import { FormattedMarkdownView } from "./FormattedMarkdownView";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 function normalizeLineEndings(content: string): string {
@@ -211,9 +212,46 @@ function useLocalDocumentPanelState(): {
   };
 }
 
+type MarkdownViewMode = "formatted" | "source";
+
+function defaultMarkdownViewMode(bootstrap: LocalDocumentPanelBootstrap): MarkdownViewMode {
+  // Very large files stay on the cheaper source view; the toggle still offers Formatted.
+  return bootstrap.highlightState === "disabledForLargeFile" ? "source" : "formatted";
+}
+
+function MarkdownViewToggle(props: {
+  viewMode: MarkdownViewMode;
+  onChange: (viewMode: MarkdownViewMode) => void;
+  floating?: boolean;
+}) {
+  const options: Array<[MarkdownViewMode, string]> = [["formatted", "Formatted"], ["source", "Source"]];
+  return (
+    <div
+      className={`local-document-view-toggle${props.floating ? " local-document-view-toggle-floating" : ""}`}
+      role="radiogroup"
+      aria-label="Markdown view"
+    >
+      {options.map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={props.viewMode === value}
+          className="local-document-view-toggle-option"
+          onClick={() => props.onChange(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Header(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   content: string;
+  markdownViewMode: MarkdownViewMode | null;
+  setMarkdownViewMode: (viewMode: MarkdownViewMode) => void;
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
@@ -304,6 +342,12 @@ function Header(props: {
           </>
         ) : (
           <>
+            {props.markdownViewMode && (
+              <MarkdownViewToggle
+                viewMode={props.markdownViewMode}
+                onChange={props.setMarkdownViewMode}
+              />
+            )}
             {bootstrap.filePath && (
               <>
                 <button
@@ -1225,20 +1269,53 @@ function LoadedLocalDocumentPanelApp(props: {
   const previewRootRef = React.useRef<HTMLElement | null>(null);
   const previewContentRef = React.useRef<HTMLElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const isMarkdown = props.bootstrap.format === "markdown";
+  const isMobile = props.bootstrap.presentation === "mobileReadOnly";
+  const [viewState, setViewState] = React.useState(() => ({
+    filePath: props.bootstrap.filePath,
+    mode: defaultMarkdownViewMode(props.bootstrap),
+    revealNoticeLine: null as number | null
+  }));
+  // A panel that switches to another file starts over in that file's default view.
+  const currentViewState = viewState.filePath === props.bootstrap.filePath
+    ? viewState
+    : { filePath: props.bootstrap.filePath, mode: defaultMarkdownViewMode(props.bootstrap), revealNoticeLine: null };
+  const markdownViewMode = isMarkdown ? currentViewState.mode : null;
+  const showsFormatted = markdownViewMode === "formatted" && !props.bootstrap.isEditing;
+  const setMarkdownViewMode = React.useCallback((mode: MarkdownViewMode) => {
+    setViewState({ filePath: props.bootstrap.filePath, mode, revealNoticeLine: null });
+  }, [props.bootstrap.filePath]);
+  const revealRequest = useRevealRequest();
+
+  // Line reveals target source lines, so a reveal arriving while the formatted
+  // view is showing switches to Source; the source view then consumes it.
+  React.useEffect(() => {
+    if (!revealRequest || !showsFormatted) {
+      return;
+    }
+    setViewState({
+      filePath: props.bootstrap.filePath,
+      mode: "source",
+      revealNoticeLine: revealRequest.lineNumber
+    });
+  }, [props.bootstrap.filePath, revealRequest, showsFormatted]);
 
   useLocalDocumentSearchController({
     content: renderedContent,
     isEditing: props.bootstrap.isEditing,
+    surfaceKey: showsFormatted ? "formatted" : "source",
     previewRootRef,
     previewContentRef,
     textareaRef
   });
 
   return (
-    <main className="local-document-shell">
-      {props.bootstrap.presentation !== "mobileReadOnly" && <Header
+    <main className={`local-document-shell${isMobile && markdownViewMode ? " local-document-shell-floating-toggle" : ""}`}>
+      {!isMobile && <Header
         bootstrap={props.bootstrap}
         content={renderedContent}
+        markdownViewMode={props.bootstrap.isEditing ? null : markdownViewMode}
+        setMarkdownViewMode={setMarkdownViewMode}
         isDirty={props.isDirty}
         canSave={props.canSave}
         canOverwrite={props.canOverwrite}
@@ -1256,13 +1333,35 @@ function LoadedLocalDocumentPanelApp(props: {
           textareaRef={textareaRef}
           updateDraftContent={props.updateDraftContent}
         />
-      ) : (
-        <CodeDocumentView
-          bootstrap={props.bootstrap}
+      ) : showsFormatted ? (
+        <FormattedMarkdownView
           content={renderedContent}
+          filePath={props.bootstrap.filePath}
+          opensLocalFiles={!isMobile}
           previewRootRef={previewRootRef}
           previewContentRef={previewContentRef}
+          onOpenLink={localDocumentNativeBridge.openLink}
         />
+      ) : (
+        <>
+          {markdownViewMode && currentViewState.revealNoticeLine !== null && (
+            <div className="local-document-reveal-notice" role="status">
+              <span>Opened at line {currentViewState.revealNoticeLine.toLocaleString()}, so this panel switched to Source.</span>
+              <button type="button" onClick={() => setMarkdownViewMode("formatted")}>
+                Back to Formatted
+              </button>
+            </div>
+          )}
+          <CodeDocumentView
+            bootstrap={props.bootstrap}
+            content={renderedContent}
+            previewRootRef={previewRootRef}
+            previewContentRef={previewContentRef}
+          />
+        </>
+      )}
+      {isMobile && markdownViewMode && (
+        <MarkdownViewToggle viewMode={markdownViewMode} onChange={setMarkdownViewMode} floating />
       )}
     </main>
   );

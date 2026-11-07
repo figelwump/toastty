@@ -25,6 +25,7 @@ export type LocalDocumentPanelEvent =
   | { type: "enterEdit" }
   | { type: "copyFullPath" }
   | { type: "openInDefaultApp" }
+  | { type: "openLink"; url: string }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
   | { type: "save"; baseContentRevision: number }
   | { type: "cancelEdit"; baseContentRevision: number }
@@ -84,6 +85,9 @@ export const localDocumentNativeBridge = {
   },
   openInDefaultApp() {
     postEvent({ type: "openInDefaultApp" });
+  },
+  openLink(url: string) {
+    postEvent({ type: "openLink", url });
   },
   draftDidChange(content: string, baseContentRevision: number) {
     postEvent({ type: "draftDidChange", content, baseContentRevision });

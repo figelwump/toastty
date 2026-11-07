@@ -1471,6 +1471,48 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         await fulfillment(of: [openExpectation], timeout: 0.1)
     }
 
+    func testFormattedMarkdownLinksRouteOnlyWebLinksAndLocalDocuments() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let siblingDocumentURL = tempDirectoryURL.appendingPathComponent("other plan.md")
+        try "# Other\n".write(to: siblingDocumentURL, atomically: true, encoding: .utf8)
+        let launcherURL = tempDirectoryURL.appendingPathComponent("run.command")
+        try "#!/bin/sh\n".write(to: launcherURL, atomically: true, encoding: .utf8)
+
+        let panelID = UUID()
+        var openedLinks: [(UUID, URL)] = []
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            linkOpener: { panelID, url in
+                openedLinks.append((panelID, url))
+                return true
+            }
+        )
+
+        for rawURL in [
+            "https://github.com/figelwump/toastty",
+            "mailto:someone@example.com",
+            siblingDocumentURL.absoluteString,
+            "javascript:alert(1)",
+            launcherURL.absoluteString,
+            tempDirectoryURL.appendingPathComponent("missing.md").absoluteString,
+        ] {
+            runtime.simulateBridgeMessageForTesting(["type": "openLink", "url": rawURL])
+        }
+
+        XCTAssertEqual(openedLinks.map(\.0), [panelID, panelID, panelID])
+        XCTAssertEqual(openedLinks.map(\.1.absoluteString), [
+            "https://github.com/figelwump/toastty",
+            "mailto:someone@example.com",
+            siblingDocumentURL.absoluteString,
+        ])
+    }
+
     func testExternalModificationWhileDirtyPreservesDraftAndRaisesConflict() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

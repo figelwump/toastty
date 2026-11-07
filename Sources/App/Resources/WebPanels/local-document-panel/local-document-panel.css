@@ -918,3 +918,388 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* Formatted markdown view. Typography restored from the April 2026 renderer
+   (removed in e74cfe61), with link, image, and mobile rules for this panel. */
+.markdown-prose-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.markdown-prose {
+  width: min(820px, calc(100% - 40px));
+  margin: 28px auto 52px;
+  padding: 34px 38px 44px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  font-size: calc(1.08rem * var(--toastty-markdown-text-scale));
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.markdown-prose > :first-child {
+  margin-top: 0;
+}
+
+.markdown-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-prose h1,
+.markdown-prose h2,
+.markdown-prose h3,
+.markdown-prose h4,
+.markdown-prose h5,
+.markdown-prose h6 {
+  margin: 1.65em 0 0.45em;
+  color: var(--heading);
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  scroll-margin-top: 70px;
+}
+
+.markdown-prose h1 {
+  font-size: clamp(
+    calc(2rem * var(--toastty-markdown-text-scale)),
+    4vw,
+    calc(2.9rem * var(--toastty-markdown-text-scale))
+  );
+}
+
+.markdown-prose h2 {
+  font-size: clamp(
+    calc(1.55rem * var(--toastty-markdown-text-scale)),
+    3vw,
+    calc(2.1rem * var(--toastty-markdown-text-scale))
+  );
+  margin-top: 2.2em;
+  padding-left: 14px;
+  border-left: 3px solid var(--accent);
+}
+
+.markdown-prose h3 {
+  font-size: calc(1.3rem * var(--toastty-markdown-text-scale));
+  margin-top: 1.9em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-prose p,
+.markdown-prose li,
+.markdown-prose blockquote {
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.markdown-prose li {
+  margin: 0.15em 0;
+}
+
+.markdown-prose li > p {
+  margin: 0.2em 0;
+}
+
+/* Nested lists under list items: tighten the gap between a parent item's
+   text and its nested bullets/numbered list. Top-level lists keep the
+   default 1em margin from the block-margin rule below. */
+.markdown-prose li > ul,
+.markdown-prose li > ol {
+  margin: 0.3em 0;
+}
+
+.markdown-prose ol {
+  list-style: none;
+  counter-reset: list-counter;
+  padding-left: 1.8em;
+}
+
+.markdown-prose ol > li {
+  counter-increment: list-counter;
+  position: relative;
+}
+
+.markdown-prose ol > li::before {
+  content: counter(list-counter) ".";
+  position: absolute;
+  top: 0.04em;
+  left: -1.8em;
+  width: 1.5em;
+  text-align: right;
+  color: var(--accent);
+  font-weight: 600;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+  font-size: 1.08rem;
+  line-height: 1.6;
+}
+
+.markdown-prose ul {
+  padding-left: 1.5em;
+}
+
+.markdown-prose ul > li::marker {
+  color: var(--accent);
+}
+
+.markdown-prose p,
+.markdown-prose ul,
+.markdown-prose ol,
+.markdown-prose blockquote,
+.markdown-prose pre,
+.markdown-prose table {
+  margin: 1em 0;
+}
+
+.markdown-prose a {
+  color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.15em;
+}
+
+.markdown-prose hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+.markdown-prose code {
+  padding: 0.18em 0.4em;
+  border-radius: 7px;
+  background: var(--code-bg);
+  font: 500 0.9em/1.5 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.markdown-prose pre {
+  overflow-x: auto;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: var(--pre-bg);
+  color: var(--pre-text);
+}
+
+.markdown-prose pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-prose blockquote {
+  margin-left: 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 14px 14px 0;
+  background: var(--quote-bg);
+  color: var(--quote-text);
+}
+
+.markdown-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 500 0.95rem/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-prose th,
+.markdown-prose td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+
+.markdown-prose pre code.hljs {
+  background: transparent;
+}
+
+.markdown-prose .contains-task-list {
+  padding-left: 0.4em;
+}
+
+.markdown-prose .task-list-item {
+  list-style: none;
+}
+
+.markdown-prose .task-list-item input {
+  margin: 0 0.5em 0 0;
+  accent-color: var(--accent);
+}
+
+.markdown-table-scroll {
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.markdown-table-scroll > table {
+  margin: 0;
+}
+
+.markdown-link-external {
+  display: inline-block;
+  margin-left: 2px;
+  font-size: 0.8em;
+  text-decoration: none;
+}
+
+.markdown-link-inert {
+  color: var(--muted);
+}
+
+.markdown-image-placeholder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 1em 0;
+  padding: 12px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  color: var(--muted);
+  font: 500 0.92em/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-image-placeholder-path {
+  overflow-wrap: anywhere;
+  font: 500 0.85em/1.5 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.markdown-frontmatter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 10px 14px;
+  margin-bottom: 1.2em;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font:
+    500
+    calc(0.82rem * var(--toastty-markdown-text-scale))
+    / 1.5
+    "IBM Plex Sans",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+}
+
+.markdown-frontmatter-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown-frontmatter-key {
+  color: var(--muted);
+}
+
+.markdown-frontmatter-key::after {
+  content: " ";
+}
+
+.markdown-frontmatter-value {
+  color: var(--accent);
+}
+
+.local-document-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.local-document-view-toggle-option {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font:
+    600
+    calc(12px * var(--toastty-markdown-text-scale))
+    / 1
+    "IBM Plex Sans",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.local-document-view-toggle-option:hover {
+  color: var(--text);
+}
+
+.local-document-view-toggle-option[aria-checked="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.local-document-view-toggle-floating {
+  position: fixed;
+  right: 16px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 2;
+  background: var(--header-bg);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+
+/* Keep the last source lines scrollable above the floating view toggle. */
+.local-document-shell-floating-toggle .local-document-code-markdown-grid {
+  padding-bottom: 72px;
+}
+
+.local-document-reveal-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--text);
+  font:
+    500
+    calc(12px * var(--toastty-markdown-text-scale))
+    / 1.4
+    "IBM Plex Sans",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+}
+
+.local-document-reveal-notice button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@media (max-width: 600px) {
+  .markdown-prose {
+    width: 100%;
+    margin: 0;
+    padding: 20px 18px 96px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    font-size: calc(1rem * var(--toastty-markdown-text-scale));
+  }
+
+  .markdown-prose h1 {
+    font-size: calc(1.7rem * var(--toastty-markdown-text-scale));
+  }
+
+  .markdown-prose h2 {
+    font-size: calc(1.35rem * var(--toastty-markdown-text-scale));
+  }
+
+  .local-document-reveal-notice {
+    padding: 8px 16px;
+  }
+}

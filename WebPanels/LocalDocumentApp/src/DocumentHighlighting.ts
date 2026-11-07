@@ -13,8 +13,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import type {
   LocalDocumentHighlightState,
-  LocalDocumentPanelBootstrap,
-  LocalDocumentSyntaxLanguage
+  LocalDocumentPanelBootstrap
 } from "./bootstrap";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 
@@ -54,7 +53,7 @@ if (!hljs.getLanguage("rust")) {
 }
 
 export function highlightedCodeHTML(
-  language: LocalDocumentSyntaxLanguage | null,
+  language: string | null,
   content: string,
   shouldHighlight: boolean
 ): string | null {

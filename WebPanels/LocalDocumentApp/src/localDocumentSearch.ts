@@ -611,11 +611,14 @@ export function applyEditorSearchForTesting(
 export function useLocalDocumentSearchController(options: {
   content: string;
   isEditing: boolean;
+  // Changes when a different read-only surface (such as formatted markdown
+  // versus source) mounts, so highlights and observers rebind to its refs.
+  surfaceKey?: string;
   previewRootRef: React.RefObject<HTMLElement | null>;
   previewContentRef: React.RefObject<HTMLElement | null>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
-  const { content, isEditing, previewRootRef, previewContentRef, textareaRef } = options;
+  const { content, isEditing, surfaceKey, previewRootRef, previewContentRef, textareaRef } = options;
   const searchStateRef = React.useRef<LocalDocumentPanelSearchState>(
     window.ToasttyLocalDocumentPanel?.getCurrentSearchState() ?? emptySearchState()
   );
@@ -677,7 +680,7 @@ export function useLocalDocumentSearchController(options: {
     }
 
     applyCommand({ type: "setQuery", query: currentQuery });
-  }, [applyCommand, content, isEditing]);
+  }, [applyCommand, content, isEditing, surfaceKey]);
 
   React.useEffect(() => {
     const currentQuery = searchStateRef.current.query;
@@ -733,5 +736,5 @@ export function useLocalDocumentSearchController(options: {
         window.cancelAnimationFrame(animationFrameID);
       }
     };
-  }, [applyCommand, isEditing, previewContentRef]);
+  }, [applyCommand, isEditing, previewContentRef, surfaceKey]);
 }

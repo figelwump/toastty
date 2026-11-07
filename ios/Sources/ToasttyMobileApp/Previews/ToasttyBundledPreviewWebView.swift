@@ -89,7 +89,7 @@ struct ToasttyBundledPreviewWebView: UIViewRepresentable {
 
         static func acceptsReadOnlyEvent(_ type: String, isMainFrame: Bool) -> Bool {
             isMainFrame && ["bridgeReady", "renderReady", "contentSize", "searchControllerReady",
-                            "searchControllerUnavailable"].contains(type)
+                            "searchControllerUnavailable", "openLink"].contains(type)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -107,6 +107,12 @@ struct ToasttyBundledPreviewWebView: UIViewRepresentable {
                       width.isFinite, height.isFinite,
                       (320...16_384).contains(width), (320...16_384).contains(height) else { return }
                 viewport?.setCanvasSize(CGSize(width: width, height: height))
+            case "openLink":
+                // Formatted markdown links: only public web links leave the app.
+                guard case .document = content,
+                      let rawURL = body["url"] as? String, let url = URL(string: rawURL),
+                      ToasttyPreviewURLPolicy.isReachableWebURL(url) else { return }
+                UIApplication.shared.open(url)
             default: break
             }
         }

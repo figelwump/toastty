@@ -105,6 +105,22 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             },
             responderDidRequestFocus: { [weak self] panelID in
                 _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
+            },
+            linkOpener: { [weak self] panelID, url in
+                guard let self,
+                      let store = self.store else {
+                    return false
+                }
+
+                let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
+                return AppURLRouter.open(
+                    url,
+                    preferredWindowID: preferredWindowID,
+                    appStore: store,
+                    requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                        self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                    }
+                )
             }
         )
         localDocumentRuntimeByPanelID[panelID] = runtime
