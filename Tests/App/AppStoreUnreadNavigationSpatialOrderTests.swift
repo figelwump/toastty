@@ -166,16 +166,10 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
             // Compare presence checks from a fresh cycle. A retained cycle
             // can return its sole entry again after reaching that entry.
             fixture.store.replaceState(fixture.store.state)
-            let state = fixture.store.state
-            let selection = WindowCommandSelection(
-                windowID: fixture.windowID,
-                window: try XCTUnwrap(state.window(id: fixture.windowID)),
-                workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
-            )
             XCTAssertEqual(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
-                state: state,
-                commandSelection: selection,
-                activePanelIDs: [tab.panelIDs[2]]
+                store: fixture.store,
+                preferredWindowID: fixture.windowID,
+                sessionRuntimeStore: fixture.sessions
             ), expectedAvailability)
             XCTAssertEqual(fixture.store.canFocusNextUnreadOrActivePanelFromCommand(
                 preferredWindowID: fixture.windowID,

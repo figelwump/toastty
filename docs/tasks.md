@@ -577,6 +577,11 @@ Tasks view, gives one a record, so its history stays after it closes.
 reply, even after you read the agent’s answer or its session exits. They follow unread panels and agents
 that need input, and precede working agents in the cycle.
 
+In a tracked task, an unread reply remains reachable while merge checks run,
+including when its parent requested the merge. Accepting a merge does not
+mark the reply read. Quiet unread replies in Done, Archived or To ship tasks
+are skipped; working agents, approval requests and errors remain reachable.
+
 The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
 the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
 the sidebar by **Projects** or by **Status**. The choice is saved for each

@@ -250,6 +250,75 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    @Test(arguments: [false, true])
+    func anUnreadChildRemainsReachableWhileItsParentWaitsForTheMerge(agentExited: Bool) async throws {
+        try await withScenario(checksPending: true) { scenario in
+            let store = scenario.store
+            let runtime = scenario.sessionRuntimeStore
+            let parentSpaceID = try #require(store.selectedWorkspace?.id)
+            let parentPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+            let parent = TaskRecord(
+                createdAt: Date(),
+                text: "Coordinate the work", title: "Coordinate the work", slug: "coordinate", source: .cli,
+                workspaceID: parentSpaceID, projectRoot: scenario.repo, setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: parentSpaceID, panelID: parentPanelID))
+            )
+            try scenario.tasks.records.insert(parent)
+            try scenario.tasks.records.save(id: scenario.taskID) { $0.parentTaskID = parent.id }
+            runtime.startSession(
+                sessionID: "parent", agent: .claude, panelID: parentPanelID,
+                windowID: scenario.windowID, workspaceID: parentSpaceID,
+                codexStatusTrackingSource: .externallyReported, cwd: scenario.repo, repoRoot: scenario.repo, at: Date()
+            )
+            runtime.updateStatus(sessionID: "parent", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+            scenario.reportAgent(.working)
+            scenario.reportAgent(.ready)
+            if agentExited {
+                runtime.stopSession(sessionID: "agent", at: Date())
+            }
+            #expect(store.state.workspacesByID[scenario.taskSpaceID]?.unreadPanelIDs.contains(scenario.taskPanelID) == true)
+
+            // The parent accepts the child's merge without reading its report.
+            try scenario.tasks.merge(
+                taskID: scenario.taskID, expectedHead: scenario.head,
+                caller: TaskCaller(sessionID: "parent", workspaceID: parentSpaceID)
+            )
+            await scenario.waitUntil("the child's merge waits for checks") {
+                if case .awaitingChecks? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                return false
+            }
+            #expect(scenario.boardItem?.stage == .running)
+            #expect(scenario.boardItem?.merge == .waitingForChecks)
+            #expect(store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
+            #expect(store.state.workspacesByID[scenario.taskSpaceID]?.unreadPanelIDs.contains(scenario.taskPanelID) == true)
+
+            #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+                store: store, preferredWindowID: scenario.windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: scenario.windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: scenario.windowID, sessionRuntimeStore: runtime
+            )?.panelID == scenario.taskPanelID)
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: scenario.windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.id == scenario.taskSpaceID)
+            #expect(store.state.workspacesByID[scenario.taskSpaceID]?.unreadPanelIDs.contains(scenario.taskPanelID) == false)
+            // Reading the reply must keep the accepted merge alive.
+            #expect(store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
+            #expect(scenario.boardItem?.merge == .waitingForChecks)
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: scenario.windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.id == parentSpaceID)
+
+            try scenario.tasks.cancelMerge(taskID: scenario.taskID)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+        }
+    }
+
     @Test
     func cancelMergeStopsAMergeWaitingForChecks() async throws {
         try await withScenario(checksPending: true) { scenario in

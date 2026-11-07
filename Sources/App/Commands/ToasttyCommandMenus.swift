@@ -231,15 +231,10 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
-        let livePanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
-                .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
-        )
         return Self.canFocusNextUnreadOrActivePanel(
-            state: store.state,
-            commandSelection: commandSelection,
-            activePanelIDs: livePanelIDs.union(sessionRuntimeStore.activeLaterPanelIDs()),
-            unreadPriorityPanelIDs: livePanelIDs
+            store: store,
+            preferredWindowID: preferredCommandWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
         )
     }
 
@@ -1103,40 +1098,14 @@ struct ToasttyCommandMenus: Commands {
     }
 
     static func canFocusNextUnreadOrActivePanel(
-        state: AppState,
-        commandSelection: WindowCommandSelection?,
-        activePanelIDs: Set<UUID>,
-        unreadPriorityPanelIDs: Set<UUID> = []
+        store: AppStore,
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
     ) -> Bool {
-        guard let selection = commandSelection,
-              let selectedTabID = selection.workspace.resolvedSelectedTabID else {
-            return false
-        }
-
-        if state.nextUnreadPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            isEligible: { workspace, panelID in
-                workspace.doneAt == nil || unreadPriorityPanelIDs.contains(panelID)
-            }
-        ) != nil {
-            return true
-        }
-
-        guard activePanelIDs.isEmpty == false else {
-            return false
-        }
-
-        return state.nextMatchingPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
-        ) { _, panelID in
-            activePanelIDs.contains(panelID)
-        } != nil
+        store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     nonisolated static func textInputOwnsFindCommands(
