@@ -935,7 +935,16 @@ code hops back to the main thread with `MainLoop.dispatch` (g_idle_add), not
   deb|appimage|snap|flatpak]`: release packages in
   `artifacts/release/linux/<version>-<build>/`, all wrapping the
   `--destdir` stage (`docs/plans/linux-release.md`). It writes
-  `lib/toastty/share/toastty/version`, which the About dialog shows.
+  `lib/toastty/share/toastty/version`, which the About dialog shows. The
+  default formats are `deb` and `appimage`; `scripts/linux/fetch-appimagetool.sh`
+  installs the pinned, checksum-verified appimagetool.
+- `scripts/linux/test-package.sh`: launches the built `.deb` and AppImage on
+  Broadway (or `--real-window`), runs a terminal command, starts Claude Code
+  and Codex with a one-word prompt, and writes screenshots, transcripts and
+  `report.md` under `artifacts/package-tests/`. `scripts/linux/check.sh` runs
+  it with `--agents none`.
+- `scripts/release/publish-linux-release.sh`: attaches the packages to the
+  `v<version>` GitHub Release after the macOS publish created it.
 
 - App icon: `scripts/linux/render-app-icon.py` renders `linux/data/icons/hicolor`
   (scalable SVG + 16–512 PNGs) from macOS's

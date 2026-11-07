@@ -21,6 +21,10 @@ Use this workflow when the user already has a built Toastty release artifact and
    ```
 4. Run `scripts/release/publish-github-release.sh --create-tag` to publish a draft by default. Add `--publish` only when the user wants the release to go live immediately and update the Sparkle appcast.
 
+## Linux packages
+
+The Linux `.deb` and AppImage attach to the release this workflow creates. After it, follow `../toastty-release/references/linux.md` (section 4): `scripts/release/publish-linux-release.sh --version X.Y.Z --build-number N`, which requires the tag to name the commit the packages were built from.
+
 ## Important invariants
 
 - Publish must use `artifacts/release/<version>-<build>/release-metadata.env`, not the current `HEAD`, to decide what commit gets tagged.

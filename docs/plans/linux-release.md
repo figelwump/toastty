@@ -1,18 +1,28 @@
 # Linux release packaging
 
-Status: in progress. The `.deb` builds and passes the end-to-end checks from
-its extracted tree. The AppImage step is written but unbuilt: it needs an
-`appimagetool` binary supplied by the operator. The Flatpak and snap recipes
-are drafts until `flatpak-builder` and `snapcraft` are installed (both need
-root to install).
+Status: `.deb` and AppImage are built, tested and ready to publish on GitHub
+Releases. Snap and Flatpak recipes are drafts, built later.
 
 ## Goal
 
-Ship the Linux port as `.deb`, AppImage, Flatpak and snap from one release
-build, with the same validation for all four. Validation is local: offscreen
-on Broadway, plus one real-window check for OpenGL (see
-`.agents/skills/toastty-release/SKILL.md` and
-`.agents/skills/toastty-verify/references/linux.md`).
+Ship the Linux port on the same GitHub Release as the macOS DMG: a `.deb` and
+an AppImage, same version and `v<version>` tag, built from the same commit and
+released by the same process. Snap and Flatpak distribution comes later.
+Validation is local: offscreen on Broadway, plus a real window for OpenGL
+(`.agents/skills/toastty-release/references/linux.md`).
+
+## Release flow
+
+1. macOS: `toastty-release`, then `toastty-publish` creates the tag and the
+   release (draft or published).
+2. Linux, on a clean checkout of the tagged commit:
+   `scripts/automation/check.sh`, `scripts/linux/package.sh`,
+   `scripts/linux/test-package.sh` (install, launch, terminal, Claude and
+   Codex, screenshots; also `--real-window` and, with the user's `sudo`, a
+   real `.deb` install).
+3. `scripts/release/publish-linux-release.sh` attaches the `.deb`, AppImage,
+   `.zsync` and `SHA256SUMS-linux.txt`; it checks that the tag names the
+   packages' source commit.
 
 ## Shared shape
 
@@ -25,7 +35,7 @@ same stage:
 
 | Format | Wraps the stage as | System libraries | Confinement |
 |---|---|---|---|
-| `.deb` | `/usr` tree + `DEBIAN/control` | From the distro (`Depends:` computed from `ldd`) | None |
+| `.deb` | `/usr` tree + `DEBIAN/control` | From the distro (`Depends:` from the binaries' direct links) | None |
 | AppImage | `AppDir/usr` + `AppRun` | From the host (GTK 4, libadwaita, WebKitGTK 6.0) | None |
 | snap | `dump` of the stage on `core26` | Staged from the Ubuntu 26.04 archive | `classic` |
 | Flatpak | Built from source in `org.gnome.Sdk` | GNOME runtime | Sandbox + host spawn |
@@ -61,21 +71,25 @@ Artifacts go to `artifacts/release/linux/<version>-<build>/`.
   to `lib/toastty/share/toastty/version` (read by the About dialog) and adds a
   `<release>` entry to the AppStream metadata.
 - **CLI path stability (AppImage).** An AppImage mounts at a new path each
-  launch. Agent hooks must not record the mounted CLI path. Verify how the
-  hooks reference the CLI before shipping the AppImage.
+  launch. Agent hooks call `$TOASTTY_CLI_PATH` from the launch environment and
+  shim links are rewritten at every launch, so no mounted path is persisted.
 
-## Open questions for the user
+## Decisions
 
-1. Distribution channels: GitHub Releases for `.deb`/AppImage, Flathub, Snap
-   Store (classic review), or a subset.
-2. Version coupling with the macOS release (same version and tag, or a
-   separate Linux track).
-3. Updates: AppImage update information (zsync), store updates for
-   Flatpak/snap, an apt repository for `.deb`, or a GitHub-release check in the
-   app.
-4. Whether to set up an older-base build environment to lower the glibc floor.
-5. The app ID. `appstreamcli validate` rejects `com.GiantThings.toastty`
-   (`cid-domain-not-lowercase`), and Flathub requires a valid AppStream file.
-   Renaming it (for example `com.giantthings.Toastty`) also changes the
-   GApplication ID, the desktop file name and the notification and badge
-   identities, so existing installs would need a migration.
+- Channels: GitHub Releases for `.deb` and AppImage now; Flathub and the Snap
+  Store later.
+- Versions follow the macOS release (same version and tag).
+- Updates: AppImage update information (`gh-releases-zsync`, latest release)
+  serves AppImageUpdate and other updaters; `.deb` users download the new
+  release. An in-app update check is not built.
+- App ID stays `com.GiantThings.toastty` on Linux. `.deb` and AppImage do not
+  need valid AppStream; `appstreamcli validate` rejects the ID
+  (`cid-domain-not-lowercase`), which matters only for Flathub. The macOS
+  bundle ID is independent of the Linux GApplication/desktop ID, so a Linux
+  rename would not affect macOS.
+
+## Open questions
+
+1. Lowering the glibc floor with an older-base build environment.
+2. An in-app update check for `.deb` users.
+3. The Linux app ID before a Flathub submission.

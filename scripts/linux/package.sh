@@ -4,9 +4,13 @@
 # Usage: scripts/linux/package.sh --version X.Y.Z [--build-number N]
 #          [--format deb|appimage|snap|flatpak|all]... [--no-build]
 #
+# Formats default to deb and appimage, the two published on GitHub Releases
+# (scripts/release/publish-linux-release.sh); `all` adds the snap and Flatpak
+# drafts.
+#
 # Output: artifacts/release/linux/<version>-<build>/
-#   toastty_<version>_amd64.deb
-#   Toastty-<version>-x86_64.AppImage
+#   toastty_<version>-<build>_amd64.deb
+#   Toastty-<version>-x86_64.AppImage (+ .zsync for AppImage updaters)
 #   toastty_<version>_amd64.snap          (needs snapcraft)
 #   com.GiantThings.toastty-<version>.flatpak  (needs flatpak-builder)
 #   package-metadata.env
@@ -28,17 +32,18 @@ while [[ $# -gt 0 ]]; do
     --build-number) build_number="$2"; shift ;;
     --format) formats+=("$2"); shift ;;
     --no-build) build=0 ;;
-    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "package.sh: unknown argument: $1" >&2; exit 64 ;;
   esac
   shift
 done
 [[ -n "$version" ]] || { echo "package.sh: --version is required" >&2; exit 64; }
 [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "package.sh: version must look like 1.2.3" >&2; exit 64; }
-[[ ${#formats[@]} -gt 0 ]] || formats=(all)
+[[ ${#formats[@]} -gt 0 ]] || formats=(deb appimage)
 if [[ " ${formats[*]} " == *" all "* ]]; then formats=(deb appimage snap flatpak); fi
 
 app_id=com.GiantThings.toastty
+github_repo="${TOASTTY_GITHUB_REPO:-figelwump/toastty}"
 arch_deb=amd64
 arch_appimage=x86_64
 [[ "$(uname -m)" == "x86_64" ]] || { echo "package.sh: only x86_64 is supported for now" >&2; exit 1; }
@@ -77,6 +82,10 @@ else:
     text = text.replace("</component>", f"  <releases>\n{entry}  </releases>\n</component>", 1)
 open(path, "w").write(text)
 PY
+
+# Packages install as root: 0755 directories and executables, 0644 files,
+# whatever the build user's umask was.
+chmod -R u+rwX,go+rX,go-w "$stage"
 
 declare -A produced=()
 declare -A failed=()
@@ -149,14 +158,13 @@ EOF
 
 # --- AppImage ----------------------------------------------------------------
 
-# appimagetool is not downloaded here: provide it with APPIMAGETOOL, on PATH, or
-# at linux/.deps/tools/appimagetool-x86_64.AppImage
-# (https://github.com/AppImage/appimagetool/releases).
+# appimagetool: scripts/linux/fetch-appimagetool.sh installs the pinned one at
+# linux/.deps/tools/appimagetool-x86_64.AppImage; APPIMAGETOOL or PATH override it.
 appimagetool="${APPIMAGETOOL:-$(command -v appimagetool || echo "$repo_root/linux/.deps/tools/appimagetool-x86_64.AppImage")}"
 
 build_appimage() {
   [[ -x "$appimagetool" ]] \
-    || { echo "appimagetool not found: set APPIMAGETOOL or put it at linux/.deps/tools/appimagetool-x86_64.AppImage (https://github.com/AppImage/appimagetool/releases)"; return 1; }
+    || { echo "appimagetool not found: run scripts/linux/fetch-appimagetool.sh, or set APPIMAGETOOL"; return 1; }
   local appdir="$work/AppDir"
   rm -rf "$appdir"
   mkdir -p "$appdir"
@@ -176,10 +184,16 @@ EOF
     "$stage/usr/share/applications/$app_id.desktop" > "$appdir/$app_id.desktop"
   cp "$stage/usr/share/icons/hicolor/256x256/apps/$app_id.png" "$appdir/$app_id.png"
   local image="$out/Toastty-$version-$arch_appimage.AppImage"
-  ARCH="$arch_appimage" APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$version" \
-    "$appimagetool" --no-appstream "$appdir" "$image" >"$work/appimagetool.log" 2>&1 \
+  # Update information for AppImageUpdate and other AppImage updaters: the
+  # latest GitHub release's AppImage, diffed through its .zsync file.
+  local update_info="gh-releases-zsync|${github_repo%%/*}|${github_repo#*/}|latest|Toastty-*-$arch_appimage.AppImage.zsync"
+  rm -f "$image" "$image.zsync"
+  (cd "$out" && ARCH="$arch_appimage" APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$version" \
+    "$appimagetool" --no-appstream --updateinformation "$update_info" "$appdir" "$image") >"$work/appimagetool.log" 2>&1 \
     || { tail -20 "$work/appimagetool.log"; return 1; }
+  [[ -s "$image.zsync" ]] || { echo "appimagetool did not write $image.zsync"; return 1; }
   produced[appimage]="$image"
+  produced[appimage_zsync]="$image.zsync"
 }
 
 # --- snap --------------------------------------------------------------------

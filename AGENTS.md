@@ -56,6 +56,7 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` for live Toastty dev/debug app ins
 - Ghostty release provenance: install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
 - Build release DMG and draft notes: follow `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env`, `ghostty-metadata.env`, `sparkle-metadata.env`, and drafted `release-notes.md` into `artifacts/release/<version>-<build>/`.
 - Publish later: follow `.agents/skills/toastty-publish/SKILL.md`. It verifies existing drafted notes and release metadata, then runs `scripts/release/publish-github-release.sh --create-tag`.
+- Linux `.deb` and AppImage: built on a Linux host from the release commit, tested with `scripts/linux/test-package.sh`, and attached to the same release with `scripts/release/publish-linux-release.sh` (`.agents/skills/toastty-release/references/linux.md`).
 
 ## Debugging
 
