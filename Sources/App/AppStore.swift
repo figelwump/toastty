@@ -2106,6 +2106,12 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
                 .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
         ) ?? []
+        let taskStages = (sessionRuntimeStore?.taskCoordinator?.board?.items() ?? [])
+            .reduce(into: [UUID: TaskStage]()) { stages, item in
+                if let workspaceID = item.taskSpaceWorkspaceID {
+                    stages[workspaceID] = item.stage
+                }
+            }
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry,
@@ -2123,7 +2129,12 @@ final class AppStore: ObservableObject {
             guard sessionRuntimeStore?.skipsUnreadForNextActive(
                 panelID: target.panelID, workspaceID: target.workspaceID
             ) != true else { return false }
-            return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
+            // A merge marks its workspace done to record acceptance while
+            // checks still run. The task's stage says whether work finished.
+            let skipsQuietUnread = taskStages[target.workspaceID].map {
+                $0 == .toShip || $0 == .done || $0 == .archived
+            } ?? (workspace.doneAt != nil)
+            return !skipsQuietUnread || livePanelIDs.contains(target.panelID)
         }) {
             if updatingCycleState {
                 nextActiveCycleState = nil

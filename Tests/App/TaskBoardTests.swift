@@ -109,6 +109,8 @@ struct TaskBoardTests {
         let fixture = try TaskCoordinatorTests.Fixture()
         let gitHub = FakeGitHub()
         let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
         let untracked = try makeUntrackedTaskSpace(fixture, title: "qa-mobile-navigation")
         let task = try await startTask(fixture, text: "The unread dot stays on")
 
@@ -138,6 +140,10 @@ struct TaskBoardTests {
         // Its done mark finishes it; the mark clears when work starts again.
         _ = fixture.store.send(.setWorkspaceDone(workspaceID: untracked, doneAt: Date()))
         #expect(board.items().first { $0.id == .taskSpace(untracked) }?.stage == .done)
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: untracked, panelID: try #require(fixture.store.state.workspacesByID[untracked]?.focusedPanelID)))
+        #expect(fixture.store.nextUnreadOrActivePanelTargetFromCommand(
+            preferredWindowID: fixture.store.state.windows.first?.id, sessionRuntimeStore: fixture.sessionRuntimeStore
+        )?.workspaceID != untracked)
 
         let windowID = try #require(fixture.store.state.windows.first?.id)
         #expect(Set(board.items(windowID: windowID).map(\.id)) == Set(board.items().map(\.id)))
@@ -226,6 +232,88 @@ struct TaskBoardTests {
             preferredWindowID: windowID, sessionRuntimeStore: runtime
         ) == hasWorkingAgent)
         #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
+    }
+
+    @Test(arguments: [TaskStage.done, .archived, .toShip])
+    func jumpSkipsQuietUnreadInCompletedTasks(stage: TaskStage) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        if stage == .toShip {
+            fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        }
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let task = try await startTask(fixture, text: "Finish the work")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let sessionID = try #require(task.currentSessionID)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Finished"), at: Date()
+        )
+        try fixture.coordinator.records.save(id: task.id) {
+            if stage == .archived { $0.archivedAt = Date() } else { Self.merge(&$0) }
+        }
+        #expect(board.items().first { $0.taskID == task.id }?.stage == stage)
+        // The task's completion is authoritative even before its workspace
+        // has a done mark or cleanup has closed it.
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.doneAt == nil)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.unreadPanelIDs.contains(panelID) == true)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        #expect(fixture.store.selectedWorkspace?.id == fixture.workspaceID)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.unreadPanelIDs.contains(panelID) == true)
+
+        // A stopped cleanup needs attention, even after work finished.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.cleanup = TaskCleanup(kind: stage == .archived ? .archive : .merge, problem: "Cleanup stopped")
+        }
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .needsYou(.cleanupStopped(reason: "Cleanup stopped")))
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.selectedWorkspace?.id == workspaceID)
+    }
+
+    @Test(arguments: [false, true])
+    func jumpUsesSavedMergeAcceptanceWithoutARestoredMergeRequest(skillStopped: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let task = try await startTask(fixture, text: "Merge the work")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let readyAt = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: .ready, summary: "Ready"), at: readyAt
+        )
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.pullRequestURL = pullRequestURL
+            $0.mergeRequestedAt = readyAt.addingTimeInterval(skillStopped ? -1 : 1)
+        }
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        let restored = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(restored)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        restored.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = restored
+        #expect(fixture.sessionRuntimeStore.workspaceMergeRequests.isEmpty)
+        #expect(board.items().first { $0.taskID == task.id }?.stage == (skillStopped ? .needsYou(.review) : .running))
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.selectedWorkspace?.focusedPanelID == panelID)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.doneAt != nil)
     }
 
     /// Complete and Archive both move focus on. An unread panel in another
@@ -862,6 +950,7 @@ struct TaskBoardTests {
         fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
         let board = makeBoard(fixture, gitHub: FakeGitHub())
         fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
         let parent = try await startTask(fixture, text: "Act on the signup feedback")
         let session = try #require(parent.operation.agentLaunch?.sessionID)
         let taskSpace = try #require(parent.taskSpaceWorkspaceID)
@@ -932,6 +1021,11 @@ struct TaskBoardTests {
         #expect(done.finishedThroughChildren)
         #expect(TaskBoardPresentation.stageDescription(done).why == "child tasks finished")
         #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip, .done])
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel))
+        #expect(fixture.store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: fixture.store.state.windows.first?.id, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
 
         // A new child opens the parent's work again, until it finishes too.
         let followUp = try insertTask(fixture, "signup-follow-up", parent: parent.id)

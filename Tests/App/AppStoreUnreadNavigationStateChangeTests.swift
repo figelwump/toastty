@@ -110,9 +110,9 @@ final class AppStoreUnreadNavigationStateChangeTests: AppStoreCommandTestCase {
             sessionRuntimeStore: sessionStore
         ))
         XCTAssertFalse(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
-            state: store.state,
-            commandSelection: store.commandSelection(preferredWindowID: windowID),
-            activePanelIDs: []
+            store: store,
+            preferredWindowID: windowID,
+            sessionRuntimeStore: sessionStore
         ))
         XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: other.id, panelID: otherPanelID)))
 
@@ -131,10 +131,9 @@ final class AppStoreUnreadNavigationStateChangeTests: AppStoreCommandTestCase {
         )
         XCTAssertNotNil(store.state.workspacesByID[done.id]?.doneAt)
         XCTAssertTrue(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
-            state: store.state,
-            commandSelection: store.commandSelection(preferredWindowID: windowID),
-            activePanelIDs: [donePanelID],
-            unreadPriorityPanelIDs: [donePanelID]
+            store: store,
+            preferredWindowID: windowID,
+            sessionRuntimeStore: sessionStore
         ))
         XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
             preferredWindowID: windowID,
