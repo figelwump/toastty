@@ -46,9 +46,9 @@ env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$WORK/home" CFFIXED_USER_HOME="$W
   XDG_RUNTIME_DIR="$WORK" LANG=C.UTF-8 SHELL=/bin/bash TERM=xterm-256color \
   GDK_BACKEND=broadway BROADWAY_DISPLAY=":$DISPLAYNUM" GTK_A11Y=none NO_AT_BRIDGE=1 \
   GDK_DEBUG=no-portals GSETTINGS_BACKEND=memory \
-  TOASTTY_LINUX_NON_UNIQUE=1 TOASTTY_DEV_WORKTREE_ROOT="$PWD" TOASTTY_SOCKET_PATH="$SOCK" \
-  TOASTTY_AUTOMATION=1 TOASTTY_RUN_ID=dev TOASTTY_ARTIFACTS_DIR="$WORK/artifacts" TOASTTY_DISABLE_ANIMATIONS=1 \
-  linux/.build/debug/toastty-linux >"$WORK/app.log" 2>&1 &
+  TOASTTY_DEV_WORKTREE_ROOT="$PWD" TOASTTY_SOCKET_PATH="$SOCK" \
+  linux/.build/debug/toastty-linux --automation --run-id dev --artifacts-dir "$WORK/artifacts" \
+    --disable-animations >"$WORK/app.log" 2>&1 &
 APP_PID=$!
 # Ready when "$WORK/artifacts/automation-ready-dev.json" exists.
 ```
@@ -58,13 +58,24 @@ APP_PID=$!
 - If the app cannot reach the Broadway socket, WebKit crashes during startup
   (a segfault under `WebKitEnvironment.init`). Check that broadwayd and the
   app share `XDG_RUNTIME_DIR`.
-- The `TOASTTY_AUTOMATION`/`TOASTTY_RUN_ID`/`TOASTTY_ARTIFACTS_DIR`/
-  `TOASTTY_FIXTURE`/`TOASTTY_DISABLE_ANIMATIONS` variables enable the shared
-  automation mode used by smoke tests (`automation.dump_state`,
-  `automation.capture_screenshot`, the readiness file). Pass them as
-  environment variables. The macOS command-line flags (`--automation`,
-  `--run-id`, …) do not work on Linux: GApplication rejects unknown options
-  and the app exits. Drop them for a plain isolated run.
+- The macOS automation flags (`--automation`, `--run-id`, `--fixture`,
+  `--artifacts-dir`, `--disable-animations`, `--socket-path`,
+  `--skip-quit-confirmation`) and their `TOASTTY_*` variables work the same
+  on Linux. They enable the automation mode the smoke scripts use
+  (`automation.dump_state`, `automation.capture_screenshot`, the readiness
+  file). Drop them for a plain isolated run.
+- Runtime-isolated and automation runs are separate GApplication instances
+  automatically. `TOASTTY_LINUX_NON_UNIQUE=1` is only needed for a run with
+  neither.
+- Broadway runs always have animations off: with no viewer attached the
+  frame clock never ticks, and pending libadwaita animations later crash the
+  tab bar.
+- The smoke scripts run here unchanged (`scripts/automation/smoke-ui.sh`,
+  `workspace-tabs-smoke.sh`, `workspace-scope-smoke.sh`,
+  `smoke-cli-live-control.sh`, `shortcut-hints-smoke.sh`): on Linux they build
+  with `scripts/linux/build.sh` and start their own Broadway display
+  (`scripts/automation/smoke-platform.sh`). `shortcut-trace.sh` is
+  macOS-only.
 - `scripts/linux/e2e-app-logic.sh` is the reference for a complete,
   self-cleaning Broadway session with a fake managed agent.
 - To watch the run, open the Broadway viewer URL in a browser.
@@ -91,13 +102,14 @@ Clean up only what you started: `kill $APP_PID $BROADWAY_PID`, then remove
 ## Real window (OpenGL checks only)
 
 ```bash
-TOASTTY_LINUX_NON_UNIQUE=1 TOASTTY_DEV_WORKTREE_ROOT="$PWD" \
+TOASTTY_DEV_WORKTREE_ROOT="$PWD" \
   linux/.build/debug/toastty-linux >artifacts/dev-runs/manual-gl.log 2>&1 &
 ```
 
-- `TOASTTY_LINUX_NON_UNIQUE=1` is required. The app is a unique GApplication
-  (`com.GiantThings.toastty`), so without it the launch is handed over D-Bus to
-  the user's installed Toastty and no dev instance starts.
+- Runtime isolation (`TOASTTY_DEV_WORKTREE_ROOT` or `TOASTTY_RUNTIME_HOME`)
+  makes this a separate GApplication instance. Without isolation the app is
+  unique (`com.GiantThings.toastty`), so the launch would be handed over
+  D-Bus to the user's installed Toastty and no dev instance would start.
 - Runtime isolation keeps its config, logs and socket apart from the live app.
   The window still appears on the user's desktop and takes focus, so say so
   before opening it and close it when done.

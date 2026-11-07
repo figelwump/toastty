@@ -10,7 +10,9 @@ NOW_EPOCH="1735689600"
 TEN_DAYS_AGO="$(jq -nr --argjson epoch "$((NOW_EPOCH - 10 * 86400))" '$epoch | todateiso8601')"
 PASS_CUTOFF="$(jq -nr --argjson epoch "$((NOW_EPOCH - 168 * 3600))" '$epoch | todateiso8601')"
 PASS_INSIDE_CUTOFF="$(jq -nr --argjson epoch "$((NOW_EPOCH - 168 * 3600 + 1))" '$epoch | todateiso8601')"
-RECENT_ACTIVITY_TIMESTAMP="$(date -r "$((NOW_EPOCH - 86400))" '+%Y%m%d%H%M.%S')"
+# BSD date takes -r <epoch>; GNU date takes -d @<epoch>.
+RECENT_ACTIVITY_TIMESTAMP="$(date -r "$((NOW_EPOCH - 86400))" '+%Y%m%d%H%M.%S' 2>/dev/null \
+  || date -d "@$((NOW_EPOCH - 86400))" '+%Y%m%d%H%M.%S')"
 OLD_TIMESTAMP="202001010000"
 ABSENT_PID="999991"
 UNKNOWN_PID="999992"

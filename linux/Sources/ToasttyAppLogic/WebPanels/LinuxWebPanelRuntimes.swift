@@ -71,6 +71,13 @@ public protocol LinuxLocalDocumentPanelHost: AnyObject {
     func setSearchQuery(_ query: String?)
     func findNext() -> Bool
     func findPrevious() -> Bool
+    /// The bootstrap last sent to the page, JSON-encoded in the shared
+    /// contract's field names, for `automation.local_document_panel_state`.
+    var currentBootstrapJSON: Data? { get }
+}
+
+public extension LinuxLocalDocumentPanelHost {
+    var currentBootstrapJSON: Data? { nil }
 }
 
 public enum LinuxLocalDocumentCloseConfirmation: Sendable, Equatable {
@@ -420,7 +427,9 @@ final class LocalDocumentPanelRuntime: ObservableObject {
             hasPendingBootstrapScript: false,
             pendingRevealLine: pendingRevealLine,
             currentAssetPath: nil,
-            currentBootstrap: nil,
+            currentBootstrap: host?.currentBootstrapJSON.flatMap {
+                try? JSONDecoder().decode(LocalDocumentPanelBootstrap.self, from: $0)
+            },
             searchState: search,
             isSearchFieldFocused: searchFieldFocused
         )

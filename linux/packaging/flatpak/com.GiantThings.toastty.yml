@@ -1,0 +1,73 @@
+# Flatpak build of Toastty (draft: not yet built; needs flatpak-builder).
+#
+#   scripts/linux/package.sh --version X.Y.Z --format flatpak
+#
+# Builds from source inside the GNOME SDK: a host build links against a newer
+# glibc than the runtime has. See docs/plans/linux-release.md.
+#
+# Network during the build: SwiftPM and Zig fetch their package dependencies.
+# That is fine for our own bundles. Flathub forbids it, so a Flathub
+# submission must vendor them as sources (flatpak-builder-tools has
+# generators for SwiftPM; Ghostty's upstream Flathub manifest vendors its Zig
+# packages).
+id: com.GiantThings.toastty
+runtime: org.gnome.Platform
+# GNOME 51 is built on freedesktop SDK 26.08, the branch the swift6
+# extension is published for.
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.swift6
+command: toastty-linux
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Shells and agent CLIs run on the host: Ghostty starts them through
+  # flatpak-spawn --host (the HostCommand portal) when it runs in a Flatpak.
+  - --talk-name=org.freedesktop.Flatpak
+  # Agent hooks and settings (~/.claude, ~/.codex, ...), documents the user
+  # opens, and Toastty's own config.
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Notifications
+build-options:
+  append-path: /usr/lib/sdk/swift6/usr/bin
+  prepend-ld-library-path: /usr/lib/sdk/swift6/usr/lib
+  build-args:
+    - --share=network
+cleanup:
+  - /zig
+modules:
+  - name: zig
+    buildsystem: simple
+    sources:
+      - type: archive
+        url: https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+        # Fill in from https://ziglang.org/download/index.json before the first build.
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    build-commands:
+      - mkdir -p /app/zig && cp -a . /app/zig/
+
+  - name: toastty
+    buildsystem: simple
+    build-options:
+      append-path: /app/zig
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - linux/.build
+          - linux/.deps
+          - linux/.generated
+          - linux/.sysroot
+          - artifacts
+          - node_modules
+    build-commands:
+      # libghostty and the GTK widget (pinned fork plus patches) into
+      # linux/.deps/ghostty, then the app; install.sh bundles both under
+      # /app/lib/toastty.
+      - linux/ghostty/build-libghostty.sh
+      - scripts/linux/build.sh --release --product toastty-linux --product toastty --product toastty-agent-shim
+      - scripts/linux/install.sh --release --no-build --prefix /app

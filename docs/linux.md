@@ -30,6 +30,8 @@ Products land in `linux/.build/debug/` (or `release/`).
 ## Test
 
 ```bash
+scripts/automation/check.sh                  # full local gate (runs scripts/linux/check.sh)
+scripts/automation/smoke-ui.sh               # shared smoke scripts, on a private Broadway display
 scripts/linux/test.sh                        # all test targets
 scripts/linux/test.sh CoreStateTests         # swift test --filter
 scripts/linux/test.sh --shared-only          # shared-core tests only
@@ -926,7 +928,14 @@ code hops back to the main thread with `MainLoop.dispatch` (g_idle_add), not
   `share/{ghostty,terminfo}`),
   symlinks `PREFIX/bin/{toastty-linux,toastty}`, installs the desktop file
   (absolute Exec), metainfo and hicolor icons, and refreshes the desktop
-  database / icon cache. No root needed.
+  database / icon cache. No root needed. `--destdir DIR` stages the same
+  layout under `DIR/PREFIX` for packaging, with the desktop entry still
+  pointing at `PREFIX`.
+- `scripts/linux/package.sh --version X.Y.Z [--build-number N] [--format
+  deb|appimage|snap|flatpak]`: release packages in
+  `artifacts/release/linux/<version>-<build>/`, all wrapping the
+  `--destdir` stage (`docs/plans/linux-release.md`). It writes
+  `lib/toastty/share/toastty/version`, which the About dialog shows.
 
 - App icon: `scripts/linux/render-app-icon.py` renders `linux/data/icons/hicolor`
   (scalable SVG + 16–512 PNGs) from macOS's

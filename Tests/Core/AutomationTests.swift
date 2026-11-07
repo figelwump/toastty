@@ -37,6 +37,20 @@ struct AutomationTests {
     }
 
     @Test
+    func removingAutomationArgumentsKeepsTheExecutableAndOtherArguments() {
+        let arguments = [
+            "toastty", "--automation", "--skip-quit-confirmation",
+            "--run-id", "smoke", "--fixture", "split-workspace",
+            "--artifacts-dir", "/tmp/a", "--disable-animations",
+            "--socket-path", "/tmp/s.sock", "/tmp/file.md",
+        ]
+        #expect(AutomationConfig.removingAutomationArguments(from: arguments) == ["toastty", "/tmp/file.md"])
+        // A missing value is not consumed, as in parse.
+        #expect(AutomationConfig.removingAutomationArguments(from: ["toastty", "--run-id", "--automation", "x"]) == ["toastty", "x"])
+        #expect(AutomationConfig.removingAutomationArguments(from: ["--automation"]) == ["--automation"])
+    }
+
+    @Test
     func parseAutomationConfigReturnsNilWhenDisabled() {
         #expect(
             AutomationConfig.parse(arguments: ["toastty"], environment: [:]) == nil

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
+source "$ROOT_DIR/scripts/automation/smoke-platform.sh"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-cli-live-control-$(date +%Y%m%d-%H%M%S)}"
 RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"
@@ -16,8 +17,8 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
 fi
 
-APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
-CLI_BINARY="$DERIVED_PATH/Build/Products/Debug/toastty"
+APP_BINARY="$(toastty_smoke_app_binary "$DERIVED_PATH")"
+CLI_BINARY="$(toastty_smoke_cli_binary "$DERIVED_PATH")"
 INSTANCE_JSON="$TOASTTY_RUNTIME_HOME/instance.json"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 LOCAL_DOCUMENT_PATH="$ARTIFACTS_DIR/live-control-smoke.md"
@@ -81,6 +82,7 @@ cleanup() {
     kill "$APP_PID" >/dev/null 2>&1 || true
     wait "$APP_PID" >/dev/null 2>&1 || true
   fi
+  toastty_smoke_stop_display
   return "$exit_code"
 }
 trap cleanup EXIT
@@ -180,17 +182,12 @@ cat > "$LOCAL_DOCUMENT_PATH" <<'EOF'
 This file was opened by `scripts/automation/smoke-cli-live-control.sh`.
 EOF
 
-if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+if ! toastty_smoke_bootstrap; then
   exit 1
 fi
 
-xcodebuild \
-  -workspace toastty.xcworkspace \
-  -scheme ToasttyApp \
-  -configuration Debug \
-  -destination "platform=macOS,arch=${ARCH}" \
-  -derivedDataPath "$DERIVED_PATH" \
-  build >/dev/null
+toastty_smoke_build "$DERIVED_PATH" "$ARCH" >/dev/null
+toastty_smoke_start_display "$ARTIFACTS_DIR/broadwayd-${RUN_ID}.log"
 
 if [[ ! -x "$APP_BINARY" ]]; then
   echo "error: expected app binary at $APP_BINARY" >&2

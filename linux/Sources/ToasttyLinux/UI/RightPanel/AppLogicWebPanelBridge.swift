@@ -171,6 +171,10 @@ extension LocalDocumentPanelController: LinuxLocalDocumentPanelHost {
             ? .saveInProgress(displayName: session.displayName)
             : .dirtyDraft(displayName: session.displayName)
     }
+
+    public var currentBootstrapJSON: Data? {
+        currentBootstrap.flatMap { try? JSONEncoder().encode($0) }
+    }
 }
 
 extension ScratchpadPanelController: LinuxScratchpadPanelHost {

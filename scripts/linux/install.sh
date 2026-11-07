@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Install the Toastty Linux build into the user's home (no root needed).
 #
-# Usage: scripts/linux/install.sh [--prefix DIR] [--debug] [--no-build] [--build-dir DIR] [--uninstall] [--dry-run]
+# Usage: scripts/linux/install.sh [--prefix DIR] [--destdir DIR] [--debug] [--no-build] [--build-dir DIR] [--uninstall] [--dry-run]
 #
 #   --prefix DIR     install root (default: ~/.local)
+#   --destdir DIR    stage under DIR/PREFIX for packaging; the desktop entry
+#                    still points at PREFIX (scripts/linux/package.sh)
 #   --debug          install the debug build (default: release)
 #   --no-build       do not build; install what is already in the build dir
 #   --build-dir DIR  SwiftPM products directory (default: linux/.build/<config>)
@@ -30,6 +32,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 prefix="${HOME}/.local"
+destdir=""
 configuration=release
 build=1
 build_dir=""
@@ -38,19 +41,27 @@ dry_run=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) prefix="$2"; shift ;;
+    --destdir) destdir="$2"; shift ;;
     --debug) configuration=debug ;;
     --release) configuration=release ;;
     --no-build) build=0 ;;
     --build-dir) build_dir="$2"; shift ;;
     --uninstall) uninstall=1 ;;
     --dry-run) dry_run=1 ;;
-    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "install.sh: unknown argument: $1" >&2; exit 64 ;;
   esac
   shift
 done
 
 app_id=com.GiantThings.toastty
+# Where the files end up at run time, and where this run writes them.
+installed_libdir="$prefix/lib/toastty"
+if [[ -n "$destdir" ]]; then
+  destdir="$(mkdir -p "$destdir" && cd "$destdir" && pwd)"
+  [[ "$prefix" == /* ]] || { echo "install.sh: --destdir needs an absolute --prefix" >&2; exit 64; }
+  prefix="$destdir$prefix"
+fi
 libdir="$prefix/lib/toastty"
 run() {
   if [[ "$dry_run" == "1" ]]; then echo "+ $*"; else "$@"; fi
@@ -162,9 +173,9 @@ run ln -sfn "../lib/toastty/bin/toastty" "$prefix/bin/toastty"
 
 # Desktop integration.
 if [[ "$dry_run" == "1" ]]; then
-  echo "+ install $app_id.desktop (Exec=$libdir/bin/toastty-linux)"
+  echo "+ install $app_id.desktop (Exec=$installed_libdir/bin/toastty-linux)"
 else
-  sed -e "s|^Exec=.*|Exec=$libdir/bin/toastty-linux|" -e "s|^TryExec=.*|TryExec=$libdir/bin/toastty-linux|" \
+  sed -e "s|^Exec=.*|Exec=$installed_libdir/bin/toastty-linux|" -e "s|^TryExec=.*|TryExec=$installed_libdir/bin/toastty-linux|" \
     "$data/$app_id.desktop" > "$prefix/share/applications/$app_id.desktop"
   chmod 0644 "$prefix/share/applications/$app_id.desktop"
 fi
@@ -175,6 +186,11 @@ run cp -R "$data/icons/hicolor/." "$prefix/share/icons/hicolor/"
 run mkdir -p "$libdir/share/icons/hicolor"
 run cp -R "$data/icons/hicolor/." "$libdir/share/icons/hicolor/"
 
+if [[ -n "$destdir" ]]; then
+  # Packages refresh the desktop and icon caches when they install.
+  echo "Staged Toastty from $build_dir in $prefix"
+  exit 0
+fi
 if command -v update-desktop-database >/dev/null; then run update-desktop-database -q "$prefix/share/applications" || true; fi
 if [[ -f "$prefix/share/icons/hicolor/index.theme" ]]; then
   if command -v gtk4-update-icon-cache >/dev/null; then run gtk4-update-icon-cache -q -t -f "$prefix/share/icons/hicolor" || true

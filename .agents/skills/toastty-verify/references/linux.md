@@ -17,8 +17,9 @@ user's installed Toastty.
 |---|---|
 | Generate + build (`check.sh`, `xcodebuild build`) | `scripts/linux/build.sh` (mirrors the shared sources, then runs `swift build`; `--product`, `--target`, `--release`) |
 | `scripts/remote/test.sh` / `xcodebuild test` | `scripts/linux/test.sh [Filter]`: every target in an isolated home, including the Broadway GUI suites. Use `--app-logic` while the GTK frontend is mid-change and `--shared-only` for the shared core only. |
-| `smoke-ui`, `workspace-tabs`, `workspace-scope`, `smoke-cli-live-control` | `scripts/linux/e2e-app-logic.sh` (socket, CLI, Ghostty, managed agent, persistence across restart, screenshot, scripted UI, Remote Access pairing). For a specific UI flow, use a Broadway test in `linux/Tests/` or a `TOASTTY_LINUX_SMOKE_SCRIPT` run (see `toastty-dev-run` `references/linux.md`). |
-| `shortcut-hints`, `shortcut-trace` | `scripts/linux/test.sh LinuxCommandTable` and the Broadway suites (accelerators, menus, palette); `TOASTTY_LINUX_SMOKE_SCRIPT` `perform`, `palette` and `alt-hints` steps for a one-off check |
+| Full local gate (`scripts/automation/check.sh`) | The same command. On Linux it runs `scripts/linux/check.sh`: shared self-tests, web panel tests, the Ghostty widget test, debug and release builds, two smoke scripts, the release install end-to-end, then `test.sh`. |
+| `smoke-ui`, `workspace-tabs`, `workspace-scope`, `smoke-cli-live-control`, `shortcut-hints` | The same scripts under `scripts/automation/`. On Linux they build with `scripts/linux/build.sh` and run on their own Broadway display. Also `scripts/linux/e2e-app-logic.sh` (managed agent, persistence across restart, scripted UI, Remote Access pairing). For a specific UI flow, use a Broadway test in `linux/Tests/` or a `TOASTTY_LINUX_SMOKE_SCRIPT` run (see `toastty-dev-run` `references/linux.md`). |
+| `shortcut-trace` (macOS-only) | `scripts/linux/test.sh LinuxCommandTable` and the Broadway suites (accelerators, menus, palette); `TOASTTY_LINUX_SMOKE_SCRIPT` `perform`, `palette` and `alt-hints` steps for a one-off check |
 | Release-build or install checks | `scripts/linux/e2e-install.sh [--release]` installs into a throwaway prefix and reruns the end-to-end checks against it |
 | Computer Use / Peekaboo | A Broadway run with screenshots you read yourself. Use a real window only for GL. |
 
@@ -36,7 +37,7 @@ Area-specific checks:
 - **OpenGL-sensitive changes** need a real window in addition to the offscreen
   tests. These include the Ghostty GL/DMA-BUF path, widget presentation, WebKit
   renderer selection, frame timing, scaling and GPU-specific behaviour. Launch
-  a runtime-isolated dev instance with `TOASTTY_LINUX_NON_UNIQUE=1` (see
+  a runtime-isolated dev instance (see
   `toastty-dev-run` `references/linux.md`), tell the user a window will
   open, and say in the handoff what was checked on the real display.
 
