@@ -7,7 +7,7 @@ description: Use this skill when building, launching, or validating a live Toast
 
 Use this workflow when the task requires a real running Toastty app instance rather than unit tests alone.
 
-**Linux:** "Core rules" items 1, 3, 9, 10 and 11, "Validation planning" and "Runtime-home conventions" apply as written. For building, launching and inspecting, read `references/linux.md` instead of the macOS sections below. Everything runs locally, offscreen on a private Broadway display, plus a runtime-isolated real window for OpenGL checks.
+**Linux:** read `references/linux.md` first; it replaces the build, launch and inspection sections below. "Core rules" items 1, 3, 9, 10 and 11, "Validation planning" (for runs that validate a change) and "Runtime-home conventions" still apply. Everything runs locally, offscreen on a private Broadway display, plus a runtime-isolated real window for OpenGL checks.
 
 Pair this skill with the global `peekaboo` skill for local UI inspection and interaction. When foreground validation would steal focus from the current desktop, prefer the repo-local remote GUI wrapper instead of running Peekaboo locally.
 

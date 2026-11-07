@@ -205,40 +205,76 @@ test_instance() {
     check "$agent draws its interface in the terminal" "transcripts/$agent.txt" test "$ready" = 0
     shot "$agent-launched" >/dev/null
     if [[ "$prompt" == "1" && "$ready" == "0" ]]; then
-      local word="PONG$RANDOM" answered=1 working=1
+      # The session status the sidebar shows, from the automation state dump:
+      # "<kind>|<detail>" for this agent's session.
+      session_status() {
+        local dump
+        dump="$(sock_req automation.dump_state '{"includeRuntime": true}' | json_get result.path)"
+        [[ -s "$dump" ]] || return 0
+        python3 -c 'import json,sys
+s=json.load(open(sys.argv[1]))["sessionRegistry"]["sessionsByID"].get(sys.argv[2]) or {}
+st=s.get("status") or {}
+print("%s|%s" % (st.get("kind",""), st.get("detail","")))' "$dump" "$session" 2>/dev/null
+        rm -f "$dump"
+      }
+      local word="PONG$RANDOM" answered=1 saw_working=1 status="" history=""
       cli action run terminal.send-text --panel "$apanel" "text=Reply with only the word $word and nothing else. Do not run any tools." submit=false >/dev/null
       sleep 0.5
       cli action run terminal.send-text --panel "$apanel" "text=" submit=true >/dev/null
       for i in $(seq 1 150); do
-        cli query run terminal.state --panel "$apanel" > "$dir/transcripts/$agent-state.json"
-        grep -q '"working"' "$dir/transcripts/$agent-state.json" && working=0
+        status="$(session_status)"
+        [[ "$history" == *"${status%%|*}"* ]] || history+="${status%%|*} "
+        [[ "$status" == working* ]] && saw_working=0
         cli query run terminal.visible-text --panel "$apanel" > "$dir/transcripts/$agent.json"
         [[ "$(grep -o "$word" "$dir/transcripts/$agent.json" | wc -l)" -ge 2 ]] && { answered=0; break; }
         sleep 0.4
       done
-      sleep 3
-      sock_req automation.dump_state '{"includeRuntime": true}' > "$dir/transcripts/$agent-dump.json"
-      local dump; dump="$(json_get result.path < "$dir/transcripts/$agent-dump.json")"
-      local status=""
-      [[ -s "$dump" ]] && status="$(python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))["sessionRegistry"]
-s=json.dumps(d)
-import re
-m=[k for k in ("working","idle","ready","needs_approval","error") if k in s]
-print(",".join(m))' "$dump" 2>/dev/null)"
       check "$agent answers a prompt" "asked for $word; transcripts/$agent.txt" test "$answered" = 0
-      check "$agent hooks report its status to Toastty" "session registry: ${status:-none}" test -n "$status"
+      # The agent's hooks report the turn: working while it answers, then
+      # idle or ready with the reply as the detail.
+      local reported=1
+      for i in $(seq 1 60); do
+        status="$(session_status)"
+        [[ "$history" == *"${status%%|*}"* ]] || history+="${status%%|*} "
+        [[ "$status" == working* ]] && saw_working=0
+        if [[ "$status" =~ ^(idle|ready)\| && "$status" == *"$word"* ]]; then reported=0; break; fi
+        sleep 0.5
+      done
+      echo "$status" > "$dir/transcripts/$agent-status.txt"
+      local hook_note=""
+      if [[ "$reported" != 0 && "$agent" == codex ]]; then
+        # Codex can run hooks in its app-server daemon, which keeps the
+        # TOASTTY_* environment of the managed session that started it.
+        local daemon_pid daemon_socket
+        for daemon_pid in $(pgrep -u "$(id -u)" -f 'codex app-server'); do
+          daemon_socket="$(tr '\0' '\n' < "/proc/$daemon_pid/environ" 2>/dev/null | sed -n 's/^TOASTTY_SOCKET_PATH=//p')"
+          [[ -n "$daemon_socket" && "$daemon_socket" != "$sock" ]] \
+            && hook_note="; Codex daemon pid $daemon_pid reports to $daemon_socket"
+        done
+      fi
+      check "$agent session shows working while it answers" "statuses seen: ${history% }$hook_note" test "$saw_working" = 0
+      check "$agent hooks report the reply to Toastty" "final status: ${status:-none}$hook_note" test "$reported" = 0
       shot "$agent-answered" >/dev/null
     fi
     json_get result.text < "$dir/transcripts/$agent.json" > "$dir/transcripts/$agent.txt"
   done
 
-  # Quit cleanly.
+  # Quit cleanly. An AppImage runs the app from a FUSE mount whose helper
+  # process must unmount and exit after the app quits.
+  local mount_dir=""
+  mount_dir="$(readlink "/proc/$app_pid/exe" 2>/dev/null)"
+  [[ "$mount_dir" == /tmp/.mount_* ]] && mount_dir="${mount_dir%%/usr/lib/toastty/*}" || mount_dir=""
   kill -TERM "$app_pid" 2>/dev/null
   local quit=1
   for i in $(seq 1 50); do kill -0 "$app_pid" 2>/dev/null || { quit=0; break; }; sleep 0.2; done
   [[ "$quit" == 0 ]] || kill -9 "$app_pid" 2>/dev/null
   check "app quits on SIGTERM" "within 10 s" test "$quit" = 0
+  if [[ -n "$mount_dir" ]]; then
+    local unmounted=1
+    for i in $(seq 1 50); do mountpoint -q "$mount_dir" || { unmounted=0; break; }; sleep 0.2; done
+    check "AppImage unmounts after the app quits" "$mount_dir" test "$unmounted" = 0 \
+      || { fusermount3 -u -z "$mount_dir" 2>/dev/null || fusermount -u -z "$mount_dir" 2>/dev/null; }
+  fi
   check "log has no crash or GL/WebKit renderer errors" "app.log" \
     bash -c "! grep -iE 'fatal error|segmentation|backtrace|failed to create.*(gl|egl)|GLib-CRITICAL|WebKit.*(crash|error)' '$app_log'"
   toastty_smoke_stop_display

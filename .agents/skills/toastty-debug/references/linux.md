@@ -16,8 +16,16 @@ file only replaces paths, process names and repro routing.
 - Sockets: the live app uses `$XDG_RUNTIME_DIR/toastty/events-v1-<pid>.sock`,
   and an isolated run uses `$XDG_RUNTIME_DIR/toastty-runtime-<hash>/events-v1.sock`.
   Prefer the `socketPath` in `instance.json`.
-- Processes: `pgrep -af toastty-linux` (the app) and `pgrep -af 'toastty '` (CLI
-  hooks), then `lsof -p <pid> | grep toastty.log` once narrowed.
+- Processes: `ps -o pid,args -C toastty-linux` lists the app processes (the
+  user's installed one included: identify yours by the PID in `instance.json`
+  or the `$!` of your launch, never kill by name). Avoid `pgrep -f toastty`
+  from an agent shell: the pattern matches the shell's own command line. Then
+  `ls -l /proc/<pid>/fd | grep toastty.log` shows the log it writes.
+- A worktree-derived runtime home is reused across runs: its log appends and
+  `instance.json` names only the latest run. Note the log's line count (or the
+  time) before you launch and read only what follows, or launch with a fresh
+  `TOASTTY_RUNTIME_HOME` (`toastty-dev-run` `references/linux.md`). stderr only
+  gets log lines with `TOASTTY_LOG_STDERR=1`.
 - A shell inside Toastty has `TOASTTY_*` variables pointing at the live app.
   Do not let them leak into a repro: use `env -i` or explicit
   `--socket-path`. Read-only queries against the live app (`query run …`)

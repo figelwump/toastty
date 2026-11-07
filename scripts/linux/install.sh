@@ -198,6 +198,7 @@ if [[ -f "$prefix/share/icons/hicolor/index.theme" ]]; then
   fi
 fi
 
+if [[ "$dry_run" == "1" ]]; then echo "Would install Toastty from $build_dir to $libdir"; exit 0; fi
 echo "Installed Toastty from $build_dir to $libdir"
 case ":$PATH:" in
   *":$prefix/bin:"*) ;;

@@ -14,12 +14,14 @@ or replace the user's installed Toastty, and never install a package with
 
 Check out the release commit on a clean tree (the commit the macOS release
 recorded as `RELEASE_SOURCE_COMMIT`, which the macOS publish tags as
-`v<version>`). Then:
+`v<version>`). For a Linux-only rehearsal with no macOS release, use `HEAD`
+on a clean tree. Then:
 
 1. `scripts/automation/check.sh` (runs `scripts/linux/check.sh` on Linux):
    self-tests, web panel tests, the Ghostty widget test, builds, smoke
    scripts, the release install end-to-end and an agent-free package test on
-   private Broadway displays, then `scripts/linux/test.sh`.
+   private Broadway displays, then `scripts/linux/test.sh`. If it already
+   passed on this exact commit, say so instead of rerunning it.
 
 ## 2. Build the packages
 
@@ -47,7 +49,8 @@ required before publishing.
 
 1. Offscreen, both packages, with agents:
    ```bash
-   scripts/linux/test-package.sh --release-dir artifacts/release/linux/<version>-<build>
+   scripts/linux/test-package.sh --release-dir artifacts/release/linux/<version>-<build> \
+     --out artifacts/package-tests/release-<version>-<build>
    ```
    For each package it launches the app (the AppImage from the image file
    itself, as users run it), takes a screenshot, runs a command in a terminal,
@@ -57,12 +60,19 @@ required before publishing.
    and run from a `dpkg-deb -x` root. Each instance has its own runtime home and
    socket, so it never touches the user's Toastty. Agent profiles and logins come
    from the user's home. An agent update offer is skipped with Esc and never
-   accepted.
+   accepted. The report's quit and unmount checks catch leftover processes;
+   if a run is interrupted, stop only the PIDs it started.
+   If the Codex hook checks fail and their detail names a Codex daemon
+   socket, Codex is running hooks in an app-server daemon that kept the
+   environment of the Toastty session that started it. Tell the user; do not
+   stop their Codex daemon yourself.
 2. Real install of the `.deb`: ask the user to run
    `! sudo apt install ./artifacts/release/linux/<version>-<build>/toastty_<version>-<build>_amd64.deb`,
    then `scripts/linux/test-package.sh --deb <that file> --installed-deb`. This
    tests `/usr/lib/toastty` and the installed desktop entry. Skip it when the
-   user declines; the extracted-root run above covers the payload.
+   user declines; the extracted-root run above covers the payload. If the user
+   also has a `scripts/linux/install.sh` copy under `~/.local`, its desktop
+   entry (same ID) shadows the `.deb`'s in the app grid; mention it.
 3. Real window, for OpenGL (Broadway always uses the offscreen renderer). Tell
    the user a window will open, then:
    ```bash
@@ -73,8 +83,9 @@ required before publishing.
 
 Read every screenshot under `artifacts/package-tests/<run>/<package>/screenshots/`
 (launched, terminal, `<agent>-launched`, `<agent>-answered`), not only
-`report.md`. Present `report.md` and the screenshots to the user, for example
-in a Scratchpad.
+`report.md`. When you are the agent talking to the user in a Toastty session,
+show `report.md` and the screenshots in a Scratchpad (`toastty-scratchpad`);
+otherwise, or as a subagent, list their paths in the handoff.
 
 ## 4. Publish
 

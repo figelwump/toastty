@@ -105,8 +105,12 @@ toastty_smoke_start_display() {
   local display attempt
   for attempt in $(seq 1 20); do
     display=$((60 + RANDOM % 30))
-    # broadwayd :N listens on $XDG_RUNTIME_DIR/broadway<N+1>.socket.
-    [[ -e "$runtime_dir/broadway$((display + 1)).socket" ]] && continue
+    # broadwayd :N listens on $XDG_RUNTIME_DIR/broadway<N+1>.socket. A socket
+    # with no broadwayd behind it is left over from a killed run: reuse it.
+    if [[ -e "$runtime_dir/broadway$((display + 1)).socket" ]]; then
+      pgrep -u "$(id -u)" -f "^gtk4-broadwayd :$display( |\$)" >/dev/null 2>&1 && continue
+      rm -f "$runtime_dir/broadway$((display + 1)).socket"
+    fi
     gtk4-broadwayd ":$display" >"$log_file" 2>&1 &
     TOASTTY_SMOKE_BROADWAY_PID=$!
     local _
@@ -135,5 +139,10 @@ toastty_smoke_stop_display() {
     kill "$TOASTTY_SMOKE_BROADWAY_PID" >/dev/null 2>&1 || true
     wait "$TOASTTY_SMOKE_BROADWAY_PID" >/dev/null 2>&1 || true
     TOASTTY_SMOKE_BROADWAY_PID=""
+  fi
+  # broadwayd leaves its socket behind when killed.
+  if [[ -n "${TOASTTY_SMOKE_BROADWAY_DISPLAY:-}" ]]; then
+    rm -f "${XDG_RUNTIME_DIR:-/nonexistent}/broadway$((TOASTTY_SMOKE_BROADWAY_DISPLAY + 1)).socket"
+    TOASTTY_SMOKE_BROADWAY_DISPLAY=""
   fi
 }
