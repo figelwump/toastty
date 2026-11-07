@@ -68,6 +68,12 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - For remote Claude login failures over SSH, check authentication in the macOS GUI login session before concluding that Claude is logged out. The SSH security session can lack access to an existing subscription login; run the live CLI check in the GUI session when this occurs.
 - Before retrying remote GUI input or investigating `cgWindowNotFound`, check `CGSSessionScreenIsLocked` from `CGSessionCopyCurrentDictionary()` on the remote Mac. `IOConsoleLocked` can report false while the WindowServer session is locked. A running GUI session and a valid provider login do not prove that its windows are available to Computer Use.
 
+## Linux Port
+
+- The Ubuntu GTK app lives in `linux/` (SwiftPM, built from Linux hosts only); `docs/linux.md` covers build, test, runtime paths and the shared-file rules. Shared `Sources/` and `Tests/` are mirrored into the Linux build through `linux/shared-sources.json`: edit the originals, never `linux/.generated/`.
+- Linux-only code in a shared file goes in `#if os(Linux)` and is listed in `docs/linux.md` under "Shared files with Linux guards". Each platform can only build itself; say which platform a shared change was not validated on.
+- The verify, debug and dev-run skills cover Linux through their `references/linux.md`. Linux validation is local: offscreen on a private Broadway display, plus a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) only for OpenGL-sensitive checks. There is no remote GUI path. Never run `gnome-shell --headless`, and never drive the user's installed Toastty.
+
 ## Specialized References
 
 - Before changing Ghostty artifacts, config loading, host-side terminal styling, or fallback builds, read `docs/ghostty-integration.md`.

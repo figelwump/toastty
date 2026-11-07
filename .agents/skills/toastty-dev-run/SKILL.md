@@ -1,11 +1,13 @@
 ---
 name: toastty-dev-run
-description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, local smoke automation, and local or remote GUI validation.
+description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, local smoke automation, and local or remote GUI validation, on macOS or the Linux port (offscreen Broadway or a real window for OpenGL checks).
 ---
 
 # Toastty Dev Run
 
 Use this workflow when the task requires a real running Toastty app instance rather than unit tests alone.
+
+**Linux:** "Core rules" items 1, 3, 9, 10 and 11, "Validation planning" and "Runtime-home conventions" apply as written. For building, launching and inspecting, read `references/linux.md` instead of the macOS sections below. Everything runs locally, offscreen on a private Broadway display, plus a runtime-isolated real window for OpenGL checks.
 
 Pair this skill with the global `peekaboo` skill for local UI inspection and interaction. When foreground validation would steal focus from the current desktop, prefer the repo-local remote GUI wrapper instead of running Peekaboo locally.
 

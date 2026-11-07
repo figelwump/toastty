@@ -1,6 +1,6 @@
 ---
 name: toastty-verify
-description: Use this skill when selecting, running, or reporting Toastty verification after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. It chooses the right mix of remote smoke validation, remote xcodebuild tests, local helpers, live GUI checks, Computer Use, and the global qa subagent for deeper user-perspective QA.
+description: Use this skill when selecting, running, or reporting Toastty verification after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes, on macOS or the Linux port. It chooses the right mix of remote smoke validation, remote xcodebuild tests, local helpers, live GUI checks, Computer Use, Linux offscreen (Broadway) and real-window checks, and the global qa subagent for deeper user-perspective QA.
 ---
 
 # Toastty Verify
@@ -8,6 +8,10 @@ description: Use this skill when selecting, running, or reporting Toastty verifi
 ## Overview
 
 Use this as the Toastty verification decision layer. Keep detailed command semantics in `docs/agents/automation.md`; use this skill to choose the right validation path, run it with the project guardrails, and report what was actually verified.
+
+## Platform
+
+The workflow, scopes, decision tree and handoff apply to both apps. The commands below are for macOS. For Linux code (`linux/`, `scripts/linux/`, or the Linux behaviour of shared code), read `references/linux.md`. Linux validation is local: offscreen on a private Broadway display for everything, plus a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) for OpenGL-sensitive changes (Ghostty GL/DMA-BUF rendering, WebKit GPU rendering, frame timing, scaling), because Broadway always uses the offscreen renderer. Tell the user before a real window opens, and say in the handoff which checks ran where. Never run `gnome-shell --headless` or drive the user's installed Toastty. The remote, `sv`, Peekaboo and Computer Use steps are macOS-only.
 
 ## Core Workflow
 
@@ -34,6 +38,14 @@ For docs-only or agent-instruction-only changes, do not run the full app gate by
 - Agent workflow changes: get the required second-opinion review if the repo instructions or active runtime require it.
 
 If the docs change alters build, release, automation, or validation behavior, also run a representative command or dry validation path.
+
+### Shared Code Across macOS And Linux
+
+`Sources/` and `Tests/` compile into both apps; the Linux build mirrors them through `linux/shared-sources.json`. A change there needs validation on both platforms:
+
+- On the platform you are on, run its checks. Each platform can only build itself, so name the other platform as untested in the handoff and leave its run to that platform (macOS: the remote wrappers or PR validation; Linux: `references/linux.md` on a Linux host).
+- Linux-only code in a shared file goes in an `#if os(Linux)` block and is listed in `docs/linux.md` under "Shared files with Linux guards". A macOS-only API in shared code breaks the Linux build.
+- New `Sources/App` files compile on Linux automatically unless they are on that target's exclude list. New `Tests/App` files run on Linux only after they are added to its include list.
 
 ### Build, Project, Or Dependency Changes
 
