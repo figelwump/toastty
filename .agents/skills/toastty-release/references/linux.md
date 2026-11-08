@@ -62,10 +62,12 @@ required before publishing.
    from the user's home. An agent update offer is skipped with Esc and never
    accepted. The report's quit and unmount checks catch leftover processes;
    if a run is interrupted, stop only the PIDs it started.
-   If the Codex hook checks fail and their detail names a Codex daemon
-   socket, Codex is running hooks in an app-server daemon that kept the
-   environment of the Toastty session that started it. Tell the user; do not
-   stop their Codex daemon yourself.
+   The report also checks that each agent got Toastty's skills (a failed
+   plugin copy from the package's root-owned resources shows up here) and
+   that Codex runs with `--no-daemon`. If a Codex check names a daemon that
+   keeps a Toastty socket, Codex ran the session in its shared app-server
+   daemon, which keeps the environment of the session that started it. Tell
+   the user; do not stop their Codex daemon yourself.
 2. Real install of the `.deb`: ask the user to run
    `! sudo apt install ./artifacts/release/linux/<version>-<build>/toastty_<version>-<build>_amd64.deb`,
    then `scripts/linux/test-package.sh --deb <that file> --installed-deb`. This

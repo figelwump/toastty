@@ -39,15 +39,19 @@ struct CodexManagedLaunchSkillsDecision: Equatable, Sendable {
     /// Typed user-plugin outcome for launches that resolved a user snapshot;
     /// nil when the launch path never considered user skills.
     let userSkills: CodexUserSkillsDeliveryState?
+    /// The resolved Codex accepts `--no-daemon` (see `CodexDaemonOptOutProbe`).
+    let supportsNoDaemon: Bool
 
     init(
         configuration: CodexSkillsLaunchConfiguration?,
         status: CodexSkillsStatus?,
-        userSkills: CodexUserSkillsDeliveryState? = nil
+        userSkills: CodexUserSkillsDeliveryState? = nil,
+        supportsNoDaemon: Bool = false
     ) {
         self.configuration = configuration
         self.status = status
         self.userSkills = userSkills
+        self.supportsNoDaemon = supportsNoDaemon
     }
 }
 
@@ -116,6 +120,7 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
     let manager: CodexSkillsManager
     private let processEnvironment: @Sendable () -> [String: String]
     private let processPathProvider: @Sendable () -> String?
+    private let daemonOptOutProbe: CodexDaemonOptOutProbe
     private let unsupportedLock = NSLock()
     private var unsupportedRuntimeKeys = Set<String>()
 
@@ -126,9 +131,11 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
         processEnvironment: @escaping @Sendable () -> [String: String] = {
             ProcessInfo.processInfo.environment
         },
-        processPathProvider: @escaping @Sendable () -> String? = { nil }
+        processPathProvider: @escaping @Sendable () -> String? = { nil },
+        daemonOptOutProbe: CodexDaemonOptOutProbe? = nil
     ) {
         self.homeDirectoryURL = homeDirectoryURL
+        self.daemonOptOutProbe = daemonOptOutProbe ?? CodexDaemonOptOutProbe(fileManager: fileManager)
         self.fileManager = fileManager
         self.manager = manager ?? CodexSkillsManager(
             homeDirectoryURL: homeDirectoryURL,
@@ -148,7 +155,8 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
         }
         return CodexManagedLaunchSkillsDecision(
             configuration: manager.cachedLaunchConfiguration(runtime: runtime),
-            status: nil
+            status: nil,
+            supportsNoDaemon: daemonOptOutProbe.supportsNoDaemon(runtime: runtime)
         )
     }
 
@@ -218,7 +226,11 @@ private extension CodexManagedLaunchSkillsResolver {
             unsupportedRuntimeKeys.contains(key)
         }
         guard unsupported == false else {
-            return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+            return CodexManagedLaunchSkillsDecision(
+                configuration: nil,
+                status: nil,
+                supportsNoDaemon: daemonOptOutProbe.supportsNoDaemon(runtime: runtime)
+            )
         }
 
         return await withCheckedContinuation { continuation in
@@ -245,7 +257,11 @@ private extension CodexManagedLaunchSkillsResolver {
         }
         let key = runtimeKey(runtime)
         guard unsupportedLock.withLock({ unsupportedRuntimeKeys.contains(key) }) == false else {
-            return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+            return CodexManagedLaunchSkillsDecision(
+                configuration: nil,
+                status: nil,
+                supportsNoDaemon: daemonOptOutProbe.supportsNoDaemon(runtime: runtime)
+            )
         }
         return decision(preparing: prepare, runtime: runtime, unsupportedKey: key)
     }
@@ -255,12 +271,14 @@ private extension CodexManagedLaunchSkillsResolver {
         runtime: CodexIntegrationRuntime,
         unsupportedKey key: String
     ) -> CodexManagedLaunchSkillsDecision {
+        let supportsNoDaemon = daemonOptOutProbe.supportsNoDaemon(runtime: runtime)
         do {
             let preparation = try prepare(runtime)
             return CodexManagedLaunchSkillsDecision(
                 configuration: preparation.configuration,
                 status: preparation.status,
-                userSkills: preparation.userSkills
+                userSkills: preparation.userSkills,
+                supportsNoDaemon: supportsNoDaemon
             )
         } catch let error as CodexPluginCLIError {
             if error.isUnsupported {
@@ -270,7 +288,11 @@ private extension CodexManagedLaunchSkillsResolver {
         } catch {
             logFailure(error, runtime: runtime)
         }
-        return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        return CodexManagedLaunchSkillsDecision(
+            configuration: nil,
+            status: nil,
+            supportsNoDaemon: supportsNoDaemon
+        )
     }
 }
 

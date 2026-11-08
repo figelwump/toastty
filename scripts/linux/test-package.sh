@@ -256,6 +256,46 @@ print("%s|%s" % (st.get("kind",""), st.get("detail","")))' "$dump" "$session" 2>
       check "$agent hooks report the reply to Toastty" "final status: ${status:-none}$hook_note" test "$reported" = 0
       shot "$agent-answered" >/dev/null
     fi
+    # Toastty stages its skills plugin for each agent from the package's
+    # resources. Root-owned resources (AppImage, installed .deb) once made
+    # that copy fail, and the agent launched without Toastty's skills.
+    local skills_error
+    case "$agent" in
+      claude) skills_error='Claude skills plugin preparation failed' ;;
+      codex) skills_error='Codex skills provisioning failed|Managed Codex launch is proceeding without Toastty skills' ;;
+      *) skills_error='' ;;
+    esac
+    if [[ -n "$skills_error" ]]; then
+      # Toastty's structured log is in the runtime home; app.log has stdout
+      # and stderr only.
+      local toastty_log="$dir/runtime-home/logs/toastty.log" skills_detail
+      skills_detail="$(grep -hE "$skills_error" "$toastty_log" "$app_log" 2>/dev/null | head -1 | cut -c1-300)"
+      check "$agent gets Toastty's skills" "${skills_detail:-no skills warning in runtime-home/logs/toastty.log}" \
+        test -s "$toastty_log" -a -z "$skills_detail"
+    fi
+    if [[ "$agent" == codex ]]; then
+      # Codex's shared app-server daemon runs hooks with the environment of
+      # the session that started it, so managed sessions pass --no-daemon.
+      local p codex_pid="" codex_args="" daemon_pids=""
+      for p in $(pgrep -u "$(id -u)" -x codex); do
+        local args
+        args="$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)"
+        if [[ "$args" == *" app-server"* ]]; then
+          tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "TOASTTY_SOCKET_PATH=$sock" \
+            && daemon_pids+="$p "
+        elif [[ -z "$codex_pid" ]] && tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "TOASTTY_SESSION_ID=$session"; then
+          codex_pid="$p" codex_args="$args"
+        fi
+      done
+      check "codex runs its session without the shared daemon" "pid ${codex_pid:-none}: ${codex_args:-not found}" \
+        test -n "$codex_pid" -a "${codex_args/ --no-daemon /}" != "$codex_args"
+      # A daemon this instance started would keep reporting to its dead
+      # socket after the test. It may also serve Codex sessions outside the
+      # test, so the test does not stop it.
+      check "no Codex daemon was started from this instance" \
+        "${daemon_pids:+daemon pid ${daemon_pids% } keeps the socket of this test; stop it once no Codex sessions use it}" \
+        test -z "$daemon_pids"
+    fi
     json_get result.text < "$dir/transcripts/$agent.json" > "$dir/transcripts/$agent.txt"
   done
 

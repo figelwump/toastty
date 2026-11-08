@@ -113,6 +113,7 @@ enum AgentLaunchInstrumentation {
         launchEnvironment: [String: String] = [:],
         codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default"),
         codexSkillsIntegration: CodexSkillsLaunchConfiguration? = nil,
+        codexSupportsNoDaemon: Bool = false,
         stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
         deliveredUserSkillsRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
@@ -166,7 +167,8 @@ enum AgentLaunchInstrumentation {
                 artifactStore: artifactStore,
                 launchEnvironment: launchEnvironment,
                 statusTrackingSource: codexStatusTrackingSource,
-                skillsIntegration: codexSkillsIntegration
+                skillsIntegration: codexSkillsIntegration,
+                supportsNoDaemon: codexSupportsNoDaemon
             )
         }
 
@@ -362,7 +364,8 @@ enum AgentLaunchInstrumentation {
         artifactStore: ManagedAgentLaunchArtifactStore?,
         launchEnvironment: [String: String],
         statusTrackingSource: CodexStatusTrackingSource,
-        skillsIntegration: CodexSkillsLaunchConfiguration?
+        skillsIntegration: CodexSkillsLaunchConfiguration?,
+        supportsNoDaemon: Bool
     ) throws -> PreparedAgentLaunchCommand {
         let artifactsDirectory = try makeArtifactsDirectory(
             agent: .codex,
@@ -395,6 +398,9 @@ enum AgentLaunchInstrumentation {
             }
 
             var preparedArgv = skillsPreparation.argv
+            if supportsNoDaemon {
+                preparedArgv = insertingCodexNoDaemonFlag(into: preparedArgv)
+            }
             if statusTrackingSource != .hooks {
                 let notifyScriptURL = artifactsDirectoryURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
                 let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
@@ -2538,6 +2544,32 @@ private extension AgentLaunchInstrumentation {
 private final class AgentLaunchInstrumentationBundleMarker {}
 
 extension AgentLaunchInstrumentation {
+    /// Keeps a managed Codex session out of Codex's shared app-server daemon,
+    /// which would run this session's hooks with another session's Toastty
+    /// environment (see `CodexDaemonOptOutProbe`). Uses the same executable
+    /// and wrapper rules as the profile injection, and leaves alone a launch
+    /// that already passes `--no-daemon` or connects to a `--remote` server
+    /// (Codex rejects the two together).
+    static func insertingCodexNoDaemonFlag(into argv: [String]) -> [String] {
+        guard let executableIndex = safeCodexSkillsExecutableIndex(in: argv) else {
+            return argv
+        }
+        let boundaryIndex = argv[(executableIndex + 1)...].firstIndex(of: "--") ?? argv.endIndex
+        let hasConflictingFlag = argv[(executableIndex + 1)..<boundaryIndex].contains { argument in
+            argument == CodexDaemonOptOutProbe.flag
+                || argument == "--remote"
+                || argument.hasPrefix("--remote=")
+        }
+        guard hasConflictingFlag == false else {
+            return argv
+        }
+        return insertingArguments(
+            [CodexDaemonOptOutProbe.flag],
+            into: argv,
+            afterIndex: executableIndex
+        )
+    }
+
     static func safeCodexExecutableIndex(in argv: [String]) -> Int? {
         guard argv.isEmpty == false else { return nil }
         let boundaryIndex = argv.firstIndex(of: "--") ?? argv.endIndex

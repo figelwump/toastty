@@ -224,6 +224,7 @@
         "AutomationSocketServerWorkspaceTabTests.swift",
         "ClaudeQuestionBrokerTests.swift",
         "ClaudeSkillsBundleManagerTests.swift",
+        "CodexDaemonOptOutProbeTests.swift",
         "CodexIntegrationManagerTests.swift",
         "CodexManagedLaunchIntegrationResolverTests.swift",
         "CodexManagedSessionResolverTests.swift",

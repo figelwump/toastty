@@ -624,6 +624,50 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         }
     }
 
+    func testPrepareCodexLaunchAddsNoDaemonWhenSupported() throws {
+        let cases: [([String], CodexSkillsLaunchConfiguration?, [String], String)] = [
+            (["codex"], codexSkillsConfiguration(), ["codex", "--no-daemon", "--profile", "toastty-managed"], "with skills"),
+            (["codex", "resume", "abc"], nil, ["codex", "--no-daemon", "resume", "abc"], "without skills"),
+            (
+                ["agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/codex", "fork", "abc"],
+                nil,
+                ["agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/codex", "--no-daemon", "fork", "abc"],
+                "supported wrapper"
+            ),
+            (["codex", "--", "--no-daemon"], nil, ["codex", "--no-daemon", "--", "--no-daemon"], "flag only after terminator"),
+        ]
+        for (argv, configuration, expected, label) in cases {
+            let prepared = try prepareCodex(
+                argv: argv,
+                source: .hooks,
+                configuration: configuration,
+                supportsNoDaemon: true
+            )
+            defer { cleanup([prepared]) }
+            XCTAssertEqual(prepared.argv, expected, label)
+        }
+    }
+
+    func testPrepareCodexLaunchLeavesDaemonChoiceAloneWhenUnsupportedOrConflicting() throws {
+        let cases: [([String], Bool, String)] = [
+            (["codex"], false, "Codex without the flag"),
+            (["codex", "--no-daemon"], true, "caller already opts out"),
+            (["codex", "--remote", "unix:///tmp/codex.sock"], true, "remote server"),
+            (["codex", "--remote=ws://127.0.0.1:4000"], true, "remote server, attached value"),
+            (["custom-wrapper", "codex"], true, "opaque wrapper"),
+        ]
+        for (argv, supported, label) in cases {
+            let prepared = try prepareCodex(
+                argv: argv,
+                source: .hooks,
+                configuration: nil,
+                supportsNoDaemon: supported
+            )
+            defer { cleanup([prepared]) }
+            XCTAssertEqual(prepared.argv, argv, label)
+        }
+    }
+
     func testPrepareCodexLaunchKeepsNotifyFallbackIndependentFromSkills() throws {
         let prepared = try prepareCodex(
             argv: ["codex", "exec", "prompt"],
@@ -2648,8 +2692,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
     private func prepareCodex(
         argv: [String],
         source: CodexStatusTrackingSource,
-        configuration: CodexSkillsLaunchConfiguration,
-        launchEnvironment: [String: String] = [:]
+        configuration: CodexSkillsLaunchConfiguration?,
+        launchEnvironment: [String: String] = [:],
+        supportsNoDaemon: Bool = false
     ) throws -> PreparedAgentLaunchCommand {
         try AgentLaunchInstrumentation.prepare(
             agent: .codex,
@@ -2660,7 +2705,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             fileManager: .default,
             launchEnvironment: launchEnvironment,
             codexStatusTrackingSource: source,
-            codexSkillsIntegration: configuration
+            codexSkillsIntegration: configuration,
+            codexSupportsNoDaemon: supportsNoDaemon
         )
     }
 

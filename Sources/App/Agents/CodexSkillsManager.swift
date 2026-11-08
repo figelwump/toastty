@@ -1069,7 +1069,11 @@ private extension CodexSkillsManager {
                 at: stagedPluginURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try fileManager.copyItem(at: bundled.pluginRootURL, to: stagedPluginURL)
+            try BundledResourceCopier.copyItem(
+                at: bundled.pluginRootURL,
+                to: stagedPluginURL,
+                fileManager: fileManager
+            )
             try normalizeScriptPermissions(in: stagedPluginURL)
             clearQuarantine(from: stagedPluginURL)
         } catch let error as CodexSkillsManagerError {
