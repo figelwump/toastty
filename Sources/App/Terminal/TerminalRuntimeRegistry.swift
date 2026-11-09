@@ -964,7 +964,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
         // A file drop inserts a shell-escaped path into the terminal and is a
         // local draft just like keyboard or paste input.
-        noteLocalInput(panelID: drop.targetPanelID)
+        noteLocalInput(panelID: drop.targetPanelID, kind: .paste)
         let handled = targetController.handleFileDrop(drop.fileURLs)
         let focusActionApplied = handled
             ? focusPanelForFileDropIfPossible(drop.targetPanelID)
@@ -1231,6 +1231,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     private func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .programmatic) {
+        // A person's input counts even when the observer leaves the prompt
+        // open, as it does for a first Ctrl+C.
+        if kind != .programmatic {
+            sessionLifecycleTracker?.noteUserInput(panelID: panelID)
+        }
         guard localInputObserver?(panelID, kind) != false else { return }
         sessionLifecycleTracker?.noteLocalInputForActiveSession(panelID: panelID)
     }

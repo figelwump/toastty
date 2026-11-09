@@ -11,8 +11,14 @@ import Foundation
 @MainActor
 final class PullRequestStateCache: ObservableObject {
     struct Entry: Equatable {
-        /// The last good answer; kept when a later request fails.
+        /// The last good answer; kept when a later request fails. While
+        /// GitHub works out the merge state it keeps the last known
+        /// mergeability, checks included, for the Merge button.
         var state: TaskPullRequestState?
+        /// The last good answer as GitHub gave it, for `task get`: its
+        /// checks belong to its head commit. An answer without mergeability
+        /// keeps the one last reported for the same commit.
+        var answer: TaskPullRequestState?
         /// When the request behind `state` started.
         var answeredAt: Date?
         var lastError: String?
@@ -47,6 +53,11 @@ final class PullRequestStateCache: ObservableObject {
 
     func state(for link: WorkspacePullRequestLink) -> TaskPullRequestState? {
         entries[link.url]?.state
+    }
+
+    /// GitHub's last answer without the smoothing of `state(for:)`.
+    func answer(for link: WorkspacePullRequestLink) -> TaskPullRequestState? {
+        entries[link.url]?.answer
     }
 
     /// Whether a request for this pull request is running.
@@ -96,6 +107,11 @@ final class PullRequestStateCache: ObservableObject {
         if let answeredAt = entry.answeredAt, answeredAt > observedAt {
             return
         }
+        var answer = state
+        if answer.mergeability == nil, let last = entry.answer, last.headSHA == answer.headSHA {
+            answer.mergeability = last.mergeability
+        }
+        entry.answer = answer
         var state = state
         // While GitHub works out the merge state, as it does after a push,
         // keep the last known one so the Merge button does not flicker.

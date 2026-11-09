@@ -138,6 +138,16 @@ struct TaskStartWorkTests {
 
         func scope(sessionID: String) -> Set<UUID>? { scopes[sessionID] }
 
+        /// When each session's transcript last changed.
+        var outputAt: [String: Date] = [:]
+        /// When a person last typed into each panel, or a phone message
+        /// reached it.
+        var userInputAt: [UUID: Date] = [:]
+
+        func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
+
+        func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
         /// Reports a status, as the agent's hooks do.
         /// A turn that was running ends at `.idle`, `.ready` or `.error`.
         func report(_ sessionID: String, _ kind: SessionStatusKind, at date: Date = Date()) {

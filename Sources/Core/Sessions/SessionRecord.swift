@@ -32,6 +32,12 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     /// such as collapsing a read `ready` to `idle`, move `statusUpdatedAt`
     /// but not this. Runtime-only, like `statusUpdatedAt`.
     public var agentStatusUpdatedAt: Date?
+    /// When the session last moved between its states: at rest (`idle` or
+    /// `ready`), working, waiting for an approval, and error. Unlike
+    /// `statusUpdatedAt`, a report that repeats the state, or the collapse
+    /// of a read `ready` to `idle`, does not move it. `nil` while the
+    /// session has been at rest since it started. Runtime-only.
+    public var stateChangedAt: Date?
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     /// Provider work outside agents, such as background shells, that the
     /// session still waits on. Kept in the provider's reported order.
@@ -143,6 +149,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
         statusUpdatedAt = nil
+        stateChangedAt = nil
         // Background activity is runtime-only. Do not restore it from persisted
         // registry snapshots, because child processes from an old app run cannot
         // safely keep a restored sidebar row in a working state.

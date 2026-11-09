@@ -107,6 +107,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     ) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         Self.applyTurnTiming(to: &record, nextStatusKind: status.kind, at: now)
+        if TaskAgentState(statusKind: record.status?.kind) != TaskAgentState(statusKind: status.kind) {
+            record.stateChangedAt = now
+        }
         record.status = status
         record.statusUpdatedAt = now
         if fromAgent || record.agentStatusUpdatedAt == nil {

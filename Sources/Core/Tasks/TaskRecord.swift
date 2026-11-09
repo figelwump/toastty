@@ -103,6 +103,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var cleanup: TaskCleanup?
     /// Set on a release task: the tasks it releases.
     public var release: TaskRelease?
+    /// The times Toastty observed for the task: when its stage changed, a
+    /// turn a quit may have cut off, pending checks, and the user's last
+    /// input. Optional so records saved before it existed still load.
+    public var stateTimes: TaskStateTimes?
     /// The task space, once setup made it.
     public var taskSpaceWorkspaceID: UUID? {
         operation.taskSpace?.workspaceID

@@ -48,6 +48,7 @@ final class LiveTaskSessions: TaskSessionProviding {
             title: record.displayTitleOverride ?? record.providerSessionName,
             status: record.status,
             statusUpdatedAt: record.statusUpdatedAt,
+            stateChangedAt: record.stateChangedAt ?? record.startedAt,
             lastTurnEndedAt: record.lastTurnEndedAt,
             turnStartedAt: record.turnStartedAt,
             transcriptPath: binding.flatMap { $0.sessionFilePath.isEmpty ? nil : $0.sessionFilePath }
@@ -79,6 +80,22 @@ final class LiveTaskSessions: TaskSessionProviding {
         // Toastty's extension instead.
         guard let feed = sessionRuntimeStore?.providerConversationFeed(managedSessionID: sessionID) else { return nil }
         return TaskAgentReplyReader.lastReply(in: feed.observations)
+    }
+
+    func lastOutputAt(sessionID: String) -> Date? {
+        guard let info = session(sessionID) else { return nil }
+        if let path = info.transcriptPath {
+            return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        }
+        return sessionRuntimeStore?.providerConversationFeed(managedSessionID: sessionID)?
+            .observations.map(\.timestamp).max()
+    }
+
+    func lastUserInputAt(panelID: UUID) -> Date? {
+        [
+            sessionRuntimeStore?.lastUserInputAt(panelID: panelID),
+            exitController?.remoteInputProbe?.lastRemoteUserInputAt(panelID: panelID),
+        ].compactMap { $0 }.max()
     }
 
     /// The effective scope: an empty explicit scope still allows the

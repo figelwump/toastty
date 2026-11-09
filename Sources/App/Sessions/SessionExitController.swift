@@ -21,6 +21,10 @@ protocol SessionRemoteInputProbe: AnyObject {
     /// Whether a phone message reached the panel after `date`, or is still
     /// queued or awaiting confirmation for it.
     func hasRemoteInput(panelID: UUID, since date: Date) -> Bool
+    /// When a phone user last sent or queued a message for the panel,
+    /// steered it or stopped it. Toastty's later delivery of a queued
+    /// message does not count.
+    func lastRemoteUserInputAt(panelID: UUID) -> Date?
 }
 
 /// Two exits that clean up after an agent:

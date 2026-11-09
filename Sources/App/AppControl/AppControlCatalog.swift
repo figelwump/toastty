@@ -849,7 +849,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session and when its status last changed), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
             )
@@ -857,7 +857,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage or agentState changed since are listed, deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage, agentState or pullRequest changed since are listed (a change of only lastOutputAt or lastUserInputAt does not count), deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
                 selectors: [],
                 parameters: [
                     .taskChangedSince(required: false),

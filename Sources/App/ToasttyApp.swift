@@ -685,6 +685,7 @@ struct ToasttyApp: App {
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let taskCoordinator: TaskCoordinator
+    private let taskTerminationObserver: AppTerminationObserver
     private let taskBoard: TaskBoardStore
     private let taskWebhooks: TaskWebhookService
     private let quickEntryController: QuickEntryController
@@ -1069,6 +1070,11 @@ struct ToasttyApp: App {
         )
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator
+        // A quit must leave the marks of turns it cuts off; see
+        // `TaskCoordinator.recordStateTimes`.
+        taskTerminationObserver = AppTerminationObserver { [weak taskCoordinator] in
+            MainActor.assumeIsolated { taskCoordinator?.prepareForTermination() }
+        }
         let pullRequestStateCache = PullRequestStateCache(
             runner: WorkspaceMergeLiveCommandRunner(socketPath: socketPath, cliExecutablePath: cliExecutablePath)
         )

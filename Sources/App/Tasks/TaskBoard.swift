@@ -442,6 +442,7 @@ final class TaskBoardStore: ObservableObject {
     private var releaseLoop: Task<Void, Never>?
     private var workingTaskSpaceIDs: Set<UUID> = []
     private var isTurnCheckScheduled = false
+    private var isStateTimesPassScheduled = false
 
     /// A board with no task system, for windows and tests without one.
     static let disabled = TaskBoardStore()
@@ -472,31 +473,43 @@ final class TaskBoardStore: ObservableObject {
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
                 self?.scheduleSessionCheck()
+                self?.scheduleStateTimesPass()
             }
             .store(in: &cancellables)
         pullRequests.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+                self?.scheduleStateTimesPass()
+            }
             .store(in: &cancellables)
         sessionRuntimeStore.$workspaceMergeRequests
             .removeDuplicates()
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+                self?.scheduleStateTimesPass()
+            }
             .store(in: &cancellables)
         sessionRuntimeStore.$sessionRegistry
             .sink { [weak self] _ in
                 // The registry publishes before it changes; read it after,
                 // once for a burst of changes.
                 self?.scheduleSessionCheck()
+                self?.scheduleStateTimesPass()
             }
             .store(in: &cancellables)
         pullRequests.answerObserver = { [weak self] link, state in
             self?.recordAnswer(link: link, state: state)
         }
-        storeObserverToken = store.addActionAppliedObserver { [weak self] _, _, nextState in
+        storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
             self?.syncRecords(state: nextState)
+            if Self.stageInputsChanged(from: previousState, to: nextState) {
+                self?.scheduleStateTimesPass()
+            }
         }
         reloadConfig()
         syncRecords(state: store.state)
         syncSessionTitles()
+        scheduleStateTimesPass()
         coordinator.removeExpiredAttachments()
         if let refreshInterval {
             refreshLoop = Task { [weak self] in
@@ -628,6 +641,33 @@ final class TaskBoardStore: ObservableObject {
             self.refreshAfterTurnsEnded()
             self.objectWillChange.send()
         }
+    }
+
+    /// Records the times of state changes once after a burst of changes to
+    /// what a stage depends on; see `TaskCoordinator.recordStateTimes`. The
+    /// publishers call this before their value changes, so the pass runs on
+    /// a later turn of the main actor.
+    private func scheduleStateTimesPass() {
+        guard isStateTimesPassScheduled == false else { return }
+        isStateTimesPassScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isStateTimesPassScheduled = false
+            self.coordinator?.recordStateTimes()
+        }
+    }
+
+    /// Whether an action changed what a stage reads from the workspaces and
+    /// nothing else announces: a task space opened or closed, or a turn in
+    /// one became read or unread. A done mark and a pull request link reach
+    /// the record through `syncRecords`.
+    private static func stageInputsChanged(from previous: AppState, to next: AppState) -> Bool {
+        guard previous.workspacesByID.count == next.workspacesByID.count else { return true }
+        for (workspaceID, workspace) in next.workspacesByID where workspace.taskID != nil {
+            guard let before = previous.workspacesByID[workspaceID] else { return true }
+            if before.unreadPanelIDs != workspace.unreadPanelIDs { return true }
+        }
+        return false
     }
 
     private func syncSessionTitles() {
