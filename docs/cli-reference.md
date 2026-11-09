@@ -987,6 +987,44 @@ Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait
 ```
 
+### `coordinator`
+
+```text
+toastty coordinator open [--window <id>] [--no-select]
+toastty coordinator restart [--window <id>]
+toastty coordinator status
+toastty coordinator send (<text> | --text-file <path>)
+```
+
+The coordinator is one long-lived agent session in its own pinned workspace;
+see [The coordinator](tasks.md#the-coordinator). It is not a task.
+
+- `open` creates the workspace on first use, selects it unless `--no-select`
+  is given, and starts the agent when none runs. It returns after the start
+  attempt, with the `status` fields, `createdWorkspace` and `startedAgent`.
+  `--window` names the window that gets a new coordinator; without it, the
+  selected window does.
+- `restart` starts a fresh agent session in the same workspace, without
+  selecting it. An agent that still runs is ended.
+- `status` prints `exists`, and for an open coordinator its `windowID`,
+  `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
+  `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`
+  after a start that did not work, and `queuedCount` and `hold` for messages
+  that wait.
+- `send` types a message at the agent's open prompt and returns
+  `delivery: sent`, or holds it and returns `delivery: queued` with
+  `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
+  `settling`, `awaitingTurn` or `terminalUnavailable`). `sentUnconfirmed`
+  means the terminal did not confirm the Return key; Toastty does not type the
+  text again. It fails when there is no coordinator.
+
+A workspace-scoped session can use these commands only when the coordinator's
+workspace is in its scope, and it cannot create the coordinator.
+
+These commands are short forms of
+`action run coordinator.open|coordinator.restart|coordinator.send` and
+`query run coordinator.get`.
+
 ### `webhook`
 
 ```text

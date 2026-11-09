@@ -924,6 +924,7 @@ struct SidebarView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     VStack(spacing: 0) {
                         sidebarTitlebarCover
+                        coordinatorRow
                         if taskBoard.isEnabled {
                             tasksHeader
                         }
@@ -1015,7 +1016,8 @@ struct SidebarView: View {
                   let workspace = store.state.workspacesByID[request.workspaceID],
                   // Subspace rows have no inline rename field yet; entering the
                   // rename state for one would be invisible and block card drags.
-                  workspace.parentWorkspaceID == nil else { return }
+                  // The coordinator's workspace keeps its name.
+                  workspace.parentWorkspaceID == nil, workspace.isCoordinator == false else { return }
             beginWorkspaceRename(workspace)
         }
         .onAppear {
@@ -1065,6 +1067,44 @@ struct SidebarView: View {
             },
             webhooks: taskBoard.coordinator?.webhooks
         )
+    }
+
+    /// The coordinator's row, when this window holds its workspace. It is
+    /// outside the scrolling list and outside both segments, so no segment
+    /// or card state hides it.
+    @ViewBuilder
+    private var coordinatorRow: some View {
+        if let controller = taskCoordinator?.coordinatorController,
+           let location = store.state.coordinator, location.windowID == windowID,
+           let workspace = store.state.workspacesByID[location.workspaceID] {
+            let isSelected = selectedWorkspaceID == location.workspaceID
+                && store.window(id: windowID)?.showsTasksView != true
+            SidebarCoordinatorRow(
+                workspace: workspace,
+                isSelected: isSelected,
+                selectedPanelID: workspace.focusedPanelID,
+                controller: controller,
+                sessionRuntimeStore: sessionRuntimeStore,
+                select: {
+                    cancelWorkspaceRename()
+                    _ = store.selectWorkspace(
+                        windowID: windowID,
+                        workspaceID: location.workspaceID,
+                        preferringUnreadSessionPanelIn: sessionRuntimeStore
+                    )
+                },
+                restart: {
+                    Task { @MainActor in
+                        do {
+                            try await controller.restart()
+                        } catch {
+                            TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
+                        }
+                    }
+                },
+                close: { requestWorkspaceClose(workspaceID: location.workspaceID) }
+            )
+        }
     }
 
     private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
@@ -1355,7 +1395,8 @@ struct SidebarView: View {
         var content = SidebarScrollGeometry.Content()
         // Derive IDs and attention from the same status pass for both pills.
         for workspaceID in store.window(id: windowID)?.workspaceIDs ?? [] {
-            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+            // The coordinator's pinned row draws no session rows to point at.
+            guard let workspace = store.state.workspacesByID[workspaceID], workspace.isCoordinator == false else { continue }
             for status in sidebarSessionStatuses(for: workspaceID) {
                 let rowID = SidebarSessionPresentation.SidebarSessionRowID(
                     workspaceID: workspaceID, sessionID: status.sessionID, panelID: status.panelID

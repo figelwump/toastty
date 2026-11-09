@@ -114,8 +114,9 @@ final class RecentWorkspacesStore: ObservableObject {
     }
 
     func recordClosedWorkspaces(previousState: AppState, nextState: AppState, at date: Date) {
+        // The coordinator's workspace is not a project to reopen for a task.
         let closed = previousState.workspacesByID.values.filter {
-            $0.parentWorkspaceID == nil && nextState.workspacesByID[$0.id] == nil
+            $0.parentWorkspaceID == nil && $0.isCoordinator == false && nextState.workspacesByID[$0.id] == nil
         }
         for workspace in closed {
             guard let root = TaskCoordinator.rootDirectory(of: workspace) else { continue }

@@ -499,6 +499,57 @@ other people, so the skill treats it as data, not instructions. Toastty still
 shows Needs you and sends its own alerts, and a task agent's permission
 prompts can be answered only in Toastty or Toastty Mobile.
 
+## The coordinator
+
+The coordinator is one long-lived agent session that follows your tasks. It
+runs in its own workspace, named **Coordinator**, with a terminal in
+`~/.toastty/coordinator/`. A runtime-isolated dev run uses
+`<runtime-home>/coordinator/` instead. The coordinator acts through the
+`toastty task` commands, as any agent can.
+
+- **Open Coordinator** in the command palette creates the workspace on first
+  use, selects it and starts the agent. Later it selects the workspace, and
+  starts the agent only when none runs there.
+- The sidebar pins one **Coordinator** row at the top, above the Tasks row, in
+  both the Projects and the Status segment. The row shows the agent's state
+  (a spinner while it works, an approval or error badge, a dot for unread
+  output) and says **Not running** when no agent runs. It is not a project
+  card: it has no number, does not reorder, and its name does not change.
+- **Restart Coordinator**, in the command palette, the row's context menu and
+  the workspace header, starts a fresh agent session in the same workspace. An
+  agent that still runs is ended: its terminal closes and the new session gets
+  a new terminal. A terminal at its shell prompt is used again.
+- After a relaunch, Toastty restores the workspace and resumes the agent's
+  conversation, as it does for any agent pane. When there is nothing to
+  resume, the row shows **Not running** until you open or restart it.
+- Closing the workspace removes the coordinator. **Open Coordinator** then
+  makes a new one. The files in its folder stay.
+
+The coordinator is not a task. It has no task record, so `task list`, the
+Tasks view, the Status segment's groups and webhook events never show it. It
+is not a project either: a task cannot be placed in its workspace, nothing
+nests under it, and quick entry and the workspace picker do not offer it. A
+task that the coordinator creates has no parent task. Without `--workspace` or
+`--root`, that task waits for a workspace, as a task from quick entry does.
+
+`toastty coordinator send` gives the coordinator a message:
+
+```bash
+toastty coordinator send "Task 1B32… is ready for review."
+```
+
+Toastty types the message when the agent is at an open prompt, and holds it in
+order otherwise: while the agent works or waits for an approval, while you
+have typed in the coordinator's terminal since the last turn started, while
+the agent starts, and while no agent runs. It types one message for each open
+prompt. The answer says `sent`, or `queued` with the position and the reason.
+The queue holds up to 50 messages in memory: it survives a restart of the
+agent, and an app quit or closing the coordinator's workspace loses it.
+Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
+
+`toastty coordinator open|restart|status` run the same actions as the command
+palette; see the [CLI reference](cli-reference.md#coordinator).
+
 ## Webhooks for task events
 
 A coordinator that can receive an HTTPS request, such as a bot that wakes
@@ -727,6 +778,9 @@ shows `Option+Shift+M` when it acts on the selected task space.
 **Release <project>…** starts a release for each open project with a
 `release_skill` or a `release_prompt`, as the To ship line's **Release…**
 does, even when nothing waits to ship. It is hidden while a release of that project is under way.
+
+**Open Coordinator** and, once its workspace is open, **Restart Coordinator**
+are described in [The coordinator](#the-coordinator).
 
 ### Context menus
 
@@ -1003,6 +1057,20 @@ effort = "high"
 whose agent is another one gets that agent's own defaults.
 
 `[triage]` is described in [Optional: triage](#optional-triage).
+
+```toml
+[coordinator]
+agent = "claude"            # the default
+model = "claude-opus-5-5"
+effort = "high"
+```
+
+`[coordinator]` sets the agent profile, model and effort that
+[the coordinator](#the-coordinator) starts with. Without it, the coordinator
+runs your `claude` profile with that profile's own model and effort.
+`[defaults]` does not apply to it. Toastty reads the table each time it starts
+the coordinator's agent, and a resumed conversation keeps what it started
+with.
 
 ```toml
 [quick_entry]

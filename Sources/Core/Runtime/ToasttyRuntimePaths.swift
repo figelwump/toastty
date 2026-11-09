@@ -34,6 +34,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let taskRecordsFileName = "task-records.json"
     private static let taskAttachmentsDirectoryName = "task-attachments"
     private static let taskWebhooksFileName = "task-webhooks.json"
+    private static let coordinatorDirectoryName = "coordinator"
     private static let taskWebhookOutboxFileName = "task-webhook-outbox.json"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
@@ -108,6 +109,13 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     /// Toastty's copies of task attachments, in one folder per task.
     public var taskAttachmentsDirectoryURL: URL {
         configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// The coordinator agent's working directory, where its policy and
+    /// ledger files live. Runtime-isolated dev and test runs get their own,
+    /// so they never read or change the real coordinator's files.
+    public var coordinatorDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorDirectoryName, directoryHint: .isDirectory)
     }
 
     /// Webhooks that receive task events. Runtime-isolated runs get their

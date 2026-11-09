@@ -269,6 +269,16 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// back through its operation, so either side can be rebuilt from the
     /// other after a crash.
     public var taskID: UUID?
+    /// Marks the one workspace the coordinator's agent lives in. It is a
+    /// top-level workspace that is not a project: no task is placed in it,
+    /// nothing nests under it, and the sidebar pins it above the project
+    /// cards. The reducer keeps at most one, and closing it removes the
+    /// coordinator.
+    public var isCoordinator = false
+    /// The terminal panel the coordinator's agent runs in. Meaningful only
+    /// while `isCoordinator` is set. It can name a panel that has since
+    /// closed; read it through `AppState.coordinator`, which checks it.
+    public var coordinatorPanelID: UUID?
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -668,6 +678,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case doneAt
         case rootDirectory
         case taskID
+        case isCoordinator
+        case coordinatorPanelID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -728,6 +740,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
         rootDirectory = (try? container.decodeIfPresent(String.self, forKey: .rootDirectory)) ?? nil
         taskID = (try? container.decodeIfPresent(UUID.self, forKey: .taskID)) ?? nil
+        isCoordinator = ((try? container.decodeIfPresent(Bool.self, forKey: .isCoordinator)) ?? nil) ?? false
+        coordinatorPanelID = (try? container.decodeIfPresent(UUID.self, forKey: .coordinatorPanelID)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -747,6 +761,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
         try container.encodeIfPresent(rootDirectory, forKey: .rootDirectory)
         try container.encodeIfPresent(taskID, forKey: .taskID)
+        if isCoordinator {
+            try container.encode(true, forKey: .isCoordinator)
+            try container.encodeIfPresent(coordinatorPanelID, forKey: .coordinatorPanelID)
+        }
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

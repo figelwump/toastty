@@ -325,6 +325,42 @@ struct WorkspaceHeaderArchiveControl: View {
     }
 }
 
+/// The header of the coordinator's workspace. While the agent does not run
+/// it says so and offers Restart; while it runs it shows `running`, the
+/// header's usual summary.
+struct WorkspaceHeaderCoordinatorControl<Running: View>: View {
+    @ObservedObject var controller: CoordinatorController
+    /// Observed: a session that starts or stops changes the control.
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    @ViewBuilder let running: () -> Running
+
+    var body: some View {
+        let status = controller.status
+        switch status?.agentState {
+        case .notRunning?:
+            HStack(spacing: 8) {
+                WorkspaceHeaderSubtitleText(text: "Agent not running")
+                Button("Restart Coordinator") {
+                    Task { @MainActor in
+                        do {
+                            try await controller.restart()
+                        } catch {
+                            TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
+                        }
+                    }
+                }
+                .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .all, tone: .neutral))
+                .help(status?.startFailure ?? "Start a fresh agent session for the coordinator")
+                .accessibilityIdentifier("topbar.workspace.restart-coordinator")
+            }
+        case .starting?:
+            WorkspaceHeaderSubtitleText(text: "Starting the agent…")
+        case .running?, nil:
+            running()
+        }
+    }
+}
+
 private struct WorkspaceHeaderMergeButtonStyle: ButtonStyle {
     enum Corners {
         case all

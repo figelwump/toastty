@@ -187,6 +187,38 @@ public struct AppReducer {
             state.windows[windowIndex].workspaceIDs.append(workspaceID)
             return true
 
+        case .createCoordinatorWorkspace(let windowID, let workspaceID, let panelID, let terminalCWD):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.coordinator == nil,
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  terminalCWD.hasPrefix("/") else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: AppState.coordinatorWorkspaceTitle,
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.isCoordinator = true
+            workspace.coordinatorPanelID = panelID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            // Last in window order, as any new workspace, so the 1-based
+            // indexes that automation uses for the others do not move. The
+            // sidebar pins its row by the mark, not by this position.
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
+        case .setCoordinatorPanel(let panelID):
+            guard let coordinator = state.coordinator,
+                  coordinator.panelID != panelID,
+                  var workspace = state.workspacesByID[coordinator.workspaceID],
+                  case .terminal? = workspace.panelState(for: panelID) else { return false }
+            workspace.coordinatorPanelID = panelID
+            commitWorkspace(workspace, workspaceID: coordinator.workspaceID, state: &state)
+            return true
+
         case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
                 title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",
@@ -211,7 +243,8 @@ public struct AppReducer {
             return removeWindow(windowID, state: &state)
 
         case .renameWorkspace(let workspaceID, let title):
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            // The coordinator's workspace keeps its name.
+            guard var workspace = state.workspacesByID[workspaceID], workspace.isCoordinator == false else { return false }
             let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmedTitle.isEmpty == false else { return false }
             guard workspace.title != trimmedTitle else { return false }
@@ -288,7 +321,9 @@ public struct AppReducer {
 
         case .setWorkspaceTaskID(let workspaceID, let taskID):
             guard var workspace = state.workspacesByID[workspaceID],
-                  workspace.taskID != taskID else { return false }
+                  workspace.taskID != taskID,
+                  // The coordinator's workspace is never a task space.
+                  taskID == nil || workspace.isCoordinator == false else { return false }
             workspace.taskID = taskID
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true

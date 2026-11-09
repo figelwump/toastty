@@ -73,7 +73,9 @@ struct SidebarPanelNavigationOrder {
         linkedParentID: (UUID) -> UUID?
     ) -> (targets: [PanelNavigationTarget], sessionPanelIDs: Set<UUID>, workspaceIDs: [UUID]) {
         guard let window = state.window(id: windowID) else { return ([], [], []) }
-        var workspaceIDs = state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
+        // The coordinator's pinned row is above the cards.
+        var workspaceIDs = state.coordinator.flatMap { $0.windowID == windowID ? [$0.workspaceID] : nil } ?? []
+        workspaceIDs += state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
             [parentID] + SidebarSubspacePresentation.groupingLinkedChildren(
                 state.subspaceWorkspaceIDs(of: parentID),
                 id: { $0 },

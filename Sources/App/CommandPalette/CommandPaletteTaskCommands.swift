@@ -9,6 +9,14 @@ enum PaletteTaskCommand: Equatable, Sendable {
     case openPullRequest(subject: TaskBoardItem.Subject)
     case openTaskSpace(subject: TaskBoardItem.Subject)
     case release(workspaceID: UUID)
+    case openCoordinator
+    case restartCoordinator
+}
+
+/// What the palette offers for the coordinator.
+struct PaletteCoordinatorOption: Equatable {
+    /// The coordinator's workspace is open, so it can restart.
+    let isOpen: Bool
 }
 
 /// An open project that can release from Toastty, so the palette can start
@@ -28,9 +36,37 @@ enum CommandPaletteTaskCatalog {
 
     static func descriptors(
         current: TaskBoardCurrentTask?,
-        releases: [PaletteTaskReleaseOption]
+        releases: [PaletteTaskReleaseOption],
+        coordinator: PaletteCoordinatorOption? = nil
     ) -> [PaletteCommandDescriptor] {
-        currentTaskDescriptors(current) + releases.map(releaseDescriptor)
+        currentTaskDescriptors(current) + releases.map(releaseDescriptor) + coordinatorDescriptors(coordinator)
+    }
+
+    /// "Open Coordinator" while the task system is on, and "Restart
+    /// Coordinator" once the coordinator's workspace is open.
+    private static func coordinatorDescriptors(_ option: PaletteCoordinatorOption?) -> [PaletteCommandDescriptor] {
+        guard let option else { return [] }
+        var descriptors = [PaletteCommandDescriptor(
+            id: "coordinator.open",
+            usageKey: "coordinator.open",
+            title: "Open Coordinator",
+            subtitle: nil,
+            keywords: ["coordinator", "agent", "tasks", "open", "show"],
+            shortcut: nil,
+            invocation: .task(.openCoordinator)
+        )]
+        if option.isOpen {
+            descriptors.append(PaletteCommandDescriptor(
+                id: "coordinator.restart",
+                usageKey: "coordinator.restart",
+                title: "Restart Coordinator",
+                subtitle: "Starts a fresh agent session in the coordinator's workspace",
+                keywords: ["coordinator", "agent", "restart", "start", "new", "session"],
+                shortcut: nil,
+                invocation: .task(.restartCoordinator)
+            ))
+        }
+        return descriptors
     }
 
     /// The detail pane's actions for the task, in its order, then its pull
@@ -241,6 +277,12 @@ final class CommandPaletteTaskActions {
         }
     }
 
+    /// `nil` when this Toastty has no coordinator to open.
+    func coordinatorOption() -> PaletteCoordinatorOption? {
+        guard let controller = coordinator?.coordinatorController else { return nil }
+        return PaletteCoordinatorOption(isOpen: controller.location != nil)
+    }
+
     /// The releasable project that the workspace is: its saved root, or
     /// else the configured project holding its first terminal's directory.
     /// Release resolves a workspace without a saved root through git, which
@@ -268,6 +310,28 @@ final class CommandPaletteTaskActions {
     func execute(_ command: PaletteTaskCommand, originWindowID: UUID) -> Bool {
         guard let store, let sessionRuntimeStore, let coordinator, let board else { return false }
         switch command {
+        case .openCoordinator, .restartCoordinator:
+            guard let controller = coordinator.coordinatorController else { return false }
+            let windowID = store.commandSelection(preferredWindowID: originWindowID)?.windowID
+            let restarts = command == .restartCoordinator
+            afterPaletteCloses { [presentFailure] in
+                Task { @MainActor in
+                    do {
+                        if restarts {
+                            try await controller.restart(windowID: windowID)
+                        } else {
+                            try await controller.open(windowID: windowID)
+                        }
+                    } catch {
+                        presentFailure(
+                            restarts ? "Unable to Restart the Coordinator" : "Unable to Start the Coordinator",
+                            error.localizedDescription
+                        )
+                    }
+                }
+            }
+            return true
+
         case .action(let action, let subject):
             // The task may have moved on since the palette listed it.
             guard let item = board.items().first(where: { $0.id == subject }),

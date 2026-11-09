@@ -7,11 +7,13 @@ import Foundation
 extension AppState {
     /// Workspaces of a window that are not nested under another, in window
     /// order. This is the list the sidebar shows as cards and that the
-    /// workspace switch shortcuts count.
+    /// workspace switch shortcuts count. The coordinator's workspace is not
+    /// in it: the sidebar pins that one above the cards, and it is not a
+    /// project.
     public func topLevelWorkspaceIDs(in windowID: UUID) -> [UUID] {
         guard let window = windows.first(where: { $0.id == windowID }) else { return [] }
         return window.workspaceIDs.filter { workspaceID in
-            guard let workspace = workspacesByID[workspaceID] else { return false }
+            guard let workspace = workspacesByID[workspaceID], workspace.isCoordinator == false else { return false }
             return isValidParentLink(from: workspace, in: window) == false
         }
     }
@@ -49,43 +51,50 @@ extension AppState {
     /// resolve to, or `nil` when the request is invalid. A requested parent
     /// that is itself a subspace resolves to its root so nesting stays one
     /// level deep; a parent in another window, the workspace itself, or a
-    /// link that would form a cycle is rejected.
+    /// link that would form a cycle is rejected. So is any link with the
+    /// coordinator's workspace, which neither nests nor holds subspaces.
     public func resolvedParentWorkspaceID(
         forNesting workspaceID: UUID,
         under requestedParentID: UUID
     ) -> UUID? {
         guard workspaceID != requestedParentID,
+              isCoordinatorWorkspace(workspaceID) == false,
               let window = windows.first(where: { $0.workspaceIDs.contains(workspaceID) }),
               window.workspaceIDs.contains(requestedParentID),
               workspacesByID[requestedParentID] != nil,
               let rootID = rootWorkspaceID(of: requestedParentID, in: window),
-              rootID != workspaceID else {
+              rootID != workspaceID,
+              isCoordinatorWorkspace(rootID) == false else {
             return nil
         }
         return rootID
     }
 
-    /// Workspaces of a window in the order the sidebar shows them: each
-    /// top-level workspace followed by its subspaces.
+    /// Workspaces of a window in the order the sidebar shows them: the
+    /// coordinator's workspace when the window holds it, then each top-level
+    /// workspace followed by its subspaces.
     public func sidebarOrderedWorkspaceIDs(in windowID: UUID) -> [UUID] {
-        topLevelWorkspaceIDs(in: windowID).flatMap { workspaceID in
+        let pinned = coordinator.flatMap { $0.windowID == windowID ? $0.workspaceID : nil }
+        return (pinned.map { [$0] } ?? []) + topLevelWorkspaceIDs(in: windowID).flatMap { workspaceID in
             [workspaceID] + subspaceWorkspaceIDs(of: workspaceID)
         }
     }
 
     /// The parent a workspace created in `windowID` would nest under when it
     /// asks for `requestedParentID`: that workspace's root, or `nil` when it
-    /// is not in the window.
+    /// is not in the window or is the coordinator's workspace.
     public func resolvedParentWorkspaceID(
         forNewWorkspaceIn windowID: UUID,
         under requestedParentID: UUID
     ) -> UUID? {
         guard let window = windows.first(where: { $0.id == windowID }),
               window.workspaceIDs.contains(requestedParentID),
-              workspacesByID[requestedParentID] != nil else {
+              workspacesByID[requestedParentID] != nil,
+              let rootID = rootWorkspaceID(of: requestedParentID, in: window),
+              isCoordinatorWorkspace(rootID) == false else {
             return nil
         }
-        return rootWorkspaceID(of: requestedParentID, in: window)
+        return rootID
     }
 
     /// Drops parent links that no longer resolve and flattens deeper nesting
@@ -126,6 +135,7 @@ extension AppState {
                 window.workspaceIDs.contains(workspaceID)
                     && window.workspaceIDs.contains(parentID)
                     && workspacesByID[parentID]?.parentWorkspaceID == nil
+                    && workspacesByID[parentID]?.isCoordinator == false
             }
             if isValid == false {
                 workspacesByID[workspaceID]?.parentWorkspaceID = nil
@@ -143,8 +153,9 @@ extension AppState {
             return false
         }
         // Only a top-level parent counts; a deeper link is flattened by the
-        // reducer and by `normalizeWorkspaceParentLinks`.
-        return parent.parentWorkspaceID == nil
+        // reducer and by `normalizeWorkspaceParentLinks`. The coordinator's
+        // workspace takes no part in nesting.
+        return parent.parentWorkspaceID == nil && parent.isCoordinator == false && workspace.isCoordinator == false
     }
 
     /// Follows parent links from `workspaceID` to a workspace with no parent.

@@ -97,6 +97,7 @@ final class SidebarViewTests: XCTestCase {
         let window: NSWindow
         var taskCoordinator: TaskCoordinator? = nil
         var taskBoard: TaskBoardStore? = nil
+        var coordinatorController: CoordinatorController? = nil
     }
 
     /// `gh` that never answers, so stages come from links and the record.
@@ -3826,6 +3827,169 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space") })
     }
 
+    // MARK: - Coordinator row
+
+    /// Two projects and the coordinator's workspace, read back from a saved
+    /// layout as a relaunch reads it.
+    private func makeCoordinatorSidebarState() throws -> (state: AppState, windowID: UUID, coordinator: CoordinatorLocation, projectIDs: [UUID]) {
+        let projects = [
+            makeSinglePanelWorkspace(id: UUID(), title: "toastty"),
+            makeSinglePanelWorkspace(id: UUID(), title: "emptyos"),
+        ]
+        let windowID = UUID()
+        var state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: projects.map(\.id), selectedWorkspaceID: projects[0].id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        XCTAssertTrue(AppReducer.reduce(
+            action: .createCoordinatorWorkspace(
+                windowID: windowID, workspaceID: UUID(), panelID: UUID(), terminalCWD: "/Users/tester/.toastty/coordinator"
+            ),
+            state: &state
+        ))
+        let saved = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: saved).makeAppState()
+        return (restored, windowID, try XCTUnwrap(restored.coordinator), projects.map(\.id))
+    }
+
+    func testCoordinatorRowIsPinnedAboveTheTasksRowInBothSegmentsAfterARestore() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        let harness = try makeSidebarHarness(
+            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true
+        )
+        defer { harness.window.orderOut(nil) }
+        let root = harness.hostingView
+
+        func checkPinned(_ segment: String) throws {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            let textValues = renderedTextValues(in: root)
+            // One row, restored without an agent.
+            XCTAssertEqual(textValues.filter { $0.hasPrefix("Coordinator") }, ["Coordinator, not running"], "\(segment): \(textValues)")
+            let coordinator = try semanticTextFrame(in: root, prefix: "Coordinator")
+            let tasks = try semanticTextFrame(in: root, prefix: "Tasks")
+            // The same side of the Tasks row as the top of the view.
+            let towardTop = root.isFlipped ? coordinator.midY < tasks.midY : coordinator.midY > tasks.midY
+            XCTAssertTrue(towardTop, "\(segment): the coordinator's row is not above the Tasks row")
+        }
+
+        // Projects: above the Tasks row, and not one of the cards.
+        try checkPinned("projects")
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("toastty"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos"), "\(textValues)")
+        let coordinator = try semanticTextFrame(in: root, prefix: "Coordinator")
+        let tasks = try semanticTextFrame(in: root, prefix: "Tasks")
+        let firstCard = try semanticTextFrame(in: root, prefix: "toastty")
+        XCTAssertEqual((coordinator.midY - tasks.midY).sign, (tasks.midY - firstCard.midY).sign, "the Tasks row is between the coordinator and the cards")
+        try attachSidebarRender(root, name: "coordinator-row-projects-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-projects-not-running")
+
+        // Status: the cards go, the coordinator's row stays.
+        _ = harness.store.send(.setSidebarSegment(windowID: fixture.windowID, segment: .status))
+        try checkPinned("status")
+        textValues = renderedTextValues(in: root)
+        XCTAssertFalse(textValues.contains("toastty"), "\(textValues)")
+        try attachSidebarRender(root, name: "coordinator-row-status-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-status-not-running")
+    }
+
+    func testCoordinatorRowShowsTheAgentsStateAndSelectsItsWorkspace() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        let harness = try makeSidebarHarness(
+            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        let root = harness.hostingView
+        let panelID = try XCTUnwrap(fixture.coordinator.panelID)
+        func coordinatorLabels() -> [String] {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            return renderedTextValues(in: root).filter { $0.hasPrefix("Coordinator") }
+        }
+        func report(_ kind: SessionStatusKind) {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "coordinator-session", status: SessionStatus(kind: kind, summary: kind.rawValue), at: Date()
+            )
+        }
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, not running"])
+
+        // The agent starts: a quiet row while it is at rest.
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "coordinator-session", agent: .claude, panelID: panelID, windowID: fixture.windowID,
+            workspaceID: fixture.coordinator.workspaceID, codexStatusTrackingSource: .externallyReported,
+            cwd: "/Users/tester/.toastty/coordinator", repoRoot: nil, at: Date()
+        )
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        report(.working)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, working"])
+        try attachSidebarRender(root, name: "coordinator-row-working")
+        try writeSidebarEvidence(root, name: "coordinator-row-working")
+        report(.needsApproval)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, needs approval"])
+        try attachSidebarRender(root, name: "coordinator-row-needs-approval")
+        try writeSidebarEvidence(root, name: "coordinator-row-needs-approval")
+        report(.error)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, error"])
+        // The turn ended while another workspace was selected: its output
+        // is unread, as on any agent's row.
+        report(.idle)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, unread"])
+        try attachSidebarRender(root, name: "coordinator-row-unread")
+        try writeSidebarEvidence(root, name: "coordinator-row-unread")
+
+        // The agent's session is not a card's session row, in either segment.
+        XCTAssertEqual(harness.store.state.topLevelWorkspaceIDs(in: fixture.windowID), fixture.projectIDs)
+
+        // A click selects the coordinator's workspace.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: fixture.windowID), fixture.coordinator.workspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+        try attachSidebarRender(root, name: "coordinator-row-selected")
+        try writeSidebarEvidence(root, name: "coordinator-row-selected")
+
+        // The agent exits: the row says so.
+        XCTAssertTrue(harness.sessionRuntimeStore.handleCommandFinished(panelID: panelID, exitCode: 0, at: Date()))
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, not running, selected"])
+
+        // Closing the workspace removes the row.
+        XCTAssertTrue(harness.store.send(.closeWorkspace(workspaceID: fixture.coordinator.workspaceID)))
+        XCTAssertEqual(coordinatorLabels(), [])
+    }
+
+    func testCoordinatorRowUnreadMarkFollowsTheSessionRowRule() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        var workspace = try XCTUnwrap(fixture.state.workspacesByID[fixture.coordinator.workspaceID])
+        let panelID = try XCTUnwrap(fixture.coordinator.panelID)
+        func mark(unread: Bool, selected: Bool) -> SidebarCoordinatorPresentation.Mark {
+            SidebarCoordinatorPresentation.mark(
+                agentState: .running,
+                statusKind: .ready,
+                hasUnread: unread && SidebarCoordinatorPresentation.hasUnread(
+                    in: workspace,
+                    selectedWorkspaceID: selected ? workspace.id : nil,
+                    selectedPanelID: selected ? panelID : nil
+                )
+            )
+        }
+        XCTAssertEqual(mark(unread: true, selected: false), .quiet)
+        let tabID = try XCTUnwrap(workspace.tabID(containingPanelID: panelID))
+        XCTAssertTrue(workspace.updateTab(id: tabID) { $0.unreadPanelIDs = [panelID] })
+        XCTAssertEqual(mark(unread: true, selected: false), .unread)
+        // The panel the user looks at is read.
+        XCTAssertEqual(mark(unread: true, selected: true), .quiet)
+        XCTAssertEqual(SidebarCoordinatorPresentation.accessibilityLabel(.unread, isSelected: false), "Coordinator, unread")
+        // A working or waiting agent shows that first.
+        XCTAssertEqual(SidebarCoordinatorPresentation.mark(agentState: .running, statusKind: .working, hasUnread: true), .working)
+        XCTAssertEqual(SidebarCoordinatorPresentation.mark(agentState: .starting, statusKind: nil, hasUnread: true), .starting)
+        XCTAssertEqual(SidebarCoordinatorPresentation.accessibilityLabel(.starting, isSelected: true), "Coordinator, starting, selected")
+    }
+
     /// Clicks the hosted view at the semantic text bridge whose text starts
     /// with `prefix`; the bridge is a zero-size field centered on its view.
     private func clickSemanticText(prefix: String, in rootView: NSView) throws {
@@ -4290,7 +4454,8 @@ final class SidebarViewTests: XCTestCase {
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
         taskRecords: [TaskRecord]? = nil,
         withTaskBoard: Bool = false,
-        tasksConfig: TasksConfig = .empty
+        tasksConfig: TasksConfig = .empty,
+        withCoordinator: Bool = false
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -4319,6 +4484,18 @@ final class SidebarViewTests: XCTestCase {
                 releaseCheckInterval: nil
             )
         } : nil
+        // No launcher and no terminal: these tests show the row, and set
+        // the agent's state through the session store.
+        let coordinatorController = withCoordinator ? CoordinatorController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            launcher: nil,
+            directoryURL: FileManager.default.temporaryDirectory,
+            configLoader: { tasksConfig },
+            deliverText: { _, _ in .unavailable },
+            promptState: { _ in .idleAtPrompt }
+        ) : nil
+        taskCoordinator?.coordinatorController = coordinatorController
 
         let sidebarView = SidebarView(
             windowID: windowID,
@@ -4357,7 +4534,8 @@ final class SidebarViewTests: XCTestCase {
             hostingView: hostingView,
             window: hostWindow,
             taskCoordinator: taskCoordinator,
-            taskBoard: taskBoard
+            taskBoard: taskBoard,
+            coordinatorController: coordinatorController
         )
     }
 

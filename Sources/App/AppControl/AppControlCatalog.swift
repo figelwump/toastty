@@ -93,6 +93,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
     case taskAdopt = "task.adopt"
+    case coordinatorOpen = "coordinator.open"
+    case coordinatorRestart = "coordinator.restart"
+    case coordinatorSend = "coordinator.send"
     case webhookAdd = "webhook.add"
     case webhookSet = "webhook.set"
     case webhookRemove = "webhook.remove"
@@ -587,6 +590,32 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.taskID(required: true), .taskMessage(required: true)]
             )
+        case .coordinatorOpen:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Open the coordinator: one long-lived agent session in its own workspace, pinned at the top of the sidebar. The first call creates the workspace in the window (windowID; the selected window without it), with a terminal in the coordinator's folder, and starts the agent from the [coordinator] table of tasks.toml. Later calls select the workspace, and start the agent only when none runs there. Returns after the start attempt, with the coordinator.get fields, createdWorkspace and startedAgent. Fails with the reason when the agent does not start; a terminal that is busy with something else is left alone. The coordinator is not a task.",
+                selectors: [.windowID],
+                parameters: [
+                    .init(name: "select", summary: "Select the coordinator's workspace. Defaults to true.", valueType: .boolean, required: false),
+                ]
+            )
+        case .coordinatorRestart:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Start a fresh agent session for the coordinator in its workspace, without selecting it. An agent that still runs there is ended: its terminal closes and the new session gets a new terminal. A terminal at its shell prompt is used again. Messages that wait in the coordinator's queue stay. Creates the workspace when there is none.",
+                selectors: [.windowID],
+                parameters: []
+            )
+        case .coordinatorSend:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while the user has typed in the coordinator's terminal since the last turn started (userDraft), while no agent runs (noSession) and while the agent starts. One message is typed for each open prompt, in order. The queue holds up to 50 messages in memory: it survives an agent restart, not an app quit. The text is typed as programmatic input, not as the user's own. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [.taskMessage(required: true)]
+            )
         case .taskWatch:
             return .init(
                 id: rawValue,
@@ -778,6 +807,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskList = "task.list"
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
+    case coordinatorGet = "coordinator.get"
     case webhookList = "webhook.list"
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -894,6 +924,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "List watches from task.watch: pending ones, and fired ones for a while after they fire, with the reason and whether the message was delivered. Filter by watchID, by the watched taskID, or by notifyTaskID.",
                 selectors: [],
                 parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
+            )
+        case .coordinatorGet:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits.",
+                selectors: []
             )
         case .webhookList:
             return .init(

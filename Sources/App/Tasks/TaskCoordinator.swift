@@ -268,6 +268,10 @@ final class TaskCoordinator {
     /// The live view of every task's stage, for queries that report it and
     /// for stage watches.
     weak var board: TaskBoardStore?
+    /// The coordinator: the agent session that follows the tasks. It is not
+    /// a task itself; it hangs here so the views and app control that get
+    /// the task system get it too.
+    var coordinatorController: CoordinatorController?
     /// Sends task events to approved webhooks, and holds the webhooks
     /// waiting for approval. Set once it exists.
     weak var webhooks: TaskWebhookService?
@@ -1646,7 +1650,8 @@ final class TaskCoordinator {
         store.state.windows
             .flatMap(\.workspaceIDs)
             .compactMap { store.state.workspacesByID[$0] }
-            .filter { $0.parentWorkspaceID == nil }
+            // The coordinator's workspace is not a project.
+            .filter { $0.parentWorkspaceID == nil && $0.isCoordinator == false }
     }
 
     /// A workspace's saved root, else its first terminal's git root, else
@@ -1720,6 +1725,15 @@ final class TaskCoordinator {
         }
         guard let workspace = store.state.workspacesByID[candidate] else {
             throw TaskError("No open workspace has ID \(candidate.uuidString).")
+        }
+        // The coordinator's workspace is not a project. A task the
+        // coordinator creates without naming one has no workspace yet, like
+        // a task from quick entry.
+        if workspace.isCoordinator {
+            guard requested == nil else {
+                throw TaskError("The coordinator's workspace is not a project. Pass the task's project workspace or root directory.")
+            }
+            return nil
         }
         let rootID = store.state.subspaceParentIDsByWorkspaceID()[candidate] ?? workspace.id
         guard store.state.workspacesByID[rootID] != nil else {

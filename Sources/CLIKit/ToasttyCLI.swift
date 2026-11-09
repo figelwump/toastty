@@ -945,8 +945,84 @@ public enum ToasttyCLI {
         case "webhook":
             return try parseWebhookCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
 
+        case "coordinator":
+            return try parseCoordinatorCommand(Array(remainingArguments.dropFirst()), options: options, environment: environment)
+
         default:
             throw ToasttyCLIError.usage("unknown command: \(command)\n\n\(usage)")
+        }
+    }
+
+    /// The text of a `--text-file`, read relative to the caller's directory.
+    private static func textFileContents(_ file: String, environment: [String: String]) throws -> String {
+        let workingDirectory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
+        let expanded = (file as NSString).expandingTildeInPath
+        let path = expanded.hasPrefix("/")
+            ? expanded
+            : URL(filePath: workingDirectory, directoryHint: .isDirectory).appending(path: expanded).standardizedFileURL.path(percentEncoded: false)
+        guard let data = FileManager.default.contents(atPath: path), let contents = String(data: data, encoding: .utf8) else {
+            throw ToasttyCLIError.runtime("could not read --text-file \(path) as UTF-8 text")
+        }
+        return contents
+    }
+
+    private static func parseCoordinatorCommand(
+        _ arguments: [String],
+        options: CLIOptions,
+        environment: [String: String]
+    ) throws -> CLIInvocation {
+        guard let verb = arguments.first else {
+            throw ToasttyCLIError.usage("coordinator requires a subcommand\n\n\(usage)")
+        }
+        let parsed = try parseCommandArguments(
+            Array(arguments.dropFirst()),
+            valueOptions: ["--window", "--text", "--text-file"],
+            flagOptions: ["--no-select"]
+        )
+        func windowArgs() throws -> [String: AutomationJSONValue] {
+            guard let window = parsed.singleValue("--window") else { return [:] }
+            guard UUID(uuidString: window) != nil else {
+                throw ToasttyCLIError.usage("--window must be a window ID\n\n\(usage)")
+            }
+            return ["windowID": .string(window)]
+        }
+        switch verb {
+        case "open":
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("usage: toastty coordinator open [--window <id>] [--no-select]\n\n\(usage)")
+            }
+            var args = try windowArgs()
+            if parsed.hasFlag("--no-select") { args["select"] = .bool(false) }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.open", args: args))
+
+        case "restart":
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("usage: toastty coordinator restart [--window <id>]\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.restart", args: try windowArgs()))
+
+        case "status":
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("usage: toastty coordinator status\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "coordinator.get", args: [:]))
+
+        case "send":
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("coordinator send takes the message as one argument; quote it\n\n\(usage)")
+            }
+            let sources = [parsed.positionals.first, parsed.singleValue("--text"), parsed.singleValue("--text-file")].compactMap { $0 }
+            guard sources.count == 1 else {
+                throw ToasttyCLIError.usage("coordinator send takes the message as an argument, --text or --text-file\n\n\(usage)")
+            }
+            var text = sources[0]
+            if let file = parsed.singleValue("--text-file") {
+                text = try textFileContents(file, environment: environment)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string(text)]))
+
+        default:
+            throw ToasttyCLIError.usage("unknown coordinator subcommand: \(verb)\n\n\(usage)")
         }
     }
 
@@ -984,6 +1060,10 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
       toastty [--json] [--socket-path <path>] task adopt [--workspace <id>]
+      toastty [--json] [--socket-path <path>] coordinator open [--window <id>] [--no-select]
+      toastty [--json] [--socket-path <path>] coordinator restart [--window <id>]
+      toastty [--json] [--socket-path <path>] coordinator status
+      toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>)
       toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
       toastty [--json] [--socket-path <path>] webhook rotate-secret <name> --secret-stdin
@@ -2420,15 +2500,7 @@ public enum ToasttyCLI {
             }
             var text = sources[0]
             if let file = parsed.singleValue("--text-file") {
-                let workingDirectory = environment["PWD"] ?? FileManager.default.currentDirectoryPath
-                let expanded = (file as NSString).expandingTildeInPath
-                let path = expanded.hasPrefix("/")
-                    ? expanded
-                    : URL(filePath: workingDirectory, directoryHint: .isDirectory).appending(path: expanded).standardizedFileURL.path(percentEncoded: false)
-                guard let data = FileManager.default.contents(atPath: path), let contents = String(data: data, encoding: .utf8) else {
-                    throw ToasttyCLIError.runtime("could not read --text-file \(path) as UTF-8 text")
-                }
-                text = contents
+                text = try textFileContents(file, environment: environment)
             }
             return CLIInvocation(
                 options: options,

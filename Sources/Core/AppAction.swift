@@ -69,6 +69,15 @@ public enum AppAction: Equatable, Sendable {
         title: String,
         terminalCWD: String
     )
+    /// Creates the coordinator's workspace in `windowID`, without
+    /// selecting it: one terminal in `terminalCWD` with no profile binding,
+    /// for the same reason as `createBackgroundTerminalTab`. Refused while
+    /// another coordinator workspace is open. The caller chooses the IDs so
+    /// it can start the agent in that terminal next.
+    case createCoordinatorWorkspace(windowID: UUID, workspaceID: UUID, panelID: UUID, terminalCWD: String)
+    /// Names the terminal panel in the coordinator's workspace that its
+    /// agent runs in, after a restart moved the agent to a new terminal.
+    case setCoordinatorPanel(panelID: UUID)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -201,6 +210,10 @@ public extension AppAction {
             return "createBackgroundTerminalTab"
         case .createTaskSpace:
             return "createTaskSpace"
+        case .createCoordinatorWorkspace:
+            return "createCoordinatorWorkspace"
+        case .setCoordinatorPanel:
+            return "setCoordinatorPanel"
         case .createWindow:
             return "createWindow"
         case .closeWindow:

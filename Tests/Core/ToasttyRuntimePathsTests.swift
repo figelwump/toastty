@@ -26,6 +26,7 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.paneJournalFileURL(for: panelID).path == "/tmp/toastty-home/.toastty/history/pane-journals/11111111-1111-1111-1111-111111111111.journal")
         #expect(paths.scratchpadDocumentsDirectoryURL.path == "/tmp/toastty-home/.toastty/scratchpad-documents")
         #expect(paths.userSkillsDirectoryURL.path == "/tmp/toastty-home/.toastty/skills")
+        #expect(paths.coordinatorDirectoryURL.path == "/tmp/toastty-home/.toastty/coordinator")
         #expect(paths.agentPluginsDirectoryURL.path == "/tmp/toastty-home/.toastty/agent-plugins")
         #expect(paths.managedAgentLaunchArtifactsDirectoryURL.path == "/tmp/toastty-home/.toastty/run/managed-agent-launches")
         #expect(paths.managedAgentHelperInstancesDirectoryURL.path == "/tmp/toastty-home/.toastty/run/managed-agent-helpers")
@@ -65,6 +66,7 @@ struct ToasttyRuntimePathsTests {
         // home even for runtime-isolated instances.
         #expect(first.userSkillsDirectoryURL.path == "/tmp/ignored-home/.toastty/skills")
         #expect(first.agentPluginsDirectoryURL.path == "\(runtimeHomePath)/agent-plugins")
+        #expect(first.coordinatorDirectoryURL.path == "\(runtimeHomePath)/coordinator")
         #expect(first.managedAgentLaunchArtifactsDirectoryURL.path == "\(runtimeHomePath)/run/managed-agent-launches")
         #expect(first.managedAgentHelperInstancesDirectoryURL.path == "\(runtimeHomePath)/run/managed-agent-helpers")
         #expect(first.defaultLogFileURL.path == "\(runtimeHomePath)/logs/toastty.log")

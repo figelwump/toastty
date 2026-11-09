@@ -89,6 +89,23 @@ public struct TasksConfig: Equatable, Sendable {
         }
     }
 
+    /// How Toastty starts the coordinator's agent.
+    public struct Coordinator: Equatable, Sendable {
+        public static let defaultAgent = "claude"
+
+        /// The agent profile to run; `claude` when the file names none.
+        public var agent: String
+        /// Left out, the profile's own model and effort apply.
+        public var model: String?
+        public var effort: String?
+
+        public init(agent: String = Coordinator.defaultAgent, model: String? = nil, effort: String? = nil) {
+            self.agent = agent
+            self.model = model
+            self.effort = effort
+        }
+    }
+
     public struct QuickEntry: Equatable, Sendable {
         /// The global shortcut for the quick entry panel; nil when the file
         /// turns it off with `shortcut = "none"`.
@@ -148,6 +165,7 @@ public struct TasksConfig: Equatable, Sendable {
     public var triage: Triage?
     public var defaults: Defaults
     public var quickEntry: QuickEntry
+    public var coordinator: Coordinator
     /// In file order.
     public var workspaces: [Workspace]
 
@@ -155,11 +173,13 @@ public struct TasksConfig: Equatable, Sendable {
         triage: Triage? = nil,
         defaults: Defaults = Defaults(),
         quickEntry: QuickEntry = QuickEntry(),
+        coordinator: Coordinator = Coordinator(),
         workspaces: [Workspace] = []
     ) {
         self.triage = triage
         self.defaults = defaults
         self.quickEntry = quickEntry
+        self.coordinator = coordinator
         self.workspaces = workspaces
     }
 
@@ -268,6 +288,7 @@ private struct TasksConfigParser {
         case triage
         case defaults
         case quickEntry
+        case coordinator
         case workspace(path: String)
 
         var name: String {
@@ -275,6 +296,7 @@ private struct TasksConfigParser {
             case .triage: "[triage]"
             case .defaults: "[defaults]"
             case .quickEntry: "[quick_entry]"
+            case .coordinator: "[coordinator]"
             case .workspace(let path): "[workspace.\"\(path)\"]"
             }
         }
@@ -287,7 +309,7 @@ private struct TasksConfigParser {
 
     private typealias Entries = [String: (value: Value, line: Int)]
 
-    private static let expectedTables = "[triage], [defaults], [quick_entry] or [workspace.\"<root directory>\"]"
+    private static let expectedTables = "[triage], [defaults], [quick_entry], [coordinator] or [workspace.\"<root directory>\"]"
 
     /// Tables and keys from an earlier draft of this file, with what
     /// replaced them.
@@ -387,6 +409,8 @@ private struct TasksConfigParser {
                 config.defaults = try defaults(entries)
             case .quickEntry:
                 config.quickEntry = try quickEntry(entries)
+            case .coordinator:
+                config.coordinator = try coordinator(entries)
             case .workspace(let path):
                 config.workspaces.append(try workspace(path: path, entries))
             }
@@ -443,6 +467,17 @@ private struct TasksConfigParser {
             startSkill: try Self.skill("start_skill", in: entries, table: table),
             mergeSkill: try Self.skill("merge_skill", in: entries, table: table),
             releaseSkill: try Self.skill("release_skill", in: entries, table: table)
+        )
+    }
+
+    private func coordinator(_ entries: Entries) throws -> TasksConfig.Coordinator {
+        let table = Table.coordinator
+        try Self.rejectUnknownKeys(entries, table: table, allowed: ["agent", "model", "effort"])
+        return TasksConfig.Coordinator(
+            agent: try Self.selection("agent", in: entries, table: table, maximumLength: 64)
+                ?? TasksConfig.Coordinator.defaultAgent,
+            model: try Self.selection("model", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumModelLength),
+            effort: try Self.selection("effort", in: entries, table: table, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength)
         )
     }
 
@@ -506,6 +541,7 @@ private struct TasksConfigParser {
         case "triage": return .triage
         case "defaults": return .defaults
         case "quick_entry": return .quickEntry
+        case "coordinator": return .coordinator
         default: break
         }
         if let replacement = replacedTables[name] {
