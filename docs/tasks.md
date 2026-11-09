@@ -343,7 +343,7 @@ worktree.
 
 - `toastty task get <task-id>` reports `agentState` (`notRunning`, `busy`,
   `waiting` for an approval or an answer, `idle`, or `error`, with the session
-  and when its status last changed) and `lastReply`, the agent's latest
+  and when it entered that state) and `lastReply`, the agent's latest
   message. Toastty reads the reply from the Claude Code or Codex transcript, or
   from the history other agents publish through Toastty's extension, and cuts it
   at 16 KB. It is `null` until Toastty has confirmed the session's transcript.
@@ -352,6 +352,8 @@ worktree.
   record, stage or agent state changed since that answer, and the IDs of deleted tasks
   in `deletedTaskIDs`. A cursor from before a relaunch gets every task back with
   `reset: true`. `--include-reply` adds each task's `lastReply`.
+- Both commands report how long the task has been in its state; see
+  [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
 - `toastty task send <task-id> "<message>"` types the message into the task's
   agent and submits it. A busy agent queues it as typed input. It fails when the
   task has no running agent, and says so when the message was typed but may not
@@ -410,6 +412,59 @@ Any unscoped caller may read, message and watch any task. A workspace-scoped
 session, which you set up on purpose, reaches only the tasks it may see in
 `task list`.
 
+### How long a task has been in its state
+
+Toastty has no rule for a task that is stuck. `task get` and `task list` report
+each state with the time it started, and the coordinator compares those times
+with your policy.
+
+| Field | Meaning |
+| --- | --- |
+| `stage.changedAt` | When the task entered its [stage](#stages): the `group`, and inside Needs you the `attention`. |
+| `agentState.changedAt` | When the agent entered its `state`. A status report that repeats the state does not move it. `null` when no agent runs. |
+| `agentState.interruptedAtQuit` | `true` when the agent was in a turn (`busy` or `waiting`) when Toastty quit or crashed, and has not started a turn since. |
+| `agentState.lastOutputAt` | When the agent's transcript last changed. |
+| `lastUserInputAt` | When you last worked in the task space. |
+| `pullRequest` | GitHub's last answer about the task's pull request: `state`, `isDraft`, `mergeStateStatus`, `checks` and `checksPendingSince`. |
+
+- **Stage.** A stage that lasts under 3 seconds does not move
+  `stage.changedAt`: when an agent's status flickers between two tool calls
+  and the stage returns, the earlier time stays. [Webhook events](#webhooks-for-task-events)
+  use the same rule. Toastty saves the time with the task record, so a task
+  whose stage is the same after a relaunch keeps its earlier time. A linked
+  pull request counts as waiting for review until GitHub's first answer, as in
+  the first minutes after a relaunch. That guess does not move the time:
+  `stage.changedAt` is `null` until the answer comes, unless the task waited
+  for review before.
+- **Relaunch.** A relaunch restores each agent at its prompt. A task that was
+  Running leaves that stage, so its stage time starts at the relaunch, and
+  `interruptedAtQuit` says that its turn was cut off. Toastty saves the start
+  of each turn at once, so a crash counts too. The mark clears when the
+  task's agent starts its next turn. `agentState.changedAt` starts again when
+  the agent is restored.
+- **Output.** For Claude Code and Codex, `lastOutputAt` is the modification
+  time of the transcript file. For agents that publish their history through
+  Toastty's extension, it is the time of the newest entry. A long tool call
+  or a sub-agent can write nothing to the transcript for a long time. It is
+  `null` until Toastty has confirmed the session's transcript.
+- **Your input.** `lastUserInputAt` moves when you type, paste or drop a file
+  into a terminal in the task space, and when you send its agent a message, a
+  steer or a stop from Toastty Mobile. Text that Toastty or the CLI types,
+  such as `task send` and `terminal.send-text`, does not count. Toastty saves
+  it about once a minute, so after a relaunch it can be up to a minute early.
+- **Checks.** `checks` is `pending`, `failing` or `passing`, and `null` when
+  the commit has no checks. One failed check reports `failing` while others
+  still run. `mergeStateStatus` is GitHub's value, such as `CLEAN`, `BLOCKED`
+  or `BEHIND`, and `UNKNOWN` while GitHub works it out after a push. Toastty asks GitHub at the times that [Stages](#stages) lists,
+  so `checksPendingSince` is when Toastty first saw the checks pending for the
+  head commit: they can have started up to two minutes earlier, or longer
+  before that while Toastty did not run. `pullRequest` is `null` for a task
+  without a pull request, and after a relaunch until GitHub answers again.
+
+`task list --changed-since` does not list a task when only `lastOutputAt` or
+`lastUserInputAt` changed. Read those times with `task get` or a full
+`task list`.
+
 ## Coordinate from an outside agent
 
 An agent outside Toastty on the same Mac, such as a chat assistant you talk
@@ -421,7 +476,9 @@ for a merge when you say so. It uses the same CLI:
   --request-id <key>` makes the task. A repeated request ID returns the
   first task. The Tasks view shows the issue as **Source**.
 - `task list --changed-since <cursor> --include-reply` and
-  `task watch <task-id> --until idle --wait` follow the tasks. A coordinator
+  `task watch <task-id> --until idle --wait` follow the tasks. A full
+  `task list` also says
+  [how long each task has been in its state](#how-long-a-task-has-been-in-its-state). A coordinator
   that can receive an HTTPS request can also get a
   [webhook](#webhooks-for-task-events), so nothing has to keep watching.
 - `task send` passes your answers.

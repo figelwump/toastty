@@ -3860,7 +3860,10 @@ extension RemoteAccessServiceSafetyTests {
             text: "Continue after review",
             deliveryMode: .queue
         )
+        #expect(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID) == nil)
         #expect(fixture.service.performRemoteSend(queued, device: device) == .queued(position: 1))
+        // A queued message is the phone user's input from when it was queued.
+        let queuedAt = try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID))
 
         // A stale request and an unavailable terminal must keep both sidebars working.
         #expect(fixture.service.performRemoteInterrupt(
@@ -3880,6 +3883,8 @@ extension RemoteAccessServiceSafetyTests {
         fixture.server.removeAllBroadcasts()
         #expect(fixture.service.performRemoteInterrupt(request, device: device) == .accepted)
         #expect(interrupts == 2)
+        // The stop is the phone user's input too.
+        #expect(try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID)) > queuedAt)
         #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .idle)
         #expect(fixture.summary.presentationStatus == .idle)
         #expect(fixture.summary.statusDetail == "Ready for prompt")
@@ -4083,6 +4088,7 @@ extension RemoteAccessServiceSafetyTests {
             .init(conversationID: fixture.conversationID, action: .resume), device: device
         ) == .updated)
         #expect(fixture.summary.inputControl?.isQueuePaused == false)
+        let lastPhoneActionAt = try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID))
 
         // The Mac user submitted their typing, then the turn ends: the next
         // prompt opens and the queued message is typed, once, as a prompt.
@@ -4112,6 +4118,8 @@ extension RemoteAccessServiceSafetyTests {
         let drained = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
         #expect(drained.inputControl?.queuedMessages.isEmpty == true)
         #expect(delivered == ["Use 300 ms", "Also add a UI test"])
+        // Toastty typed the queued message; the phone user did nothing new.
+        #expect(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID) == lastPhoneActionAt)
         // Delivery consumed the prompt, so nothing else can type until the
         // provider opens the next one.
         #expect(drained.inputAvailability.allowsRemoteSend == false)

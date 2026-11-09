@@ -523,6 +523,10 @@ final class RemoteAccessService: ObservableObject {
     /// When a phone message or stop last reached each panel. Remote delivery
     /// bypasses local-input tracking, so an exit after the turn asks here.
     private var lastRemoteInputAtByPanelID: [UUID: Date] = [:]
+    /// When a phone user last acted on each panel: sent or queued a message,
+    /// steered, or stopped. The later delivery of a queued message is
+    /// Toastty's action and does not move it.
+    private var lastRemoteUserInputAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -3314,6 +3318,7 @@ final class RemoteAccessService: ObservableObject {
         let result: RemoteMessageSendResult
         switch sendQueue.enqueue(entry) {
         case .queued(let position):
+            lastRemoteUserInputAtByPanelID[panelID] = entry.enqueuedAt
             if let staged { stagedAttachmentsByQueuedRequestID[request.clientRequestID] = staged }
             result = .queued(position: position)
         case .duplicate:
@@ -3731,7 +3736,7 @@ final class RemoteAccessService: ObservableObject {
             // paste-oriented text plus a real Return key, which preserves
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
-            recordRemoteInput(panelID: panelID)
+            recordRemoteInput(panelID: panelID, byUserNow: recordedDeliveryMode != .queue)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 deliveredText ?? request.text,
                 submit: true,
@@ -4388,11 +4393,20 @@ final class RemoteAccessService: ObservableObject {
 
 extension RemoteAccessService: SessionRemoteInputProbe {
     /// Phone input is rare, so each write also drops panels that are gone.
-    private func recordRemoteInput(panelID: UUID) {
+    /// `byUserNow` is false when Toastty delivers a message the user queued
+    /// earlier.
+    private func recordRemoteInput(panelID: UUID, byUserNow: Bool = true) {
         lastRemoteInputAtByPanelID = lastRemoteInputAtByPanelID.filter {
             store.state.workspaceSelection(containingPanelID: $0.key) != nil
         }
-        lastRemoteInputAtByPanelID[panelID] = Date()
+        lastRemoteUserInputAtByPanelID = lastRemoteUserInputAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        let now = Date()
+        lastRemoteInputAtByPanelID[panelID] = now
+        if byUserNow {
+            lastRemoteUserInputAtByPanelID[panelID] = now
+        }
     }
 
     func hasRemoteInput(panelID: UUID, since date: Date) -> Bool {
@@ -4406,5 +4420,9 @@ extension RemoteAccessService: SessionRemoteInputProbe {
                 && (sendQueue.entries(for: conversationID).isEmpty == false
                     || pendingSendCorrelator.conversationIDs.contains(conversationID))
         }
+    }
+
+    func lastRemoteUserInputAt(panelID: UUID) -> Date? {
+        lastRemoteUserInputAtByPanelID[panelID]
     }
 }

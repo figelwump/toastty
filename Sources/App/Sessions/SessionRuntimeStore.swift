@@ -131,6 +131,12 @@ final class SessionRuntimeStore: ObservableObject {
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
     /// When someone last typed into each panel, with or without a session.
     private var lastLocalInputAtByPanelID: [UUID: Date] = [:]
+    /// When a person last typed, pasted or dropped a file into each panel.
+    /// Unlike `lastLocalInputAtByPanelID`, text that Toastty or the CLI
+    /// typed does not count.
+    private var lastUserInputAtByPanelID: [UUID: Date] = [:]
+    /// When each panel's input last asked the task system to save its time.
+    private var userInputSaveRequestedAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -486,6 +492,26 @@ final class SessionRuntimeStore: ObservableObject {
     /// When user- or automation-authored input last reached `panelID`.
     func lastLocalInputAt(panelID: UUID) -> Date? {
         lastLocalInputAtByPanelID[panelID]
+    }
+
+    func noteUserInput(panelID: UUID) {
+        let now = Date()
+        lastUserInputAtByPanelID[panelID] = now
+        // Typing changes nothing else that the task system follows, so ask
+        // it to save the time: once per save interval for each panel, and
+        // outside the key event.
+        guard taskCoordinator != nil,
+              now.timeIntervalSince(userInputSaveRequestedAtByPanelID[panelID] ?? .distantPast)
+              >= TaskStateTimes.userInputSaveInterval else { return }
+        userInputSaveRequestedAtByPanelID[panelID] = now
+        Task { @MainActor [weak self] in
+            self?.taskCoordinator?.recordStateTimes()
+        }
+    }
+
+    /// When a person last typed, pasted or dropped a file into `panelID`.
+    func lastUserInputAt(panelID: UUID) -> Date? {
+        lastUserInputAtByPanelID[panelID]
     }
 
     /// A remote user released the Mac draft lock: they say the composer holds
@@ -3395,6 +3421,10 @@ final class SessionRuntimeStore: ObservableObject {
         )
         if lastLocalInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
             lastLocalInputAtByPanelID = lastLocalInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+        }
+        if lastUserInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
+            lastUserInputAtByPanelID = lastUserInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+            userInputSaveRequestedAtByPanelID = userInputSaveRequestedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         publish(nextRegistry, reason: "synchronize_app_state", at: now)

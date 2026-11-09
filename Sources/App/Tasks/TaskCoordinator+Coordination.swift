@@ -6,7 +6,8 @@ struct TaskAgentStatus: Equatable {
     var activity: TaskAgentState
     var session: TaskSessionInfo?
 
-    var changedAt: Date? { session?.statusUpdatedAt }
+    /// When the agent entered `activity`. `nil` when no agent runs.
+    var changedAt: Date? { session?.stateChangedAt }
 }
 
 /// A `toastty task watch --wait` watch: kept in memory, read by polling.
@@ -70,15 +71,7 @@ extension TaskCoordinator {
         guard let session = liveAgentSession(of: record) else {
             return TaskAgentStatus(activity: .notRunning, session: nil)
         }
-        let activity: TaskAgentState
-        switch session.status?.kind {
-        case .working?: activity = .busy
-        case .needsApproval?: activity = .waiting
-        case .error?: activity = .error
-        // A session that has not reported a status yet sits at its prompt.
-        case .idle?, .ready?, nil: activity = .idle
-        }
-        return TaskAgentStatus(activity: activity, session: session)
+        return TaskAgentStatus(activity: TaskAgentState(statusKind: session.status?.kind), session: session)
     }
 
     func lastReply(of record: TaskRecord) -> TaskAgentReply? {
@@ -224,7 +217,7 @@ extension TaskCoordinator {
         let status = agentStatus(of: record)
         return TaskWatchFacts(
             activity: status.activity,
-            activityChangedAt: status.changedAt,
+            activityChangedAt: status.session?.statusUpdatedAt,
             turnEndedAt: status.session?.lastTurnEndedAt,
             stages: record.archivedAt != nil ? [.archived] : stages[record.id] ?? [],
             // A pull request merged on GitHub after a failed merge.

@@ -86,6 +86,19 @@ final class TaskRecordStore: ObservableObject {
         return record
     }
 
+    /// Changes any number of records and saves once, after a short delay.
+    /// For a pass over every record: one `update` per record would encode
+    /// the whole file each time.
+    func updateEach(_ body: (inout TaskRecord) -> Void) {
+        var next = records
+        for index in next.indices {
+            body(&next[index])
+        }
+        guard next != records else { return }
+        records = next
+        schedulePersist()
+    }
+
     /// Removes a record and saves at once. When the save fails, the record
     /// stays and the error is thrown.
     func remove(id: UUID) throws {

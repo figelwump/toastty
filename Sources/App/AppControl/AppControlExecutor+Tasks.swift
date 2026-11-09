@@ -199,13 +199,20 @@ extension AppControlExecutor {
     func runTaskAdopt(workspaceID: UUID) throws -> AppControlActionOutcome {
         let coordinator = try requiredTaskCoordinator()
         let record = try perform { try coordinator.adopt(workspaceID: workspaceID) }
-        return .init(didMutateState: true, result: Self.taskSnapshot(record, stage: Self.stagesByTaskID(coordinator.board)[record.id]))
+        let stages = Self.stagesByTaskID(coordinator.recordStateTimes(), pullRequests: coordinator.board?.pullRequests)
+        return .init(
+            didMutateState: true,
+            result: Self.taskSnapshot(coordinator.records.record(id: record.id) ?? record, stage: stages[record.id])
+        )
     }
 
     func runTaskQuery(_ query: AppControlQueryID, args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
         let coordinator = try requiredTaskCoordinator()
         switch query {
         case .taskGet:
+            // The times of state changes are brought up to date first, so
+            // each belongs to the state this answer reports.
+            let stages = Self.stagesByTaskID(coordinator.recordStateTimes(), pullRequests: coordinator.board?.pullRequests)
             // Without a taskID, a task's agent reads its own task.
             let record: TaskRecord
             if args.taskString("taskID") == nil {
@@ -216,15 +223,20 @@ extension AppControlExecutor {
             } else {
                 record = try visibleTask(args: args, coordinator: coordinator)
             }
-            return liveTaskSnapshot(
-                record, coordinator: coordinator, stage: Self.stagesByTaskID(coordinator.board)[record.id], includeReply: true
+            return addingActivityTimes(
+                to: liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true),
+                record: record,
+                coordinator: coordinator
             )
         case .taskList:
             let includeReply = try args.taskBool("includeReply") ?? false
-            let stages = Self.stagesByTaskID(coordinator.board)
+            let stages = Self.stagesByTaskID(coordinator.recordStateTimes(), pullRequests: coordinator.board?.pullRequests)
             // Every task's snapshot goes to the change feed, so one caller's
             // poll never hides a change from another. The reply is left out
             // of what the feed compares: it changes only with agentState.
+            // So are lastOutputAt and lastUserInputAt, which move while an
+            // agent works or the user types and would list the task on
+            // every poll.
             let records = coordinator.records.records
             let snapshots = Dictionary(uniqueKeysWithValues: records.map {
                 ($0.id, liveTaskSnapshot($0, coordinator: coordinator, stage: stages[$0.id], includeReply: false))
@@ -243,8 +255,10 @@ extension AppControlExecutor {
                     && (parent == nil || record.parentTaskID == parent)
             }
             let tasks = listed.map { record -> AutomationJSONValue in
-                guard includeReply else { return .object(snapshots[record.id] ?? [:]) }
-                return .object(liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true))
+                let snapshot = includeReply
+                    ? liveTaskSnapshot(record, coordinator: coordinator, stage: stages[record.id], includeReply: true)
+                    : snapshots[record.id] ?? [:]
+                return .object(addingActivityTimes(to: snapshot, record: record, coordinator: coordinator))
             }
             return [
                 "tasks": .array(tasks),
@@ -287,7 +301,8 @@ extension AppControlExecutor {
     }
 
     /// The record snapshot plus what only the running app knows: the agent's
-    /// state and, when asked, its last reply.
+    /// state, GitHub's last answer about the pull request and, when asked,
+    /// the agent's last reply.
     private func liveTaskSnapshot(
         _ record: TaskRecord,
         coordinator: TaskCoordinator,
@@ -305,7 +320,9 @@ extension AppControlExecutor {
             "summary": optional(status.session?.status?.summary),
             "changedAt": optional(status.changedAt.map { ISO8601DateFormatter().string(from: $0) }),
             "lastTurnEndedAt": optional(status.session?.lastTurnEndedAt.map { ISO8601DateFormatter().string(from: $0) }),
+            "interruptedAtQuit": .bool(coordinator.wasInterruptedAtQuit(record)),
         ])
+        snapshot["pullRequest"] = stage?.pullRequest.map { .object(Self.pullRequestSnapshot($0, record: record)) } ?? .null
         if includeReply {
             snapshot["lastReply"] = coordinator.lastReply(of: record).map { reply in
                 .object([
@@ -316,6 +333,48 @@ extension AppControlExecutor {
             } ?? .null
         }
         return snapshot
+    }
+
+    /// Adds the two times that move without a change of state: the agent's
+    /// last output and the user's last input.
+    private func addingActivityTimes(
+        to snapshot: [String: AutomationJSONValue],
+        record: TaskRecord,
+        coordinator: TaskCoordinator
+    ) -> [String: AutomationJSONValue] {
+        func date(_ value: Date?) -> AutomationJSONValue {
+            value.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
+        }
+        var snapshot = snapshot
+        if case .object(var agentState)? = snapshot["agentState"] {
+            agentState["lastOutputAt"] = date(coordinator.lastOutputAt(of: record))
+            snapshot["agentState"] = .object(agentState)
+        }
+        snapshot["lastUserInputAt"] = date(coordinator.lastUserInputAt(of: record))
+        return snapshot
+    }
+
+    /// `pullRequest`: GitHub's last answer. `checks` is `pending`, `failing`
+    /// or `passing`, and `null` when the commit has no checks or the answer
+    /// did not say. `checksPendingSince` is when Toastty first saw them
+    /// pending for the head commit.
+    private static func pullRequestSnapshot(_ state: TaskPullRequestState, record: TaskRecord) -> [String: AutomationJSONValue] {
+        func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
+        var checks: String?
+        switch state.mergeability?.checks {
+        case .passing?: checks = "passing"
+        case .running?: checks = "pending"
+        case .failing?: checks = "failing"
+        case nil: checks = nil
+        }
+        let pendingSince = state.state == .open && checks == "pending" ? record.stateTimes?.checksPending?.since : nil
+        return [
+            "state": .string(state.state.rawValue),
+            "isDraft": .bool(state.isDraft),
+            "mergeStateStatus": optional(state.mergeability?.mergeState.rawValue.uppercased()),
+            "checks": optional(checks),
+            "checksPendingSince": optional(pendingSince.map { ISO8601DateFormatter().string(from: $0) }),
+        ]
     }
 
     /// A watch is visible when the caller may see the task it notifies, or,
@@ -557,19 +616,31 @@ extension AppControlExecutor {
         }
     }
 
-    private static func stagesByTaskID(_ board: TaskBoardStore?) -> [UUID: TaskStageSnapshot] {
-        guard let board else { return [:] }
-        return Dictionary(board.items().compactMap { item in
-            item.taskID.map { ($0, TaskStageSnapshot(stage: item.stage, finishedThroughChildren: item.finishedThroughChildren)) }
+    /// `pullRequests` gives GitHub's answers as given: the board's own copy
+    /// keeps the last known checks while GitHub works out the merge state.
+    private static func stagesByTaskID(_ items: [TaskBoardItem], pullRequests: PullRequestStateCache?) -> [UUID: TaskStageSnapshot] {
+        Dictionary(items.compactMap { item in
+            item.taskID.map {
+                ($0, TaskStageSnapshot(
+                    stage: item.stage,
+                    finishedThroughChildren: item.finishedThroughChildren,
+                    pullRequest: item.pullRequest.flatMap { pullRequests?.answer(for: $0) }
+                ))
+            }
         }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// `stage` as `{group, attention?, reason?, finishedThroughChildren?}`:
-    /// the group the Tasks view lists the task in, why it needs the user,
+    /// `stage` as `{group, needsUser, changedAt, attention?, reason?,
+    /// finishedThroughChildren?}`: the group the Tasks view lists the task
+    /// in, when its group or attention last changed, why it needs the user,
     /// and whether it reached To ship or Done through its child tasks.
-    static func stageSnapshot(_ snapshot: TaskStageSnapshot) -> [String: AutomationJSONValue] {
+    static func stageSnapshot(_ snapshot: TaskStageSnapshot, changedAt: Date?) -> [String: AutomationJSONValue] {
         let stage = snapshot.stage
-        var result: [String: AutomationJSONValue] = ["group": .string("\(stage.group)"), "needsUser": .bool(stage.needsUser)]
+        var result: [String: AutomationJSONValue] = [
+            "group": .string("\(stage.group)"),
+            "needsUser": .bool(stage.needsUser),
+            "changedAt": changedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
+        ]
         if snapshot.finishedThroughChildren {
             result["finishedThroughChildren"] = .bool(true)
         }
@@ -683,7 +754,9 @@ extension AppControlExecutor {
             ])
         }
         if let stage {
-            snapshot["stage"] = .object(stageSnapshot(stage))
+            snapshot["stage"] = .object(stageSnapshot(
+                stage, changedAt: TaskCoordinator.stageChangedAt(record, stage: stage.stage)
+            ))
         }
         if let startWork = record.startWork {
             snapshot["worktree"] = .object(worktreeSnapshot(record, startWork: startWork))
@@ -766,4 +839,6 @@ struct TaskStageSnapshot: Equatable {
     var stage: TaskStage
     /// The task reached To ship or Done because its child tasks finished.
     var finishedThroughChildren = false
+    /// GitHub's last answer about the task's pull request, if any.
+    var pullRequest: TaskPullRequestState?
 }

@@ -75,6 +75,9 @@ struct TaskSessionInfo: Equatable {
     var title: String?
     var status: SessionStatus? = nil
     var statusUpdatedAt: Date? = nil
+    /// When the session entered its current state (busy, waiting, idle or
+    /// error). A report that repeats the state does not move it.
+    var stateChangedAt: Date? = nil
     var lastTurnEndedAt: Date? = nil
     /// When the current turn started, while the session works.
     var turnStartedAt: Date? = nil
@@ -106,6 +109,14 @@ protocol TaskSessionProviding: AnyObject {
     /// The managed session's workspace scope; `nil` when it is unscoped or
     /// not a running managed session.
     func scope(sessionID: String) -> Set<UUID>?
+    /// When the session's transcript last changed: the transcript file's
+    /// modification time, or the newest entry of an agent that publishes
+    /// its history through Toastty's extension.
+    func lastOutputAt(sessionID: String) -> Date?
+    /// When a person last typed, pasted or dropped a file into the panel,
+    /// or sent it a message from Toastty Mobile. Text that Toastty or the
+    /// CLI typed, such as `task send`, does not count.
+    func lastUserInputAt(panelID: UUID) -> Date?
 }
 
 extension TaskSessionProviding {
@@ -113,6 +124,8 @@ extension TaskSessionProviding {
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }
+    func lastOutputAt(sessionID: String) -> Date? { nil }
+    func lastUserInputAt(panelID: UUID) -> Date? { nil }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -276,6 +289,14 @@ final class TaskCoordinator {
     var watchMonitor: Task<Void, Never>?
     /// The change cursor behind `task.list changedSince`.
     let changeFeed = TaskChangeFeed()
+    /// Names this app launch in the turn marks `recordStateTimes` saves. A
+    /// mark with another ID is from a launch that ended during the turn.
+    let launchID = UUID().uuidString
+    /// Set when the app quits. Sessions that stop while it quits must not
+    /// remove the turn marks that tell the next launch what was cut off.
+    var isTerminating = false
+    /// The tasks whose stage `recordStateTimes` has seen in this launch.
+    var stageSeenTaskIDs: Set<UUID> = []
 
     init(
         records: TaskRecordStore,

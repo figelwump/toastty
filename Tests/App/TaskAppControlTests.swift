@@ -7,7 +7,7 @@ import Testing
 /// reach it.
 @MainActor
 struct TaskAppControlTests {
-    private func makeExecutor(_ fixture: TaskCoordinatorTests.Fixture, coordinator: TaskCoordinator?) -> AppControlExecutor {
+    func makeExecutor(_ fixture: TaskCoordinatorTests.Fixture, coordinator: TaskCoordinator?) -> AppControlExecutor {
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
         webPanelRuntimeRegistry.bind(store: fixture.store)
@@ -27,7 +27,7 @@ struct TaskAppControlTests {
         )
     }
 
-    private func context(_ callerSessionID: String? = nil) -> AutomationRequestContext {
+    func context(_ callerSessionID: String? = nil) -> AutomationRequestContext {
         AutomationRequestContext(callerSessionID: callerSessionID, commandName: "app_control.run_action")
     }
 
@@ -404,10 +404,12 @@ struct TaskAppControlTests {
         var entries: [(text: String, panelID: UUID)] = []
     }
 
-    private func useLiveSessions(_ fixture: TaskCoordinatorTests.Fixture) -> TypedText {
+    /// `coordinator` defaults to the fixture's; pass one made for a relaunch.
+    @discardableResult
+    func useLiveSessions(_ fixture: TaskCoordinatorTests.Fixture, coordinator: TaskCoordinator? = nil) -> TypedText {
         let typed = TypedText()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
-        fixture.coordinator.sessions = LiveTaskSessions(
+        (coordinator ?? fixture.coordinator).sessions = LiveTaskSessions(
             sessionRuntimeStore: fixture.sessionRuntimeStore,
             closeController: SessionCloseController(
                 store: fixture.store,
@@ -630,7 +632,7 @@ extension TaskAppControlTests {
         }
     }
 
-    private struct OfflineGitHub: WorkspaceMergeCommandRunning {
+    struct OfflineGitHub: WorkspaceMergeCommandRunning {
         func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
             WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
         }
@@ -661,8 +663,14 @@ extension TaskAppControlTests {
         }
         let parent = try insert("coordinate-signup")
         let child = try insert("fix-signup", parent: parent.id)
+        // The stage without its time, which other tests cover.
+        func withoutTime(_ stage: AutomationJSONValue?) -> AutomationJSONValue? {
+            guard case .object(var object)? = stage else { return stage }
+            object["changedAt"] = nil
+            return .object(object)
+        }
         func parentStage() throws -> AutomationJSONValue? {
-            try executor.runQuery(id: "task.get", args: ["taskID": .string(parent.id.uuidString)])["stage"]
+            withoutTime(try executor.runQuery(id: "task.get", args: ["taskID": .string(parent.id.uuidString)])["stage"])
         }
         #expect(try parentStage() == .object(["group": .string("idle"), "needsUser": .bool(false)]))
         let first = try executor.runQuery(id: "task.list", args: [:])
@@ -687,7 +695,7 @@ extension TaskAppControlTests {
         }
         let byID = Dictionary(uniqueKeysWithValues: tasks.compactMap { task -> (String, AutomationJSONValue?)? in
             guard case .object(let object) = task, case .string(let id)? = object["taskID"] else { return nil }
-            return (id, object["stage"])
+            return (id, withoutTime(object["stage"]))
         })
         #expect(Set(byID.keys) == [parent.id.uuidString, child.id.uuidString])
         #expect(byID[parent.id.uuidString] == finished)

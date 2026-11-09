@@ -925,6 +925,14 @@ Needs you the `attention` and `reason`. A task that is starting reports
 `toShip` or `done` because its child tasks finished also reports
 `finishedThroughChildren: true`; its record has no merge or done time of its
 own. See [Stages](tasks.md#stages).
+They also report how long the task has been in its state: `stage.changedAt`,
+`agentState.changedAt`, `agentState.interruptedAtQuit` (the agent was in a turn
+when Toastty quit or crashed, and has not started one since),
+`agentState.lastOutputAt`, `lastUserInputAt`, and `pullRequest` with `checks`
+(`pending`, `failing` or `passing`), `checksPendingSince` and
+`mergeStateStatus`. `task list --changed-since` does not list a task when only
+`lastOutputAt` or `lastUserInputAt` changed. See
+[How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state).
 `task adopt` gives a task space without a record one; it defaults to the
 calling agent's task space.
 

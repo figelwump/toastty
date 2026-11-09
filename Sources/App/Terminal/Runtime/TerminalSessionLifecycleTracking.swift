@@ -50,6 +50,9 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
     func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID)
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool
     func noteLocalInputForActiveSession(panelID: UUID)
+    /// A person typed, pasted or dropped a file into the panel. Text that
+    /// Toastty or the CLI typed does not come through here.
+    func noteUserInput(panelID: UUID)
     @discardableResult
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,
@@ -74,4 +77,5 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
 
 extension TerminalSessionLifecycleTracking {
     func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID) {}
+    func noteUserInput(panelID: UUID) {}
 }

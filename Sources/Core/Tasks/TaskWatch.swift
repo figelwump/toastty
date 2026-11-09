@@ -131,6 +131,19 @@ public enum TaskAgentState: String, Codable, Equatable, Sendable {
     case error
 }
 
+extension TaskAgentState {
+    /// The state of a running session with this status. A session that has
+    /// not reported a status yet sits at its prompt.
+    public init(statusKind: SessionStatusKind?) {
+        switch statusKind {
+        case .working?: self = .busy
+        case .needsApproval?: self = .waiting
+        case .error?: self = .error
+        case .idle?, .ready?, nil: self = .idle
+        }
+    }
+}
+
 /// The facts a watch reads, gathered by the app from the live session and
 /// the task's stage.
 public struct TaskWatchFacts: Equatable, Sendable {

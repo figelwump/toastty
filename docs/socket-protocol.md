@@ -734,7 +734,9 @@ the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`
 merging, cleared when a new merge starts, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
 `group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`; a task that
-is starting reports `running`), `needsUser`, and for Needs you `attention` and, for failures and a stopped
+is starting reports `running`), `needsUser`, `changedAt` (when the task entered
+this `group` and `attention`; a stage that lasts under 3 seconds does not move
+it), and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
 `cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,
@@ -749,14 +751,23 @@ session that continues in the worktree, `conversationConfirmed`,
 `sourceKeptReason`). A task created with `fork` has `fork`:
 `sourceSessionID`, `sourceConversationID`, and `conversationConfirmed`, which is
 `true` once the fork reported a conversation of its own. `task.get` also has `agentState` (`state`: `notRunning`,
-`busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`, and
-`changedAt`, when the status last changed) and `lastReply` (`text`, cut at
+`busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`,
+`changedAt`, when the agent entered that state, `lastTurnEndedAt`,
+`interruptedAtQuit`, which is `true` when the agent was in a turn when Toastty
+quit or crashed and has not started one since, and `lastOutputAt`, when its
+transcript last changed) and `lastReply` (`text`, cut at
 16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the
-session's transcript. `task.list` returns `tasks`, oldest first, with the same
+session's transcript. `lastUserInputAt` is when a person last typed into a
+terminal in the task space or sent its agent a message from Toastty Mobile.
+`pullRequest` is `null`, or GitHub's last answer: `state` (`open`, `closed` or
+`merged`), `isDraft`, `mergeStateStatus`, `checks` (`pending`, `failing`,
+`passing` or `null`) and `checksPendingSince`. See
+[How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state). `task.list` returns `tasks`, oldest first, with the same
 scope rule as `task.retry`, with `agentState` but without `lastReply` unless
 `args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, and
 `reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
-the tasks whose record, `stage` or `agentState` changed since, and `deletedTaskIDs` the
+the tasks whose record, `stage`, `agentState` or `pullRequest` changed since
+(a change of only `lastOutputAt` or `lastUserInputAt` does not count), and `deletedTaskIDs` the
 tasks deleted since; a cursor from another launch, or one Toastty cannot read,
 returns every task with `reset: true`. `task.watches` returns `watches`, each
 with `watchID`, `taskID` (the watched task), `until`, `notifyTaskID` (`null` for
