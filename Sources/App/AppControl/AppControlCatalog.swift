@@ -78,6 +78,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskRetry = "task.retry"
     case taskDelete = "task.delete"
     case taskSetWorkspace = "task.set-workspace"
+    case taskSetRelease = "task.set-release"
     case taskStartWork = "task.start-work"
     case taskSend = "task.send"
     case taskWatch = "task.watch"
@@ -565,6 +566,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskWorkspace(required: false),
                     .taskRecentWorkspace(required: false),
                     .taskRootDirectory(required: false),
+                ]
+            )
+        case .taskSetRelease:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Save the user's request to release one task's work right after it merges, whatever the project's release rule says, or clear it. Toastty only saves the request and marks the task's rows; it starts no release. task.get and task.list report it as releaseAfterMerge, with the time of the first request, and it survives a relaunch. afterMerge=true saves it; asking again keeps the first time. afterMerge=false clears it, also on a task that has none. Saving is refused on a Done or archived task and on a release task. Without taskID, a task's agent sets it on its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "afterMerge", summary: "true asks for a release right after the task merges; false clears the request.", valueType: .boolean, required: true),
                 ]
             )
         case .taskSend:

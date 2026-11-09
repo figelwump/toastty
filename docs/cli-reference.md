@@ -865,6 +865,7 @@ toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
+toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>]
 toastty task send <task-id> (<text> | --text-file <path>)
@@ -967,10 +968,17 @@ reads the turn, until the task's agent starts its next turn. A later
 `task mark-done` finishes it. `task release` starts a release task for a
 project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
 [Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
+`task set-release --after-merge` saves the user's request to release one task
+right after it merges; `--clear` removes it. Without a task ID, it applies to
+the calling agent's own task. Toastty starts no release because of it:
+`task get` and `task list` report it as `releaseAfterMerge` with `requestedAt`,
+for the agent that starts releases. Toastty refuses the request on a Done or
+archived task and on a release task. See
+[Release one task right after it merges](tasks.md#release-one-task-right-after-it-merges).
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.

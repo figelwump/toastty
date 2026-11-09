@@ -549,6 +549,10 @@ struct SidebarTaskRecordRow: View {
 
     @State private var isHovered = false
 
+    private var label: String {
+        TaskBoardPresentation.addingReleaseAfterMerge(to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             RoundedRectangle(cornerRadius: 1.5)
@@ -557,10 +561,15 @@ struct SidebarTaskRecordRow: View {
                 .frame(width: 12, height: 17)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                SidebarView.styledSessionNameText(item.title, isEmphasized: false)
-                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                    .lineLimit(1)
-                    .frame(minHeight: 17, alignment: .leading)
+                HStack(spacing: 6) {
+                    SidebarView.styledSessionNameText(item.title, isEmphasized: false)
+                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                        .lineLimit(1)
+                    if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
+                        TaskReleaseAfterMergeMark()
+                    }
+                }
+                .frame(minHeight: 17, alignment: .leading)
                 HStack(spacing: 6) {
                     SidebarView.styledSessionSummaryText(TaskBoardPresentation.statusLine(item))
                         .foregroundStyle(ToastyTheme.sidebarSummaryText)
@@ -580,12 +589,12 @@ struct SidebarTaskRecordRow: View {
         .onTapGesture(perform: open)
         .onHover { isHovered = $0 }
         .background {
-            SidebarSemanticTextBridge(text: "\(item.title), \(TaskBoardPresentation.statusLine(item))")
+            SidebarSemanticTextBridge(text: label)
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(item.title), \(TaskBoardPresentation.statusLine(item))")
+        .accessibilityLabel(label)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
     }

@@ -107,7 +107,8 @@ enum RemoteTaskBoardProjection {
             pullRequest: pullRequest(item),
             activityAt: item.activityAt,
             mergeControl: mergeControl(item, context: context),
-            actions: actions(item, isTriageConfigured: context.isTriageConfigured())
+            actions: actions(item, isTriageConfigured: context.isTriageConfigured()),
+            releaseAfterMergeRequestedAt: TaskBoardPresentation.releaseAfterMergeRequestedAt(item)
         )
     }
 

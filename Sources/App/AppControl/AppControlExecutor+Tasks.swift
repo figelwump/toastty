@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone,
              .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
@@ -52,6 +52,13 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.setWorkspace(taskID: record.id, choice: choice) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskSetRelease:
+            guard let afterMerge = try args.taskBool("afterMerge") else {
+                throw AutomationSocketError.invalidPayload("afterMerge is required: true to release right after the merge, false to clear the request")
+            }
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            let updated = try perform { try coordinator.setReleaseAfterMerge(taskID: record.id, requested: afterMerge) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMerge:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let merged = try perform {
@@ -734,6 +741,9 @@ extension AppControlExecutor {
             "mergeCancelledAt": date(record.mergeCancelledAt),
             "mergeFailure": record.mergeFailure.map {
                 .object(["at": date($0.at), "reason": .string($0.reason)])
+            } ?? .null,
+            "releaseAfterMerge": record.releaseAfterMerge.map {
+                .object(["requestedAt": date($0.requestedAt)])
             } ?? .null,
             "shippedAt": date(record.shippedAt),
             "releaseTag": optional(record.releaseTag),

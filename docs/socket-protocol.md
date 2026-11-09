@@ -249,6 +249,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.retry`
 - `task.delete`
 - `task.set-workspace`
+- `task.set-release`
 - `task.send`
 - `task.watch`
 - `task.unwatch`
@@ -487,6 +488,15 @@ Notable action-specific behavior:
     turn, until the task's own agent starts its next turn.
     `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
     done.
+- `task.set-release`
+  - requires the boolean `afterMerge` and takes optional `taskID`; without it,
+    a task's own agent sets it on its own task. `afterMerge=true` saves the
+    user's request to release this task right after it merges, as
+    `releaseAfterMerge.requestedAt`; a second request keeps the first time.
+    `afterMerge=false` clears it, also on a task that has none. Toastty only
+    saves and shows the request; it starts no release.
+  - a request fails with `INVALID_PAYLOAD` on a Done or archived task and on a
+    release task. Returns the task object.
 - `task.archive`
   - requires `args.taskID`; takes booleans `closePullRequest`,
     `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
@@ -731,7 +741,9 @@ has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
 `replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`,
 `mergeFailure` (`at` and `reason` of Toastty's last merge that stopped without
-merging, cleared when a new merge starts, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
+merging, cleared when a new merge starts, or `null`), `releaseAfterMerge`
+(`requestedAt` of the user's request to release the task right after it merges,
+from `task.set-release`, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with
 `group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`; a task that
 is starting reports `running`), `needsUser`, `changedAt` (when the task entered

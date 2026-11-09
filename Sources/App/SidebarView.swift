@@ -1147,7 +1147,9 @@ struct SidebarView: View {
         case .task(let id), .taskSpace(let id): id
         }
         return SidebarHoverRegion(id: hoverID, selection: hoverState.toShipTask) { isHovered in
-            let label = "\(item.title), \(TaskBoardPresentation.statusLine(item))"
+            let label = TaskBoardPresentation.addingReleaseAfterMerge(
+                to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item
+            )
             let open = {
                 if let workspaceID = item.taskSpaceWorkspaceID {
                     runTaskMenuItem(.openTaskSpace(workspaceID: workspaceID))
@@ -1164,6 +1166,10 @@ struct SidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(minHeight: Self.sessionRowLineMinHeight, alignment: .leading)
+                if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
+                    TaskReleaseAfterMergeMark()
+                        .frame(minHeight: Self.sessionRowLineMinHeight)
+                }
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 4)
@@ -1179,7 +1185,7 @@ struct SidebarView: View {
                     hoverState.toShipTask.value = nil
                 }
             }
-            .help(TaskBoardPresentation.statusLine(item))
+            .help(TaskBoardPresentation.addingReleaseAfterMerge(to: TaskBoardPresentation.statusLine(item), item))
             .background {
                 SidebarSemanticTextBridge(text: label)
                     .frame(width: 0, height: 0)
@@ -3767,6 +3773,7 @@ struct SidebarView: View {
             childProgressLabel: boardItem?.taskID.flatMap(childProgressLabel(ofTaskID:)),
             doneAt: workspace.doneAt,
             acceptsDoneMark: boardItem?.acceptsDoneMark ?? true,
+            releasesAfterMerge: boardItem.flatMap(TaskBoardPresentation.releaseAfterMergeRequestedAt) != nil,
             annotations: workspace.annotations,
             primaryAnnotationKey: workspace.primaryAnnotationKey,
             // While setup or the move into a worktree runs or has failed,
@@ -4116,6 +4123,9 @@ struct SidebarView: View {
                 )
 
             HStack(spacing: 6) {
+                if row.releasesAfterMerge {
+                    TaskReleaseAfterMergeMark()
+                }
                 if let chipKind = Self.subspaceStatusChipKind(row.status) {
                     sessionStatusChip(kind: chipKind)
                 } else if row.status == .question {

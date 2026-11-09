@@ -277,6 +277,14 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "task.mark-done", args: ["taskID": .string(taskID)]))
         #expect(try command(["clean-up", taskID])
             == .appControlRun(kind: .action, id: "task.clean-up", args: ["taskID": .string(taskID)]))
+        // The request to release one task right after it merges; a task's
+        // agent sets it on its own task.
+        #expect(try command(["set-release", taskID, "--after-merge"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["taskID": .string(taskID), "afterMerge": .bool(true)]))
+        #expect(try command(["set-release", taskID, "--clear"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["taskID": .string(taskID), "afterMerge": .bool(false)]))
+        #expect(try command(["set-release", "--after-merge"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["afterMerge": .bool(true)]))
         #expect(try command(["archive", taskID, "--close-pr", "--discard-changes"])
             == .appControlRun(kind: .action, id: "task.archive", args: [
                 "taskID": .string(taskID),
@@ -294,6 +302,8 @@ struct ToasttyCLITaskTests {
             ["mark-done"], ["clean-up"], ["archive"], ["archive", "not-an-id"], ["merge", "a", "b"],
             ["request-merge"], ["request-merge", "not-an-id"], ["request-merge", taskID, "--head", "abc1234"],
             ["merge", "--head"], ["release", "extra"], ["list", "--parent", "nope"],
+            ["set-release", taskID], ["set-release", taskID, "--after-merge", "--clear"],
+            ["set-release", "not-an-id", "--after-merge"], ["set-release", taskID, taskID, "--clear"],
         ] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }
         }

@@ -2604,6 +2604,136 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Home setup wizard") }, "\(textValues)")
     }
 
+    /// The rows of a task the user asked to release right after its merge
+    /// carry a small mark, before the merge and while the task waits in To
+    /// ship: in the project card, the Status segment and the Tasks view.
+    func testReleaseAfterMergeMarkShowsOnOpenAndToShipRows() throws {
+        let now = Date()
+        let toasttyID = UUID()
+        let request = TaskReleaseAfterMerge(requestedAt: now.addingTimeInterval(-2 * 86_400))
+        func taskSpace(_ title: String, taskID: UUID) -> WorkspaceState {
+            let panelID = UUID()
+            var workspace = WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/toastty"))],
+                focusedPanelID: panelID,
+                parentWorkspaceID: toasttyID
+            )
+            workspace.taskID = taskID
+            return workspace
+        }
+        func record(
+            _ title: String,
+            id: UUID = UUID(),
+            taskSpace: WorkspaceState? = nil,
+            mergedHoursAgo: Double? = nil,
+            releaseAfterMerge: TaskReleaseAfterMerge? = nil
+        ) -> TaskRecord {
+            var record = TaskRecord(
+                id: id,
+                createdAt: now.addingTimeInterval(-3 * 86_400),
+                text: title,
+                title: title,
+                slug: title,
+                source: .cli,
+                workspaceID: toasttyID,
+                projectRoot: "/repo/toastty",
+                setup: .started
+            )
+            record.mergedAt = mergedHoursAgo.map { now.addingTimeInterval(-$0 * 3_600) }
+            record.releaseAfterMerge = releaseAfterMerge
+            if let taskSpace, let panelID = taskSpace.focusedPanelID {
+                record.operation.taskSpace = .init(workspaceID: taskSpace.id, panelID: panelID)
+            }
+            return record
+        }
+        let hotfixID = UUID()
+        let renameID = UUID()
+        let shippingID = UUID()
+        let hotfixSpace = taskSpace("hotfix-unread-dot", taskID: hotfixID)
+        let renameSpace = taskSpace("rename-sidebar-group", taskID: renameID)
+        let workspaces = [makeSinglePanelWorkspace(id: toasttyID, title: "toastty"), hotfixSpace, renameSpace]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: toasttyID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            taskRecords: [
+                record("Hotfix the unread dot", id: hotfixID, taskSpace: hotfixSpace, releaseAfterMerge: request),
+                record("Rename the sidebar group", id: renameID, taskSpace: renameSpace),
+                record("Fix the crash on wake", id: shippingID, mergedHoursAgo: 2, releaseAfterMerge: request),
+                record("Update the docs", mergedHoursAgo: 5),
+            ],
+            withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: [
+                TasksConfig.Workspace(path: "/repo/toastty", releaseTags: "v*", releasePrompt: "Release the merged tasks."),
+            ])
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.window.appearance = NSAppearance(named: .darkAqua)
+        let marked = "release right after merge"
+
+        // The project card: the open task space rows, then To ship.
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "To ship, 2 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        func assertRows(_ textValues: [String], _ place: String) throws {
+            let hotfix = try XCTUnwrap(textValues.first { $0.hasPrefix("Hotfix the unread dot, task space") }, "\(place): \(textValues)")
+            XCTAssertTrue(hotfix.contains(marked), "\(place): \(hotfix)")
+            let rename = try XCTUnwrap(textValues.first { $0.hasPrefix("Rename the sidebar group, task space") }, "\(place): \(textValues)")
+            XCTAssertFalse(rename.contains(marked), "\(place): \(rename)")
+            XCTAssertTrue(
+                textValues.contains("Fix the crash on wake, Merged · waiting for a release, \(marked)"), "\(place): \(textValues)"
+            )
+            XCTAssertTrue(textValues.contains("Update the docs, Merged · waiting for a release"), "\(place): \(textValues)")
+        }
+        try assertRows(renderedTextValues(in: harness.hostingView), "project card")
+        try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-projects")
+        try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-projects")
+
+        // The Status segment: Idle, then To ship under the project's header.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "To ship, 2 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        try assertRows(renderedTextValues(in: harness.hostingView), "Status segment")
+        try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-status")
+        try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-status")
+
+        // The Tasks view, with the To ship task in the detail pane.
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[windowID] = .task(shippingID)
+        let tasks = hostTasksView(harness, board: board, height: 520)
+        defer { tasks.window.orderOut(nil) }
+        let textValues = renderedTextValues(in: tasks.hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Hotfix the unread dot, ") && $0.hasSuffix(", \(marked)") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the crash on wake, Merged · waiting for a release, \(marked)"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Update the docs, Merged · waiting for a release"), "\(textValues)")
+        XCTAssertFalse(
+            textValues.contains { $0.hasPrefix("Rename the sidebar group, ") && $0.contains(marked) }, "\(textValues)"
+        )
+        XCTAssertTrue(textValues.contains("Task detail, Fix the crash on wake, To ship"), "\(textValues)")
+        try writeSidebarEvidence(tasks.hostingView, name: "release-mark-tasks-view")
+        try attachSidebarRender(tasks.hostingView, name: "release-mark-tasks-view")
+    }
+
     func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
         let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
