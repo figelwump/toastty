@@ -24,6 +24,7 @@ for (const [path, expected] of [
   ['ios/Project.swift', ['ios']],
   ['Sources/RemoteProtocol/RemoteSessionModels.swift', ['ios', 'macos']],
   ['Tests/RemoteProtocol/Fixtures/example.json', ['ios', 'macos']],
+  ['Sources/ConversationUI/ToasttyTranscriptView.swift', ['ios', 'macos']],
   ['WebPanels/LocalDocumentApp/src/index.jsx', ['ios', 'macos', 'web']],
   ['WebPanels/ScratchpadApp/package-lock.json', ['ios', 'macos', 'web']],
   ['Sources/App/Resources/WebPanels/scratchpad-panel/index.html', ['ios', 'macos', 'web']],

@@ -1,9 +1,14 @@
 import RemoteProtocol
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
-import ToasttyMobileDomain
+#endif
 
-struct ToasttyTranscriptView: View {
+/// The conversation transcript: messages, tool activity, interaction cards,
+/// and the tail of outgoing messages. The host supplies presentation values
+/// and receives the reader's actions through the closures.
+@available(macOS 15.0, *)
+public struct ToasttyTranscriptView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
@@ -15,7 +20,8 @@ struct ToasttyTranscriptView: View {
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
-    let readAcknowledgementEpoch: MobileSessionStatus?
+    let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
+    let readAcknowledgementEpoch: ToasttyTranscriptSessionStatus?
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: () -> Void
@@ -34,11 +40,11 @@ struct ToasttyTranscriptView: View {
     @State private var entryScrollPosition: TranscriptEntryScrollPosition
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
     @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
-    #if DEBUG
+    #if DEBUG && os(iOS)
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
     #endif
 
-    init(
+    public init(
         state: ToasttyConversationPresentationState,
         isSubmitting: Bool,
         loadOlder: @escaping () -> Void = {},
@@ -50,7 +56,8 @@ struct ToasttyTranscriptView: View {
             ToasttyInteractionAnswerEdit
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
-        readAcknowledgementEpoch: MobileSessionStatus? = nil,
+        interactionAnswerFeedback: @escaping ToasttyInteractionAnswerFeedback = { _, _ in nil },
+        readAcknowledgementEpoch: ToasttyTranscriptSessionStatus? = nil,
         workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
         canAcknowledgeRead: Bool,
@@ -64,18 +71,19 @@ struct ToasttyTranscriptView: View {
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
+        self.interactionAnswerFeedback = interactionAnswerFeedback
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
         self.workingIndicator = workingIndicator
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
         _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
         _followsLiveEdge = State(initialValue:
-            readAcknowledgementEpoch?.bucket != .ready || state.phase == .loading || state.phase == .resyncing
+            readAcknowledgementEpoch?.activity != .ready || state.phase == .loading || state.phase == .resyncing
         )
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
     }
 
-    var body: some View {
+    public var body: some View {
         let scrollTaskKey = self.scrollTaskKey
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
@@ -86,7 +94,7 @@ struct ToasttyTranscriptView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
                     .padding(.bottom, 4)
-                    .background(ToasttyDesignTokens.background)
+                    .background(ConversationDesignTokens.background)
                 }
 
                 ScrollView {
@@ -111,7 +119,7 @@ struct ToasttyTranscriptView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
                 }
-                .background(ToasttyDesignTokens.background)
+                .background(ConversationDesignTokens.background)
                 .accessibilityIdentifier("toastty-mobile-transcript")
                 .scrollDismissesKeyboard(.interactively)
                 // Keep the content's bottom fixed in the same layout pass as
@@ -123,7 +131,7 @@ struct ToasttyTranscriptView: View {
                     for: .sizeChanges
                 )
                 .overlay(alignment: .topLeading) {
-                    #if DEBUG
+                    #if DEBUG && os(iOS)
                     if TranscriptFixtureScrollTrace.isEnabled {
                         Color.clear
                             .frame(width: 1, height: 1)
@@ -147,7 +155,7 @@ struct ToasttyTranscriptView: View {
                 .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
                     TranscriptScrollMetrics(geometry: geometry)
                 } action: { old, new in
-                    #if DEBUG
+                    #if DEBUG && os(iOS)
                     fixtureScrollTrace.record(new, hasSendItems: !state.sendItems.isEmpty)
                     #endif
                     let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
@@ -213,7 +221,7 @@ struct ToasttyTranscriptView: View {
                         followsLiveEdge = false
                         entryScrollPosition.cancelForInteraction()
                         scrollCoordinator.cancelForInteraction()
-                        #if DEBUG
+                        #if DEBUG && os(iOS)
                         fixtureScrollTrace.stop()
                         #endif
                         return
@@ -253,8 +261,8 @@ struct ToasttyTranscriptView: View {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9)
-                                .background(ToasttyDesignTokens.amber, in: Capsule())
-                                .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                                .background(ConversationDesignTokens.amber, in: Capsule())
+                                .foregroundStyle(ConversationDesignTokens.inkOnAmber)
                                 .shadow(color: .black.opacity(0.45), radius: 7, y: 3)
                         }
                         .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
@@ -265,7 +273,7 @@ struct ToasttyTranscriptView: View {
                     guard request > 0 else { return }
                     entryScrollPosition.cancelForInteraction()
                     guard lastScrollTarget != nil else { return }
-                    #if DEBUG
+                    #if DEBUG && os(iOS)
                     fixtureScrollTrace.begin()
                     #endif
                     scrollCoordinator.requestSend(request)
@@ -415,7 +423,7 @@ struct ToasttyTranscriptView: View {
                     onVisibleLiveEdge()
                 }
             }
-            .background(ToasttyDesignTokens.background)
+            .background(ConversationDesignTokens.background)
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
             .onChange(of: toolBatchActivity, initial: true) { _, activity in
@@ -496,7 +504,7 @@ struct ToasttyTranscriptView: View {
                 systemImage: "text.bubble",
                 description: Text("New conversation activity will appear here.")
             )
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .foregroundStyle(ConversationDesignTokens.secondaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 44)
         }
@@ -606,7 +614,7 @@ struct ToasttyTranscriptView: View {
                     .padding(.leading, 14)
                     .overlay(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(ToasttyDesignTokens.border)
+                            .fill(ConversationDesignTokens.border)
                             .frame(width: 2)
                     }
             } else {
@@ -616,7 +624,7 @@ struct ToasttyTranscriptView: View {
     }
 
     private var isSessionWorking: Bool {
-        readAcknowledgementEpoch?.bucket == .working
+        readAcknowledgementEpoch?.activity == .working
     }
 
     private var settledTurnIDs: Set<ToasttyTranscriptRowID> {
@@ -643,25 +651,25 @@ struct ToasttyTranscriptView: View {
         case .loading:
             HStack(spacing: 9) {
                 ProgressView()
-                    .tint(ToasttyDesignTokens.amber)
+                    .tint(ConversationDesignTokens.amber)
                 Text("Loading transcript…")
             }
-            .transcriptBannerStyle(color: ToasttyDesignTokens.secondaryText)
+            .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
         case .resyncing:
             HStack(spacing: 9) {
                 ProgressView()
-                    .tint(ToasttyDesignTokens.amber)
+                    .tint(ConversationDesignTokens.amber)
                 Text("Resyncing transcript…")
             }
-            .transcriptBannerStyle(color: ToasttyDesignTokens.amberText)
+            .transcriptBannerStyle(color: ConversationDesignTokens.amberText)
             .accessibilityIdentifier("toastty-mobile-transcript-resyncing")
         case .stale:
             Label("Connection paused — transcript may be stale", systemImage: "wifi.slash")
-                .transcriptBannerStyle(color: ToasttyDesignTokens.secondaryText)
+                .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
                 .accessibilityIdentifier("toastty-mobile-transcript-stale")
         case .failure(let message):
             Label(message, systemImage: "exclamationmark.triangle")
-                .transcriptBannerStyle(color: ToasttyDesignTokens.red)
+                .transcriptBannerStyle(color: ConversationDesignTokens.red)
         case .live:
             EmptyView()
         }
@@ -671,7 +679,7 @@ struct ToasttyTranscriptView: View {
                 "Earlier activity is no longer retained by Toastty",
                 systemImage: "clock.badge.exclamationmark"
             )
-            .transcriptBannerStyle(color: ToasttyDesignTokens.mutedText)
+            .transcriptBannerStyle(color: ConversationDesignTokens.mutedText)
             .accessibilityIdentifier("toastty-mobile-transcript-history-truncated")
         }
     }
@@ -685,10 +693,10 @@ struct ToasttyTranscriptView: View {
         if state.isLoadingOlder {
             HStack(spacing: 8) {
                 ProgressView()
-                    .tint(ToasttyDesignTokens.amber)
+                    .tint(ConversationDesignTokens.amber)
                 Text("Loading earlier activity…")
             }
-            .transcriptBannerStyle(color: ToasttyDesignTokens.secondaryText)
+            .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
             .accessibilityIdentifier("toastty-mobile-transcript-loading-older")
         } else if state.hasOlder {
             Button {
@@ -697,12 +705,12 @@ struct ToasttyTranscriptView: View {
             } label: {
                 Label("Load earlier activity", systemImage: "arrow.up")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .foregroundStyle(ConversationDesignTokens.amberText)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
-                    .background(ToasttyDesignTokens.raisedSurface)
+                    .background(ConversationDesignTokens.raisedSurface)
                     .clipShape(RoundedRectangle(
-                        cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
                         style: .continuous
                     ))
             }
@@ -722,7 +730,8 @@ struct ToasttyTranscriptView: View {
                 toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) },
                 interactionAnswerStates: interactionAnswerStates,
                 editInteractionAnswer: editInteractionAnswer,
-                submitInteractionAnswer: submitInteractionAnswer
+                submitInteractionAnswer: submitInteractionAnswer,
+                interactionAnswerFeedback: interactionAnswerFeedback
             )
         case .messageChunk(let chunk):
             ToasttyTranscriptRowView(
@@ -733,7 +742,8 @@ struct ToasttyTranscriptView: View {
                 toggleSubagentExpansion: {},
                 interactionAnswerStates: interactionAnswerStates,
                 editInteractionAnswer: editInteractionAnswer,
-                submitInteractionAnswer: submitInteractionAnswer
+                submitInteractionAnswer: submitInteractionAnswer,
+                interactionAnswerFeedback: interactionAnswerFeedback
             )
         case .toolBatch(let rows):
             ToasttyToolBatchCard(
@@ -921,8 +931,8 @@ struct TranscriptEntryScrollPosition {
     private(set) var isPending = true
     private(set) var selectedTarget: TranscriptScrollCoordinator.Target?
 
-    init(status: MobileSessionStatus?) {
-        opensLatestResponse = status?.bucket == .ready
+    init(status: ToasttyTranscriptSessionStatus?) {
+        opensLatestResponse = status?.activity == .ready
     }
 
     mutating func cancelForInteraction() {
@@ -991,6 +1001,7 @@ struct TranscriptScrollMetrics: Equatable {
     let bottomInset: CGFloat
     let containerHeight: CGFloat
 
+    @available(macOS 15.0, *)
     init(geometry: ScrollGeometry) {
         contentHeight = geometry.contentSize.height
         // visibleRect includes the safe-area regions behind the composer and
@@ -1056,7 +1067,7 @@ struct TranscriptScrollMetrics: Equatable {
     }
 }
 
-#if DEBUG
+#if DEBUG && os(iOS)
 /// UI tests collect one coherent geometry sample per committed UI update.
 /// `onScrollGeometryChange` can run several times inside a single update while
 /// the keyboard inset, the container size, and the composer inset settle one
@@ -1273,6 +1284,7 @@ struct TranscriptScrollCoordinator: Equatable {
         return true
     }
 
+    @available(macOS 15.0, *)
     static func shouldResolveFollowing(
         oldPhase: ScrollPhase,
         newPhase: ScrollPhase
@@ -1494,7 +1506,7 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
     let hasMeasuredScrollGeometry: Bool
     let measuredBoundaryID: ToasttyTranscriptRowID?
     let latestBoundaryID: ToasttyTranscriptRowID?
-    let readAcknowledgementEpoch: MobileSessionStatus?
+    let readAcknowledgementEpoch: ToasttyTranscriptSessionStatus?
     let canAcknowledgeRead: Bool
 
     var isEligible: Bool {
@@ -1636,16 +1648,16 @@ private struct ToasttySendTailItemView: View {
                 ? "Paused · queued \(queued.position)"
                 : "Queued \(queued.position) · sends after this turn")
                 .font(.caption2.monospaced().weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
                 .textCase(.uppercase)
             Text(item.text)
                 .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if queued.attachmentCount > 0 {
                 Text(queued.attachmentCount == 1 ? "+1 file" : "+\(queued.attachmentCount) files")
                     .font(.caption2.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
             }
             HStack(spacing: 16) {
                 if queued.isPaused {
@@ -1667,11 +1679,11 @@ private struct ToasttySendTailItemView: View {
         }
         .padding(12)
         .overlay {
-            ToasttyDesignTokens.userBubbleShape
+            ConversationDesignTokens.userBubbleShape
                 .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                .foregroundStyle(ToasttyDesignTokens.userBubbleBorder)
+                .foregroundStyle(ConversationDesignTokens.userBubbleBorder)
         }
-        .clipShape(ToasttyDesignTokens.userBubbleShape)
+        .clipShape(ConversationDesignTokens.userBubbleShape)
         .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .contain)
@@ -1682,7 +1694,7 @@ private struct ToasttySendTailItemView: View {
     private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .foregroundStyle(ConversationDesignTokens.mutedText)
             .frame(minHeight: 32)
             .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
     }
@@ -1690,24 +1702,24 @@ private struct ToasttySendTailItemView: View {
     private var optimisticBubble: some View {
         VStack(alignment: .trailing, spacing: 7) {
             ToasttySelectableText(AttributedString(item.text),
-                                  textColor: ToasttyDesignTokens.userBubbleText, lineSpacing: 0)
+                                  textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.mini)
-                    .tint(ToasttyDesignTokens.amberText)
+                    .tint(ConversationDesignTokens.amberText)
                 Text("Sending…")
                     .font(.caption2.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .foregroundStyle(ConversationDesignTokens.amberText)
             }
         }
         .padding(12)
-        .background(ToasttyDesignTokens.userBubbleSurface)
+        .background(ConversationDesignTokens.userBubbleSurface)
         .overlay {
-            ToasttyDesignTokens.userBubbleShape
-                .stroke(ToasttyDesignTokens.userBubbleBorder)
+            ConversationDesignTokens.userBubbleShape
+                .stroke(ConversationDesignTokens.userBubbleBorder)
         }
-        .clipShape(ToasttyDesignTokens.userBubbleShape)
+        .clipShape(ConversationDesignTokens.userBubbleShape)
         .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .contain)
@@ -1721,16 +1733,16 @@ private struct ToasttySendTailItemView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(ToasttyDesignTokens.red)
+                    .foregroundStyle(ConversationDesignTokens.red)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(receipt.title)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .foregroundStyle(ConversationDesignTokens.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(receipt.detail)
                         .font(.caption)
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
@@ -1739,7 +1751,7 @@ private struct ToasttySendTailItemView: View {
                         .font(.caption.weight(.bold))
                         .frame(width: 44, height: 44)
                 }
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .accessibilityLabel("Dismiss delivery receipt")
                 .accessibilityIdentifier(
                     "toastty-mobile-send-receipt-dismiss-\(item.clientRequestID)"
@@ -1747,34 +1759,34 @@ private struct ToasttySendTailItemView: View {
             }
 
             Button {
-                UIPasteboard.general.string = item.text
+                ConversationPasteboard.copy(item.text)
             } label: {
                 Label("Copy attempted message", systemImage: "doc.on.doc")
                     .font(.caption.weight(.semibold))
                     .frame(minHeight: 44)
             }
-            .foregroundStyle(ToasttyDesignTokens.amberText)
+            .foregroundStyle(ConversationDesignTokens.amberText)
             .padding(.leading, 28)
             .accessibilityIdentifier("toastty-mobile-send-receipt-copy-\(item.clientRequestID)")
 
             Text(item.text)
                 .font(.caption.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 28)
         }
         .padding(12)
-        .background(ToasttyDesignTokens.raisedSurface)
+        .background(ConversationDesignTokens.raisedSurface)
         .overlay {
             RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                cornerRadius: ConversationDesignTokens.cardCornerRadius,
                 style: .continuous
             )
-            .stroke(ToasttyDesignTokens.red.opacity(0.5))
+            .stroke(ConversationDesignTokens.red.opacity(0.5))
         }
         .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+            cornerRadius: ConversationDesignTokens.cardCornerRadius,
             style: .continuous
         ))
         .accessibilityElement(children: .contain)
@@ -1791,6 +1803,7 @@ private struct ToasttyTranscriptRowView: View {
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
+    let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
 
     @ViewBuilder
     var body: some View {
@@ -1800,6 +1813,7 @@ private struct ToasttyTranscriptRowView: View {
             ToasttyInteractionCard(
                 presentation: presentation,
                 answerState: interactionAnswerStates[interaction.id],
+                answerFeedback: interactionAnswerFeedback,
                 onEdit: { editInteractionAnswer(interaction.id, $0) },
                 onSubmit: { submitInteractionAnswer(interaction.id) }
             )
@@ -1884,33 +1898,33 @@ private struct ToasttyTranscriptRowView: View {
         let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
             if isUser {
                 ToasttySelectableText(AttributedString(text),
-                                      textColor: ToasttyDesignTokens.userBubbleText, lineSpacing: 0)
+                                      textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
             } else {
                 ToasttyMarkdownText(
                     text: text,
                     preparedBlocks: chunk?.blocks,
                     textColor: isDemoted
-                        ? ToasttyDesignTokens.secondaryText
-                        : ToasttyDesignTokens.primaryText
+                        ? ConversationDesignTokens.secondaryText
+                        : ConversationDesignTokens.primaryText
                 )
             }
 
             if let metadata {
                 Text(metadata)
                     .font(.caption2.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
             }
         }
 
         if isUser {
             content
                 .padding(12)
-                .background(ToasttyDesignTokens.userBubbleSurface)
+                .background(ConversationDesignTokens.userBubbleSurface)
                 .overlay {
-                    ToasttyDesignTokens.userBubbleShape
-                        .stroke(ToasttyDesignTokens.userBubbleBorder)
+                    ConversationDesignTokens.userBubbleShape
+                        .stroke(ConversationDesignTokens.userBubbleBorder)
                 }
-                .clipShape(ToasttyDesignTokens.userBubbleShape)
+                .clipShape(ConversationDesignTokens.userBubbleShape)
                 .padding(.leading, 48)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .accessibilityElement(children: .contain)
@@ -1928,7 +1942,7 @@ private struct ToasttyTranscriptRowView: View {
     private func marker(icon: String, text: String) -> some View {
         Label(text, systemImage: icon)
             .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .foregroundStyle(ConversationDesignTokens.mutedText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
             .accessibilityElement(children: .combine)
@@ -1951,7 +1965,7 @@ private struct ToasttyTranscriptRowView: View {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                 }
                 .font(.caption.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1961,7 +1975,7 @@ private struct ToasttyTranscriptRowView: View {
             if isExpanded, let detail, detail.isEmpty == false {
                 Text(detail)
                     .font(.caption)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
                     .textSelection(.enabled)
             }
         }
@@ -2002,9 +2016,9 @@ private extension View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ToasttyDesignTokens.raisedSurface)
+            .background(ConversationDesignTokens.raisedSurface)
             .clipShape(RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                cornerRadius: ConversationDesignTokens.controlCornerRadius,
                 style: .continuous
             ))
             .accessibilityElement(children: .combine)

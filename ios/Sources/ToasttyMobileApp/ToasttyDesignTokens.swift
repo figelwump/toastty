@@ -1,39 +1,42 @@
+import ConversationUI
 import SwiftUI
 import ToasttyMobileDomain
 
+/// The app palette. The conversation colors come from `ConversationUI`, which
+/// draws the transcript, so the two cannot differ.
 enum ToasttyDesignTokens {
     // Neutral surfaces lean warm so they harmonize with the cream text and
     // amber accent; luminance matches the previous cool-gray stack, keeping
     // every audited contrast ratio intact.
-    static let background = Color(red: 19 / 255, green: 17 / 255, blue: 16 / 255)
-    static let raisedSurface = Color(red: 28 / 255, green: 25 / 255, blue: 23 / 255)
+    static let background = ConversationDesignTokens.background
+    static let raisedSurface = ConversationDesignTokens.raisedSurface
     static let elevatedSurface = Color(red: 33 / 255, green: 29 / 255, blue: 26 / 255)
-    static let border = Color(red: 44 / 255, green: 39 / 255, blue: 34 / 255)
+    static let border = ConversationDesignTokens.border
     static let divider = Color(red: 38 / 255, green: 34 / 255, blue: 32 / 255)
-    static let primaryText = Color(red: 232 / 255, green: 230 / 255, blue: 225 / 255)
-    static let secondaryText = Color(red: 184 / 255, green: 180 / 255, blue: 172 / 255)
+    static let primaryText = ConversationDesignTokens.primaryText
+    static let secondaryText = ConversationDesignTokens.secondaryText
     // Muted text stays >= 4.5:1 against raisedSurface so caption-sized
     // metadata remains readable (WCAG AA).
-    static let mutedText = Color(red: 146 / 255, green: 141 / 255, blue: 133 / 255)
+    static let mutedText = ConversationDesignTokens.mutedText
     // Translucent white so the chip reads on both raised and status-tinted
     // card backgrounds.
-    static let chipSurface = Color.white.opacity(0.055)
-    static let chipBorder = Color.white.opacity(0.11)
+    static let chipSurface = ConversationDesignTokens.chipSurface
+    static let chipBorder = ConversationDesignTokens.chipBorder
     /// Faint lift for the language header strip on transcript code blocks.
-    static let codeHeaderSurface = Color.white.opacity(0.025)
-    static let amber = Color(red: 232 / 255, green: 147 / 255, blue: 12 / 255)
-    static let amberText = Color(red: 232 / 255, green: 180 / 255, blue: 106 / 255)
+    static let codeHeaderSurface = ConversationDesignTokens.codeHeaderSurface
+    static let amber = ConversationDesignTokens.amber
+    static let amberText = ConversationDesignTokens.amberText
     /// Dark-mode system blue for external web links in assistant Markdown.
-    static let externalLink = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
+    static let externalLink = ConversationDesignTokens.externalLink
     /// Foreground for text and glyphs placed on the amber accent.
-    static let inkOnAmber = Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255)
-    static let green = Color(red: 70 / 255, green: 165 / 255, blue: 126 / 255)
-    static let red = Color(red: 224 / 255, green: 88 / 255, blue: 78 / 255)
+    static let inkOnAmber = ConversationDesignTokens.inkOnAmber
+    static let green = ConversationDesignTokens.green
+    static let red = ConversationDesignTokens.red
     static let offline = Color(red: 107 / 255, green: 112 / 255, blue: 118 / 255)
-    static let userBubbleSurface = Color(red: 64 / 255, green: 47 / 255, blue: 21 / 255)
-    static let userBubbleBorder = Color(red: 90 / 255, green: 62 / 255, blue: 27 / 255)
-    static let userBubbleText = Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255)
-    static let interactionSurface = Color(red: 24 / 255, green: 21 / 255, blue: 9 / 255)
+    static let userBubbleSurface = ConversationDesignTokens.userBubbleSurface
+    static let userBubbleBorder = ConversationDesignTokens.userBubbleBorder
+    static let userBubbleText = ConversationDesignTokens.userBubbleText
+    static let interactionSurface = ConversationDesignTokens.interactionSurface
     /// The desktop's waiting colors, for a session whose own turn has ended
     /// while work it started is still running.
     static let waitingText = Color(red: 230 / 255, green: 207 / 255, blue: 169 / 255)
@@ -48,20 +51,12 @@ enum ToasttyDesignTokens {
     static let taskToShip = Color(red: 185 / 255, green: 140 / 255, blue: 224 / 255)
 
     /// Corner scale: cards and bubbles, inset controls, and chips.
-    static let cardCornerRadius: CGFloat = 14
-    static let controlCornerRadius: CGFloat = 10
+    static let cardCornerRadius = ConversationDesignTokens.cardCornerRadius
+    static let controlCornerRadius = ConversationDesignTokens.controlCornerRadius
     static let chipCornerRadius: CGFloat = 6
 
     /// Trailing-edge speech shape for user-authored bubbles.
-    static var userBubbleShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: cardCornerRadius,
-            bottomLeadingRadius: cardCornerRadius,
-            bottomTrailingRadius: 5,
-            topTrailingRadius: cardCornerRadius,
-            style: .continuous
-        )
-    }
+    static var userBubbleShape: UnevenRoundedRectangle { ConversationDesignTokens.userBubbleShape }
 
     static func color(for bucket: MobileSessionBucket) -> Color {
         switch bucket {

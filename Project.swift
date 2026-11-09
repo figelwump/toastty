@@ -283,6 +283,7 @@ func applyGhosttyVariantLinkSettings(
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CodexReconciliation"),
+    .target(name: "ConversationUI"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
     .target(name: "toastty"),
@@ -402,6 +403,7 @@ if let developmentTeam {
 var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
     .target(name: "CodexReconciliation"),
+    .target(name: "ConversationUI"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
 ]
@@ -554,6 +556,17 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/RemoteProtocol/**"]
+        ),
+        // The conversation renderer, which the iOS graph also builds.
+        .target(
+            name: "ConversationUI",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.conversation-ui",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/ConversationUI/**"],
+            dependencies: [.target(name: "RemoteProtocol")]
         ),
         .target(
             name: "CoreState",

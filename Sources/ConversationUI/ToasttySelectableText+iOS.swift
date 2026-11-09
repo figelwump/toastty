@@ -1,3 +1,5 @@
+#if canImport(UIKit)
+import RemoteProtocol
 import SwiftUI
 import UIKit
 
@@ -13,13 +15,13 @@ struct ToasttySelectableText: UIViewRepresentable {
     var textStyle: UIFont.TextStyle = .body
     var weight: UIFont.Weight?
     var monospaced = false
-    var textColor: Color = ToasttyDesignTokens.primaryText
+    var textColor: Color = ConversationDesignTokens.primaryText
     var lineSpacing: CGFloat = 6
     var alignment: NSTextAlignment = .natural
 
     init(_ text: AttributedString, textStyle: UIFont.TextStyle = .body,
          weight: UIFont.Weight? = nil, monospaced: Bool = false,
-         textColor: Color = ToasttyDesignTokens.primaryText,
+         textColor: Color = ConversationDesignTokens.primaryText,
          lineSpacing: CGFloat = 6, alignment: NSTextAlignment = .natural) {
         self.text = text
         self.textStyle = textStyle
@@ -44,7 +46,7 @@ struct ToasttySelectableText: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.contentInsetAdjustmentBehavior = .never
         view.adjustsFontForContentSizeCategory = false
-        view.tintColor = UIColor(ToasttyDesignTokens.amber)
+        view.tintColor = UIColor(ConversationDesignTokens.amber)
         // Each run already has its link color. UIKit's default overrides it.
         view.linkTextAttributes = [:]
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -152,7 +154,7 @@ struct ToasttySelectableText: UIViewRepresentable {
                 }
                 var attributes: [NSAttributedString.Key: Any] = [
                     .font: font,
-                    .foregroundColor: UIColor(run.foregroundColor ?? (run.link == nil ? textColor : ToasttyDesignTokens.amberText)),
+                    .foregroundColor: UIColor(run.foregroundColor ?? (run.link == nil ? textColor : ConversationDesignTokens.amberText)),
                     .paragraphStyle: paragraph,
                 ]
                 if let color = run.backgroundColor { attributes[.backgroundColor] = UIColor(color) }
@@ -174,7 +176,7 @@ struct ToasttySelectableText: UIViewRepresentable {
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem,
                       defaultAction: UIAction) -> UIAction? {
             guard case .link(let url) = textItem.content,
-                  ToasttyPreviewURLPolicy.localFileReference(url) != nil else { return defaultAction }
+                  RemotePreviewLinkReference.localFileReference(url) != nil else { return defaultAction }
             return UIAction(title: defaultAction.title, image: defaultAction.image) { [weak self] _ in
                 self?.openURL?(url)
             }
@@ -183,7 +185,7 @@ struct ToasttySelectableText: UIViewRepresentable {
         func textView(_ textView: UITextView, menuConfigurationFor textItem: UITextItem,
                       defaultMenu: UIMenu) -> UITextItem.MenuConfiguration? {
             guard case .link(let url) = textItem.content,
-                  ToasttyPreviewURLPolicy.localFileReference(url) != nil else { return .init(menu: defaultMenu) }
+                  RemotePreviewLinkReference.localFileReference(url) != nil else { return .init(menu: defaultMenu) }
             // File references must open the conversation preview from a link's
             // long-press menu too, rather than going directly to UIApplication.
             let open = UIAction(title: "Open", image: UIImage(systemName: "arrow.up.right")) { [weak self] _ in
@@ -207,3 +209,4 @@ final class ToasttyTranscriptTextView: UITextView {
         UIPasteboard.general.string = selection
     }
 }
+#endif

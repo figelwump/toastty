@@ -1,19 +1,31 @@
 import RemoteProtocol
 import SwiftUI
 
-struct ToasttyInteractionAnswerKey: Hashable, Sendable {
-    let interactionID: RemotePendingInteraction.ID
-    let responseID: String
-    let inputEpoch: RemoteInputEpoch
+public struct ToasttyInteractionAnswerKey: Hashable, Sendable {
+    public let interactionID: RemotePendingInteraction.ID
+    public let responseID: String
+    public let inputEpoch: RemoteInputEpoch
+
+    public init(interactionID: RemotePendingInteraction.ID, responseID: String, inputEpoch: RemoteInputEpoch) {
+        self.interactionID = interactionID
+        self.responseID = responseID
+        self.inputEpoch = inputEpoch
+    }
 }
 
-struct ToasttyInteractionQuestionDraft: Equatable, Sendable {
-    var selectedOptionIDs: Set<String> = []
-    var usesCustomText = false
-    var customText = ""
+public struct ToasttyInteractionQuestionDraft: Equatable, Sendable {
+    public var selectedOptionIDs: Set<String>
+    public var usesCustomText: Bool
+    public var customText: String
+
+    public init(selectedOptionIDs: Set<String> = [], usesCustomText: Bool = false, customText: String = "") {
+        self.selectedOptionIDs = selectedOptionIDs
+        self.usesCustomText = usesCustomText
+        self.customText = customText
+    }
 }
 
-enum ToasttyInteractionAnswerStatus: Equatable, Sendable {
+public enum ToasttyInteractionAnswerStatus: Equatable, Sendable {
     case editing
     case submitting
     case awaitingClaude
@@ -22,7 +34,7 @@ enum ToasttyInteractionAnswerStatus: Equatable, Sendable {
     case resolved([RemoteInteractionAnswer])
 }
 
-enum ToasttyInteractionAnswerEdit: Equatable, Sendable {
+public enum ToasttyInteractionAnswerEdit: Equatable, Sendable {
     case toggleOption(questionID: String, optionID: String)
     /// Makes this option the only answer, as a permission decision button does.
     case selectOnly(questionID: String, optionID: String)
@@ -30,17 +42,17 @@ enum ToasttyInteractionAnswerEdit: Equatable, Sendable {
     case setCustomText(questionID: String, text: String)
 }
 
-struct ToasttyInteractionAnswerState: Equatable, Sendable {
-    let key: ToasttyInteractionAnswerKey
-    let questions: [RemoteInteractionQuestion]
-    var drafts: [String: ToasttyInteractionQuestionDraft]
-    var status: ToasttyInteractionAnswerStatus
-    var connectionIsLive: Bool
-    var retryRequest: RemoteQuestionAnswerRequest?
+public struct ToasttyInteractionAnswerState: Equatable, Sendable {
+    public let key: ToasttyInteractionAnswerKey
+    public let questions: [RemoteInteractionQuestion]
+    public var drafts: [String: ToasttyInteractionQuestionDraft]
+    public var status: ToasttyInteractionAnswerStatus
+    public var connectionIsLive: Bool
+    public var retryRequest: RemoteQuestionAnswerRequest?
     /// Set when a phone submission finishes; drives the answer haptic.
-    var lastSubmission: ToasttyOutcomeFeedback?
+    public var lastSubmission: ToasttyOutcomeFeedback?
 
-    init(
+    public init(
         key: ToasttyInteractionAnswerKey,
         questions: [RemoteInteractionQuestion],
         status: ToasttyInteractionAnswerStatus = .editing,
@@ -56,7 +68,7 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
         retryRequest = nil
     }
 
-    var canonicalAnswers: [RemoteInteractionAnswer]? {
+    public var canonicalAnswers: [RemoteInteractionAnswer]? {
         let answers = questions.map { question in
             let draft = drafts[question.id] ?? ToasttyInteractionQuestionDraft()
             return RemoteInteractionAnswer(
@@ -70,7 +82,7 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
         return RemoteQuestionAnswerValidation.canonicalAnswers(answers, for: questions)
     }
 
-    var canSubmit: Bool {
+    public var canSubmit: Bool {
         guard connectionIsLive, canonicalAnswers != nil else { return false }
         return switch status {
         case .editing, .failed: true
@@ -78,7 +90,7 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
         }
     }
 
-    mutating func apply(_ edit: ToasttyInteractionAnswerEdit) {
+    public mutating func apply(_ edit: ToasttyInteractionAnswerEdit) {
         guard case .editing = editableStatus else { return }
         switch edit {
         case .toggleOption(let questionID, let optionID):
@@ -127,14 +139,22 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
     }
 
     /// The decision this phone sent for a permission request, if any.
-    var sentOptionID: String? {
+    public var sentOptionID: String? {
         retryRequest?.answers.first?.selectedOptionIDs.first
     }
 }
 
+/// Maps a change of one card's answer state to feedback for the user, such as
+/// the iPhone app's haptics.
+public typealias ToasttyInteractionAnswerFeedback = (
+    _ old: ToasttyInteractionAnswerState?,
+    _ new: ToasttyInteractionAnswerState?
+) -> SensoryFeedback?
+
 struct ToasttyInteractionCard: View {
     let presentation: ToasttyInteractionPresentation
     let answerState: ToasttyInteractionAnswerState?
+    let answerFeedback: ToasttyInteractionAnswerFeedback
     let onEdit: (ToasttyInteractionAnswerEdit) -> Void
     let onSubmit: () -> Void
 
@@ -163,21 +183,21 @@ struct ToasttyInteractionCard: View {
             }
         }
         .padding(14)
-        .background(ToasttyDesignTokens.interactionSurface)
+        .background(ConversationDesignTokens.interactionSurface)
         .overlay {
             RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                cornerRadius: ConversationDesignTokens.cardCornerRadius,
                 style: .continuous
             )
             .stroke(accentColor.opacity(0.35))
         }
         .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+            cornerRadius: ConversationDesignTokens.cardCornerRadius,
             style: .continuous
         ))
         .accessibilityElement(children: answerState == nil ? .combine : .contain)
         .sensoryFeedback(trigger: answerState) { old, new in
-            ToasttyHapticFeedback.interactionAnswer(from: old, to: new)
+            answerFeedback(old, new)
         }
     }
 
@@ -186,7 +206,7 @@ struct ToasttyInteractionCard: View {
         if interaction.questions == nil {
             Text(interaction.prompt)
                 .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -233,13 +253,13 @@ struct ToasttyInteractionCard: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .tint(ToasttyDesignTokens.amber)
+            .tint(ConversationDesignTokens.amber)
             .disabled(state.canSubmit == false)
             .accessibilityIdentifier("toastty-mobile-interaction-submit-\(interaction.id.rawValue)")
 
             Label("You can also answer on the desktop", systemImage: "desktopcomputer")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         }
     }
 
@@ -251,10 +271,10 @@ struct ToasttyInteractionCard: View {
         return VStack(alignment: .leading, spacing: 8) {
             Text(question.header)
                 .font(.caption.monospaced().weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
             Text(question.question)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
             ForEach(question.options, id: \.id) { option in
@@ -313,12 +333,12 @@ struct ToasttyInteractionCard: View {
                 if let preview = option.preview, preview.isEmpty == false {
                     Text(preview)
                         .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ToasttyDesignTokens.raisedSurface)
+                        .background(ConversationDesignTokens.raisedSurface)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
             }
@@ -340,14 +360,14 @@ struct ToasttyInteractionCard: View {
             Image(systemName: multiSelect
                 ? (selected ? "checkmark.square.fill" : "square")
                 : (selected ? "largecircle.fill.circle" : "circle"))
-                .foregroundStyle(selected ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.mutedText)
+                .foregroundStyle(selected ? ConversationDesignTokens.amberText : ConversationDesignTokens.mutedText)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.medium))
                 if let detail, detail.isEmpty == false {
-                    Text(detail).font(.caption).foregroundStyle(ToasttyDesignTokens.mutedText)
+                    Text(detail).font(.caption).foregroundStyle(ConversationDesignTokens.mutedText)
                 }
             }
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .foregroundStyle(ConversationDesignTokens.secondaryText)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
@@ -358,18 +378,18 @@ struct ToasttyInteractionCard: View {
         switch state.status {
         case .editing where state.connectionIsLive == false:
             Label("Reconnect to your Mac to answer", systemImage: "wifi.slash")
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         case .editing where state.canonicalAnswers == nil:
             Text("Answer every question to continue")
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         case .submitting:
-            Text("Sending answer…").foregroundStyle(ToasttyDesignTokens.mutedText)
+            Text("Sending answer…").foregroundStyle(ConversationDesignTokens.mutedText)
         case .awaitingClaude:
             Label("Answer sent · waiting for Claude", systemImage: "hourglass")
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
         case .failed(let message), .unavailable(let message):
             Label(message, systemImage: "exclamationmark.circle")
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
         case .editing, .resolved:
             EmptyView()
         }
@@ -395,7 +415,7 @@ struct ToasttyInteractionCard: View {
             if interaction.state == .pending {
                 Label(readOnlyMessage, systemImage: "desktopcomputer")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .foregroundStyle(ConversationDesignTokens.amberText)
             }
         }
     }
@@ -404,7 +424,7 @@ struct ToasttyInteractionCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Claude accepted", systemImage: "checkmark.circle.fill")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.green)
+                .foregroundStyle(ConversationDesignTokens.green)
             ForEach(answers, id: \.questionID) { answer in
                 let question = interaction.questions?.first { $0.id == answer.questionID }
                 let labels = question?.options.filter {
@@ -414,10 +434,10 @@ struct ToasttyInteractionCard: View {
                     if let question {
                         Text(question.header)
                             .font(.caption.monospaced().weight(.semibold))
-                            .foregroundStyle(ToasttyDesignTokens.amberText)
+                            .foregroundStyle(ConversationDesignTokens.amberText)
                         Text(question.question)
                             .font(.caption)
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
+                            .foregroundStyle(ConversationDesignTokens.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Text(([labels.joined(separator: ", "), answer.text]
@@ -425,7 +445,7 @@ struct ToasttyInteractionCard: View {
                         .filter { $0.isEmpty == false }
                         .joined(separator: ", ")))
                         .font(.subheadline)
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -476,14 +496,14 @@ struct ToasttyInteractionCard: View {
     }
 
     private var accentColor: Color {
-        interaction.state == .pending ? ToasttyDesignTokens.amber : ToasttyDesignTokens.secondaryText
+        interaction.state == .pending ? ConversationDesignTokens.amber : ConversationDesignTokens.secondaryText
     }
 
     private var stateColor: Color {
         switch interaction.state {
-        case .pending: ToasttyDesignTokens.amberText
-        case .resolved: ToasttyDesignTokens.green
-        case .superseded: ToasttyDesignTokens.mutedText
+        case .pending: ConversationDesignTokens.amberText
+        case .resolved: ConversationDesignTokens.green
+        case .superseded: ConversationDesignTokens.mutedText
         }
     }
 }

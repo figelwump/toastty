@@ -714,6 +714,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
     assert.match(configuredWorkflow, /test "\$\("\$TUIST_BIN_DIR\/tuist" version\)" = "\$TUIST_VERSION"/);
   }
   assert.match(workflow, /Tests\/RemoteProtocol\/\*\*/);
+  assert.match(workflow, /Sources\/ConversationUI\/\*\*/);
   assert.match(workflow, /\.node-version/);
   assert.match(workflow, /\.tool-versions/);
   assert.match(mobileWorkflow, /filters: \.github\/ci-paths\.yml/);

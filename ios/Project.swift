@@ -360,6 +360,21 @@ let project = Project(
                 "SWIFT_STRICT_CONCURRENCY": "complete",
             ])
         ),
+        // The conversation renderer, which the macOS graph also builds.
+        .target(
+            name: "ConversationUI",
+            destinations: .iOS,
+            product: .staticFramework,
+            bundleId: "com.giantthings.toastty.mobile.conversation-ui",
+            deploymentTargets: deploymentTarget,
+            infoPlist: .default,
+            sources: ["../Sources/ConversationUI/**"],
+            dependencies: [.target(name: "RemoteProtocol")],
+            settings: .settings(base: [
+                "SWIFT_VERSION": "6.0",
+                "SWIFT_STRICT_CONCURRENCY": "complete",
+            ])
+        ),
         .target(
             name: "ToasttyMobileApp",
             destinations: .iOS,
@@ -380,6 +395,7 @@ let project = Project(
             dependencies: [
                 .target(name: "ToasttyMobileDomain"),
                 .target(name: "RemoteProtocol"),
+                .target(name: "ConversationUI"),
             ] + shareExtensionTargets.map { .target(name: $0.name) },
             settings: .settings(base: appSettings)
         ),
@@ -421,6 +437,7 @@ let project = Project(
             dependencies: [
                 .target(name: "ToasttyMobileApp"),
                 .target(name: "ToasttyMobileDomain"),
+                .target(name: "ConversationUI"),
             ]
         ),
         .target(

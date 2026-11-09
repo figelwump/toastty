@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import RemoteProtocol
 import XCTest
@@ -276,6 +277,24 @@ final class ToasttyTurnPresentationTests: XCTestCase {
             provider: .codex,
             content: content
         )
+    }
+
+    /// The transcript's working row and the session list show one turn age,
+    /// so both must format it the same way.
+    func testWorkingRowElapsedLabelMatchesTheSessionList() {
+        let hundredYears = Int(MobileConversation.maximumDurationSeconds)
+        for seconds in [0, 59, 60, 61, 3_599, 3_600, hundredYears, hundredYears + 5] {
+            let age = MobileActivityAge(secondsAtReceipt: seconds, receivedAtMonotonicTime: 100)
+            let indicator = ToasttyTranscriptWorkingIndicator(turnElapsed: .init(age))
+            for now in [40.0, 100, 100.9, 161.5, .infinity] {
+                XCTAssertEqual(
+                    indicator.elapsedLabel(atMonotonicTime: now),
+                    MobileConversation.durationLabel(seconds: TimeInterval(age.seconds(atMonotonicTime: now))),
+                    "\(seconds) s at \(now)"
+                )
+            }
+        }
+        XCTAssertNil(ToasttyTranscriptWorkingIndicator(turnElapsed: nil).elapsedLabel(atMonotonicTime: 1))
     }
 
     private func rowID(_ sequence: UInt64) -> ToasttyTranscriptRowID {

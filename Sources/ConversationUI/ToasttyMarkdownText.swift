@@ -3,7 +3,7 @@ import SwiftUI
 struct ToasttyMarkdownText: View {
     let text: String
     var preparedBlocks: [ToasttyMarkdownBlock]?
-    var textColor: Color = ToasttyDesignTokens.primaryText
+    var textColor: Color = ConversationDesignTokens.primaryText
 
     var body: some View {
         // Matches the transcript stack spacing so the seams between chunks of
@@ -32,7 +32,7 @@ struct ToasttyMarkdownText: View {
             HStack(alignment: .top, spacing: 8) {
                 Text(block.isContinuation ? "" : marker.label)
                     .font(.body.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .foregroundStyle(ConversationDesignTokens.secondaryText)
                     .frame(minWidth: 16, alignment: .trailing)
                 ToasttySelectableText(block.content, textColor: textColor)
             }
@@ -40,9 +40,9 @@ struct ToasttyMarkdownText: View {
         case .blockQuote:
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(ToasttyDesignTokens.border)
+                    .fill(ConversationDesignTokens.border)
                     .frame(width: 3)
-                ToasttySelectableText(block.content, textColor: ToasttyDesignTokens.secondaryText)
+                ToasttySelectableText(block.content, textColor: ConversationDesignTokens.secondaryText)
             }
         case .table(let table):
             ToasttyMarkdownTableView(table: table)
@@ -51,29 +51,29 @@ struct ToasttyMarkdownText: View {
                 if let language, language.isEmpty == false {
                     Text(language)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ToasttyDesignTokens.codeHeaderSurface)
+                        .background(ConversationDesignTokens.codeHeaderSurface)
                     Divider()
-                        .overlay(ToasttyDesignTokens.border)
+                        .overlay(ConversationDesignTokens.border)
                 }
                 ToasttySelectableText(block.content, monospaced: true,
                                       textColor: textColor, lineSpacing: 4)
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ToasttyDesignTokens.raisedSurface)
+            .background(ConversationDesignTokens.raisedSurface)
             .overlay {
                 RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    cornerRadius: ConversationDesignTokens.controlCornerRadius,
                     style: .continuous
                 )
-                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
+                .stroke(ConversationDesignTokens.border, lineWidth: 1)
             }
             .clipShape(RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                cornerRadius: ConversationDesignTokens.controlCornerRadius,
                 style: .continuous
             ))
         }
@@ -140,10 +140,10 @@ struct ToasttyMarkdownText: View {
         for run in content.runs {
             var piece = AttributedString(content[run.range])
             if run.inlinePresentationIntent?.contains(.code) == true {
-                piece.foregroundColor = ToasttyDesignTokens.amberText
-                piece.backgroundColor = ToasttyDesignTokens.chipSurface
+                piece.foregroundColor = ConversationDesignTokens.amberText
+                piece.backgroundColor = ConversationDesignTokens.chipSurface
             } else if isExternalWebLink(run.link) {
-                piece.foregroundColor = ToasttyDesignTokens.externalLink
+                piece.foregroundColor = ConversationDesignTokens.externalLink
             }
             styled.append(piece)
         }

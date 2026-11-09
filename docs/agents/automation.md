@@ -7,7 +7,7 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 `.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets all automatic checks; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
 
 - Desktop sources, tests, scripts, and build inputs select the full macOS Debug test suite and an unsigned Release build.
-- Native iOS sources select Debug and Release simulator tests. Automatic Debug runs app/domain tests plus four fixture UI methods; Release runs app/domain tests. Both exclude the provisional numeric domain performance budget while retaining its large-page correctness check. Shared protocol changes select both platforms.
+- Native iOS sources select Debug and Release simulator tests. Automatic Debug runs app/domain tests plus four fixture UI methods; Release runs app/domain tests. Both exclude the provisional numeric domain performance budget while retaining its large-page correctness check. Changes to the sources both graphs compile, `Sources/RemoteProtocol/` and `Sources/ConversationUI/`, select both platforms.
 - Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
 - Documentation-only PR changes skip app jobs.
 
@@ -277,7 +277,7 @@ iOS remote test exists. Unexpected process identity or age, a booted device,
 a live iOS owner, or a state change during the recheck is retained for manual
 review.
 
-For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
+For changes under `Sources/RemoteProtocol/`, `Tests/RemoteProtocol/`, or `Sources/ConversationUI/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
 
 ### Temporary Composer Typing Trace
 

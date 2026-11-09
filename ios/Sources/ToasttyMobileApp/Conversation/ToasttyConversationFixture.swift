@@ -1,4 +1,5 @@
 #if DEBUG
+import ConversationUI
 import Foundation
 import RemoteProtocol
 import ToasttyMobileDomain
