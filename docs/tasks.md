@@ -517,8 +517,9 @@ runs in its own workspace, named **Coordinator**, with a terminal in
   card: it has no number, does not reorder, and its name does not change.
 - **Restart Coordinator**, in the command palette, the row's context menu and
   the workspace header, starts a fresh agent session in the same workspace. An
-  agent that still runs is ended: its terminal closes and the new session gets
-  a new terminal. A terminal at its shell prompt is used again.
+  agent that still runs is ended: the new session starts in a new terminal,
+  and then the old terminal closes. A start that fails leaves the running
+  agent alone. A terminal at its shell prompt is used again.
 - After a relaunch, Toastty restores the workspace and resumes the agent's
   conversation, as it does for any agent pane. When there is nothing to
   resume, the row shows **Not running** until you open or restart it.
@@ -530,7 +531,9 @@ Tasks view, the Status segment's groups and webhook events never show it. It
 is not a project either: a task cannot be placed in its workspace, nothing
 nests under it, and quick entry and the workspace picker do not offer it. A
 task that the coordinator creates has no parent task. Without `--workspace` or
-`--root`, that task waits for a workspace, as a task from quick entry does.
+`--root`, that task has no workspace yet, as a task from quick entry:
+[triage](#optional-triage) places it when it is on, and otherwise it waits in
+Needs you for one.
 
 `toastty coordinator send` gives the coordinator a message:
 
@@ -543,6 +546,8 @@ order otherwise: while the agent works or waits for an approval, while you
 have typed in the coordinator's terminal since the last turn started, while
 the agent starts, and while no agent runs. It types one message for each open
 prompt. The answer says `sent`, or `queued` with the position and the reason.
+`sentUnconfirmed` means the terminal did not confirm the Return key: Toastty
+does not type that message again, and holds the next ones until a turn runs.
 The queue holds up to 50 messages in memory: it survives a restart of the
 agent, and an app quit or closing the coordinator's workspace loses it.
 Toastty Mobile shows the coordinator's workspace as an ordinary workspace.

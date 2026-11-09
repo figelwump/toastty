@@ -604,7 +604,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Start a fresh agent session for the coordinator in its workspace, without selecting it. An agent that still runs there is ended: its terminal closes and the new session gets a new terminal. A terminal at its shell prompt is used again. Messages that wait in the coordinator's queue stay. Creates the workspace when there is none.",
+                summary: "Start a fresh agent session for the coordinator in its workspace, without selecting it. An agent that still runs there is ended: the new session starts in a new terminal, and then the old terminal closes. A start that fails leaves the running agent alone. A terminal at its shell prompt is used again. Messages that wait in the coordinator's queue stay. Creates the workspace when there is none.",
                 selectors: [.windowID],
                 parameters: []
             )
@@ -612,7 +612,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while the user has typed in the coordinator's terminal since the last turn started (userDraft), while no agent runs (noSession) and while the agent starts. One message is typed for each open prompt, in order. The queue holds up to 50 messages in memory: it survives an agent restart, not an app quit. The text is typed as programmatic input, not as the user's own. Fails when there is no coordinator.",
+                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while the user has typed in the coordinator's terminal since the last turn started (userDraft), while no agent runs (noSession) and while the agent starts. One message is typed for each open prompt, in order. The queue holds up to 50 messages in memory: it survives an agent restart, not an app quit. The text is typed as programmatic input, not as the user's own. Fails when there is no coordinator.",
                 selectors: [],
                 parameters: [.taskMessage(required: true)]
             )

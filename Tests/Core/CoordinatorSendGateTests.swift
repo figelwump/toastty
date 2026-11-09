@@ -30,7 +30,8 @@ struct CoordinatorSendGateTests {
         terminalReady: Bool = true,
         userInputAt: TimeInterval? = nil,
         deliveryAt: TimeInterval? = nil,
-        deliverySession: String = "session-1"
+        deliverySession: String = "session-1",
+        submitConfirmed: Bool = true
     ) -> CoordinatorSendGate.Decision {
         CoordinatorSendGate.decide(
             CoordinatorPromptFacts(
@@ -38,7 +39,9 @@ struct CoordinatorSendGateTests {
                 isTerminalReady: terminalReady,
                 lastUserInputAt: userInputAt.map { start.addingTimeInterval($0) },
                 lastDelivery: deliveryAt.map {
-                    CoordinatorPromptFacts.Delivery(sessionID: deliverySession, at: start.addingTimeInterval($0))
+                    CoordinatorPromptFacts.Delivery(
+                        sessionID: deliverySession, at: start.addingTimeInterval($0), submitConfirmed: submitConfirmed
+                    )
                 }
             ),
             now: start.addingTimeInterval(seconds)
@@ -104,6 +107,17 @@ struct CoordinatorSendGateTests {
         #expect(decide(session(.idle, turnEndedAfter: 20), at: 30 + timeout - 0.1, deliveryAt: 30)
             == .hold(.awaitingTurn, recheckAt: at(30 + timeout)))
         #expect(decide(session(.idle, turnEndedAfter: 20), at: 30 + timeout, deliveryAt: 30) == .open)
+    }
+
+    @Test
+    func anEntryWhoseReturnKeyWasNotConfirmedHoldsUntilATurnRuns() {
+        // Its text may still be in the composer, so no time limit lifts it.
+        let later = 30 + CoordinatorSendGate.turnStartTimeout * 100
+        #expect(decide(session(.idle, turnEndedAfter: 20), at: later, deliveryAt: 30, submitConfirmed: false)
+            == .hold(.awaitingTurn, recheckAt: nil))
+        // A turn that ended after it, or a new session, opens the prompt.
+        #expect(decide(session(.idle, turnEndedAfter: 40), at: 41, deliveryAt: 30, submitConfirmed: false) == .open)
+        #expect(decide(session(nil, id: "session-2"), at: 31, deliveryAt: 30, submitConfirmed: false) == .open)
     }
 
     @Test

@@ -90,7 +90,8 @@ struct CoordinatorWorkspaceTests {
         #expect(fixture.send(.selectWorkspace(windowID: fixture.windowID, workspaceID: first)))
         #expect(fixture.send(.closeWorkspace(workspaceID: first)))
         #expect(fixture.state.coordinator == nil)
-        #expect(fixture.state.windows[0].selectedWorkspaceID == fixture.projectIDs[0])
+        // The selection moves to its neighbor in window order.
+        #expect(fixture.state.windows[0].selectedWorkspaceID == fixture.projectIDs[1])
 
         let second = UUID()
         #expect(fixture.createCoordinator(workspaceID: second))
@@ -228,15 +229,18 @@ struct CoordinatorWorkspaceTests {
 
     @Test
     func aRestoreKeepsOneValidCoordinatorAndDropsMarksThatCannotHold() throws {
-        // Two marked workspaces: the first in window order stays.
+        // Two marked workspaces: the first in window order stays, and the
+        // other is an ordinary workspace again.
         let two = Fixture()
         let coordinatorID = UUID()
         two.createCoordinator(workspaceID: coordinatorID)
         two.state.workspacesByID[two.projectIDs[1]]?.isCoordinator = true
         var restored = try two.restored()
-        #expect(restored.coordinatorWorkspaceID == coordinatorID)
-        #expect(restored.workspacesByID[two.projectIDs[1]]?.isCoordinator == false)
-        #expect(restored.topLevelWorkspaceIDs(in: two.windowID) == two.projectIDs)
+        #expect(restored.coordinatorWorkspaceID == two.projectIDs[1])
+        #expect(restored.workspacesByID.values.filter(\.isCoordinator).count == 1)
+        #expect(restored.workspacesByID[coordinatorID]?.isCoordinator == false)
+        #expect(restored.workspacesByID[coordinatorID]?.coordinatorPanelID == nil)
+        #expect(restored.topLevelWorkspaceIDs(in: two.windowID) == [two.projectIDs[0], coordinatorID])
 
         // A marked task space is a task space, not the coordinator.
         let task = Fixture()

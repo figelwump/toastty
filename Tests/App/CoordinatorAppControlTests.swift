@@ -270,6 +270,16 @@ struct CoordinatorAppControlTests {
             Issue.record("expected needsWorkspace, got \(unplacedRecord.setup)")
         }
 
+        // The picker's action cannot place it there either.
+        await expectInvalidPayload(containing: "not a project") {
+            _ = try executor.runAction(
+                id: "task.set-workspace",
+                args: ["taskID": .string(unplacedID.uuidString), "workspace": .string(coordinatorID.uuidString)],
+                context: context()
+            )
+        }
+        #expect(fixture.tasks.record(unplacedID)?.workspaceID == nil)
+
         // Nothing nests under the coordinator, whoever asks.
         #expect(fixture.store.state.subspaceWorkspaceIDs(of: coordinatorID).isEmpty)
         let created = try executor.runAction(

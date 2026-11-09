@@ -17,6 +17,15 @@ struct CoordinatorControllerTests {
         /// What the controller typed, in order.
         private(set) var typed: [(text: String, panelID: UUID)] = []
         var typingSucceeds = true
+        /// The next delivery types the text but does not confirm Return.
+        var nextSubmitIsUnconfirmed = false
+        private let deliveryOverride = DeliveryOverride()
+
+        /// Lets the closure the controller holds read a fixture setting.
+        @MainActor
+        final class DeliveryOverride {
+            var result: (() -> TerminalInputDeliveryResult?)?
+        }
 
         init(readinessTimeout: Duration = .seconds(3)) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
@@ -24,6 +33,7 @@ struct CoordinatorControllerTests {
             directory = tasks.root.appendingPathComponent("runtime-home/coordinator", isDirectory: true)
             terminals.bind(sessionLifecycleTracker: tasks.sessionRuntimeStore)
             let terminals = terminals
+            let deliveryOverride = deliveryOverride
             controller = CoordinatorController(
                 store: tasks.store,
                 sessionRuntimeStore: tasks.sessionRuntimeStore,
@@ -34,7 +44,8 @@ struct CoordinatorControllerTests {
                     return tasks.config
                 },
                 deliverText: { text, panelID in
-                    terminals.sendTextResult(text, submit: true, panelID: panelID, focusPolicy: .preserveFirstResponder)
+                    let result = terminals.sendTextResult(text, submit: true, panelID: panelID, focusPolicy: .preserveFirstResponder)
+                    return result == .delivered ? (deliveryOverride.result?() ?? result) : result
                 },
                 promptState: { [unowned tasks] panelID in tasks.router.promptState(panelID: panelID) },
                 terminalReadinessTimeout: readinessTimeout
@@ -45,6 +56,11 @@ struct CoordinatorControllerTests {
                 #expect(submit)
                 typed.append((text, panelID))
                 return true
+            }
+            deliveryOverride.result = { [unowned self] in
+                guard nextSubmitIsUnconfirmed else { return nil }
+                nextSubmitIsUnconfirmed = false
+                return .uncertain
             }
         }
 
@@ -339,9 +355,40 @@ struct CoordinatorControllerTests {
         } catch let error as CoordinatorError {
             #expect(error.message.contains("nobody"))
         }
+        // The agent that ran keeps its terminal; the one made for the new
+        // session is gone.
         #expect(fixture.store.state.coordinator == first.location)
         #expect(try fixture.session().sessionID == first.sessionID)
         #expect(try fixture.status().agentState == .running)
+        let workspace = try #require(fixture.store.state.workspacesByID[first.location.workspaceID])
+        #expect(workspace.allTerminalPanelIDs == [try #require(first.location.panelID)])
+        #expect(workspace.tabIDs.count == 1)
+    }
+
+    @Test func closingAndReopeningDuringAStartGivesTheNewCoordinatorItsOwnAgent() async throws {
+        let fixture = try Fixture(readinessTimeout: .seconds(2))
+        // The first coordinator's terminal never gets ready.
+        fixture.tasks.router.defaultPromptState = .unavailable
+        let firstStart = Task { try await fixture.controller.open() }
+        await fixture.waitUntil("the first start is under way") { fixture.controller.isStarting }
+        let firstID = try #require(fixture.store.state.coordinatorWorkspaceID)
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: firstID)))
+        #expect(fixture.controller.isStarting == false)
+
+        fixture.tasks.router.defaultPromptState = .idleAtPrompt
+        let second = try await fixture.controller.open()
+        #expect(second.createdWorkspace)
+        #expect(second.startedAgent)
+        #expect(second.location.workspaceID != firstID)
+        do {
+            _ = try await firstStart.value
+            Issue.record("the start of the closed coordinator should fail")
+        } catch is CoordinatorError {}
+        // The first start's end does not touch the second coordinator.
+        let status = try fixture.status()
+        #expect(status.agentState == .running)
+        #expect(status.startFailure == nil)
+        #expect(status.session?.sessionID == second.sessionID)
     }
 
     @Test func restartMakesTheCoordinatorWhenThereIsNone() async throws {
@@ -475,6 +522,52 @@ struct CoordinatorControllerTests {
         try fixture.setStatus(.idle)
         await fixture.waitUntil("the second entry follows") { fixture.typedTexts == ["one", "two"] }
         #expect(fixture.typed.allSatisfy { $0.panelID == newPanelID })
+    }
+
+    @Test func anUnconfirmedSubmitHoldsTheNextEntryUntilATurnRuns() async throws {
+        let fixture = try Fixture()
+        try await fixture.openAtPrompt()
+        // The text went in, but the terminal did not confirm Return. It is
+        // not typed again, and nothing is typed after it.
+        fixture.nextSubmitIsUnconfirmed = true
+        #expect(try fixture.controller.send("one") == .sentUnconfirmed)
+        #expect(try fixture.controller.send("two") == .queued(position: 1, hold: .awaitingTurn))
+        await fixture.settle()
+        #expect(fixture.typedTexts == ["one"])
+        #expect(try fixture.status().hold == .awaitingTurn)
+
+        // The user submits what is in the composer: after that turn, the
+        // next entry goes in.
+        try fixture.setStatus(.working)
+        try fixture.setStatus(.idle)
+        await fixture.waitUntil("the next entry is typed after the turn") { fixture.typedTexts == ["one", "two"] }
+    }
+
+    @Test func closingTheCoordinatorsTerminalHoldsTheQueueUntilARestart() async throws {
+        let fixture = try Fixture()
+        let opened = try await fixture.openAtPrompt()
+        let panelID = try #require(opened.location.panelID)
+        // Another tab keeps the workspace open.
+        #expect(fixture.store.send(.createBackgroundTerminalTab(
+            workspaceID: opened.location.workspaceID, tabID: UUID(), panelID: UUID(), terminalCWD: fixture.directory.path
+        )))
+        try fixture.setStatus(.working)
+        #expect(try fixture.controller.send("kept") == .queued(position: 1, hold: .busy))
+        #expect(fixture.store.send(.closePanel(panelID: panelID)))
+
+        var status = try fixture.status()
+        #expect(status.location.panelID == nil)
+        #expect(status.agentState == .notRunning)
+        await fixture.waitUntil("the queue waits for an agent") { fixture.controller.hold == .noSession }
+        #expect(fixture.typedTexts.isEmpty)
+
+        let restarted = try await fixture.controller.restart()
+        #expect(restarted.location.workspaceID == opened.location.workspaceID)
+        try fixture.reportAgentStarted()
+        await fixture.waitUntil("the entry reaches the new terminal") { fixture.typedTexts == ["kept"] }
+        status = try fixture.status()
+        #expect(status.location.panelID == restarted.location.panelID)
+        #expect(fixture.typed.first?.panelID == restarted.location.panelID)
     }
 
     @Test func aTerminalThatRefusesTheTextKeepsTheEntry() async throws {

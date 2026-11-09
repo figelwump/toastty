@@ -729,6 +729,9 @@ final class TaskCoordinator {
                 throw TaskError("No open workspace has ID \(requestedID.uuidString).")
             }
             workspaceID = store.state.subspaceParentIDsByWorkspaceID()[requestedID] ?? requestedID
+            guard store.state.isCoordinatorWorkspace(workspaceID) == false else {
+                throw TaskError("The coordinator's workspace is not a project. Pass the task's project workspace or root directory.")
+            }
             let root = store.state.workspacesByID[workspaceID].flatMap { Self.rootDirectory(of: $0, fileManager: fileManager) }
             try checkProjectUnchanged(record, newRoot: root)
         case .recent(let recentID):
@@ -1728,7 +1731,7 @@ final class TaskCoordinator {
         }
         // The coordinator's workspace is not a project. A task the
         // coordinator creates without naming one has no workspace yet, like
-        // a task from quick entry.
+        // a task from quick entry: triage places it, or it waits for one.
         if workspace.isCoordinator {
             guard requested == nil else {
                 throw TaskError("The coordinator's workspace is not a project. Pass the task's project workspace or root directory.")

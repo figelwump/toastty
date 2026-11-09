@@ -6,8 +6,6 @@ import Foundation
 /// can start the coordinator without terminals.
 @MainActor
 protocol CoordinatorAgentLaunching: AnyObject {
-    /// Throws when no agent profile has this ID.
-    func checkCoordinatorProfile(_ profileID: String) throws
     /// Launches into the given terminal without moving focus and with no
     /// first message.
     func launchCoordinator(
@@ -21,10 +19,6 @@ protocol CoordinatorAgentLaunching: AnyObject {
 }
 
 extension AgentLaunchService: CoordinatorAgentLaunching {
-    func checkCoordinatorProfile(_ profileID: String) throws {
-        _ = try profileExecutableState(profileID: profileID)
-    }
-
     func launchCoordinator(
         profileID: String,
         workspaceID: UUID,
@@ -109,8 +103,11 @@ final class CoordinatorController: ObservableObject {
     /// text must survive a quit keeps its own copy until `send` returns.
     static let maximumQueuedEntries = 50
 
-    @Published private(set) var isStarting = false
-    @Published private(set) var startFailure: String?
+    /// The coordinator's workspace whose agent Toastty is starting. A start
+    /// belongs to its workspace: a coordinator opened after that one closed
+    /// gets its own start.
+    @Published private var startingWorkspaceID: UUID?
+    @Published private var failedStart: FailedStart?
     @Published private(set) var queuedCount = 0
     @Published private(set) var hold: CoordinatorSendHold?
 
@@ -124,6 +121,19 @@ final class CoordinatorController: ObservableObject {
     private let fileManager: FileManager
     private let terminalReadinessTimeout: Duration
     private let now: () -> Date
+
+    private struct FailedStart {
+        var workspaceID: UUID
+        var reason: String
+    }
+
+    /// A terminal chosen for a start. `replacedPanelID` is the coordinator's
+    /// terminal that closes once the agent runs in the new one.
+    private struct StartTerminal {
+        var panelID: UUID
+        var tabID: UUID?
+        var replacedPanelID: UUID?
+    }
 
     private var queue: [String] = []
     /// The coordinator's workspace the queue was filled for. The queue goes
@@ -174,6 +184,17 @@ final class CoordinatorController: ObservableObject {
 
     var location: CoordinatorLocation? {
         store.state.coordinator
+    }
+
+    /// Toastty is starting the agent of the current coordinator.
+    var isStarting: Bool {
+        startingWorkspaceID != nil && startingWorkspaceID == location?.workspaceID
+    }
+
+    /// Why the last start of the current coordinator's agent did not work.
+    var startFailure: String? {
+        guard let failedStart, failedStart.workspaceID == location?.workspaceID else { return nil }
+        return failedStart.reason
     }
 
     /// The agent session in the coordinator's terminal, while one runs.
@@ -233,7 +254,7 @@ final class CoordinatorController: ObservableObject {
         guard isStarting == false, awaitsRestore(location) == false else {
             return StartResult(location: location, createdWorkspace: createdWorkspace, startedAgent: false, sessionID: nil)
         }
-        let sessionID = try await startAgent(replacingBusyTerminal: false)
+        let sessionID = try await startAgent(location, replacingBusyTerminal: false)
         return StartResult(
             location: self.location ?? location,
             createdWorkspace: createdWorkspace,
@@ -243,8 +264,9 @@ final class CoordinatorController: ObservableObject {
     }
 
     /// Starts a fresh agent session in the coordinator's workspace. An agent
-    /// that still runs is ended: its terminal is closed and the new session
-    /// gets a new one. A terminal at its shell prompt is used again.
+    /// that still runs is ended: the new session gets a new terminal, and
+    /// once it runs there the old terminal closes. A start that fails leaves
+    /// the old agent alone. A terminal at its shell prompt is used again.
     @discardableResult
     func restart(windowID requestedWindowID: UUID? = nil) async throws -> StartResult {
         guard isStarting == false else {
@@ -254,7 +276,7 @@ final class CoordinatorController: ObservableObject {
         guard let location else {
             throw CoordinatorError("Toastty could not create the coordinator's workspace.")
         }
-        let sessionID = try await startAgent(replacingBusyTerminal: true)
+        let sessionID = try await startAgent(location, replacingBusyTerminal: true)
         return StartResult(
             location: self.location ?? location,
             createdWorkspace: createdWorkspace,
@@ -294,24 +316,27 @@ final class CoordinatorController: ObservableObject {
         return directoryURL.path
     }
 
-    private func startAgent(replacingBusyTerminal: Bool) async throws -> String {
-        isStarting = true
-        startFailure = nil
+    private func startAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool) async throws -> String {
+        let workspaceID = location.workspaceID
+        startingWorkspaceID = workspaceID
+        failedStart = nil
         defer {
-            isStarting = false
+            if startingWorkspaceID == workspaceID { startingWorkspaceID = nil }
             drain()
         }
         do {
-            return try await launchAgent(replacingBusyTerminal: replacingBusyTerminal)
+            return try await launchAgent(location, replacingBusyTerminal: replacingBusyTerminal)
         } catch {
             let reason = Self.startFailureReason(for: error)
-            startFailure = reason
+            if self.location?.workspaceID == workspaceID {
+                failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
+            }
             ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: ["reason": reason])
             throw CoordinatorError(reason)
         }
     }
 
-    private func launchAgent(replacingBusyTerminal: Bool) async throws -> String {
+    private func launchAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool) async throws -> String {
         guard let launcher else {
             throw CoordinatorError("The agent launcher is not available.")
         }
@@ -321,39 +346,42 @@ final class CoordinatorController: ObservableObject {
         } catch {
             throw CoordinatorError(error.localizedDescription)
         }
-        // Checked before a restart closes the terminal of a running agent:
-        // a wrong setting must not end the session it cannot replace.
-        try launcher.checkCoordinatorProfile(config.agent)
         let directory = try preparedDirectory()
-        guard let location else {
-            throw CoordinatorError("The coordinator's workspace is closed.")
+        let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
+        let result: AgentLaunchResult
+        do {
+            result = try await TaskCoordinator.launchWhenTerminalIsReady(timeout: terminalReadinessTimeout) {
+                try await launcher.launchCoordinator(
+                    profileID: config.agent,
+                    workspaceID: location.workspaceID,
+                    panelID: terminal.panelID,
+                    cwd: directory,
+                    model: config.model,
+                    reasoningEffort: config.effort
+                )
+            }
+        } catch {
+            abandonReplacement(terminal)
+            throw error
         }
-        let panelID = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
-        let result = try await TaskCoordinator.launchWhenTerminalIsReady(timeout: terminalReadinessTimeout) {
-            try await launcher.launchCoordinator(
-                profileID: config.agent,
-                workspaceID: location.workspaceID,
-                panelID: panelID,
-                cwd: directory,
-                model: config.model,
-                reasoningEffort: config.effort
-            )
-        }
+        adoptReplacement(terminal, workspaceID: location.workspaceID)
         ToasttyLog.info("Started the coordinator's agent", category: .tasks, metadata: [
             "session_id": result.sessionID,
-            "panel_id": panelID.uuidString,
+            "panel_id": terminal.panelID.uuidString,
             "agent": config.agent,
         ])
         return result.sessionID
     }
 
     /// The terminal the agent starts in: the coordinator's own when it can
-    /// take a command, else a new one in the same workspace.
+    /// take a command, else a new one in the same workspace. A new terminal
+    /// that replaces one becomes the coordinator's only after the agent
+    /// started in it, so a start that fails ends no running agent.
     private func terminalForStart(
         _ location: CoordinatorLocation,
         directory: String,
         replacingBusyTerminal: Bool
-    ) throws -> UUID {
+    ) throws -> StartTerminal {
         if let panelID = location.panelID {
             let isBusy = sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) != nil
                 || promptState(panelID) == .busy
@@ -361,25 +389,46 @@ final class CoordinatorController: ObservableObject {
                 // Closing the terminal also drops its pending resume.
                 || awaitsRestore(location)
             if replacingBusyTerminal == false || isBusy == false {
-                return panelID
+                return StartTerminal(panelID: panelID, tabID: nil, replacedPanelID: nil)
             }
         }
-        let tabID = UUID()
-        let panelID = UUID()
-        guard store.send(.createBackgroundTerminalTab(
+        let terminal = StartTerminal(panelID: UUID(), tabID: UUID(), replacedPanelID: location.panelID)
+        guard let tabID = terminal.tabID, store.send(.createBackgroundTerminalTab(
             workspaceID: location.workspaceID,
             tabID: tabID,
-            panelID: panelID,
+            panelID: terminal.panelID,
             terminalCWD: directory
-        )), store.send(.setCoordinatorPanel(panelID: panelID)) else {
+        )) else {
             throw CoordinatorError("Toastty could not open a terminal in the coordinator's workspace.")
         }
-        _ = store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: tabID))
-        if let previousPanelID = location.panelID {
-            // Closing the terminal ends the agent that ran in it.
-            _ = store.send(.closePanel(panelID: previousPanelID, preservesTabSelection: true))
+        if terminal.replacedPanelID == nil {
+            // Nothing to replace: the new terminal is the coordinator's now.
+            adoptReplacement(terminal, workspaceID: location.workspaceID)
         }
-        return panelID
+        return terminal
+    }
+
+    /// Makes a new terminal the coordinator's and closes the one it
+    /// replaces, which ends the agent that ran there.
+    private func adoptReplacement(_ terminal: StartTerminal, workspaceID: UUID) {
+        guard let tabID = terminal.tabID else { return }
+        guard store.send(.setCoordinatorPanel(panelID: terminal.panelID)) || location?.panelID == terminal.panelID else { return }
+        _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+        if let replacedPanelID = terminal.replacedPanelID {
+            _ = store.send(.closePanel(panelID: replacedPanelID, preservesTabSelection: true))
+        }
+    }
+
+    /// After a start that failed: the terminal that was to replace the
+    /// coordinator's goes, and the old terminal with its agent stays. When
+    /// the old terminal closed meanwhile, the new one is all there is.
+    private func abandonReplacement(_ terminal: StartTerminal) {
+        guard let replacedPanelID = terminal.replacedPanelID else { return }
+        if location?.panelID == replacedPanelID {
+            _ = store.send(.closePanel(panelID: terminal.panelID, preservesTabSelection: true))
+        } else {
+            _ = store.send(.setCoordinatorPanel(panelID: terminal.panelID))
+        }
     }
 
     static func startFailureReason(for error: any Error) -> String {
@@ -465,7 +514,11 @@ final class CoordinatorController: ObservableObject {
             return nil
         case .delivered, .uncertain:
             queue.removeFirst()
-            lastDelivery = CoordinatorPromptFacts.Delivery(sessionID: session.sessionID, at: moment)
+            lastDelivery = CoordinatorPromptFacts.Delivery(
+                sessionID: session.sessionID,
+                at: moment,
+                submitConfirmed: result == .delivered
+            )
             ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
                 "session_id": session.sessionID,
                 "submit_confirmed": result == .delivered ? "true" : "false",
@@ -474,11 +527,9 @@ final class CoordinatorController: ObservableObject {
             if queue.isEmpty {
                 setHold(nil)
             } else {
-                setHold(.awaitingTurn)
-                scheduleRecheck(
-                    at: moment.addingTimeInterval(CoordinatorSendGate.turnStartTimeout),
-                    from: moment
-                )
+                // Sets the hold of the next entry, which waits for this
+                // one's turn.
+                drain()
             }
             return result
         }

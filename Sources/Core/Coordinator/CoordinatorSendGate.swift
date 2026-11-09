@@ -52,10 +52,14 @@ public struct CoordinatorPromptFacts: Equatable, Sendable {
     public struct Delivery: Equatable, Sendable {
         public var sessionID: String
         public var at: Date
+        /// The terminal confirmed the Return key. Without that, the text may
+        /// still be in the agent's composer.
+        public var submitConfirmed: Bool
 
-        public init(sessionID: String, at: Date) {
+        public init(sessionID: String, at: Date, submitConfirmed: Bool = true) {
             self.sessionID = sessionID
             self.at = at
+            self.submitConfirmed = submitConfirmed
         }
     }
 
@@ -90,8 +94,10 @@ public enum CoordinatorSendGate {
     /// Claude reports the end of a turn before its composer resets.
     /// `RemoteAccessService` waits the same time before it opens a prompt.
     public static let promptSettleInterval: TimeInterval = 0.5
-    /// How long a typed entry may take to start its turn. After that the
-    /// prompt counts as open again, so one lost entry cannot stop the queue.
+    /// How long a submitted entry may take to start its turn. After that
+    /// the prompt counts as open again, so one lost entry cannot stop the
+    /// queue. An entry whose Return key was not confirmed has no such
+    /// limit: the next entry would be typed after its text.
     public static let turnStartTimeout: TimeInterval = 10
     /// How soon to look again at a hold that no session change announces.
     public static let pollInterval: TimeInterval = 0.5
@@ -124,6 +130,9 @@ public enum CoordinatorSendGate {
         // after the delivery is that turn.
         if let delivery = facts.lastDelivery, delivery.sessionID == session.sessionID,
            (session.lastTurnEndedAt ?? .distantPast) < delivery.at {
+            guard delivery.submitConfirmed else {
+                return .hold(.awaitingTurn, recheckAt: nil)
+            }
             let deadline = delivery.at.addingTimeInterval(turnStartTimeout)
             if now < deadline {
                 return .hold(.awaitingTurn, recheckAt: deadline)

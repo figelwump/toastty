@@ -1005,7 +1005,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   `--window` names the window that gets a new coordinator; without it, the
   selected window does.
 - `restart` starts a fresh agent session in the same workspace, without
-  selecting it. An agent that still runs is ended.
+  selecting it. An agent that still runs is ended once the new one started;
+  a start that fails leaves it alone.
 - `status` prints `exists`, and for an open coordinator its `windowID`,
   `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
   `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`
@@ -1016,7 +1017,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
   `settling`, `awaitingTurn` or `terminalUnavailable`). `sentUnconfirmed`
   means the terminal did not confirm the Return key; Toastty does not type the
-  text again. It fails when there is no coordinator.
+  text again, and holds later messages until a turn runs. It fails when there
+  is no coordinator.
 
 A workspace-scoped session can use these commands only when the coordinator's
 workspace is in its scope, and it cannot create the coordinator.
