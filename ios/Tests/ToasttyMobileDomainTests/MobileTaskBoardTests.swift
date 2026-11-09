@@ -114,6 +114,7 @@ final class MobileTaskBoardTests: XCTestCase {
                             ["action": "release", "title": "Release"],
                             ["action": "archive", "title": "Archive…"],
                         ],
+                        "releaseAfterMergeRequestedAt": "2026-11-05T09:30:00.000Z",
                     ]),
                     task(newer, extra: ["mergeControl": ["kind": "queued", "title": "Queued", "menu": []]]),
                     task(older, extra: [:]),
@@ -139,6 +140,11 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertNil(board.task(id: newer)?.mergeControl)
         XCTAssertNil(board.task(id: older)?.mergeControl)
         XCTAssertEqual(board.task(id: older)?.actions, [])
+        // The request to release right after the merge, which a later
+        // release of this app can show. Older Macs do not send it.
+        XCTAssertEqual(task.releaseAfterMergeRequestedAt, ISO8601DateFormatter().date(from: "2026-11-05T09:30:00Z"))
+        XCTAssertNotNil(task.releaseAfterMergeRequestedAt)
+        XCTAssertNil(board.task(id: older)?.releaseAfterMergeRequestedAt)
     }
 
     /// The Mac sidebar's rule: an agent that works or wants the user shows

@@ -85,6 +85,21 @@ enum TaskBoardPresentation {
         return "\(agentName(item)) is waiting for your reply"
     }
 
+    /// What the mark of a task the user asked to release right after its
+    /// merge says, in tooltips and spoken labels.
+    static let releaseAfterMergeLabel = "release right after merge"
+
+    /// When the user asked to release the task right after it merges, while
+    /// the request still waits: `nil` once the task is Done or archived.
+    static func releaseAfterMergeRequestedAt(_ item: TaskBoardItem) -> Date? {
+        item.stage.isFinished ? nil : item.record?.releaseAfterMerge?.requestedAt
+    }
+
+    /// `label`, with the request's mark added when the task's rows show it.
+    static func addingReleaseAfterMerge(to label: String, _ item: TaskBoardItem) -> String {
+        releaseAfterMergeRequestedAt(item) == nil ? label : "\(label), \(releaseAfterMergeLabel)"
+    }
+
     /// The stage's name and why, for the detail pane.
     static func stageDescription(_ item: TaskBoardItem) -> (stage: String, why: String) {
         switch item.stage {
@@ -418,6 +433,19 @@ struct TaskQuestionGlyph: View {
         Image(systemName: "questionmark")
             .font(.system(size: 6.5, weight: .black))
             .foregroundStyle(ToastyTheme.sidebarTaskQuestionMark)
+    }
+}
+
+/// The small mark on the rows of a task the user asked to release right
+/// after it merges, in the To ship color. It is not a control: the request
+/// is set by asking an agent, or with `toastty task set-release`.
+struct TaskReleaseAfterMergeMark: View {
+    var body: some View {
+        Image(systemName: "bolt.fill")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(ToastyTheme.sidebarTaskToShipMark.opacity(0.85))
+            .help("Release right after merge")
+            .accessibilityHidden(true)
     }
 }
 

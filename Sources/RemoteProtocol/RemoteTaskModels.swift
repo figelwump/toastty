@@ -164,6 +164,10 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     /// Actions that stay on the Mac are left out. A client acts only on a
     /// host that advertises `task_actions`.
     public var actions: [RemoteTaskActionItem]
+    /// When the user asked to release this task right after it merges,
+    /// while the Mac's rows mark it: until the task is Done or archived.
+    /// Absent without a request, and from older hosts.
+    public var releaseAfterMergeRequestedAt: Date?
 
     public init(
         id: UUID,
@@ -181,7 +185,8 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         pullRequest: RemoteTaskPullRequest? = nil,
         activityAt: Date,
         mergeControl: RemoteTaskMergeControl? = nil,
-        actions: [RemoteTaskActionItem] = []
+        actions: [RemoteTaskActionItem] = [],
+        releaseAfterMergeRequestedAt: Date? = nil
     ) {
         self.id = id
         self.hasRecord = hasRecord
@@ -199,11 +204,13 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         self.activityAt = activityAt
         self.mergeControl = mergeControl
         self.actions = actions
+        self.releaseAfterMergeRequestedAt = releaseAfterMergeRequestedAt
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, hasRecord, title, group, mark, statusLine, rowSummary, stageTitle, stageReason
         case projectWorkspaceID, projectTitle, taskSpaceWorkspaceID, pullRequest, activityAt, mergeControl, actions
+        case releaseAfterMergeRequestedAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -224,6 +231,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         activityAt = try container.decode(Date.self, forKey: .activityAt)
         mergeControl = try container.decodeIfPresent(RemoteTaskMergeControl.self, forKey: .mergeControl)
         actions = try container.decodeIfPresent([RemoteTaskActionItem].self, forKey: .actions) ?? []
+        releaseAfterMergeRequestedAt = try container.decodeIfPresent(Date.self, forKey: .releaseAfterMergeRequestedAt)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -244,6 +252,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encode(activityAt, forKey: .activityAt)
         try container.encodeIfPresent(mergeControl, forKey: .mergeControl)
         if actions.isEmpty == false { try container.encode(actions, forKey: .actions) }
+        try container.encodeIfPresent(releaseAfterMergeRequestedAt, forKey: .releaseAfterMergeRequestedAt)
     }
 
     /// Whether the Mac offers `action` for this task now: in its action

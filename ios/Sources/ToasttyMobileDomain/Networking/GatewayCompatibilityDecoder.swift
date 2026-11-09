@@ -185,7 +185,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             pullRequest: pullRequest,
             activityAt: (try? object.requiredDate("activityAt")) ?? .distantPast,
             mergeControl: object.lossyObject("mergeControl").flatMap(decodeTaskMergeControl),
-            actions: ((try? object.requiredArray("actions")) ?? []).compactMap(decodeTaskActionItem)
+            actions: ((try? object.requiredArray("actions")) ?? []).compactMap(decodeTaskActionItem),
+            // Absent without a request, and from older Macs.
+            releaseAfterMergeRequestedAt: try? object.requiredDate("releaseAfterMergeRequestedAt")
         )
     }
 

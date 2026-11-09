@@ -907,6 +907,35 @@ shipped becomes Done with them. A shipped release task
 closes its task space and removes its worktree once its agent is at rest,
 unless the worktree's commit is on no remote branch or tag.
 
+### Release one task right after it merges
+
+You can ask for one task to be released right after it merges, also in a
+project that releases in batches. Tell the task's agent or your coordinating
+agent, or run the command yourself:
+
+```bash
+toastty task set-release <task-id> --after-merge
+toastty task set-release <task-id> --clear
+```
+
+A task's agent can leave out the task ID to set the request on its own task.
+
+Toastty saves the request on the task and shows it. Toastty does not start a
+release because of it. The agent that starts your releases reads the request
+when the task reaches To ship, and then runs `toastty task release`.
+
+- The request is allowed on an open task and on a To ship task. Toastty
+  refuses it on a Done or archived task and on a release task.
+- A second request keeps the time of the first one. `--clear` removes the
+  request, and is also accepted on a task that has none.
+- `task get` and `task list` report it as `releaseAfterMerge`, with
+  `requestedAt`. A set or a clear lists the task in
+  `task list --changed-since`.
+- The request stays after Toastty relaunches.
+- While the task is open or To ship, its rows in the sidebar and in the Tasks
+  view show a small violet bolt, and the Tasks view's detail pane shows
+  **Release: Right after merge**. The app has no control for it.
+
 ## Skills for task events
 
 At each point where Toastty hands work to an agent, `tasks.toml` can name the

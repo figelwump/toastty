@@ -967,6 +967,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
+      toastty [--json] [--socket-path <path>] task set-release [<task-id>] (--after-merge | --clear)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
       toastty [--json] [--socket-path <path>] task merge [<task-id>] [--head <commit>]
       toastty [--json] [--socket-path <path>] task request-merge <task-id>
@@ -2277,6 +2278,23 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("task set-workspace takes one of --workspace, --recent or --root\n\n\(usage)")
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-workspace", args: args))
+
+        case "set-release":
+            let parsed = try parseCommandArguments(remaining, valueOptions: [], flagOptions: ["--after-merge", "--clear"])
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task set-release takes at most one task ID\n\n\(usage)")
+            }
+            guard parsed.hasFlag("--after-merge") != parsed.hasFlag("--clear") else {
+                throw ToasttyCLIError.usage("task set-release takes one of --after-merge or --clear\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = ["afterMerge": .bool(parsed.hasFlag("--after-merge"))]
+            if let taskID = parsed.positionals.first {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("task set-release takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-release", args: args))
 
         case "adopt":
             let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace"])

@@ -103,6 +103,12 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     public var cleanup: TaskCleanup?
     /// Set on a release task: the tasks it releases.
     public var release: TaskRelease?
+    /// The user's request to release this task's work right after it
+    /// merges, whatever the project's release rule says
+    /// (`task.set-release`). Toastty only saves and shows it; whoever
+    /// starts releases reads it. Optional so records saved before it existed
+    /// still load.
+    public var releaseAfterMerge: TaskReleaseAfterMerge?
     /// The times Toastty observed for the task: when its stage changed, a
     /// turn a quit may have cut off, pending checks, and the user's last
     /// input. Optional so records saved before it existed still load.
@@ -251,6 +257,16 @@ public struct TaskArchiveOptions: Codable, Equatable, Sendable {
         self.closePullRequest = closePullRequest
         self.deleteUnpushedCommits = deleteUnpushedCommits
         self.discardChanges = discardChanges
+    }
+}
+
+/// A request to release one task's work right after it merges.
+public struct TaskReleaseAfterMerge: Codable, Equatable, Sendable {
+    /// When the request was first made. Asking again keeps it.
+    public var requestedAt: Date
+
+    public init(requestedAt: Date) {
+        self.requestedAt = requestedAt
     }
 }
 

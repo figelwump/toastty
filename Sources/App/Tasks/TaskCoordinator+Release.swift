@@ -84,6 +84,45 @@ extension TaskCoordinator {
         return record
     }
 
+    // MARK: - Release right after merge
+
+    /// `task.set-release`: saves, or with `requested == false` clears, the
+    /// user's request to release this task's work right after it merges.
+    /// Toastty starts no release for it. Asking again keeps the first
+    /// time, and clearing a task that has no request changes nothing. A
+    /// request is refused where no merge of the task can still wait for a
+    /// release: a Done or archived task, and a release task.
+    @discardableResult
+    func setReleaseAfterMerge(taskID: UUID, requested: Bool) throws -> TaskRecord {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        if requested {
+            guard record.release == nil else {
+                throw TaskError("Task \(record.title) is a release task, so it has no merge to release.")
+            }
+            guard record.archivedAt == nil else {
+                throw TaskError("Task \(record.title) is archived.")
+            }
+            // The board knows a task that is Done without a mark of its own:
+            // merged in a project without release tags, or finished through
+            // its child tasks.
+            let stage = board?.items().first { $0.taskID == taskID }?.stage
+            guard record.doneAt == nil, record.shippedAt == nil, stage != .done else {
+                throw TaskError("Task \(record.title) is done.")
+            }
+        }
+        let requestedAt = now()
+        try saveMergeState(taskID: taskID) { record in
+            if requested == false {
+                record.releaseAfterMerge = nil
+            } else if record.releaseAfterMerge == nil {
+                record.releaseAfterMerge = TaskReleaseAfterMerge(requestedAt: requestedAt)
+            }
+        }
+        return records.record(id: taskID)!
+    }
+
     /// The project's release task that has not shipped or ended, if any.
     /// A project has one release at a time, whichever spelling of its path
     /// the release was made with.

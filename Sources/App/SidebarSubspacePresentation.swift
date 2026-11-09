@@ -79,6 +79,9 @@ enum SidebarSubspacePresentation {
         /// False for a task with an open pull request or a merge under way;
         /// see `TaskBoardItem.acceptsDoneMark`.
         var acceptsDoneMark = true
+        /// The user asked to release the task right after it merges; see
+        /// `TaskBoardPresentation.releaseAfterMergeRequestedAt`.
+        var releasesAfterMerge = false
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -423,6 +426,9 @@ enum SidebarSubspacePresentation {
         case .toShip: components.append("merged, to ship")
         case .done: components.append("done")
         case .idle: break
+        }
+        if row.releasesAfterMerge {
+            components.append(TaskBoardPresentation.releaseAfterMergeLabel)
         }
         if let projectTag = row.projectTag {
             components.append("in \(projectTag)")
