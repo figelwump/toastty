@@ -745,7 +745,9 @@ final class QuickEntryController: ObservableObject {
         guard let workspaceID = state.workspaceSelection(containingPanelID: panelID)?.workspaceID else {
             return nil
         }
-        return state.subspaceParentIDsByWorkspaceID()[workspaceID] ?? workspaceID
+        let rootID = state.subspaceParentIDsByWorkspaceID()[workspaceID] ?? workspaceID
+        // The coordinator's workspace is not a project.
+        return state.isCoordinatorWorkspace(rootID) ? nil : rootID
     }
 
     /// Opens the panel with text selected in a terminal attached and that

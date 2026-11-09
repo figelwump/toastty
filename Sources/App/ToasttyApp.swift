@@ -1391,6 +1391,26 @@ struct ToasttyApp: App {
                 ) ?? .unavailable
             }
         )
+        taskCoordinator.coordinatorController = CoordinatorController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            launcher: agentLaunchService,
+            directoryURL: runtimePaths.coordinatorDirectoryURL,
+            configLoader: { try TasksConfigFile.load() },
+            // The call `task send` uses: programmatic input, which closes a
+            // prompt the iPhone holds open but is not the user's typing.
+            deliverText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendTextResult(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? .unavailable
+            },
+            promptState: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
+            }
+        )
         let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,

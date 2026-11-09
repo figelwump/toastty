@@ -66,6 +66,10 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Toastty's copies of files attached to a task. They are removed when the
     task is deleted, or a week after Toastty first sees the task Done or
     Archived with its task space closed. The task record keeps the file names.
+- `~/.toastty/coordinator/`
+  - The working directory of the coordinator's agent, created when you first
+    open the coordinator. Toastty writes nothing else there; the agent keeps
+    its own notes in it. Closing the coordinator's workspace leaves it.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.

@@ -15,7 +15,8 @@ enum CommandPaletteCatalog {
         staticCommandDescriptors(originWindowID: originWindowID, actions: actions) +
             CommandPaletteTaskCatalog.descriptors(
                 current: actions.currentTask(originWindowID: originWindowID),
-                releases: actions.taskReleaseOptions(originWindowID: originWindowID)
+                releases: actions.taskReleaseOptions(originWindowID: originWindowID),
+                coordinator: actions.coordinatorOption()
             ) +
             workspaceSwitchDescriptors(originWindowID: originWindowID, actions: actions) +
             terminalProfileDescriptors(

@@ -57,6 +57,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var toggledTasksViewWindowIDs: [UUID] = []
     var currentTaskValue: TaskBoardCurrentTask?
     var taskReleaseOptionsValue: [PaletteTaskReleaseOption] = []
+    var coordinatorOptionValue: PaletteCoordinatorOption?
     var executedTaskCommands: [PaletteTaskCommand] = []
 
     var createWindowResult = true
@@ -302,6 +303,10 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
         _ = originWindowID
         return taskReleaseOptionsValue
+    }
+
+    func coordinatorOption() -> PaletteCoordinatorOption? {
+        coordinatorOptionValue
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {

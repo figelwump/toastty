@@ -41,6 +41,9 @@ extension TaskCoordinator {
     /// saved; the move continues in the background.
     @discardableResult
     func startWork(_ request: TaskStartWorkRequest, caller: TaskCaller) throws -> TaskRecord {
+        if let workspaceID = caller.workspaceID, store.state.isCoordinatorWorkspace(workspaceID) {
+            throw TaskError("The coordinator is not a task and does not move into a worktree. Create a task for the work: toastty task create --start-work")
+        }
         guard let sessionID = caller.sessionID, let sessions,
               let session = sessions.session(sessionID), session.isActive else {
             throw TaskError("task start-work runs from the agent session whose work moves into the worktree.")

@@ -717,6 +717,17 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
+        if workspace.isCoordinator, let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController {
+            WorkspaceHeaderCoordinatorControl(controller: controller, sessionRuntimeStore: sessionRuntimeStore) {
+                workspaceHeaderSummaryLabel(for: workspace)
+            }
+        } else {
+            workspaceHeaderSummaryLabel(for: workspace)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceHeaderSummaryLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
         // Tasks with a pull request keep their merge controls. Tasks without

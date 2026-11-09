@@ -117,6 +117,17 @@ struct TasksConfigFileTests {
     }
 
     @Test
+    func coordinatorDefaultsToTheClaudeProfileAndTakesItsOwnAgentModelAndEffort() throws {
+        #expect(try parse("").coordinator == TasksConfig.Coordinator(agent: "claude", model: nil, effort: nil))
+        // The task defaults do not reach the coordinator.
+        #expect(try parse("[defaults]\nagent = \"codex\"\nmodel = \"gpt\"").coordinator == TasksConfig.Coordinator())
+        #expect(try parse("[coordinator]\nmodel = \"claude-opus-5-5\"").coordinator
+            == TasksConfig.Coordinator(agent: "claude", model: "claude-opus-5-5", effort: nil))
+        #expect(try parse("[coordinator]\nagent = \"claude-work\"\nmodel = \"claude-fable-5-2\"\neffort = \"xhigh\"").coordinator
+            == TasksConfig.Coordinator(agent: "claude-work", model: "claude-fable-5-2", effort: "xhigh"))
+    }
+
+    @Test
     func triageTimeoutDefaults() throws {
         #expect(try parse("[triage]\ncommand = \"x\"").triage?.timeoutSeconds == TasksConfig.Triage.defaultTimeoutSeconds)
     }
@@ -164,6 +175,10 @@ struct TasksConfigFileTests {
         ("[workspace.\"/r\"]\nstart_skill = \"\"\"\none\ntwo\n\"\"\"", 2, "start_skill must be one line"),
         ("[quick_entry]\nshortcut = \"shift+t\"", 2, "[quick_entry] the shortcut \"shift+t\" needs Command"),
         ("[quick_entry]\nshortcut = \"opt+shift+tt\"", 2, "unknown key \"tt\""),
+        ("[coordinator]\nprompt = \"x\"", 2, "[coordinator] contains unknown key 'prompt'"),
+        ("[coordinator]\nmodel = \"--dangerous\"", 2, "[coordinator] model must be one word"),
+        ("[coordinator]\nagent = \"claude code\"", 2, "[coordinator] agent must be one word"),
+        ("[coordinator]\nagent = \"a\"\n[coordinator]", 3, "duplicate table"),
     ])
     func reportsErrorsWithLines(contents: String, line: Int, mention: String) {
         let error = parseError(contents)

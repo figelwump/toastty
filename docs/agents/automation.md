@@ -151,6 +151,42 @@ The Claude check also saves its transcript files, then removes the project
 directory and trust entry for its temporary working directory. Other provider
 history for that directory can remain in the validation account.
 
+### Coordinator
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-check.py'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-check.py --provider claude --gui-session'
+```
+
+These checks mutate disposable Toastty instances on the dedicated validation
+Mac. Each instance has a throwaway runtime home and user home; the installed
+production app is not touched.
+
+The default run uses a fake `claude` script that reports its start and its
+turns through the Toastty CLI. Through the built CLI it opens the coordinator
+twice, sends messages at an open prompt and during a held turn, checks that
+the coordinator is in no task list or workspace choice and that a task it
+creates has no parent, restarts the agent, sends a message while no agent
+runs, kills and relaunches the app to check the restored workspace and the
+resumed agent, and closes the workspace. A second instance in automation mode
+captures the sidebar with the pinned row; the restore steps cannot use that
+mode, because an automation launch does not read the saved layout. A capture
+that cannot be made is recorded in the evidence, not failed.
+
+The `--provider claude` run uses the real, authenticated Claude CLI and
+subscription usage. It proves that pasted text plus Return submits a turn,
+that a message sent during a turn is typed after it, and that the resumed
+conversation takes a message after a relaunch. The profile allows only Bash
+commands that start with `sleep`. The run marks only its temporary
+coordinator folder trusted in `~/.claude.json`, and removes that entry and the
+folder's Claude project directory afterward. `--gui-session` reruns the check
+through Terminal in the GUI session, where the Claude login is readable.
+
+Both write `remote-coordinator-check-<provider>.json` and the app logs under
+the run's artifacts directory.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

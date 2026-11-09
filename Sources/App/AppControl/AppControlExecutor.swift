@@ -56,13 +56,18 @@ final class AppControlExecutor {
             if action.isTaskAction, taskCoordinator == nil {
                 return nil
             }
+            if action.isCoordinatorAction, coordinatorController == nil {
+                return nil
+            }
             return action.descriptor
         }
     }
 
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
         AppControlQueryID.allCases.compactMap { query in
-            query.isTaskQuery && taskCoordinator == nil ? nil : query.descriptor
+            if query.isTaskQuery, taskCoordinator == nil { return nil }
+            if query == .coordinatorGet, coordinatorController == nil { return nil }
+            return query.descriptor
         }
     }
 
@@ -819,6 +824,12 @@ final class AppControlExecutor {
         case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:
             return try runWebhookAction(action, args: args)
 
+        case .coordinatorOpen, .coordinatorRestart:
+            throw AutomationSocketError.invalidPayload("\(action.rawValue) waits for the agent to start; send it through app_control.run_action")
+
+        case .coordinatorSend:
+            return try runCoordinatorSend(args: args)
+
         case .taskRelease:
             return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
 
@@ -876,6 +887,13 @@ final class AppControlExecutor {
                 try prepareTaskArchive(args: args)
             }
             return try await finishTaskArchive(coordinator, taskID: taskID, options: options)
+        }
+        if let action = AppControlActionID.resolve(rawID), action == .coordinatorOpen || action == .coordinatorRestart {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: action.descriptor)
+                return try prepareCoordinatorStart(action, args: args)
+            }
+            return try await finishCoordinatorStart(action, preparation: preparation)
         }
         guard AppControlActionID.resolve(rawID) == .agentLaunch else {
             return try runAction(id: rawID, args: args, context: context)
@@ -1046,6 +1064,9 @@ final class AppControlExecutor {
 
         case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
             return try runTaskQuery(query, args: args)
+
+        case .coordinatorGet:
+            return try coordinatorQuery()
 
         case .webhookList:
             return try runWebhookList(args: args)

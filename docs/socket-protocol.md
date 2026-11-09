@@ -263,6 +263,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.archive`
 - `task.release`
 - `task.adopt`
+- `coordinator.open`
+- `coordinator.restart`
+- `coordinator.send`
 - `window.tasks.show`
 - `window.tasks.hide`
 - `window.sidebar.set-segment`
@@ -729,6 +732,17 @@ Common query IDs include:
 - `task.list`
 - `task.workspace-choices`
 - `task.watches`
+- `coordinator.get`
+
+`coordinator.get` returns `exists`, and for an open coordinator `windowID`,
+`workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
+`running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
+`queuedCount` and `hold`. `coordinator.open` (optional `windowID` and
+`select`) and `coordinator.restart` (optional `windowID`) return the same
+fields with `createdWorkspace` and `startedAgent`, after the start attempt.
+`coordinator.send` requires `args.text` and returns `delivery` (`sent`,
+`sentUnconfirmed` or `queued`), `queuedCount`, and for a queued message
+`position` and `hold`. See [The coordinator](tasks.md#the-coordinator).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
