@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import RemoteProtocol
 import XCTest

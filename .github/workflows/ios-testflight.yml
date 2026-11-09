@@ -16,6 +16,7 @@ on:
       - "ios/**"
       - "Sources/RemoteProtocol/**"
       - "Tests/RemoteProtocol/**"
+      - "Sources/ConversationUI/**"
       - "scripts/ci/**"
       - ".github/ios-xcode-version"
       - ".secrets"

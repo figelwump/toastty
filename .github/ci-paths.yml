@@ -8,6 +8,7 @@ ios:
   - 'ios/**'
   - 'Sources/RemoteProtocol/**'
   - 'Tests/RemoteProtocol/**'
+  - 'Sources/ConversationUI/**'
   - 'Sources/App/Resources/WebPanels/**'
   - 'WebPanels/**'
   - 'scripts/remote/test.sh'

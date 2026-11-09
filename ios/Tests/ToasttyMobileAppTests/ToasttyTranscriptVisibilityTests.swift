@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import RemoteProtocol
 import SwiftUI
@@ -198,7 +199,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
     func testNonReadyEntriesAndReadyEntriesWithoutAResponseUseLiveEdge() {
         let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
         for status in [MobileSessionStatus.working, .needsApproval, .idle, .error] {
-            var position = TranscriptEntryScrollPosition(status: status)
+            var position = TranscriptEntryScrollPosition(status: ToasttyTranscriptSessionStatus(status))
             XCTAssertEqual(position.target(for: state, isSubmitting: false), .liveEdge)
         }
         var position = TranscriptEntryScrollPosition(status: .ready)
@@ -830,6 +831,20 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
             key(boundary: boundary, measuredBoundary: boundary, readAcknowledgementEpoch: .ready),
             "A new ready epoch at the same transcript boundary must retrigger acknowledgement"
         )
+        // Statuses that are neither ready nor working must still differ.
+        let statuses: [MobileSessionStatus] = [
+            .idle, .working, .needsApproval, .ready, .error,
+            .unsupported(rawValue: "idle"), .unsupported(rawValue: "future"),
+        ]
+        for (index, status) in statuses.enumerated() {
+            for other in statuses[(index + 1)...] {
+                XCTAssertNotEqual(
+                    key(boundary: boundary, measuredBoundary: boundary, readAcknowledgementEpoch: status),
+                    key(boundary: boundary, measuredBoundary: boundary, readAcknowledgementEpoch: other),
+                    "\(status) and \(other) must be different acknowledgement epochs"
+                )
+            }
+        }
     }
 
     func testConnectionReadinessRearmsVisibleBoundaryAndPreservesVisibilityRequirements() {
@@ -863,7 +878,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
             hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
             measuredBoundaryID: measuredBoundary,
             latestBoundaryID: boundary,
-            readAcknowledgementEpoch: readAcknowledgementEpoch,
+            readAcknowledgementEpoch: readAcknowledgementEpoch.map(ToasttyTranscriptSessionStatus.init),
             canAcknowledgeRead: canAcknowledgeRead
         )
     }

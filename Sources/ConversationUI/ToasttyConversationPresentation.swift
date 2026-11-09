@@ -1,18 +1,24 @@
 import Foundation
 import RemoteProtocol
-import ToasttyMobileDomain
 
-struct ToasttyTranscriptRowID: Hashable, Sendable {
-    let projectionRunID: UUID
-    let projectionGeneration: UInt64
-    let conversationID: UUID
-    let sequence: UInt64
+public struct ToasttyTranscriptRowID: Hashable, Sendable {
+    public let projectionRunID: UUID
+    public let projectionGeneration: UInt64
+    public let conversationID: UUID
+    public let sequence: UInt64
 
-    var accessibilitySuffix: String { String(sequence) }
+    public init(projectionRunID: UUID, projectionGeneration: UInt64, conversationID: UUID, sequence: UInt64) {
+        self.projectionRunID = projectionRunID
+        self.projectionGeneration = projectionGeneration
+        self.conversationID = conversationID
+        self.sequence = sequence
+    }
+
+    public var accessibilitySuffix: String { String(sequence) }
 }
 
-struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
-    enum Content: Equatable, Sendable {
+public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
+    public enum Content: Equatable, Sendable {
         case userMessage(text: String, origin: ConversationMessageOrigin, deliveryMode: RemoteMessageDeliveryMode? = nil)
         case assistantMessage(text: String, phase: ConversationAssistantMessagePhase)
         case toolStarted(callID: String, name: String, detail: String?)
@@ -23,17 +29,24 @@ struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
         case sessionBindingChanged(reason: ConversationBindingChangeReason)
     }
 
-    let id: ToasttyTranscriptRowID
-    let timestamp: Date
-    let provider: AgentKind
-    let content: Content
+    public let id: ToasttyTranscriptRowID
+    public let timestamp: Date
+    public let provider: AgentKind
+    public let content: Content
+
+    public init(id: ToasttyTranscriptRowID, timestamp: Date, provider: AgentKind, content: Content) {
+        self.id = id
+        self.timestamp = timestamp
+        self.provider = provider
+        self.content = content
+    }
 }
 
-struct ToasttyInteractionPresentation: Equatable, Sendable {
-    var interaction: RemotePendingInteraction
-    var responseClosedReason: RemoteQuestionAnswerRejectionReason?
+public struct ToasttyInteractionPresentation: Equatable, Sendable {
+    public var interaction: RemotePendingInteraction
+    public var responseClosedReason: RemoteQuestionAnswerRejectionReason?
 
-    init(
+    public init(
         interaction: RemotePendingInteraction,
         responseClosedReason: RemoteQuestionAnswerRejectionReason? = nil
     ) {
@@ -45,16 +58,16 @@ struct ToasttyInteractionPresentation: Equatable, Sendable {
 /// Identity of one rendered transcript block. Long assistant messages split
 /// into several blocks sharing a row ID and counting up `chunkIndex`, so each
 /// chunk is an independently laid-out `LazyVStack` cell with stable identity.
-struct ToasttyTranscriptBlockID: Hashable, Sendable {
-    let rowID: ToasttyTranscriptRowID
-    let chunkIndex: Int
+public struct ToasttyTranscriptBlockID: Hashable, Sendable {
+    public let rowID: ToasttyTranscriptRowID
+    public let chunkIndex: Int
 
-    init(rowID: ToasttyTranscriptRowID, chunkIndex: Int = 0) {
+    public init(rowID: ToasttyTranscriptRowID, chunkIndex: Int = 0) {
         self.rowID = rowID
         self.chunkIndex = chunkIndex
     }
 
-    var accessibilitySuffix: String {
+    public var accessibilitySuffix: String {
         chunkIndex == 0
             ? rowID.accessibilitySuffix
             : "\(rowID.accessibilitySuffix)-c\(chunkIndex)"
@@ -62,26 +75,26 @@ struct ToasttyTranscriptBlockID: Hashable, Sendable {
 }
 
 /// One slice of a chunked assistant message.
-struct ToasttyTranscriptMessageChunk: Equatable, Sendable {
-    let row: ToasttyTranscriptRow
-    let blocks: [ToasttyMarkdownBlock]
-    let index: Int
-    let isLast: Bool
+public struct ToasttyTranscriptMessageChunk: Equatable, Sendable {
+    public let row: ToasttyTranscriptRow
+    public let blocks: [ToasttyMarkdownBlock]
+    public let index: Int
+    public let isLast: Bool
 
-    var isFirst: Bool { index == 0 }
+    public var isFirst: Bool { index == 0 }
 }
 
-struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
-    enum Content: Equatable, Sendable {
+public struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
+    public enum Content: Equatable, Sendable {
         case row(ToasttyTranscriptRow)
         case messageChunk(ToasttyTranscriptMessageChunk)
         case toolBatch([ToasttyTranscriptRow])
     }
 
-    let id: ToasttyTranscriptBlockID
-    let content: Content
+    public let id: ToasttyTranscriptBlockID
+    public let content: Content
 
-    static func group(_ rows: [ToasttyTranscriptRow]) -> [ToasttyTranscriptBlock] {
+    public static func group(_ rows: [ToasttyTranscriptRow]) -> [ToasttyTranscriptBlock] {
         var blocks: [ToasttyTranscriptBlock] = []
         var toolRows: [ToasttyTranscriptRow] = []
 
@@ -149,18 +162,18 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
 /// commentary) between it and its first final response.
 /// Interaction cards are never part of a turn's foldable work — they stay
 /// visible so pending prompts cannot hide.
-struct ToasttyTranscriptTurn: Equatable, Sendable {
-    let id: ToasttyTranscriptRowID
-    let workBlockIDs: [ToasttyTranscriptBlockID]
-    let toolCallCount: Int
-    let noteCount: Int
+public struct ToasttyTranscriptTurn: Equatable, Sendable {
+    public let id: ToasttyTranscriptRowID
+    public let workBlockIDs: [ToasttyTranscriptBlockID]
+    public let toolCallCount: Int
+    public let noteCount: Int
     /// True once a final assistant message follows the work, which is what
     /// makes the work section foldable.
-    let hasResponse: Bool
+    public let hasResponse: Bool
 
     /// Includes user turns before their first work block arrives, so the
     /// previous completed turn cannot be mistaken for the current one.
-    static func turns(for blocks: [ToasttyTranscriptBlock]) -> [ToasttyTranscriptTurn] {
+    public static func turns(for blocks: [ToasttyTranscriptBlock]) -> [ToasttyTranscriptTurn] {
         var turns: [ToasttyTranscriptTurn] = []
         var currentID: ToasttyTranscriptRowID?
         var workBlockIDs: [ToasttyTranscriptBlockID] = []
@@ -241,7 +254,7 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
     }
 }
 
-enum ToasttyConversationPresentationPhase: Equatable, Sendable {
+public enum ToasttyConversationPresentationPhase: Equatable, Sendable {
     case loading
     case live
     case resyncing
@@ -249,7 +262,7 @@ enum ToasttyConversationPresentationPhase: Equatable, Sendable {
     case failure(message: String)
 }
 
-enum ToasttyTranscriptRevision: Equatable, Sendable {
+public enum ToasttyTranscriptRevision: Equatable, Sendable {
     case initial
     case appended
     case prepended
@@ -258,36 +271,36 @@ enum ToasttyTranscriptRevision: Equatable, Sendable {
 }
 
 /// Prepared transcript content is immutable and shared by metadata-only updates.
-final class ToasttyPreparedTranscript: Equatable, Sendable {
-    let rows: [ToasttyTranscriptRow]
-    let blocks: [ToasttyTranscriptBlock]
-    let turns: [ToasttyTranscriptTurn]
+public final class ToasttyPreparedTranscript: Equatable, Sendable {
+    public let rows: [ToasttyTranscriptRow]
+    public let blocks: [ToasttyTranscriptBlock]
+    public let turns: [ToasttyTranscriptTurn]
 
-    init(rows: [ToasttyTranscriptRow]) {
+    public init(rows: [ToasttyTranscriptRow]) {
         self.rows = rows
         blocks = ToasttyTranscriptBlock.group(rows)
         turns = ToasttyTranscriptTurn.turns(for: blocks)
     }
 
-    static func == (lhs: ToasttyPreparedTranscript, rhs: ToasttyPreparedTranscript) -> Bool {
+    public static func == (lhs: ToasttyPreparedTranscript, rhs: ToasttyPreparedTranscript) -> Bool {
         lhs === rhs || (lhs.rows == rhs.rows && lhs.blocks == rhs.blocks && lhs.turns == rhs.turns)
     }
 }
 
-struct ToasttyConversationPresentationState: Equatable, Sendable {
-    let preparedTranscript: ToasttyPreparedTranscript
-    var rows: [ToasttyTranscriptRow] { preparedTranscript.rows }
-    var blocks: [ToasttyTranscriptBlock] { preparedTranscript.blocks }
-    var turns: [ToasttyTranscriptTurn] { preparedTranscript.turns }
-    private(set) var sendItems: [ToasttySendPresentationItem]
-    private(set) var phase: ToasttyConversationPresentationPhase
-    private(set) var revision: ToasttyTranscriptRevision
-    private(set) var historyTruncated: Bool
-    private(set) var hasOlder: Bool
-    private(set) var isLoadingOlder: Bool
-    private(set) var prependAnchorID: ToasttyTranscriptRowID?
+public struct ToasttyConversationPresentationState: Equatable, Sendable {
+    public let preparedTranscript: ToasttyPreparedTranscript
+    public var rows: [ToasttyTranscriptRow] { preparedTranscript.rows }
+    public var blocks: [ToasttyTranscriptBlock] { preparedTranscript.blocks }
+    public var turns: [ToasttyTranscriptTurn] { preparedTranscript.turns }
+    public private(set) var sendItems: [ToasttySendPresentationItem]
+    public private(set) var phase: ToasttyConversationPresentationPhase
+    public private(set) var revision: ToasttyTranscriptRevision
+    public private(set) var historyTruncated: Bool
+    public private(set) var hasOlder: Bool
+    public private(set) var isLoadingOlder: Bool
+    public private(set) var prependAnchorID: ToasttyTranscriptRowID?
 
-    init(
+    public init(
         rows: [ToasttyTranscriptRow],
         sendItems: [ToasttySendPresentationItem] = [],
         phase: ToasttyConversationPresentationPhase,
@@ -307,7 +320,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         self.prependAnchorID = prependAnchorID
     }
 
-    func settledTurnIDs(isSessionWorking: Bool, isSubmitting: Bool = false) -> Set<ToasttyTranscriptRowID> {
+    public func settledTurnIDs(isSessionWorking: Bool, isSubmitting: Bool = false) -> Set<ToasttyTranscriptRowID> {
         var settled = Set(turns.filter(\.hasResponse).map(\.id))
         let hasPendingSend = isSubmitting || sendItems.contains { item in
             if case .optimistic = item.content { return true }
@@ -322,7 +335,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         return settled
     }
 
-    func updatingMetadata(
+    public func updatingMetadata(
         sendItems: [ToasttySendPresentationItem],
         phase: ToasttyConversationPresentationPhase,
         revision: ToasttyTranscriptRevision,
@@ -342,174 +355,10 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         return updated
     }
 
-    static let loading = ToasttyConversationPresentationState(
+    public static let loading = ToasttyConversationPresentationState(
         rows: [],
         phase: .loading,
         revision: .initial,
         historyTruncated: false
     )
-}
-
-enum ToasttyConversationPresentationAdapter {
-    static func makeState(
-        events: [CompatibleConversationEvent],
-        projectionRunID: RemoteProjectionRunID?,
-        projectionGeneration: UInt64?,
-        phase: ToasttyConversationPresentationPhase,
-        revision: ToasttyTranscriptRevision,
-        historyTruncated: Bool,
-        sendItems: [ToasttySendPresentationItem] = [],
-        hasOlder: Bool = false,
-        isLoadingOlder: Bool = false,
-        prependAnchorID: ToasttyTranscriptRowID? = nil
-    ) -> ToasttyConversationPresentationState {
-        let resolutions = interactionResolutions(in: events)
-        let responseClosures = interactionResponseClosures(in: events)
-        var toolNames: [String: String] = [:]
-        let rows = events.compactMap { event -> ToasttyTranscriptRow? in
-            switch event {
-            case .unknown:
-                return nil
-            case .statusChanged:
-                // Live status belongs in the header and composer, not chat history.
-                return nil
-            case .known(let value):
-                let content: ToasttyTranscriptRow.Content
-                switch value.payload {
-                case .userMessage(let payload):
-                    content = .userMessage(text: payload.text, origin: payload.origin, deliveryMode: payload.deliveryMode)
-                case .assistantMessage(let payload):
-                    content = .assistantMessage(text: payload.text, phase: payload.phase)
-                case .toolStarted(let payload):
-                    toolNames[payload.callID] = payload.toolName
-                    content = .toolStarted(
-                        callID: payload.callID,
-                        name: payload.toolName,
-                        detail: payload.detail
-                    )
-                case .toolFinished(let payload):
-                    content = .toolFinished(
-                        callID: payload.callID,
-                        name: payload.toolName ?? toolNames[payload.callID] ?? "Tool",
-                        outcome: payload.outcome,
-                        detail: payload.detail
-                    )
-                case .statusChanged:
-                    return nil
-                case .interactionPresented(var payload):
-                    if let resolution = resolutions[payload.id] {
-                        payload.state = resolution.resolution
-                        payload.answers = resolution.answers
-                        payload.responseID = nil
-                    } else if responseClosures[payload.id] != nil {
-                        payload.responseID = nil
-                    }
-                    content = .interaction(ToasttyInteractionPresentation(
-                        interaction: payload,
-                        responseClosedReason: responseClosures[payload.id]
-                    ))
-                case .interactionResolved(let payload):
-                    content = .interactionResolved(
-                        interactionID: payload.interactionID,
-                        resolution: payload.resolution
-                    )
-                case .interactionResponseClosed:
-                    // The presented card carries the response-channel state.
-                    // A second marker would imply that the native question ended.
-                    return nil
-                case .subagentSummary(let payload):
-                    content = .subagentSummary(
-                        name: payload.displayName,
-                        phase: payload.phase,
-                        detail: payload.detail
-                    )
-                case .sessionBindingChanged(let payload):
-                    content = .sessionBindingChanged(reason: payload.reason)
-                case .sendDeliveryUnconfirmed:
-                    // Delivery receipts render through SendReconciliation so
-                    // they stay attached to the optimistic outgoing message.
-                    return nil
-                }
-                return ToasttyTranscriptRow(
-                    id: rowID(
-                        projectionRunID: projectionRunID,
-                        projectionGeneration: projectionGeneration,
-                        conversationID: value.conversationID,
-                        sequence: value.sequence
-                    ),
-                    timestamp: value.timestamp,
-                    provider: value.provider,
-                    content: content
-                )
-            }
-        }
-
-        return ToasttyConversationPresentationState(
-            rows: rows,
-            sendItems: sendItems,
-            phase: phase,
-            revision: revision,
-            historyTruncated: historyTruncated,
-            hasOlder: hasOlder,
-            isLoadingOlder: isLoadingOlder,
-            prependAnchorID: prependAnchorID
-        )
-    }
-
-    private static func interactionResolutions(
-        in events: [CompatibleConversationEvent]
-    ) -> [RemotePendingInteraction.ID: ConversationInteractionResolvedPayload] {
-        events.reduce(into: [:]) { resolutions, event in
-            guard case .known(let known) = event,
-                  case .interactionResolved(let payload) = known.payload else { return }
-            if let previous = resolutions[payload.interactionID],
-               previous.resolution == .resolved {
-                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
-                    interactionID: payload.interactionID,
-                    resolution: .resolved,
-                    answers: payload.answers ?? previous.answers
-                )
-            } else {
-                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
-                    interactionID: payload.interactionID,
-                    resolution: payload.resolution,
-                    answers: payload.answers ?? resolutions[payload.interactionID]?.answers
-                )
-            }
-        }
-    }
-
-    private static func interactionResponseClosures(
-        in events: [CompatibleConversationEvent]
-    ) -> [RemotePendingInteraction.ID: RemoteQuestionAnswerRejectionReason] {
-        events.reduce(into: [:]) { closures, event in
-            guard case .known(let known) = event else { return }
-            switch known.payload {
-            case .interactionResponseClosed(let payload):
-                closures[payload.interactionID] = payload.reason
-            case .interactionPresented(let payload):
-                closures[payload.id] = nil
-            case .interactionResolved(let payload):
-                closures[payload.interactionID] = nil
-            default:
-                break
-            }
-        }
-    }
-
-    private static func rowID(
-        projectionRunID: RemoteProjectionRunID?,
-        projectionGeneration: UInt64?,
-        conversationID: RemoteConversationID,
-        sequence: UInt64
-    ) -> ToasttyTranscriptRowID {
-        ToasttyTranscriptRowID(
-            projectionRunID: projectionRunID?.rawValue
-                ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
-            projectionGeneration: projectionGeneration ?? 0,
-            conversationID: conversationID.rawValue,
-            sequence: sequence
-        )
-    }
-
 }

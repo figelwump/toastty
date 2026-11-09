@@ -1,3 +1,4 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
@@ -129,7 +130,8 @@ struct ToasttyConversationScreen: View {
                     interactionAnswerStates: interactionAnswerStates,
                     editInteractionAnswer: editInteractionAnswer,
                     submitInteractionAnswer: submitInteractionAnswer,
-                    readAcknowledgementEpoch: conversation.state,
+                    interactionAnswerFeedback: ToasttyHapticFeedback.interactionAnswer,
+                    readAcknowledgementEpoch: ToasttyTranscriptSessionStatus(conversation.state),
                     workingIndicator: transcriptWorkingIndicator(conversation),
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     canAcknowledgeRead: canAcknowledgeRead,
@@ -428,7 +430,7 @@ struct ToasttyConversationScreen: View {
         guard conversation.state.bucket == .working, controller.freshness == .live else { return nil }
         let gate = (composer ?? lockedComposerFallback(conversation)).gate
         if gate == .disabled(.prompt(.working)) { return nil }
-        return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed)
+        return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed.map { .init($0) })
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {

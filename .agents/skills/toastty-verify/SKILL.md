@@ -69,6 +69,8 @@ Treat `ios/` as a separate Tuist graph from the root macOS project. Choose the t
 
 Changes to `Sources/RemoteProtocol/` or its fixtures must validate both graphs: root macOS generation/build/tests and the native iOS test tier. Do not treat a green iOS run as proof that the macOS host still compiles the shared contract.
 
+Both graphs also compile `Sources/ConversationUI/`, the SwiftUI conversation transcript views. A change there must build on both platforms and pass the native iOS test tier, which covers the views on the iPhone. On macOS, `ToasttyAppTests/ConversationUIRenderTests` hosts the views and keeps a PNG on the test result.
+
 Do not boot or interact with a local iOS Simulator when the user has requested remote-only validation. Pass `--platform ios`; merely supplying an iOS workspace without that mode is intentionally insufficient because the wrapper must select the correct bootstrap path.
 
 ### UI, Runtime, Menu, Or Shortcut Changes

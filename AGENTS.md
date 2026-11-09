@@ -19,6 +19,7 @@
 ## Build And Generate
 
 - Toastty has two independent Tuist graphs. The macOS source of truth is root `Project.swift`; the native client source of truth is `ios/Project.swift` with `ios/Workspace.swift`. Never hand-edit either graph's generated Xcode project/workspace files, and run Tuist from the graph's own directory.
+- Both graphs compile `Sources/RemoteProtocol/` (wire models) and `Sources/ConversationUI/` (SwiftUI conversation transcript views). Keep these sources free of app-specific types, and build both graphs after a change to them.
 - Web-panel bundles under `Sources/App/Resources/WebPanels/` are generated artifacts. For local-document behavior, inspect and edit `WebPanels/LocalDocumentApp/src/` rather than loading or modifying the generated `local-document-panel` bundle; use the bundle only when validating generated output.
 - Install packages with `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
 - For a fresh worktree, or when `Tuist/Package.swift`, `Tuist/Package.resolved`, or Ghostty artifact state changes, run `./scripts/dev/bootstrap-worktree.sh`. It links local Ghostty artifacts when needed, then runs `tuist install` and `tuist generate --no-open`.

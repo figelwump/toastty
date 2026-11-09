@@ -1,3 +1,4 @@
+import ConversationUI
 import Foundation
 import RemoteProtocol
 import ToasttyMobileDomain
@@ -570,129 +571,6 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     }
 }
 
-struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
-    enum Content: Equatable, Sendable {
-        case optimistic(response: PendingSendResponse)
-        case receipt(ToasttySendReceiptPresentation)
-        /// Held on the Mac for the next prompt, as the host currently lists it.
-        case queued(ToasttyQueuedSendPresentation)
-    }
-
-    var id: String { clientRequestID }
-
-    let clientRequestID: String
-    let text: String
-    let content: Content
-
-    var isQueued: Bool {
-        if case .queued = content { return true }
-        return false
-    }
-}
-
-struct ToasttyQueuedSendPresentation: Equatable, Sendable {
-    /// 1-based delivery order.
-    let position: Int
-    let attachmentCount: Int
-    /// The queue holds after a stop until the user resumes it.
-    let isPaused: Bool
-    /// "Steer now" is offered on the row.
-    let canSteer: Bool
-}
-
-/// What the user asked for on a queued message in the transcript.
-enum ToasttyQueuedMessageAction: Equatable, Sendable {
-    case edit(clientRequestID: String, text: String)
-    case steer(clientRequestID: String, text: String)
-    case remove(clientRequestID: String)
-    case resume
-}
-
-struct ToasttySendReceiptPresentation: Equatable, Sendable {
-    enum Kind: Equatable, Sendable {
-        case rejected(RemoteMessageRejectionReason)
-        case uncertain
-        case operationFailed
-        case deliveryUnconfirmed
-    }
-
-    let kind: Kind
-
-    var title: String {
-        switch kind {
-        case .rejected(.sendScopeDenied):
-            "This iPhone cannot send messages"
-        case .rejected(.sessionWritesDisabled):
-            "Remote input is off for this session"
-        case .rejected(.epochMismatch):
-            "The prompt changed before this message was sent"
-        case .rejected(.localDraftPresent):
-            "A draft started on the Mac before this message was sent"
-        case .rejected(.pendingInteraction):
-            "A pending interaction blocked this message"
-        case .rejected(.notBound):
-            "The session is no longer connected"
-        case .rejected(.surfaceUnavailable):
-            "The Mac could not accept this message"
-        case .rejected(.promptNotOpen):
-            "The prompt closed before this message was sent"
-        case .rejected(.invalidAttachments):
-            "An attachment could not be accepted"
-        case .rejected(.attachmentStorageUnavailable):
-            "The Mac could not save the attachments"
-        case .rejected(.emptyText):
-            "The message was empty"
-        case .rejected(.queueFull):
-            "The Mac's queue for this session is full"
-        case .rejected(.notWorking):
-            "The agent finished before this message was queued"
-        case .rejected(.turnMismatch):
-            "The agent moved to another turn before this message was sent"
-        case .rejected(.steerUnavailable):
-            "Someone is typing on the Mac, so this message could not steer the turn"
-        case .uncertain:
-            "Delivery could not be confirmed"
-        case .operationFailed:
-            "Toastty could not complete the send"
-        case .deliveryUnconfirmed:
-            "The Mac accepted this send, but it did not appear in the session transcript"
-        }
-    }
-
-    var detail: String {
-        switch kind {
-        case .rejected(.sendScopeDenied):
-            "Enable Send for this device on the Mac. The attempted message is shown below; Toastty did not retry it."
-        case .rejected(.sessionWritesDisabled):
-            "Enable remote input for this session on the Mac. The attempted message is shown below; Toastty did not retry it."
-        case .rejected(.epochMismatch):
-            "Review the current prompt before sending again. Toastty did not retry."
-        case .rejected(.localDraftPresent):
-            "Continue on the Mac or wait for a new prompt. Toastty did not retry."
-        case .rejected(.pendingInteraction):
-            "Respond to the interaction on the Mac. Toastty did not retry."
-        case .rejected(.notBound), .rejected(.surfaceUnavailable), .rejected(.promptNotOpen):
-            "Check the session on the Mac. The attempted message is shown below; Toastty did not retry it."
-        case .rejected(.invalidAttachments), .rejected(.attachmentStorageUnavailable):
-            "The attachments were not delivered. Review the draft and check Toastty on your Mac before sending again."
-        case .rejected(.emptyText):
-            "Enter a message before sending."
-        case .rejected(.queueFull):
-            "Wait for a queued message to send, or remove one. Your draft is still here."
-        case .rejected(.notWorking), .rejected(.turnMismatch):
-            "Review the current prompt before sending again. Toastty did not retry."
-        case .rejected(.steerUnavailable):
-            "Queue it for the next prompt instead, or wait for the Mac. Toastty did not retry."
-        case .uncertain:
-            "Check the transcript or the Mac before sending anything else. Toastty will not retry this message."
-        case .operationFailed:
-            "Check the transcript on the Mac. The attempted message is shown below; Toastty did not retry it."
-        case .deliveryUnconfirmed:
-            "Check the session on the Mac before sending again. Toastty will not retry this message."
-        }
-    }
-}
-
 enum ToasttySendPresentationAdapter {
     /// Reconciliation records first, then the Mac's queue in delivery order.
     /// A queued record the host still lists renders from the host's list,
@@ -728,7 +606,7 @@ enum ToasttySendPresentationAdapter {
             let content: ToasttySendPresentationItem.Content
             switch record.deliveryState {
             case .pending(let response):
-                content = .optimistic(response: response)
+                content = .optimistic(response: ToasttyPendingSendResponse(response))
             case .confirmed:
                 return nil
             case .rejected(let reason):
@@ -745,6 +623,17 @@ enum ToasttySendPresentationAdapter {
                 text: record.text,
                 content: content
             )
+        }
+    }
+}
+
+private extension ToasttyPendingSendResponse {
+    init(_ response: PendingSendResponse) {
+        self = switch response {
+        case .awaitingResponse: .awaitingResponse
+        case .accepted: .accepted
+        case .duplicate: .duplicate
+        case .queued(let position): .queued(position: position)
         }
     }
 }

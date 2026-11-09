@@ -1,5 +1,4 @@
 import SwiftUI
-import ToasttyMobileDomain
 
 /// Disclosure state for per-turn work sections. Settled turns fold by
 /// default; the live turn streams expanded and auto-folds when its response
@@ -86,13 +85,13 @@ struct ToasttyTurnWorkStrip: View {
                 Text(summary)
             }
             .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .foregroundStyle(ConversationDesignTokens.mutedText)
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
-            .background(ToasttyDesignTokens.chipSurface)
+            .background(ConversationDesignTokens.chipSurface)
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(ToasttyDesignTokens.chipBorder)
+                    .stroke(ConversationDesignTokens.chipBorder)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.vertical, 6)
@@ -120,12 +119,48 @@ struct ToasttyTurnWorkStrip: View {
 }
 
 /// What the transcript's tail shows while the agent works.
-struct ToasttyTranscriptWorkingIndicator: Equatable {
+public struct ToasttyTranscriptWorkingIndicator: Equatable, Sendable {
+    /// A turn's age as the host reported it, anchored to the local monotonic
+    /// clock so wall-clock changes cannot move it.
+    public struct TurnElapsed: Equatable, Sendable {
+        public let secondsAtReceipt: Int
+        public let receivedAtMonotonicTime: TimeInterval
+
+        public init(secondsAtReceipt: Int, receivedAtMonotonicTime: TimeInterval) {
+            self.secondsAtReceipt = max(0, secondsAtReceipt)
+            self.receivedAtMonotonicTime = receivedAtMonotonicTime.isFinite
+                ? max(0, receivedAtMonotonicTime)
+                : 0
+        }
+
+        /// Whole seconds elapsed, advanced only from the monotonic anchor.
+        func seconds(atMonotonicTime now: TimeInterval) -> Int {
+            let finiteNow = now.isFinite ? now : receivedAtMonotonicTime
+            return secondsAtReceipt + max(0, Int(finiteNow - receivedAtMonotonicTime))
+        }
+    }
+
     /// The running turn's age, when the host reports it.
-    let turnElapsed: MobileActivityAge?
+    public let turnElapsed: TurnElapsed?
+
+    public init(turnElapsed: TurnElapsed?) {
+        self.turnElapsed = turnElapsed
+    }
 
     func elapsedLabel(atMonotonicTime now: TimeInterval) -> String? {
-        turnElapsed.map { MobileConversation.durationLabel(seconds: TimeInterval($0.seconds(atMonotonicTime: now))) }
+        turnElapsed.map { Self.durationLabel(seconds: $0.seconds(atMonotonicTime: now)) }
+    }
+
+    /// Durations past this show as this, as in the iPhone session list.
+    static let maximumDurationSeconds = 100 * 365 * 24 * 60 * 60
+
+    /// The same format as the iPhone session list: "42s", then "3m 07s".
+    static func durationLabel(seconds: Int) -> String {
+        let clamped = min(max(0, seconds), maximumDurationSeconds)
+        let minutes = clamped / 60
+        let remaining = clamped % 60
+        guard minutes > 0 else { return "\(remaining)s" }
+        return String(format: "%dm %02ds", minutes, remaining)
     }
 }
 
@@ -151,7 +186,7 @@ struct ToasttyTranscriptWorkingRow: View {
                 .monospacedDigit()
         }
         .font(.caption2.monospaced())
-        .foregroundStyle(ToasttyDesignTokens.mutedText)
+        .foregroundStyle(ConversationDesignTokens.mutedText)
         .padding(.vertical, 6)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Agent working")

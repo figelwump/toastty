@@ -20,13 +20,13 @@ struct ToasttyPermissionRequestContent: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(interaction.prompt)
                 .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let description = permission.description, description.isEmpty == false,
                description != interaction.prompt {
                 Text(description)
                     .font(.caption)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             preview
@@ -46,7 +46,7 @@ struct ToasttyPermissionRequestContent: View {
                 ScrollView {
                     Text(permission.preview)
                         .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -54,13 +54,13 @@ struct ToasttyPermissionRequestContent: View {
                 }
                 .frame(maxHeight: Self.previewMaximumHeight)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(ToasttyDesignTokens.raisedSurface)
+                .background(ConversationDesignTokens.raisedSurface)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .accessibilityIdentifier("toastty-mobile-permission-preview-\(interaction.id.rawValue)")
                 if permission.previewTruncated {
                     Label("Preview shortened. Check the desktop for the full request.", systemImage: "scissors")
                         .font(.caption)
-                        .foregroundStyle(ToasttyDesignTokens.amberText)
+                        .foregroundStyle(ConversationDesignTokens.amberText)
                 }
             }
         }
@@ -75,7 +75,7 @@ struct ToasttyPermissionRequestContent: View {
             statusView(state)
             Label("You can also respond on the desktop", systemImage: "desktopcomputer")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         }
     }
 
@@ -118,19 +118,19 @@ struct ToasttyPermissionRequestContent: View {
         case .editing where state.connectionIsLive == false:
             Label("Reconnect to your Mac to respond", systemImage: "wifi.slash")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         case .submitting:
             Text("Sending…")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
         case .awaitingClaude:
             Label("Sent · \(sentLabel ?? "decision") · waiting for Claude", systemImage: "hourglass")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
         case .failed(let message), .unavailable(let message):
             Label(message, systemImage: "exclamationmark.circle")
                 .font(.caption)
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
                 .fixedSize(horizontal: false, vertical: true)
         case .editing, .resolved:
             EmptyView()
@@ -145,11 +145,11 @@ struct ToasttyPermissionRequestContent: View {
             Label("Sent from iPhone: \(sentLabel)", systemImage: "iphone")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(interaction.state == .pending
-                    ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText)
+                    ? ConversationDesignTokens.amberText : ConversationDesignTokens.secondaryText)
         } else if interaction.state == .pending {
             Label(readOnlyMessage, systemImage: "desktopcomputer")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .foregroundStyle(ConversationDesignTokens.amberText)
         }
     }
 
@@ -193,16 +193,16 @@ private struct DecisionButtonStyle: ViewModifier {
         case .allowOnce:
             content
                 .buttonStyle(.borderedProminent)
-                .tint(ToasttyDesignTokens.amber)
-                .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                .tint(ConversationDesignTokens.amber)
+                .foregroundStyle(ConversationDesignTokens.inkOnAmber)
         case .alwaysAllow:
             content
                 .buttonStyle(.bordered)
-                .tint(ToasttyDesignTokens.amberText)
+                .tint(ConversationDesignTokens.amberText)
         case .deny:
             content
                 .buttonStyle(.bordered)
-                .tint(ToasttyDesignTokens.red)
+                .tint(ConversationDesignTokens.red)
         }
     }
 }

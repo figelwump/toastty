@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 struct ToasttyMarkdownTableView: View {
     @Environment(\.layoutDirection) private var layoutDirection
@@ -25,10 +29,10 @@ struct ToasttyMarkdownTableView: View {
                                 .accessibilityAddTraits(row.isHeader ? .isHeader : [])
                         }
                     }
-                    .background(row.isHeader ? ToasttyDesignTokens.raisedSurface : Color.clear)
+                    .background(row.isHeader ? ConversationDesignTokens.raisedSurface : Color.clear)
                     .overlay(alignment: .bottom) {
                         Rectangle()
-                            .fill(ToasttyDesignTokens.border)
+                            .fill(ConversationDesignTokens.border)
                             .frame(height: 1)
                             .accessibilityHidden(true)
                     }
@@ -39,12 +43,12 @@ struct ToasttyMarkdownTableView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("toastty-mobile-markdown-table")
         .fixedSize(horizontal: false, vertical: true)
-        .background(ToasttyDesignTokens.background)
+        .background(ConversationDesignTokens.background)
         .overlay {
-            RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius)
-                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: ConversationDesignTokens.controlCornerRadius)
+                .stroke(ConversationDesignTokens.border, lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: ConversationDesignTokens.controlCornerRadius))
     }
 }
 

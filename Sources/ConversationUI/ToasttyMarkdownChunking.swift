@@ -219,7 +219,7 @@ enum ToasttyMarkdownParser {
     }
 }
 
-struct ToasttyMarkdownBlock: Identifiable, Equatable, Sendable {
+public struct ToasttyMarkdownBlock: Identifiable, Equatable, Sendable {
     enum ListMarker: Equatable, Sendable {
         case bullet
         case ordered(Int)
@@ -241,7 +241,7 @@ struct ToasttyMarkdownBlock: Identifiable, Equatable, Sendable {
         case table(ToasttyMarkdownTable)
     }
 
-    let id: Int
+    public let id: Int
     let content: AttributedString
     let style: Style
     var isContinuation = false

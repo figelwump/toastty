@@ -59,24 +59,24 @@ struct ToasttyToolBatchCard: View {
                 HStack(spacing: 10) {
                     Image(systemName: "wrench.and.screwdriver")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(ToasttyDesignTokens.amberText)
+                        .foregroundStyle(ConversationDesignTokens.amberText)
                         .frame(width: 30, height: 30)
-                        .background(ToasttyDesignTokens.amber.opacity(0.12), in: Circle())
+                        .background(ConversationDesignTokens.amber.opacity(0.12), in: Circle())
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
                             .font(.caption.monospaced().weight(.semibold))
-                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                            .foregroundStyle(ConversationDesignTokens.secondaryText)
                         Text(isExpanded ? "Hide details" : "Show details")
                             .font(.caption2.monospaced())
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
+                            .foregroundStyle(ConversationDesignTokens.mutedText)
                     }
 
                     Spacer(minLength: 4)
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
                 }
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
@@ -92,7 +92,7 @@ struct ToasttyToolBatchCard: View {
 
             if isExpanded {
                 Divider()
-                    .overlay(ToasttyDesignTokens.border)
+                    .overlay(ConversationDesignTokens.border)
 
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(rows) { row in
@@ -102,16 +102,16 @@ struct ToasttyToolBatchCard: View {
                 .padding(12)
             }
         }
-        .background(ToasttyDesignTokens.raisedSurface)
+        .background(ConversationDesignTokens.raisedSurface)
         .overlay {
             RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                cornerRadius: ConversationDesignTokens.controlCornerRadius,
                 style: .continuous
             )
-            .stroke(ToasttyDesignTokens.border)
+            .stroke(ConversationDesignTokens.border)
         }
         .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+            cornerRadius: ConversationDesignTokens.controlCornerRadius,
             style: .continuous
         ))
     }
@@ -130,11 +130,11 @@ private struct ToasttyToolEventRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(row.toolSummary)
                     .font(.caption.monospaced().weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .foregroundStyle(ConversationDesignTokens.secondaryText)
                 if let detail = row.toolDetail, detail.isEmpty == false {
                     Text(detail)
                         .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
@@ -142,16 +142,16 @@ private struct ToasttyToolEventRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
-        .background(ToasttyDesignTokens.raisedSurface)
+        .background(ConversationDesignTokens.raisedSurface)
         .overlay {
             RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                cornerRadius: ConversationDesignTokens.controlCornerRadius,
                 style: .continuous
             )
-            .stroke(ToasttyDesignTokens.border)
+            .stroke(ConversationDesignTokens.border)
         }
         .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+            cornerRadius: ConversationDesignTokens.controlCornerRadius,
             style: .continuous
         ))
         .accessibilityElement(children: .combine)
@@ -193,9 +193,9 @@ private extension ToasttyTranscriptRow {
 
     var toolColor: Color {
         switch content {
-        case .toolFinished(_, _, .failed, _): ToasttyDesignTokens.red
-        case .toolFinished(_, _, .succeeded, _): ToasttyDesignTokens.green
-        default: ToasttyDesignTokens.mutedText
+        case .toolFinished(_, _, .failed, _): ConversationDesignTokens.red
+        case .toolFinished(_, _, .succeeded, _): ConversationDesignTokens.green
+        default: ConversationDesignTokens.mutedText
         }
     }
 }
