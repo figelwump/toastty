@@ -310,6 +310,39 @@ struct LocalConversationAccessTests {
         }
     }
 
+    @MainActor
+    @Test func restoredPanelKeepsItsConversationIDAndIsReadableWithoutAnAgent() async throws {
+        // After a relaunch the panel has its saved identity and resume
+        // record, and no agent runs in it yet.
+        let saved = RemoteConversationID()
+        let fixture = try LocalConversationFixture(startsSession: false, savedConversationID: saved)
+        defer { fixture.removeRuntimeFiles() }
+        let delivered = fixture.captureDeliveredText()
+        try fixture.appendToTranscript(Self.userMessage("Before the relaunch", at: "2026-08-07T10:00:05.000Z"))
+
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        #expect(subscription.conversationID == saved)
+        #expect(fixture.conversationID(ofPanel: fixture.panelID) == saved)
+        let page = try await Self.waitForPage(subscription) { page in
+            page.events.contains { Self.userText($0) == "Before the relaunch" }
+        }
+        #expect(page.conversationID == saved)
+
+        // History is readable, but nothing can be typed without an agent.
+        let summary = try #require(subscription.snapshot(at: .now)?.summary)
+        #expect(summary.inputAvailability.allowsRemoteSend == false)
+        #expect(summary.inputControl?.canQueue == false)
+        for mode in [RemoteMessageDeliveryMode.prompt, .queue, .steer] {
+            #expect(subscription.send(.init(
+                conversationID: saved, clientRequestID: "restored-\(mode.rawValue)",
+                expectedInputEpoch: RemoteInputEpoch(bindingID: UUID(), counter: 1),
+                text: "No agent runs", deliveryMode: mode
+            ), byUser: false) == .rejected(reason: .notBound))
+        }
+        #expect(delivered.texts.isEmpty)
+    }
+
     // MARK: - Gateway transitions with a subscriber
 
     @MainActor
@@ -717,7 +750,12 @@ private final class LocalConversationFixture {
     let nativeCredential: String?
     private var transcript: FileHandle?
 
-    init(addsSecondAgentPanel: Bool = false, pairsNativeDevice: Bool = false) throws {
+    init(
+        addsSecondAgentPanel: Bool = false,
+        pairsNativeDevice: Bool = false,
+        startsSession: Bool = true,
+        savedConversationID: RemoteConversationID? = nil
+    ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
         panelID = try #require(selection.workspace.focusedPanelID)
@@ -735,23 +773,30 @@ private final class LocalConversationFixture {
         )
 
         sessionRuntimeStore = SessionRuntimeStore()
-        sessionRuntimeStore.startSession(
-            sessionID: sessionID,
-            agent: .codex,
-            panelID: panelID,
-            windowID: selection.windowID,
-            workspaceID: selection.workspaceID,
-            usesSessionStatusNotifications: false,
-            codexStatusTrackingSource: .externallyReported,
-            cwd: "/repo",
-            repoRoot: "/repo",
-            at: confirmedAt
-        )
-        sessionRuntimeStore.updateStatus(
-            sessionID: sessionID,
-            status: SessionStatus(kind: .idle, summary: "idle"),
-            at: confirmedAt
-        )
+        if startsSession {
+            sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: panelID,
+                windowID: selection.windowID,
+                workspaceID: selection.workspaceID,
+                usesSessionStatusNotifications: false,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: confirmedAt
+            )
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .idle, summary: "idle"),
+                at: confirmedAt
+            )
+        }
+        if let savedConversationID {
+            _ = store.send(.updateTerminalPanelRemoteConversationID(
+                panelID: panelID, remoteConversationID: savedConversationID
+            ))
+        }
 
         if addsSecondAgentPanel {
             let panelsBefore = Set(store.state.workspacesByID[selection.workspaceID]?.allPanelsByID.keys.map { $0 } ?? [])
