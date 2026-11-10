@@ -282,7 +282,11 @@ struct CoordinatorChatSendPathTests {
         fixture.chat.show(panelID: fixture.panelID)
         #expect(fixture.chat.shownPanelID == fixture.panelID)
         try await fixture.waitUntil("the chat's rows") { fixture.chat.presentation.rows.isEmpty == false }
-        fixture.chat.hide()
+        // The view of another terminal, such as the one a restart
+        // replaced, does not end this view's reading when it goes away.
+        fixture.chat.hide(panelID: UUID())
+        #expect(fixture.chat.shownPanelID == fixture.panelID)
+        fixture.chat.hide(panelID: fixture.panelID)
         #expect(fixture.chat.shownPanelID == nil)
         #expect(fixture.chat.presentation.rows.isEmpty == false)
         #expect(fixture.isReadingConversations)

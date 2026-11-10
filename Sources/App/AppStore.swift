@@ -95,6 +95,10 @@ final class AppStore: ObservableObject {
     /// user sets it for a login, a folder-trust or a permission prompt. It
     /// is not saved: a relaunch shows the chat again.
     @Published var coordinatorShowsTerminal = false
+    /// The task space that a chip in the coordinator's chat opened last.
+    /// Its header offers the way back until the user is in the
+    /// coordinator again. Not saved.
+    @Published var coordinatorReturnWorkspaceID: UUID?
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.

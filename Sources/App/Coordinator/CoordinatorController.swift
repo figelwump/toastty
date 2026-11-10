@@ -271,7 +271,9 @@ final class CoordinatorController: ObservableObject {
             if let coordinator = nextState.coordinator,
                nextState.selectedWorkspaceID(in: coordinator.windowID) == coordinator.workspaceID,
                previousState.selectedWorkspaceID(in: coordinator.windowID) != coordinator.workspaceID {
-                self?.chat?.noteCoordinatorSelected()
+                if self?.store.coordinatorReturnWorkspaceID != nil {
+                    self?.store.coordinatorReturnWorkspaceID = nil
+                }
             }
             if previousState.coordinator != nextState.coordinator {
                 self?.syncConversationSubscription()

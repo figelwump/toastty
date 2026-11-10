@@ -57,9 +57,6 @@ final class CoordinatorChatModel: ObservableObject {
     @Published var jumpToLiveEdgeRequest: UInt64 = 0
     /// Counts up each time the composer should take the keyboard.
     @Published private(set) var composerFocusRequest = 0
-    /// The task space that a chip in the chat opened last. Its header
-    /// offers the way back until the user is in the coordinator again.
-    @Published private(set) var returnWorkspaceID: UUID?
     /// A notice that an action left, until the next action or a dismiss.
     @Published private var transientNotice: Notice?
 
@@ -148,6 +145,15 @@ final class CoordinatorChatModel: ObservableObject {
         isSettled = presentation.rows.isEmpty == false
         settleDeadline = now().addingTimeInterval(Self.maximumSettleInterval)
         refresh()
+    }
+
+    /// Stops reading the conversation in `panelID`, for the view of that
+    /// panel. After a restart the coordinator has a new terminal, and the
+    /// view of the old one goes away after the view of the new one showed:
+    /// it must not end the new view's reading.
+    func hide(panelID: UUID) {
+        guard subscription?.panelID == panelID else { return }
+        hide()
     }
 
     /// Stops reading. The rows stay as they are, and so do the messages
@@ -568,19 +574,6 @@ final class CoordinatorChatModel: ObservableObject {
             return true
         }
         return window.makeFirstResponder(composerTextView)
-    }
-
-    // MARK: - Task links
-
-    /// Remembers the task space a chip opened, so its header can offer the
-    /// way back to the coordinator.
-    func noteOpenedTaskSpace(workspaceID: UUID) {
-        returnWorkspaceID = workspaceID
-    }
-
-    /// The user is in the coordinator again: no way back is needed.
-    func noteCoordinatorSelected() {
-        if returnWorkspaceID != nil { returnWorkspaceID = nil }
     }
 
     // MARK: - What the transcript needs about the session

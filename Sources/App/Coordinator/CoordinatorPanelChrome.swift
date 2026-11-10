@@ -38,44 +38,39 @@ struct CoordinatorPanelModeToggle: View {
 }
 
 /// "← Coordinator" in the header of a task space that a chip in the
-/// coordinator's chat opened. It shows nothing in any other workspace.
+/// coordinator's chat opened. The header shows it only for that space.
 struct WorkspaceHeaderCoordinatorReturnButton: View {
-    @ObservedObject var chat: CoordinatorChatModel
-    let controller: CoordinatorController
+    let location: CoordinatorLocation
     let store: AppStore
     let sessionRuntimeStore: SessionRuntimeStore
-    let workspaceID: UUID
 
     var body: some View {
-        if chat.returnWorkspaceID == workspaceID, let location = controller.location {
-            Button {
-                _ = store.selectWorkspace(
-                    windowID: location.windowID,
-                    workspaceID: location.workspaceID,
-                    preferringUnreadSessionPanelIn: sessionRuntimeStore
-                )
-                chat.noteCoordinatorSelected()
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.left")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text(AppState.coordinatorWorkspaceTitle)
-                        .font(ToastyTheme.fontWorkspaceMergeButton)
-                }
-                .foregroundStyle(ToastyTheme.sidebarDisclosureText)
-                .padding(.horizontal, 7)
-                .frame(height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(ToastyTheme.sidebarDisclosureBackground)
-                )
-                .contentShape(Rectangle())
+        Button {
+            _ = store.selectWorkspace(
+                windowID: location.windowID,
+                workspaceID: location.workspaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(AppState.coordinatorWorkspaceTitle)
+                    .font(ToastyTheme.fontWorkspaceMergeButton)
             }
-            .buttonStyle(.plain)
-            .fixedSize()
-            .help("Go back to the coordinator")
-            .accessibilityLabel("Back to Coordinator")
-            .accessibilityIdentifier("topbar.workspace.back-to-coordinator")
+            .foregroundStyle(ToastyTheme.sidebarDisclosureText)
+            .padding(.horizontal, 7)
+            .frame(height: 18)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(ToastyTheme.sidebarDisclosureBackground)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Go back to the coordinator")
+        .accessibilityLabel("Back to Coordinator")
+        .accessibilityIdentifier("topbar.workspace.back-to-coordinator")
     }
 }

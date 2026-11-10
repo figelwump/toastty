@@ -709,16 +709,15 @@ struct WorkspaceView: View {
     private var workspaceTitleLabel: some View {
         HStack(spacing: 6) {
             // A task space that a chip in the coordinator's chat opened
-            // offers the way back.
+            // offers the way back. The store publishes which one, so the
+            // header is laid out again when the button comes or goes.
             if let workspaceID = selectedWorkspace?.id,
-               let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController,
-               let chat = controller.chat {
+               store.coordinatorReturnWorkspaceID == workspaceID,
+               let location = store.state.coordinator {
                 WorkspaceHeaderCoordinatorReturnButton(
-                    chat: chat,
-                    controller: controller,
+                    location: location,
                     store: store,
-                    sessionRuntimeStore: sessionRuntimeStore,
-                    workspaceID: workspaceID
+                    sessionRuntimeStore: sessionRuntimeStore
                 )
             }
             Text(selectedWorkspace?.title ?? "")

@@ -58,13 +58,14 @@ struct CoordinatorChatView: View {
             if onScreen {
                 model.show(panelID: panelID)
             } else {
-                model.hide()
+                model.hide(panelID: panelID)
             }
         }
-        .onChange(of: panelID) { _, panelID in
+        .onChange(of: panelID) { previous, panelID in
+            model.hide(panelID: previous)
             if isOnScreen { model.show(panelID: panelID) }
         }
-        .onDisappear { model.hide() }
+        .onDisappear { model.hide(panelID: panelID) }
         .onChange(of: isOnScreen && hasPanelFocus, initial: true) { _, takesKeyboard in
             if takesKeyboard { model.requestComposerFocus() }
         }
@@ -190,7 +191,8 @@ struct CoordinatorChatView: View {
                 store: store,
                 sessionRuntimeStore: sessionRuntimeStore
             )
-            model.noteOpenedTaskSpace(workspaceID: workspaceID)
+            // The task space's header then offers the way back.
+            store.coordinatorReturnWorkspaceID = workspaceID
             return .handled
         case .openWebPage:
             return .systemAction
