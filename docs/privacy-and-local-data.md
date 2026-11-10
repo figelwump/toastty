@@ -74,6 +74,15 @@ Toastty is designed to run locally on your machine. The app itself does not send
     [The coordinator's folder](tasks.md#the-coordinators-folder). The policy
     holds your rules for your tasks, and the ledger holds task titles and
     what the coordinator did. Closing the coordinator's workspace leaves it.
+  - `attachments/<message-id>/` holds Toastty's copies of the files you
+    attached to a quick entry message for the coordinator. Toastty removes
+    a message's copies when you remove the waiting message, and otherwise
+    7 days after it made them.
+- `~/.toastty/coordinator-queue.json`
+  - The messages you sent to the coordinator, from its chat or from quick
+    entry, that its prompt has not taken yet. A message leaves the file when
+    it is typed or removed. Closing the coordinator's workspace removes the
+    file.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.
@@ -201,6 +210,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/task-attachments/`
   - `<runtime-home>/recent-workspaces.json`
   - `<runtime-home>/task-webhooks.json` and `<runtime-home>/task-webhook-outbox.json`
+  - `<runtime-home>/coordinator/` and `<runtime-home>/coordinator-queue.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`

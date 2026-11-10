@@ -78,6 +78,7 @@ struct CoordinatorChatView: View {
             }
             CoordinatorComposerView(
                 text: $model.draft,
+                placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcutLabel()),
                 canStop: model.canStop,
                 focusRequestID: model.composerFocusRequest,
                 onSend: { model.send() },
@@ -115,6 +116,8 @@ struct CoordinatorChatView: View {
             case .deliveryNotConfirmed:
                 showTerminalButton
                 dismissButton
+            case .typingInterrupted:
+                showTerminalButton
             case .failure:
                 dismissButton
             }
@@ -147,6 +150,14 @@ struct CoordinatorChatView: View {
             .accessibilityIdentifier(identifier)
     }
 
+    /// The field's hint also names the quick entry shortcut, which sends to
+    /// the coordinator from any app. Without a shortcut it names none.
+    static func composerPlaceholder(quickEntryShortcut: String?) -> String {
+        let placeholder = "Message the coordinator…"
+        guard let quickEntryShortcut else { return placeholder }
+        return "\(placeholder)  \(quickEntryShortcut) from anywhere"
+    }
+
     static func text(for notice: CoordinatorChatModel.Notice) -> String {
         switch notice {
         case .agentNotRunning(let reason):
@@ -159,6 +170,8 @@ struct CoordinatorChatView: View {
 "You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there."
         case .deliveryNotConfirmed:
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
+        case .typingInterrupted:
+            "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation, then choose Send next or Remove on the paused message."
         case .failure(let message):
             message
         }

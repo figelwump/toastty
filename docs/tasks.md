@@ -24,6 +24,12 @@ panel. Write the task, attach what helps, and press `Cmd+Return` or Create
 Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
 
+While [the coordinator](#the-coordinator) exists, the same panel sends your
+text to it, and the coordinator makes the task; see
+[Quick entry with the coordinator](#quick-entry-with-the-coordinator). The
+rest of this section describes the panel with no coordinator, and what
+`Option+Cmd+Return` does with one.
+
 - **Attach files** by dropping them anywhere on the panel, including a
   screenshot's thumbnail, by pasting an image or a copied file with `Cmd+V`,
   or with Attach. Toastty copies each file when you add it, so a screenshot
@@ -551,11 +557,16 @@ the agent starts, and while no agent runs. It types one message for each open
 prompt. The answer says `sent`, or `queued` with the position and the reason.
 `sentUnconfirmed` means the terminal did not confirm the Return key: Toastty
 does not type that message again, and holds the next ones until a turn runs.
-The queue holds up to 50 messages in memory: it survives a restart of the
-agent, and an app quit or closing the coordinator's workspace loses it.
+The queue holds up to 50 messages. It survives a restart of the agent.
+Messages that you sent, from the chat or from quick entry, are also saved and
+survive an app quit; a message from `coordinator send` waits in memory, and
+an app quit loses it. Closing the coordinator's workspace drops the queue.
 
-The chat's composer, `coordinator send` and Toastty's own digests all go
-through this one queue, so their text never mixes. For an agent whose
+Each message from `coordinator send` gets a first line that names its
+sender; see [who a message is from](#the-coordinator) below.
+
+The chat's composer, quick entry, `coordinator send` and Toastty's own
+digests all go through this one queue, so their text never mixes. For an agent whose
 conversation Toastty reads (Claude Code, Codex and the other agents that
 Toastty Mobile can show), each message is typed through the check that a
 paired iPhone's message gets: the agent's conversation must show an open
@@ -564,6 +575,93 @@ that a phone queued for the coordinator is typed first. For any other agent,
 Toastty goes by the session's reported status.
 
 Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
+
+**Who a message is from.** Toastty writes the first line of each message
+that is not your own typing, from who called it and never from the message's
+text:
+
+| First line | Sender |
+| --- | --- |
+| `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
+| `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
+| `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
+| `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
+| `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
+| no `[Toastty]` line | You, in the chat or in the terminal. |
+
+The sender's text starts on the second line, and the coordinator's
+instructions say that only the first line counts. So text that an agent
+sends with `coordinator send` cannot read as yours, as a digest or as a
+quick entry message, whatever it says. The coordinator treats such a message
+as data from that sender, as it treats a task's reply. Toastty takes the
+sender from the session ID that the CLI reports, so a caller can hide its
+session and show as a terminal command, but it cannot show as you.
+
+### Quick entry with the coordinator
+
+While the coordinator's workspace exists, `Option+Shift+T` opens the quick
+entry panel with the label **To coordinator**. `Cmd+Return` or **Send** sends
+your text to the coordinator, which chooses the project and the agent, asks
+you when it is not sure, and creates the task.
+
+- **Workspace and Agent are optional.** Both pills start as **Auto**: the
+  coordinator chooses. Set one with `Cmd+1` or `Cmd+2`, and the message
+  carries it as your choice: the coordinator then uses it without a
+  question. The first row of each list sets the pill back to Auto; in a
+  search that row is last, and `auto` finds it.
+- **The selected project is a hint.** The message also names the project of
+  the workspace that was selected in Toastty when the panel opened, marked
+  as a hint and not as your choice. **New Task from Selection…** names that
+  terminal's project. A project that you chose replaces the hint.
+- **Attachments.** Toastty copies each attached file to
+  `~/.toastty/coordinator/attachments/<message ID>/`, and the message ends
+  with the paths. The coordinator passes them to the task it creates
+  (`task create --file`), which copies them again. Toastty removes a
+  message's copies when you remove the waiting message, and otherwise 7 days
+  after it made them. A copy's name keeps only letters, digits, `.`, `_`
+  and `-`.
+- **Nothing is lost.** Toastty saves your message in
+  `~/.toastty/coordinator-queue.json` until the coordinator's prompt takes
+  it: while the coordinator works, starts or restarts, while no agent runs,
+  and across an app quit. The toast says **Sent to the coordinator**, or why
+  the message waits. The panel's header says so before you send, when the
+  coordinator is not running or starting. Messages from the chat's field are
+  saved in the same way.
+- **See and remove a waiting message** in the coordinator's chat: it shows as
+  **Queued** with **Edit** and **Remove**. Remove also deletes the copies of
+  its files. Edit puts the text into the chat's field as Toastty would type
+  it, with its first line and the paths of its files.
+- **Typed once.** Toastty saves that it starts to type a message before the
+  text goes to the terminal. If Toastty quits in that moment, the message is
+  not typed again after the relaunch: it shows as **Paused**, and the chat
+  asks you to check the conversation and to choose **Send next** or
+  **Remove**. While Toastty cannot write `coordinator-queue.json`, it does
+  not type a message that the file lists as waiting, because a relaunch
+  could then type it a second time: the message waits, the chat says that
+  Toastty could not save it, and Toastty tries again every 5 seconds.
+- **Create the task directly** with `Option+Cmd+Return` or **Create Task**.
+  This is the panel without a coordinator: the task goes to the workspace
+  and the agent of the pills, and a pill that shows Auto uses the value it
+  would start on without a coordinator (see [Quick entry](#quick-entry)),
+  also after you set it and went back to Auto; the button's tooltip names
+  both. In a list, `Option+Cmd+Return` chooses the row and then creates the
+  task, as `Cmd+Return` chooses it and then sends.
+- **In the chat** a quick entry message shows your text, and under it your
+  choices and the names of the files. The terminal shows the message as
+  typed.
+
+A message looks like this in the coordinator's terminal:
+
+```text
+[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.1-sol, effort high
+The unread dot stays on after I read the session on the phone.
+
+Read the following files attached to this message on this Mac:
+`/Users/you/.toastty/coordinator/attachments/7C1B…/Screenshot.png`
+```
+
+With no choice, the first line is `[Toastty] Quick entry from the user |
+selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)`.
 
 ### The coordinator's chat
 
@@ -574,7 +672,10 @@ under it. On macOS 14 the panel shows the terminal.
 - **Send.** Type in the field under the conversation and press Return.
   Shift-Return starts a new line. While the coordinator works, the message
   waits in the chat as **Queued** and is typed when the turn ends. **Edit**
-  puts a waiting message back in the field, and **Remove** drops it.
+  puts a waiting message back in the field, and **Remove** drops it. A
+  waiting message is saved, so it is still there after a relaunch. The
+  field's hint names the quick entry shortcut, which sends to the coordinator
+  from any app.
 - **Stop.** While a turn runs and the field is empty, the button stops the
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send
@@ -591,6 +692,9 @@ under it. On macOS 14 the panel shows the terminal.
   message is then typed there.
 - **Digests.** A message that Toastty typed (see below) shows as one muted
   line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
+- **Messages from agents.** A message that `coordinator send` brought shows
+  as one muted line that names its sender, such as "From task Fix the unread
+  dot · 14:07". A click opens the full text. It never shows as your message.
 - **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
   text shows as a chip with the task's stage color, its current title and its
   pull request number. A click opens the task's space, and that space's
@@ -632,9 +736,10 @@ sets its next check.
 | Setup failed | Retries it once, then tells you. |
 | No agent runs, an agent stopped with an error, or a merge or cleanup stopped | Tells you, with the reason. |
 
-- **New tasks.** Tell the coordinator what you want done. It chooses the
-  project, and the agent, model and effort, from what you said, then from
-  your policy, then from the history of your tasks. When two projects are
+- **New tasks.** Tell the coordinator what you want done, in its chat or
+  with [quick entry](#quick-entry-with-the-coordinator). It chooses the
+  project, and the agent, model and effort, from what you said or set in the
+  panel, then from your policy, then from the history of your tasks. When two projects are
   still plausible, it asks first and creates the task after your answer.
   When your answer holds for more than one request, it adds a rule to the
   policy.
@@ -691,7 +796,9 @@ These limits are instructions to the agent. Toastty itself refuses only
 the task's own task space. The coordinator runs as you, so keep its agent's
 own approval rules on for commands that merge, archive or delete. A message
 that another agent sends with `toastty coordinator send` arrives at the same
-prompt as your own typing.
+prompt as your own typing, with a first line from Toastty that names its
+sender. Text that an agent types straight into the coordinator's terminal,
+with `terminal.send-text`, has no such line.
 
 ### The coordinator's folder
 
@@ -703,6 +810,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
 | `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
+| `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
 
 - **The instructions are Toastty's.** An agent reads its folder's instruction
   file at each start and each time its conversation is resumed. So the

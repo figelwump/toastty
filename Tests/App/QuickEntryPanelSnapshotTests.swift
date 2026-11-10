@@ -181,6 +181,105 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         try render("quick-entry-footer-usual-names")
     }
 
+    // MARK: - With a coordinator
+
+    /// A coordinator on this store. With `running`, an agent session is in
+    /// its terminal; without, the panel says that the message will wait.
+    private func makeCoordinator(running: Bool) throws -> CoordinatorController {
+        let sessions = SessionRuntimeStore()
+        let coordinator = CoordinatorController(
+            store: store,
+            sessionRuntimeStore: sessions,
+            launcher: nil,
+            directoryURL: stagingRoot.appendingPathComponent("coordinator", isDirectory: true),
+            configLoader: { TasksConfig() },
+            deliverText: { _, _ in .unavailable },
+            promptState: { _ in .idleAtPrompt }
+        )
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(store.send(.createCoordinatorWorkspace(
+            windowID: windowID, workspaceID: UUID(), panelID: UUID(), terminalCWD: stagingRoot.path
+        )))
+        let location = try XCTUnwrap(store.state.coordinator)
+        if running {
+            sessions.startSession(
+                sessionID: "coordinator-\(UUID().uuidString)",
+                agent: .claude,
+                panelID: try XCTUnwrap(location.panelID),
+                windowID: location.windowID,
+                workspaceID: location.workspaceID,
+                usesSessionStatusNotifications: false,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: stagingRoot.path,
+                repoRoot: nil,
+                at: Date()
+            )
+        }
+        controller.coordinatorController = coordinator
+        return coordinator
+    }
+
+    /// "Coordinator design" revision 15, section 4: quick entry is a
+    /// composer that sends to the coordinator. The pills are optional, Send
+    /// is the main button, and Create Task stays as the second one.
+    func testCoordinatorPanelSendsWithOptionalPills() throws {
+        let coordinator = try makeCoordinator(running: true)
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        XCTAssertTrue(model.sendsToCoordinator)
+        XCTAssertNil(model.coordinator?.hint)
+        let empty = try render("quick-entry-coordinator-empty")
+        XCTAssertFalse(model.canSubmit)
+
+        model.text = Self.designText
+        XCTAssertEqual(model.workspacePillTitle, "Auto")
+        XCTAssertEqual(model.agentPillTitle, "Auto")
+        XCTAssertTrue(model.canSubmit)
+        XCTAssertTrue(model.canCreateTask, "The second key uses the workspace and preset of a panel without a coordinator")
+        let auto = try render("quick-entry-coordinator-auto")
+        XCTAssertEqual(auto.size.height, empty.size.height)
+
+        // The user's choices, with long names: the footer stays one row
+        // with both buttons whole.
+        let workspace = try XCTUnwrap(store.state.workspacesByID.values.first { $0.isCoordinator == false })
+        _ = store.send(.renameWorkspace(workspaceID: workspace.id, title: "toastty-quick-entry-pickers-and-presets"))
+        model.workspaceOptions = [QuickEntryModel.Option(id: workspace.id.uuidString, title: "toastty-quick-entry-pickers-and-presets")]
+        model.chooseWorkspace(workspace.id)
+        model.choosePreset(QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol-long-context-preview", effort: "xhigh"))
+        model.attachImageData(try Self.screenshotData(), named: "Screenshot 4.11.52 PM.png")
+        let chosen = try render("quick-entry-coordinator-chosen")
+        XCTAssertEqual(chosen.size.height, auto.size.height, "The footer stays one row")
+        withExtendedLifetime(coordinator) {}
+    }
+
+    func testCoordinatorPanelSaysWhenTheMessageWillWait() throws {
+        let coordinator = try makeCoordinator(running: false)
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        XCTAssertEqual(model.coordinator?.hint, "Coordinator is not running · your message waits")
+        model.text = Self.designText
+        try render("quick-entry-coordinator-not-running")
+        withExtendedLifetime(coordinator) {}
+    }
+
+    func testCoordinatorPickersOfferAuto() throws {
+        let coordinator = try makeCoordinator(running: true)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        for title in ["emptyos", "toastty-ios"] {
+            XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: title, activate: false)))
+        }
+        controller.present(prefill: .empty)
+        controller.model?.text = Self.designText
+        controller.togglePicker(.workspace)
+        XCTAssertEqual(controller.picker?.rows.first?.id, QuickEntryPicker.coordinatorDecidesRowID)
+        XCTAssertFalse(controller.picker?.rows.contains { $0.title == "Coordinator" } ?? true, "Its own workspace is not a project")
+        try renderWithPicker("quick-entry-coordinator-workspace-picker")
+        controller.togglePicker(.agent)
+        XCTAssertEqual(controller.picker?.rows.first?.id, QuickEntryPicker.coordinatorDecidesRowID)
+        try renderWithPicker("quick-entry-coordinator-agent-picker")
+        withExtendedLifetime(coordinator) {}
+    }
+
     func testWorkspacePicker() throws {
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         for title in ["emptyos", "toastty-ios", "ghostty-fork"] {

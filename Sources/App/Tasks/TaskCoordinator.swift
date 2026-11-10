@@ -216,7 +216,7 @@ struct TaskError: LocalizedError, Equatable {
 /// outside the record, so Retry continues from the last finished step.
 @MainActor
 final class TaskCoordinator {
-    static let maximumAttachmentBytes = 50 * 1024 * 1024
+    nonisolated static let maximumAttachmentBytes = 50 * 1024 * 1024
 
     let records: TaskRecordStore
     let store: AppStore

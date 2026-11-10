@@ -15,10 +15,27 @@ struct QuickEntryPrefill: Equatable {
     static let empty = QuickEntryPrefill()
 }
 
+/// The coordinator, as the quick entry panel uses it. While a coordinator
+/// exists, the panel sends to it and the pills are optional.
+struct QuickEntryCoordinator {
+    /// One line for the panel's header when the message will wait, such as
+    /// "Coordinator is not running · your message waits".
+    var hint: String?
+    /// The project selected in Toastty when the panel opened. It goes with
+    /// the message as a hint, not as the user's choice.
+    var selectedProject: CoordinatorMessageHeader.Workspace?
+    var send: @MainActor (QuickEntryCoordinatorMessage) async throws -> CoordinatorController.SendResult
+}
+
 /// The quick entry panel's state: the text, the attached files, and the
 /// workspace and agent preset the task needs. Toastty copies each attached file into a
 /// staging directory as soon as it is added, because a dragged screenshot
 /// or a pasted image may live only in a temporary file.
+///
+/// With a coordinator, the panel sends the text to it. The workspace and
+/// the preset are then choices the user can make or leave to the
+/// coordinator, and a second key creates the task directly, as the panel
+/// does without a coordinator.
 @MainActor
 final class QuickEntryModel: ObservableObject {
     struct Attachment: Identifiable, Equatable {
@@ -44,6 +61,17 @@ final class QuickEntryModel: ObservableObject {
     /// The agent, model and effort. nil only when no Frequent preset or
     /// `[defaults]` agent is offered; Create Task waits for a choice.
     @Published var preset: QuickEntryPreset?
+    /// The user set the Workspace pill in this panel. Only then does a
+    /// message for the coordinator name the project as the user's choice.
+    @Published private(set) var choseWorkspace = false
+    /// The user set the Agent pill in this panel.
+    @Published private(set) var chosePreset = false
+    /// Set while a coordinator exists: the panel then sends to it.
+    private(set) var coordinator: QuickEntryCoordinator?
+    /// The workspace and the preset the panel started on. A pill that is
+    /// set back to Auto goes back to them, for a direct create.
+    private var startingWorkspaceID: UUID?
+    private var startingPreset: QuickEntryPreset?
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSubmitting = false
     /// Files still being copied in.
@@ -66,10 +94,14 @@ final class QuickEntryModel: ObservableObject {
     private let stagingDirectoryURL: URL
     private let create: @MainActor (TaskCreateRequest) async throws -> TaskRecord
     private let onCreated: @MainActor (TaskRecord) -> Void
+    private let onSent: @MainActor (CoordinatorController.SendResult) -> Void
     private let onCancel: @MainActor () -> Void
     /// One per panel, so a double submit or a retry after a lost answer
     /// returns the first task.
     private let clientRequestID = "quick-entry-\(UUID().uuidString)"
+    /// One per panel, as `clientRequestID`: a message's files are copied
+    /// under this ID.
+    private let coordinatorMessageID = UUID()
     private var usedFileNames: Set<String> = []
 
     init(
@@ -79,18 +111,23 @@ final class QuickEntryModel: ObservableObject {
         agentProfiles: [QuickEntryAgentProfile],
         frequentPresets: [QuickEntryPreset],
         stagingDirectoryURL: URL,
+        coordinator: QuickEntryCoordinator? = nil,
         create: @escaping @MainActor (TaskCreateRequest) async throws -> TaskRecord,
         onCreated: @escaping @MainActor (TaskRecord) -> Void,
+        onSent: @escaping @MainActor (CoordinatorController.SendResult) -> Void = { _ in },
         onCancel: @escaping @MainActor () -> Void
     ) {
         self.workspaceOptions = workspaceOptions
         self.agentProfiles = agentProfiles
         self.frequentPresets = frequentPresets
         self.stagingDirectoryURL = stagingDirectoryURL
+        self.coordinator = coordinator
         self.create = create
         self.onCreated = onCreated
+        self.onSent = onSent
         self.onCancel = onCancel
         self.preset = preset
+        startingPreset = preset
         apply(prefill)
     }
 
@@ -104,11 +141,24 @@ final class QuickEntryModel: ObservableObject {
         isSubmitting == false && isClosed == false
     }
 
-    var canSubmit: Bool {
+    /// The panel sends to the coordinator; Create Task is the second key.
+    var sendsToCoordinator: Bool { coordinator != nil }
+
+    private var hasDraft: Bool {
         isEditable
             && pendingAttachmentCount == 0
-            && missingChoiceHint == nil
             && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    /// Whether ⌘↩ can act: send to the coordinator, or without one create
+    /// the task.
+    var canSubmit: Bool {
+        hasDraft && (sendsToCoordinator || missingChoiceHint == nil)
+    }
+
+    /// Whether the task can be created directly.
+    var canCreateTask: Bool {
+        hasDraft && missingChoiceHint == nil
     }
 
     /// Why Create Task waits for the user, when a pill has no value.
@@ -116,6 +166,50 @@ final class QuickEntryModel: ObservableObject {
         if workspaceID == nil { return "Pick a workspace with ⌘1" }
         if preset == nil { return "Pick an agent with ⌘2" }
         return nil
+    }
+
+    /// The Workspace pill's value: with a coordinator, "Auto" until the
+    /// user chooses.
+    var workspacePillTitle: String {
+        sendsToCoordinator && choseWorkspace == false ? Self.autoTitle : workspaceTitle
+    }
+
+    var agentPillParts: (name: String, effort: String?) {
+        sendsToCoordinator && chosePreset == false ? (Self.autoTitle, nil) : agentTitleParts
+    }
+
+    var agentPillTitle: String {
+        sendsToCoordinator && chosePreset == false ? Self.autoTitle : agentTitle
+    }
+
+    static let autoTitle = "Auto"
+
+    /// Sets the Workspace pill. `nil` leaves the project to the
+    /// coordinator, and a direct create uses the workspace the panel
+    /// started on again.
+    func chooseWorkspace(_ id: UUID?) {
+        workspaceID = id ?? startingWorkspaceID
+        choseWorkspace = id != nil
+    }
+
+    /// Sets the Agent pill. `nil` leaves the agent to the coordinator, and
+    /// a direct create uses the preset the panel started on again.
+    func choosePreset(_ preset: QuickEntryPreset?) {
+        self.preset = preset ?? startingPreset
+        chosePreset = preset != nil
+    }
+
+    /// The pill's workspace closed while the draft was open: it has no
+    /// workspace now, chosen or not.
+    func workspaceClosed() {
+        if startingWorkspaceID == workspaceID { startingWorkspaceID = nil }
+        workspaceID = nil
+        choseWorkspace = false
+    }
+
+    /// The project a later opener names for the message, as its hint.
+    func setSelectedProject(_ project: CoordinatorMessageHeader.Workspace?) {
+        coordinator?.selectedProject = project
     }
 
     var canAttachMore: Bool {
@@ -155,7 +249,11 @@ final class QuickEntryModel: ObservableObject {
     func apply(_ prefill: QuickEntryPrefill) {
         guard isEditable else { return }
         if let workspaceID = prefill.workspaceID {
+            // The opener's workspace is where the panel starts now. It is
+            // not the user's choice in this panel.
             self.workspaceID = workspaceID
+            startingWorkspaceID = workspaceID
+            choseWorkspace = false
         }
         if let selectionText = prefill.selectionText,
            selectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
@@ -191,8 +289,58 @@ final class QuickEntryModel: ObservableObject {
 
     // MARK: - Submit
 
+    /// ⌘↩: sends to the coordinator, or without one creates the task.
     func submit() {
-        guard canSubmit else { return }
+        guard sendsToCoordinator else {
+            createTask()
+            return
+        }
+        sendToCoordinator()
+    }
+
+    private func sendToCoordinator() {
+        guard canSubmit, let coordinator else { return }
+        isSubmitting = true
+        errorMessage = nil
+        let project = choseWorkspace ? workspaceID.map { id in
+            CoordinatorMessageHeader.Workspace(id: id, title: workspaceTitle)
+        } : nil
+        let chosen = chosePreset ? preset : nil
+        let message = QuickEntryCoordinatorMessage(
+            id: coordinatorMessageID,
+            text: text,
+            files: attachments.map(\.url),
+            choices: CoordinatorMessageHeader.QuickEntry(
+                project: project,
+                agent: chosen?.agent,
+                model: chosen?.model,
+                effort: chosen?.effort,
+                selectedProject: coordinator.selectedProject
+            )
+        )
+        Task { @MainActor in
+            do {
+                let result = try await coordinator.send(message)
+                isSubmitting = false
+                onSent(result)
+            } catch {
+                isSubmitting = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// ⌥⌘↩, and ⌘↩ without a coordinator: creates the task directly, in
+    /// the workspace and with the preset of the pills.
+    func createTask() {
+        guard canCreateTask else {
+            // With a coordinator the pills are optional, so the key needs
+            // to say what it lacks.
+            if sendsToCoordinator, hasDraft, let missingChoiceHint {
+                errorMessage = "\(missingChoiceHint) to create the task directly."
+            }
+            return
+        }
         isSubmitting = true
         errorMessage = nil
         let request = TaskCreateRequest(

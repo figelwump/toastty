@@ -5,7 +5,9 @@ import RemoteProtocol
 import SwiftUI
 
 /// Opens the quick entry panel from the global shortcut and from Toastty's
-/// own entry points, and creates the task through `task.create`.
+/// own entry points. While a coordinator exists, the panel sends its text
+/// to the coordinator, and a second key creates the task directly. With no
+/// coordinator, it creates the task through `task.create`.
 @MainActor
 final class QuickEntryController: ObservableObject {
     /// The configured shortcut, shown on File ▸ New Task…; nil when
@@ -37,6 +39,9 @@ final class QuickEntryController: ObservableObject {
     /// recent first: the list the iPhone's start-session screen offers. It
     /// comes from remote access, which is set up after this controller.
     var recentModels: @MainActor (AgentKind) -> [String] = { _ in [] }
+    /// The app's coordinator, which is set up after this controller. While
+    /// its workspace exists, a new panel sends to it.
+    weak var coordinatorController: CoordinatorController?
     /// Optional CLI catalog lookup. The composition root supplies background
     /// I/O; tests and other providers need no installed Codex or remote access.
     var loadCodexModels: (@MainActor () async throws -> [String])?
@@ -58,7 +63,9 @@ final class QuickEntryController: ObservableObject {
     /// on the same screen. The top stays put because the height follows the
     /// text.
     private var lastPanelPlacement: QuickEntryPlacement.Remembered?
-    private var toastPanel: QuickEntryToastPanel?
+    private(set) var toastPanel: QuickEntryToastPanel?
+    /// What the last toast said.
+    private(set) var lastToastMessage: String?
     private var toastTask: Task<Void, Never>?
 
     var isPresented: Bool { panel != nil }
@@ -169,6 +176,11 @@ final class QuickEntryController: ObservableObject {
     func present(prefill: QuickEntryPrefill) {
         if let panel, let model {
             model.apply(prefill)
+            // An opener that names a workspace, such as "New Task from
+            // Selection…", names the project the message is about.
+            if let workspaceID = prefill.workspaceID {
+                model.setSelectedProject(project(workspaceID))
+            }
             panel.orderFrontRegardless()
             panel.makeKey()
             model.requestFocus()
@@ -190,6 +202,9 @@ final class QuickEntryController: ObservableObject {
         let profiles = quickEntryAgentProfiles(defaults: defaults)
         let options = workspaceOptions()
         let frequent = frequentPresets(defaults: defaults, profiles: profiles)
+        // Read before the workspace is filled in: an opener that names a
+        // workspace, such as "New Task from Selection…", names the hint.
+        let coordinator = coordinator(hintWorkspaceID: prefill.workspaceID ?? selectedProjectID())
         var prefill = prefill
         prefill.workspaceID = prefill.workspaceID ?? Self.initialWorkspaceID(
             selectedProject: selectedProjectID(),
@@ -205,9 +220,13 @@ final class QuickEntryController: ObservableObject {
             agentProfiles: profiles,
             frequentPresets: frequent,
             stagingDirectoryURL: stagingDirectoryURL,
+            coordinator: coordinator,
             create: create,
             onCreated: { [weak self] record in
                 self?.finish(created: record)
+            },
+            onSent: { [weak self] result in
+                self?.finish(sent: result)
             },
             onCancel: { [weak self] in
                 self?.dismiss()
@@ -221,6 +240,7 @@ final class QuickEntryController: ObservableObject {
         let dropTarget = QuickEntryDropTarget(model: model)
         let panel = QuickEntryPanel()
         panel.onSubmit = { [weak model] in model?.submit() }
+        panel.onCreateTask = { [weak model] in model?.createTask() }
         panel.onCancel = { [weak model] in model?.cancel() }
         panel.onPicker = { [weak self] kind in self?.togglePicker(kind) }
         panel.contentView = QuickEntryContentView(
@@ -264,6 +284,7 @@ final class QuickEntryController: ObservableObject {
         model.requestFocus()
         refreshCodexModels()
         ToasttyLog.info("Opened the quick entry panel", category: .tasks, metadata: [
+            "sends_to": coordinator == nil ? "task" : "coordinator",
             "from_app": previousApplication?.bundleIdentifier ?? "toastty",
             "window_number": String(panel.windowNumber),
             "is_key_window": String(panel.isKeyWindow),
@@ -281,10 +302,65 @@ final class QuickEntryController: ObservableObject {
         let frame = panel?.frame
         close()
         restoreFocus()
-        showToast(near: frame)
+        showToast("Task created", near: frame)
         ToasttyLog.info("Created a task from quick entry", category: .tasks, metadata: [
             "task_id": record.id.uuidString,
         ])
+    }
+
+    /// The coordinator has the message, or keeps it until its prompt opens.
+    /// The staged files are copied, so the draft can end.
+    private func finish(sent result: CoordinatorController.SendResult) {
+        let frame = panel?.frame
+        close()
+        restoreFocus()
+        showToast(Self.toastMessage(for: result), near: frame)
+        ToasttyLog.info("Sent a quick entry message to the coordinator", category: .tasks, metadata: [
+            "typed": result.wasTyped ? "true" : "false",
+        ])
+    }
+
+    /// What the toast says after a send: that the coordinator has the
+    /// message, or why the message waits.
+    static func toastMessage(for result: CoordinatorController.SendResult) -> String {
+        switch result {
+        case .sent, .sentUnconfirmed:
+            "Sent to the coordinator"
+        case .queued(_, let hold), .held(let hold):
+            switch hold {
+            case .noSession: "Waits: the coordinator is not running"
+            case .agentStarting: "Waits: the coordinator is starting"
+            case .userDraft: "Waits: text is in the coordinator's terminal"
+            case .busy, .awaitingTurn, .settling: "Waits: the coordinator is working"
+            case .terminalUnavailable, .promptNotOpen: "Waits for the coordinator's prompt"
+            case .notSaved: "Waits: Toastty could not save it"
+            }
+        }
+    }
+
+    /// The coordinator as a new panel uses it, or `nil` when there is none:
+    /// the panel then creates the task itself.
+    private func coordinator(hintWorkspaceID: UUID?) -> QuickEntryCoordinator? {
+        guard let controller = coordinatorController, let status = controller.status else { return nil }
+        let hint: String?
+        switch status.agentState {
+        case .notRunning:
+            hint = "Coordinator is not running · your message waits"
+        case .starting:
+            hint = "Coordinator is starting · your message waits"
+        case .running:
+            hint = status.queuedCount == 0 ? nil
+                : (status.queuedCount == 1 ? "1 message waits for the coordinator"
+                    : "\(status.queuedCount) messages wait for the coordinator")
+        }
+        return QuickEntryCoordinator(
+            hint: hint,
+            selectedProject: hintWorkspaceID.flatMap(project),
+            send: { [weak controller] message in
+                guard let controller else { throw CoordinatorError("Toastty is quitting.") }
+                return try await controller.sendQuickEntry(message)
+            }
+        )
     }
 
     /// Ends the draft; the model removes its staged files once no copy is
@@ -360,14 +436,24 @@ final class QuickEntryController: ObservableObject {
         }
     }
 
-    private func showToast(near frame: NSRect?) {
+    /// A workspace as a message names it. The coordinator's own workspace
+    /// is not a project.
+    private func project(_ workspaceID: UUID) -> CoordinatorMessageHeader.Workspace? {
+        let state = store.state
+        guard state.isCoordinatorWorkspace(workspaceID) == false,
+              let workspace = state.workspacesByID[workspaceID] else { return nil }
+        return CoordinatorMessageHeader.Workspace(id: workspaceID, title: workspace.title)
+    }
+
+    private func showToast(_ message: String, near frame: NSRect?) {
         toastTask?.cancel()
         toastPanel?.orderOut(nil)
-        let toast = QuickEntryToastPanel(message: "Task created")
+        let toast = QuickEntryToastPanel(message: message)
+        lastToastMessage = message
         let anchor = frame ?? QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.focusedScreen())
         toast.setFrameOrigin(NSPoint(
-            x: (anchor.midX - QuickEntryToastPanel.size.width / 2).rounded(),
-            y: (anchor.midY - QuickEntryToastPanel.size.height / 2).rounded()
+            x: (anchor.midX - toast.frame.width / 2).rounded(),
+            y: (anchor.midY - toast.frame.height / 2).rounded()
         ))
         toast.orderFrontRegardless()
         toastPanel = toast
@@ -417,24 +503,41 @@ final class QuickEntryController: ObservableObject {
             model.workspaceOptions = workspaceOptions()
             if let selected = model.workspaceID,
                model.workspaceOptions.contains(where: { $0.id == selected.uuidString }) == false {
-                model.workspaceID = nil
+                model.workspaceClosed()
             }
         }
 
+        // With a coordinator, a pill the user has not set shows no choice,
+        // and the picker offers to leave it so.
+        let sendsToCoordinator = model.sendsToCoordinator
         let picker = switch kind {
         case .workspace:
-            QuickEntryPicker(workspaces: model.workspaceOptions, current: model.workspaceID)
+            QuickEntryPicker(
+                workspaces: model.workspaceOptions,
+                current: sendsToCoordinator && model.choseWorkspace == false ? nil : model.workspaceID,
+                offersCoordinatorChoice: sendsToCoordinator
+            )
         case .agent:
-            QuickEntryPicker(profiles: model.agentProfiles, frequent: model.frequentPresets, current: model.preset)
+            QuickEntryPicker(
+                profiles: model.agentProfiles,
+                frequent: model.frequentPresets,
+                current: sendsToCoordinator && model.chosePreset == false ? nil : model.preset,
+                offersCoordinatorChoice: sendsToCoordinator
+            )
         }
         picker.codexCatalogStatus = kind == .agent ? codexCatalogStatus : nil
         picker.onRetryCodexModels = { [weak self] in self?.refreshCodexModels() }
         picker.onChoose = { [weak self, weak model] choice in
             switch choice {
             case .workspace(let workspaceID):
-                model?.workspaceID = workspaceID
+                model?.chooseWorkspace(workspaceID)
             case .agent(let preset):
-                model?.preset = preset
+                model?.choosePreset(preset)
+            case .coordinatorDecides:
+                switch kind {
+                case .workspace: model?.chooseWorkspace(nil)
+                case .agent: model?.choosePreset(nil)
+                }
             }
             self?.closePicker(refocusText: true)
         }
@@ -445,13 +548,21 @@ final class QuickEntryController: ObservableObject {
         let pickerPanel = QuickEntryPickerPanel()
         pickerPanel.onPickerShortcut = { [weak self] kind in self?.togglePicker(kind) }
         pickerPanel.onClose = { [weak picker] in picker?.cancel() }
+        // ⌘↩ and ⌥⌘↩ in the list: choose the row, then act as in the panel.
+        // Only once the choice is made; a row that opens the columns
+        // leaves the picker open.
         pickerPanel.onSubmitTask = { [weak self, weak picker] in
             guard let self, let picker else { return }
             picker.submit()
-            // Create only once the choice is made; a row that opens the
-            // columns leaves the picker open.
             if self.picker == nil {
                 self.model?.submit()
+            }
+        }
+        pickerPanel.onCreateTask = { [weak self, weak picker] in
+            guard let self, let picker else { return }
+            picker.submit()
+            if self.picker == nil {
+                self.model?.createTask()
             }
         }
         pickerPanel.onCommandRight = { [weak picker] in

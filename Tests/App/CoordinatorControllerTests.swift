@@ -31,11 +31,15 @@ struct CoordinatorControllerTests {
         /// change it, as an update of Toastty does. `nil` is an app that
         /// cannot read them.
         let instructions = CoordinatorFolderTests.Instructions()
+        /// Where the controller saves the user's waiting messages, as the
+        /// app does.
+        let queueFileURL: URL
 
         init(readinessTimeout: Duration = .seconds(3)) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
             self.tasks = tasks
             directory = tasks.root.appendingPathComponent("runtime-home/coordinator", isDirectory: true)
+            queueFileURL = tasks.root.appendingPathComponent("runtime-home/coordinator-queue.json")
             let folder = CoordinatorFolderTests.folder(at: directory, instructions: instructions)
             terminals.bind(sessionLifecycleTracker: tasks.sessionRuntimeStore)
             let terminals = terminals
@@ -46,6 +50,7 @@ struct CoordinatorControllerTests {
                 launcher: tasks.launcher,
                 directoryURL: directory,
                 folder: folder,
+                queueFileURL: queueFileURL,
                 configLoader: { [unowned tasks] in
                     if let configError = tasks.configError { throw configError }
                     return tasks.config

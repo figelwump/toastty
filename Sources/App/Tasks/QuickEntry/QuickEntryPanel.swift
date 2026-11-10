@@ -19,6 +19,8 @@ final class QuickEntryPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     var onSubmit: () -> Void = {}
+    /// ⌥⌘↩: create the task directly, also when ⌘↩ sends to the coordinator.
+    var onCreateTask: () -> Void = {}
     var onCancel: () -> Void = {}
     /// ⌘1 or ⌘2: open, or close, the Workspace or Agent picker.
     var onPicker: (QuickEntryPickerKind) -> Void = { _ in }
@@ -69,6 +71,8 @@ final class QuickEntryPanel: NSPanel {
             onPicker(kind)
         case .submit:
             onSubmit()
+        case .createTask:
+            onCreateTask()
         case .close:
             onCancel()
         case .application:
@@ -86,6 +90,8 @@ final class QuickEntryPanel: NSPanel {
         case textNavigation
         case picker(QuickEntryPickerKind)
         case submit
+        /// ⌥⌘↩: create the task directly.
+        case createTask
         case close
         /// ⌘Q and ⌘H, which act on the app rather than a window.
         case application
@@ -94,7 +100,7 @@ final class QuickEntryPanel: NSPanel {
 
     static func commandAction(key: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> CommandAction {
         if keyCode == 36 || keyCode == 76 {
-            return .submit
+            return modifiers.contains(.option) ? .createTask : .submit
         }
         if modifiers == .command, key == "w" || key == "." {
             return .close
@@ -365,9 +371,17 @@ final class QuickEntryContentView: NSView {
 final class QuickEntryToastPanel: NSPanel {
     nonisolated static let size = NSSize(width: 260, height: 40)
 
+    /// Wide enough for the message, such as why a message waits.
+    static func size(for message: String) -> NSSize {
+        let text = (message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium)])
+        // The check mark, its gap and the padding on both sides.
+        return NSSize(width: min(max(size.width, (text.width + 62).rounded(.up)), 460), height: size.height)
+    }
+
     init(message: String) {
+        let size = Self.size(for: message)
         super.init(
-            contentRect: NSRect(origin: .zero, size: Self.size),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -381,7 +395,7 @@ final class QuickEntryToastPanel: NSPanel {
         backgroundColor = .clear
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isReleasedWhenClosed = false
-        contentView = NSHostingView(rootView: QuickEntryToastView(message: message))
+        contentView = NSHostingView(rootView: QuickEntryToastView(message: message, size: size))
         setAccessibilityIdentifier("quick-entry.toast")
     }
 
@@ -390,6 +404,7 @@ final class QuickEntryToastPanel: NSPanel {
 
 private struct QuickEntryToastView: View {
     let message: String
+    let size: NSSize
 
     var body: some View {
         HStack(spacing: 8) {
@@ -399,9 +414,11 @@ private struct QuickEntryToastView: View {
             Text(message)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .accessibilityIdentifier("quick-entry.toast.message")
         }
         .padding(.horizontal, 14)
-        .frame(width: QuickEntryToastPanel.size.width, height: QuickEntryToastPanel.size.height)
+        .frame(width: size.width, height: size.height)
         .background(
             Capsule(style: .continuous).fill(Color(red: 0.10, green: 0.10, blue: 0.11).opacity(0.96))
         )

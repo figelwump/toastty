@@ -93,7 +93,13 @@ extension AppControlExecutor {
         }
         let result: CoordinatorController.SendResult
         do {
-            result = try controller.send(text)
+            guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                throw CoordinatorError("The message is empty.")
+            }
+            // The first line says who sent it. Toastty writes that line
+            // from the caller, so the text cannot pass as the user's or as
+            // one of Toastty's own messages.
+            result = try controller.send(CoordinatorMessageHeader.message(from: coordinatorSender(), text: text))
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -114,6 +120,21 @@ extension AppControlExecutor {
             response["hold"] = .string(hold.rawValue)
         }
         return .init(didMutateState: false, result: response)
+    }
+
+    /// Who runs this request, for the first line of a message: the task
+    /// whose space the caller's session is in, else that session, else a
+    /// caller that named no running session.
+    private func coordinatorSender() -> CoordinatorMessageHeader.Sender {
+        guard let session = callerManagedSession() else { return .unknown }
+        if let task = taskCoordinator?.task(inWorkspace: session.workspaceID) {
+            return .task(id: task.id, title: task.title)
+        }
+        return .session(
+            id: session.sessionID,
+            agent: session.agent.rawValue,
+            workspaceTitle: (try? requiredStore())?.state.workspacesByID[session.workspaceID]?.title
+        )
     }
 
     /// Sets, moves or removes the coordinator's next check.

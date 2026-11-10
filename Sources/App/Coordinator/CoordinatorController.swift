@@ -107,9 +107,10 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
-    /// Entries waiting for an open prompt. They are kept in memory only: an
-    /// agent restart keeps them and an app quit loses them. A caller whose
-    /// text must survive a quit keeps its own copy until `send` returns.
+    /// The most entries that wait for an open prompt. An agent restart
+    /// keeps them all. An app quit keeps the user's own messages, which
+    /// are saved in `queueFileURL`, and loses the others: a sender such as
+    /// the wake digests keeps its own copy until `send` returns.
     static let maximumQueuedEntries = 50
 
     /// The coordinator's workspace whose agent Toastty is starting. A start
@@ -124,6 +125,10 @@ final class CoordinatorController: ObservableObject {
     private let sessionRuntimeStore: SessionRuntimeStore
     private weak var launcher: (any CoordinatorAgentLaunching)?
     private let folder: CoordinatorFolder
+    /// The files the user attached to messages for the coordinator.
+    let attachments: CoordinatorAttachments
+    /// Where the user's waiting messages are saved, or `nil` to save none.
+    private let queueFileURL: URL?
     private let configLoader: () throws -> TasksConfig
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
@@ -149,8 +154,14 @@ final class CoordinatorController: ObservableObject {
         /// agent's conversation is echoed there under this ID.
         let id: String
         let text: String
-        /// A person sent it, for example from the chat's composer.
+        /// A person sent it, from the chat's composer or from quick entry.
+        /// Such an entry is saved until it is typed, so an app quit does
+        /// not lose it.
         let byUser: Bool
+        /// Toastty quit while it typed this entry, so the coordinator may
+        /// have it already. It waits with the paused entries until the
+        /// user sends it again or removes it.
+        var typingWasInterrupted = false
     }
 
     /// A message that reached the coordinator's terminal.
@@ -224,6 +235,12 @@ final class CoordinatorController: ObservableObject {
     /// The coordinator's workspace the queue was filled for. The queue goes
     /// with that workspace: entries never reach a coordinator opened later.
     private var queueWorkspaceID: UUID?
+    /// The saved entry that Toastty types at this moment. It is saved
+    /// before the text goes to the terminal: after a crash in that moment,
+    /// the entry is not typed a second time without the user.
+    private var typingEntryID: String?
+    /// The queue as the file holds it, so that only a change is written.
+    private var savedQueue: CoordinatorQueueSnapshot?
     private var lastDelivery: CoordinatorPromptFacts.Delivery?
     private var recheckTask: Task<Void, Never>?
     /// The one run of `CoordinatorFolder.prepareRepository` under way.
@@ -244,6 +261,7 @@ final class CoordinatorController: ObservableObject {
         launcher: (any CoordinatorAgentLaunching)?,
         directoryURL: URL,
         folder: CoordinatorFolder? = nil,
+        queueFileURL: URL? = nil,
         configLoader: @escaping () throws -> TasksConfig,
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
@@ -254,6 +272,8 @@ final class CoordinatorController: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.launcher = launcher
         self.folder = folder ?? CoordinatorFolder(directoryURL: directoryURL)
+        self.attachments = CoordinatorAttachments(coordinatorDirectoryURL: directoryURL)
+        self.queueFileURL = queueFileURL
         self.configLoader = configLoader
         self.deliverText = deliverText
         self.promptState = promptState
@@ -284,7 +304,20 @@ final class CoordinatorController: ObservableObject {
             // A coordinator opened later starts with the chat.
             self?.showsTerminal = false
             self?.onWorkspaceChange?(workspaceID)
+            // The queue goes with its workspace: what waited for a closed
+            // coordinator is dropped now, with its saved copy and files.
+            Task { @MainActor [weak self] in self?.drain() }
         }
+        restoreQueue()
+        // A waiting message keeps the folders it names: after an edit in
+        // the chat, its files are under the ID of the message it was.
+        self.attachments.removeExpired(
+            waitingMessageIDs: (queuedEntries + pausedEntries).reduce(into: Set<String>()) { ids, entry in
+                ids.insert(entry.id)
+                ids.formUnion(self.attachments.messageIDs(namedIn: entry.text))
+            },
+            now: now()
+        )
         refreshFolderOfARestoredCoordinator()
     }
 
@@ -608,10 +641,11 @@ final class CoordinatorController: ObservableObject {
     /// while no agent runs. One entry is typed for each open prompt.
     ///
     /// This is the one way into the coordinator for the chat's composer,
-    /// `coordinator send` and Toastty's own digests, so their text cannot
-    /// interleave. Pass `byUser: true` only when a person sent the message.
-    /// `id` names the message for its sender; the conversation's echo of a
-    /// typed message carries it.
+    /// quick entry, `coordinator send` and Toastty's own digests, so their
+    /// text cannot interleave. Pass `byUser: true` only when a person sent
+    /// the message: it is then saved until it is typed, and waits across
+    /// an app quit. `id` names the message for its sender; the
+    /// conversation's echo of a typed message carries it.
     ///
     /// With `queueWhenHeld` off, text that cannot be typed now is not kept:
     /// the answer is `held`, and the caller sends its text again later. A
@@ -688,15 +722,23 @@ final class CoordinatorController: ObservableObject {
     /// that came later.
     func resumeQueue() {
         guard pausedEntries.isEmpty == false else { return }
-        queuedEntries.insert(contentsOf: pausedEntries, at: 0)
+        // The user sends an interrupted entry again: it is typed as any
+        // other.
+        queuedEntries.insert(contentsOf: pausedEntries.map { entry in
+            var entry = entry
+            entry.typingWasInterrupted = false
+            return entry
+        }, at: 0)
         pausedEntries.removeAll()
         drain()
     }
 
     /// Takes a waiting entry out of the queue. Returns it, or `nil` when it
-    /// was typed or removed already.
+    /// was typed or removed already. With `discardingAttachments`, the
+    /// files attached to it go too: the message will not be sent. Without
+    /// it they stay, for a caller that sends the entry's text again.
     @discardableResult
-    func removeQueuedEntry(id: String) -> QueuedEntry? {
+    func removeQueuedEntry(id: String, discardingAttachments: Bool = false) -> QueuedEntry? {
         let removed: QueuedEntry
         if let index = queuedEntries.firstIndex(where: { $0.id == id }) {
             removed = queuedEntries.remove(at: index)
@@ -704,6 +746,9 @@ final class CoordinatorController: ObservableObject {
             removed = pausedEntries.remove(at: index)
         } else {
             return nil
+        }
+        if discardingAttachments {
+            attachments.discard(messageID: removed.id, text: removed.text)
         }
         drain()
         return removed
@@ -747,6 +792,7 @@ final class CoordinatorController: ObservableObject {
         defer {
             let waiting = queuedEntries.count + pausedEntries.count
             if queuedCount != waiting { queuedCount = waiting }
+            saveQueue()
         }
         guard let location, let entry = queuedEntries.first else {
             setHold(nil)
@@ -763,6 +809,7 @@ final class CoordinatorController: ObservableObject {
             return nil
         case .typed(let result):
             queuedEntries.removeFirst()
+            typingEntryID = nil
             if queuedEntries.isEmpty {
                 setHold(nil)
             } else {
@@ -824,9 +871,13 @@ final class CoordinatorController: ObservableObject {
         guard let panelID = location.panelID, let session else {
             return .held(.noSession, recheckAt: nil)
         }
+        guard noteTypingStarts(entry) else {
+            return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))
+        }
         let result = deliverText(entry.text, panelID)
         switch result {
         case .unavailable:
+            noteTypingDidNotHappen()
             return .held(.terminalUnavailable, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
         case .delivered, .uncertain:
             lastDelivery = CoordinatorPromptFacts.Delivery(
@@ -864,6 +915,9 @@ final class CoordinatorController: ObservableObject {
         case .unavailable(let reason):
             return .held(Self.hold(for: reason), recheckAt: nil)
         }
+        guard noteTypingStarts(entry) else {
+            return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))
+        }
         let result = subscription.send(RemoteMessageSendRequest(
             conversationID: summary.conversationID,
             clientRequestID: entry.id,
@@ -879,8 +933,10 @@ final class CoordinatorController: ObservableObject {
             return .typed(.uncertain)
         case .queued:
             // Not reached: the request asks for the open prompt.
+            noteTypingDidNotHappen()
             return .held(.busy, recheckAt: nil)
         case .rejected(let reason):
+            noteTypingDidNotHappen()
             switch reason {
             case .localDraftPresent:
                 return .held(.userDraft, recheckAt: nil)
@@ -936,10 +992,128 @@ final class CoordinatorController: ObservableObject {
     private func dropQueueOfAClosedCoordinator() {
         let workspaceID = location?.workspaceID
         guard workspaceID != queueWorkspaceID else { return }
+        // Their coordinator is gone, and with it the reason to keep the
+        // files of the messages that waited for it.
+        for entry in queuedEntries + pausedEntries {
+            attachments.discard(messageID: entry.id, text: entry.text)
+        }
         queuedEntries.removeAll()
         pausedEntries.removeAll()
+        typingEntryID = nil
         lastDelivery = nil
         queueWorkspaceID = workspaceID
+        saveQueue()
+    }
+
+    // MARK: - The saved queue
+
+    /// Puts back the user's messages that waited when Toastty quit. They
+    /// belong to the coordinator's workspace that they were sent to: a
+    /// queue saved for another one is dropped with its files.
+    private func restoreQueue() {
+        guard let queueFileURL, let snapshot = CoordinatorQueueSnapshot.load(from: queueFileURL) else { return }
+        guard let workspaceID = location?.workspaceID, snapshot.workspaceID == workspaceID else {
+            for entry in snapshot.queued + snapshot.paused {
+                attachments.discard(messageID: entry.id, text: entry.text)
+            }
+            try? CoordinatorQueueSnapshot.remove(at: queueFileURL)
+            ToasttyLog.info("Dropped saved messages of a coordinator that is gone", category: .tasks, metadata: [
+                "count": String(snapshot.queued.count + snapshot.paused.count),
+            ])
+            return
+        }
+        var queued = snapshot.queued.map { QueuedEntry(id: $0.id, text: $0.text, byUser: true) }
+        var paused = snapshot.paused.map {
+            QueuedEntry(id: $0.id, text: $0.text, byUser: true, typingWasInterrupted: $0.typingWasInterrupted ?? false)
+        }
+        // Toastty quit after it started to type this entry and before it
+        // saved that the entry was typed. Whether the coordinator has it is
+        // not known, so it is not typed again without the user.
+        if let typingEntryID = snapshot.typingEntryID,
+           let index = queued.firstIndex(where: { $0.id == typingEntryID }) {
+            var interrupted = queued.remove(at: index)
+            interrupted.typingWasInterrupted = true
+            paused.insert(interrupted, at: 0)
+        }
+        queueWorkspaceID = workspaceID
+        queuedEntries = queued
+        pausedEntries = paused
+        queuedCount = queued.count + paused.count
+        savedQueue = snapshot
+        saveQueue()
+        ToasttyLog.info("Restored the messages that waited for the coordinator", category: .tasks, metadata: [
+            "queued": String(queued.count),
+            "paused": String(paused.count),
+        ])
+    }
+
+    /// How long a message whose typing could not be saved waits before
+    /// Toastty tries again.
+    static let saveRetryInterval: TimeInterval = 5
+
+    /// Writes the user's waiting messages when they changed. Every change
+    /// of the queue ends here, so the file is the queue at each moment
+    /// that Toastty can quit. Returns whether the file now holds the queue.
+    @discardableResult
+    private func saveQueue() -> Bool {
+        guard let queueFileURL else { return true }
+        let snapshot = queueSnapshot()
+        guard snapshot != savedQueue else { return true }
+        do {
+            if let snapshot {
+                try snapshot.save(to: queueFileURL)
+            } else {
+                try CoordinatorQueueSnapshot.remove(at: queueFileURL)
+            }
+            savedQueue = snapshot
+            return true
+        } catch {
+            // `savedQueue` stays as it was, so the next change writes again.
+            ToasttyLog.warning("Could not save the messages that wait for the coordinator", category: .tasks, metadata: [
+                "path": queueFileURL.path, "error": error.localizedDescription,
+            ])
+            return false
+        }
+    }
+
+    private func queueSnapshot() -> CoordinatorQueueSnapshot? {
+        guard let workspaceID = queueWorkspaceID else { return nil }
+        let queued = queuedEntries.filter(\.byUser)
+        let paused = pausedEntries.filter(\.byUser)
+        guard queued.isEmpty == false || paused.isEmpty == false else { return nil }
+        return CoordinatorQueueSnapshot(
+            workspaceID: workspaceID,
+            queued: queued.map { .init(id: $0.id, text: $0.text) },
+            paused: paused.map {
+                .init(id: $0.id, text: $0.text, typingWasInterrupted: $0.typingWasInterrupted ? true : nil)
+            },
+            typingEntryID: typingEntryID
+        )
+    }
+
+    /// Saves that a saved entry is being typed, before its text goes to
+    /// the terminal. Returns `false` when the entry must not be typed now:
+    /// the file lists it as waiting and could not be changed, so a
+    /// relaunch would type it again. An entry that the file never held can
+    /// be typed, since no relaunch knows of it.
+    private func noteTypingStarts(_ entry: QueuedEntry) -> Bool {
+        guard entry.byUser, queueFileURL != nil, queuedEntries.first?.id == entry.id else { return true }
+        typingEntryID = entry.id
+        if saveQueue() { return true }
+        typingEntryID = nil
+        return savedQueue?.queued.contains { $0.id == entry.id } != true
+    }
+
+    /// The terminal did not take the text: the entry waits as before.
+    private func noteTypingDidNotHappen() {
+        guard typingEntryID != nil else { return }
+        typingEntryID = nil
+        saveQueue()
+    }
+
+    /// Whether an entry waits whose typing a quit interrupted.
+    var hasInterruptedEntry: Bool {
+        pausedEntries.contains(where: \.typingWasInterrupted)
     }
 
     // MARK: - The conversation the controller sends through

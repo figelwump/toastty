@@ -1021,10 +1021,15 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   `nextWakeAt` and `nextWakeSource` (`coordinator` when `wake` set the time,
   `default` for 1 hour after the last digest, both `null` when there is no
   timer); and `lastWakeAt`.
-- `send` types a message at the agent's open prompt and returns
+- `send` puts a first line before the message that names the sender, which
+  Toastty takes from the caller and not from the text: the task whose space
+  the calling session is in, else that session, else "a terminal command".
+  The coordinator reads such a message as data from that sender, not as
+  your instruction; see [The coordinator](tasks.md#the-coordinator). It
+  then types the message at the agent's open prompt and returns
   `delivery: sent`, or holds it and returns `delivery: queued` with
   `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
-  `settling`, `awaitingTurn`, `terminalUnavailable` or `promptNotOpen`). `sentUnconfirmed`
+  `settling`, `awaitingTurn`, `terminalUnavailable`, `promptNotOpen` or `notSaved`). `sentUnconfirmed`
   means the terminal did not confirm the Return key; Toastty does not type the
   text again, and holds later messages until a turn runs. It fails when there
   is no coordinator.

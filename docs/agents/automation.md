@@ -282,6 +282,9 @@ session, where the Claude login is readable.
 
 - Each task's agent is a fake `claude` that records the messages it reads.
   The check sets its status, last reply and question through the Toastty CLI.
+- The user's messages are typed into the coordinator's terminal
+  (`terminal.send-text`). `coordinator send` would not do: Toastty marks its
+  text with the sender, and the coordinator reads such a message as data.
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.
@@ -314,6 +317,54 @@ under the run's artifacts directory and, for each run, a folder with Claude's
 transcript, `policy.md`, `ledger.md`, the folder's git log, the task agents'
 event log, the `gh` call log and the app log. The whole set takes about an
 hour with `--jobs 1`.
+
+### Quick entry to the coordinator
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-quick-entry-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers quick entry with a coordinator and
+the sender line of `coordinator send`; see
+[Quick entry with the coordinator](../tasks.md#quick-entry-with-the-coordinator).
+It needs the remote Mac's screen unlocked, uses subscription usage, and
+takes about 40 minutes.
+
+It reuses the setup of the coordinator skill check: the coordinator is the
+real, authenticated Claude CLI with the instructions that the build writes;
+each task's agent is a fake that records what it reads; GitHub is a fake
+`gh`. The instance's quick entry shortcut is Control+Option+Shift+T, so it
+does not compete with the wrapper's own instance.
+
+Every action a person makes goes through the real UI. The panel opens with
+its global shortcut while Finder is in front and takes key events from
+`scripts/automation/quick-entry-ui-driver.swift`; the chat is read and
+clicked with `scripts/automation/ax-drive.swift`. `--gui-session` runs the
+check in Terminal in the GUI session, where the Claude login is readable;
+the process that started it over SSH, which Accessibility trusts, makes the
+clicks and keys.
+
+The check creates a task from the panel with no coordinator; sends a request
+with an unclear project and answers the coordinator's question in the chat;
+sends one with a chosen project, a chosen agent and a pasted image; sends
+while the coordinator works, and removes a second waiting message in the
+chat; sends while Restart Coordinator runs; kills the app with a message
+waiting and relaunches it twice; creates a task with Option+Command+Return;
+and sends three messages with `coordinator send` as a task's agent, two of
+which imitate a digest and the user. It proves each step from Claude's
+transcript, the task records, `coordinator-queue.json`, the coordinator's
+`attachments` folder and the chat's own text.
+
+A check on what the coordinator does is required; a check on its wording is
+a note. The command fails when a required check fails. It writes
+`remote-coordinator-quick-entry-check/result.json`, the app log, Claude's
+transcripts, the task agents' event log and the coordinator's files under
+the run's artifacts directory. A build that can capture its windows outside
+automation mode also writes PNG frames; a normal build cannot, and the check
+records that and continues.
 
 ## Remote Computer Use
 

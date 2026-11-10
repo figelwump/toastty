@@ -18,11 +18,12 @@ struct QuickEntryTests {
         let controller: QuickEntryController
 
         init(
+            fixture existing: TaskCoordinatorTests.Fixture? = nil,
             create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
             recordsPresetUsage: Bool = false,
             agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil
         ) throws {
-            let fixture = try TaskCoordinatorTests.Fixture()
+            let fixture = try existing ?? TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
             let stagingRoot = fixture.root.appendingPathComponent("quick-entry-staging", isDirectory: true)
             self.fixture = fixture
@@ -66,11 +67,11 @@ struct QuickEntryTests {
             textView.insertText(text, replacementRange: textView.selectedRange())
         }
 
-        func pressCommandReturn() throws {
+        func pressCommandReturn(modifiers: NSEvent.ModifierFlags = .command) throws {
             let event = try #require(NSEvent.keyEvent(
                 with: .keyDown,
                 location: .zero,
-                modifierFlags: .command,
+                modifierFlags: modifiers,
                 timestamp: 0,
                 windowNumber: 0,
                 context: nil,
@@ -474,6 +475,8 @@ struct QuickEntryTests {
             ("w", kVK_ANSI_W, .command, .close),
             (".", kVK_ANSI_Period, .command, .close),
             ("\r", kVK_Return, .command, .submit),
+            ("\r", kVK_Return, [.command, .option], .createTask),
+            ("\u{3}", kVK_ANSI_KeypadEnter, [.command, .option], .createTask),
             ("q", kVK_ANSI_Q, .command, .application),
             ("v", kVK_ANSI_V, .command, .edit(#selector(NSText.paste(_:)))),
             ("z", kVK_ANSI_Z, [.command, .shift], .edit(Selector(("redo:")))),

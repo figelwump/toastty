@@ -7,6 +7,11 @@ import SwiftUI
 /// follow "Task Keyboard Flow" revision 3, section 1, except that a small
 /// icon takes the place of each pill's name, so the values have room. The
 /// panel's height follows the text.
+///
+/// With a coordinator the same panel sends to it ("Coordinator design"
+/// revision 15, section 4): the label says so, a pill shows "Auto" until
+/// the user sets it, Send is the main button, and Create Task stays as a
+/// second, quiet button.
 struct QuickEntryView: View {
     @ObservedObject var model: QuickEntryModel
     let dropTarget: QuickEntryDropTarget
@@ -43,6 +48,7 @@ struct QuickEntryView: View {
                     isEditable: model.isEditable,
                     focusRequestID: model.focusRequestID,
                     onSubmit: model.submit,
+                    onCreateTask: model.createTask,
                     onCancel: model.cancel,
                     onPasteAttachments: model.pasteAttachments(from:),
                     dropTarget: dropTarget
@@ -95,17 +101,28 @@ struct QuickEntryView: View {
             Circle()
                 .fill(ToastyTheme.accent)
                 .frame(width: 6, height: 6)
-            Text("New task")
+            Text(model.sendsToCoordinator ? "To coordinator" : "New task")
                 .textCase(.uppercase)
                 .font(.system(size: 11, weight: .medium))
                 .tracking(0.44)
                 .foregroundStyle(Self.mutedText)
+                .accessibilityIdentifier("quick-entry.title")
             Spacer(minLength: 8)
             if model.isDropTargeted {
                 Text("Drop to attach")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Self.accentText)
                     .accessibilityIdentifier("quick-entry.drop-hint")
+            } else if let coordinator = model.coordinator {
+                // The pills are optional here. The line says instead when
+                // the message will wait.
+                if let hint = coordinator.hint {
+                    Text(hint)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Self.accentText)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("quick-entry.coordinator-hint")
+                }
             } else if let hint = model.missingChoiceHint {
                 Text(hint)
                     .font(.system(size: 11, weight: .medium))
@@ -159,13 +176,17 @@ struct QuickEntryView: View {
     /// buttons keep their size.
     private var footer: some View {
         HStack(spacing: 8) {
+            let sendsToCoordinator = model.sendsToCoordinator
             pill(
                 .workspace,
                 title: "Workspace",
                 icon: "square.grid.2x2",
-                value: model.workspaceTitle,
-                isMissing: model.workspaceID == nil,
-                help: "The workspace the task starts in."
+                value: model.workspacePillTitle,
+                isMissing: sendsToCoordinator == false && model.workspaceID == nil,
+                isUnset: sendsToCoordinator && model.choseWorkspace == false,
+                help: sendsToCoordinator
+                    ? "The project. Auto leaves the choice to the coordinator."
+                    : "The workspace the task starts in."
             )
             .accessibilityIdentifier("quick-entry.workspace")
 
@@ -173,11 +194,14 @@ struct QuickEntryView: View {
                 .agent,
                 title: "Agent",
                 icon: "sparkle",
-                value: model.agentTitleParts.name,
-                suffix: model.agentTitleParts.effort.map { " · \($0)" },
-                accessibilityValue: model.agentTitle,
-                isMissing: model.preset == nil,
-                help: "The agent, model and effort for the task."
+                value: model.agentPillParts.name,
+                suffix: model.agentPillParts.effort.map { " · \($0)" },
+                accessibilityValue: model.agentPillTitle,
+                isMissing: sendsToCoordinator == false && model.preset == nil,
+                isUnset: sendsToCoordinator && model.chosePreset == false,
+                help: sendsToCoordinator
+                    ? "The agent, model and effort. Auto leaves the choice to the coordinator."
+                    : "The agent, model and effort for the task."
             )
             .accessibilityIdentifier("quick-entry.agent")
 
@@ -187,20 +211,43 @@ struct QuickEntryView: View {
                 KeyCap(text: "esc")
             }
             .buttonStyle(.plain)
-            .help("Close without creating a task")
+            .help(sendsToCoordinator ? "Close without sending" : "Close without creating a task")
             .accessibilityLabel("Cancel")
             .fixedSize()
             .layoutPriority(1)
 
-            Button(action: model.submit) {
-                CreateButtonLabel(isSubmitting: model.isSubmitting)
+            if sendsToCoordinator {
+                Button(action: model.createTask) {
+                    SubmitButtonLabel(title: "Create Task", shortcut: "⌥⌘↩", isSubmitting: false, isProminent: false)
+                }
+                .buttonStyle(QuietButtonStyle())
+                .disabled(model.canCreateTask == false)
+                .help(model.missingChoiceHint.map { "\($0) to create the task directly." }
+                    ?? "Create the task now in \(model.workspaceTitle) with \(model.agentTitle), without the coordinator")
+                .accessibilityIdentifier("quick-entry.create")
+                .fixedSize()
+                .layoutPriority(1)
+
+                Button(action: model.submit) {
+                    SubmitButtonLabel(title: "Send", shortcut: "⌘↩", isSubmitting: model.isSubmitting, isProminent: true)
+                }
+                .buttonStyle(CreateButtonStyle())
+                .disabled(model.canSubmit == false)
+                .help("Send to the coordinator")
+                .accessibilityIdentifier("quick-entry.send")
+                .fixedSize()
+                .layoutPriority(1)
+            } else {
+                Button(action: model.submit) {
+                    SubmitButtonLabel(title: "Create Task", shortcut: "⌘↩", isSubmitting: model.isSubmitting, isProminent: true)
+                }
+                .buttonStyle(CreateButtonStyle())
+                .disabled(model.canSubmit == false)
+                .help(model.missingChoiceHint ?? "Create the task")
+                .accessibilityIdentifier("quick-entry.create")
+                .fixedSize()
+                .layoutPriority(1)
             }
-            .buttonStyle(CreateButtonStyle())
-            .disabled(model.canSubmit == false)
-            .help(model.missingChoiceHint ?? "Create the task")
-            .accessibilityIdentifier("quick-entry.create")
-            .fixedSize()
-            .layoutPriority(1)
         }
     }
 
@@ -212,6 +259,7 @@ struct QuickEntryView: View {
         suffix: String? = nil,
         accessibilityValue: String? = nil,
         isMissing: Bool,
+        isUnset: Bool = false,
         help: String
     ) -> some View {
         let shortcut = kind == .workspace ? "⌘1" : "⌘2"
@@ -224,6 +272,7 @@ struct QuickEntryView: View {
                 suffix: suffix,
                 shortcut: shortcut,
                 isMissing: isMissing,
+                isUnset: isUnset,
                 isOpen: model.openPicker == kind
             )
         }
@@ -264,6 +313,8 @@ private struct PillLabel: View {
     let suffix: String?
     let shortcut: String
     let isMissing: Bool
+    /// "Auto": the coordinator chooses. Quieter than a value.
+    var isUnset = false
     let isOpen: Bool
 
     var body: some View {
@@ -283,7 +334,9 @@ private struct PillLabel: View {
                         .fixedSize()
                 }
             }
-            .foregroundStyle(isMissing ? QuickEntryView.accentText : ToastyTheme.primaryText)
+            .foregroundStyle(
+                isMissing ? QuickEntryView.accentText : (isUnset ? QuickEntryView.secondaryText : ToastyTheme.primaryText)
+            )
             KeyCap(text: shortcut, size: 10)
                 .fixedSize()
         }
@@ -383,22 +436,45 @@ private struct AddChipStyle: ButtonStyle {
     }
 }
 
-private struct CreateButtonLabel: View {
+/// A footer button's title and key: "Create Task ⌘↩", "Send ⌘↩".
+private struct SubmitButtonLabel: View {
     @Environment(\.isEnabled) private var isEnabled
+    let title: String
+    let shortcut: String
     let isSubmitting: Bool
+    /// On the amber button the key cap is dark.
+    let isProminent: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             if isSubmitting {
                 ProgressView().controlSize(.mini)
             }
-            Text("Create Task")
+            Text(title)
             KeyCap(
-                text: "⌘↩",
-                color: isEnabled ? Color(hex: 0x3A2806) : QuickEntryView.mutedText,
-                border: isEnabled ? Color(hex: 0x9A6208) : QuickEntryView.chipBorder
+                text: shortcut,
+                color: isEnabled && isProminent ? Color(hex: 0x3A2806) : QuickEntryView.mutedText,
+                border: isEnabled && isProminent ? Color(hex: 0x9A6208) : QuickEntryView.chipBorder
             )
         }
+    }
+}
+
+/// The second action next to the amber button: an outline, never filled.
+private struct QuietButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        configuration.label
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(isEnabled ? QuickEntryView.secondaryText : QuickEntryView.mutedText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(shape.fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0.03)))
+            .overlay(shape.strokeBorder(QuickEntryView.chipBorder, lineWidth: 1))
+            .contentShape(shape)
+            .opacity(isEnabled ? 1 : 0.6)
     }
 }
 

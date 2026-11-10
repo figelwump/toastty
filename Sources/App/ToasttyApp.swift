@@ -1396,6 +1396,7 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             launcher: agentLaunchService,
             directoryURL: runtimePaths.coordinatorDirectoryURL,
+            queueFileURL: runtimePaths.coordinatorQueueFileURL,
             configLoader: { try TasksConfigFile.load() },
             // The call `task send` uses: programmatic input, which closes a
             // prompt the iPhone holds open but is not the user's typing.
@@ -1415,6 +1416,8 @@ struct ToasttyApp: App {
         if let coordinatorController = taskCoordinator.coordinatorController {
             taskWebhooks.attach(coordinator: coordinatorController)
         }
+        // While a coordinator exists, quick entry sends to it.
+        quickEntryController.coordinatorController = taskCoordinator.coordinatorController
         let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
