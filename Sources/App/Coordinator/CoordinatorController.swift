@@ -122,11 +122,10 @@ final class CoordinatorController: ObservableObject {
     private let store: AppStore
     private let sessionRuntimeStore: SessionRuntimeStore
     private weak var launcher: (any CoordinatorAgentLaunching)?
-    private let directoryURL: URL
+    private let folder: CoordinatorFolder
     private let configLoader: () throws -> TasksConfig
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
-    private let fileManager: FileManager
     private let terminalReadinessTimeout: Duration
     private let now: () -> Date
 
@@ -149,6 +148,8 @@ final class CoordinatorController: ObservableObject {
     private var queueWorkspaceID: UUID?
     private var lastDelivery: CoordinatorPromptFacts.Delivery?
     private var recheckTask: Task<Void, Never>?
+    /// The one run of `CoordinatorFolder.prepareRepository` under way.
+    private var repositoryPreparation: Task<Void, Never>?
     private var sessionObserver: AnyCancellable?
     private var storeObserverToken: UUID?
 
@@ -157,27 +158,27 @@ final class CoordinatorController: ObservableObject {
     var onWorkspaceChange: ((UUID?) -> Void)?
 
     /// `deliverText` types text plus Return into a terminal panel as
-    /// programmatic input, which is not the user's own.
+    /// programmatic input, which is not the user's own. `folder` defaults to
+    /// `directoryURL` with the instructions Toastty ships.
     init(
         store: AppStore,
         sessionRuntimeStore: SessionRuntimeStore,
         launcher: (any CoordinatorAgentLaunching)?,
         directoryURL: URL,
+        folder: CoordinatorFolder? = nil,
         configLoader: @escaping () throws -> TasksConfig,
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
-        fileManager: FileManager = .default,
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.launcher = launcher
-        self.directoryURL = directoryURL
+        self.folder = folder ?? CoordinatorFolder(directoryURL: directoryURL)
         self.configLoader = configLoader
         self.deliverText = deliverText
         self.promptState = promptState
-        self.fileManager = fileManager
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
         // A session that starts, ends a turn or stops can open the prompt
@@ -192,6 +193,31 @@ final class CoordinatorController: ObservableObject {
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
             self?.onWorkspaceChange?(workspaceID)
         }
+        refreshFolderOfARestoredCoordinator()
+    }
+
+    /// After a relaunch, Toastty resumes the agent of a restored coordinator
+    /// when its terminal comes up, and no start of this controller runs
+    /// before that. The instruction files are written here, at launch, so
+    /// the resumed agent reads the instructions of this Toastty. When they
+    /// cannot be written, nothing is resumed: the terminal comes up without
+    /// an agent, and the row says why until a start works.
+    private func refreshFolderOfARestoredCoordinator() {
+        guard let location else { return }
+        do {
+            try folder.prepareFiles()
+        } catch {
+            let reason = Self.startFailureReason(for: error)
+            ToasttyLog.warning("Could not refresh the coordinator's folder at launch", category: .tasks, metadata: [
+                "reason": reason,
+            ])
+            if let panelID = location.panelID {
+                _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+            }
+            failedStart = FailedStart(workspaceID: location.workspaceID, reason: reason)
+            return
+        }
+        Task { [weak self] in await self?.prepareRepository() }
     }
 
     deinit {
@@ -328,13 +354,24 @@ final class CoordinatorController: ObservableObject {
         return true
     }
 
+    /// The coordinator's folder with its files in place. An agent never
+    /// starts without the instructions of this Toastty.
     private func preparedDirectory() throws -> String {
-        do {
-            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        } catch {
-            throw CoordinatorError("Toastty could not create the coordinator's folder \(directoryURL.path): \(error.localizedDescription)")
+        try folder.prepareFiles()
+    }
+
+    /// Makes the folder a git repository when it is none. Calls that
+    /// overlap wait for the same run.
+    private func prepareRepository() async {
+        if let repositoryPreparation {
+            await repositoryPreparation.value
+            return
         }
-        return directoryURL.path
+        let folder = folder
+        let preparation = Task { await folder.prepareRepository() }
+        repositoryPreparation = preparation
+        await preparation.value
+        repositoryPreparation = nil
     }
 
     private func startAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool) async throws -> String {
@@ -368,6 +405,7 @@ final class CoordinatorController: ObservableObject {
             throw CoordinatorError(error.localizedDescription)
         }
         let directory = try preparedDirectory()
+        await prepareRepository()
         let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
         let result: AgentLaunchResult
         do {
