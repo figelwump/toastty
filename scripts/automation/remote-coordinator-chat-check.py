@@ -78,6 +78,8 @@ while IFS= read -r line; do :; done
 
 NO_BREAK_SPACE = '\u00a0'
 HOLD_COMMAND = './hold-turn.sh'
+# The label of the "← Coordinator" button in a task space's header.
+BACK = 'Back to Coordinator'
 
 
 def long_turn(seconds, marker):
@@ -114,6 +116,9 @@ class UI:
 
     def exists(self, identifier):
         return self.run('frame', identifier, check=False)[0] == 0
+
+    def has_label(self, label):
+        return self.run('label-frame', label, check=False)[0] == 0
 
     def texts(self, identifier='coordinator.chat'):
         code, output = self.run('texts', identifier, check=False)
@@ -338,8 +343,8 @@ def run(check):
         wait_for('Claude at its first prompt', at_prompt, timeout=180)
         # A new runtime home shows a notice about skills over the top of
         # the window. It is not part of the chat.
-        if ui.exists('banner.managed-agent-skills-provisioned'):
-            ui.run('click-in', 'banner.managed-agent-skills-provisioned', 'Dismiss', check=False)
+        if ui.has_label('Dismiss'):
+            ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
         capture('chat-open')
         step('open shows the chat', opened=opened, version=version)
@@ -407,10 +412,10 @@ def run(check):
         wait_for('the folded line', lambda: 'Toastty · 1 update' in ui.texts(), timeout=60)
         require('[Toastty] Wake' not in ui.texts(), f'The digest is not folded: {ui.texts()[-800:]}')
         capture('digest-folded')
-        ui.run('click-prefix', 'toastty-mobile-transcript-host-message-')
+        ui.run('click-label', 'Toastty · 1 update')
         wait_for('the open digest', lambda: 'Scheduled check' in ui.texts(), timeout=30)
         capture('digest-open')
-        ui.run('click-prefix', 'toastty-mobile-transcript-host-message-')
+        ui.run('click-label', 'Toastty · 1 update')
         wait_for('Claude to end the digest\'s turn', at_prompt, timeout=240)
         step('a digest showed folded and opened', timer=timer, digest=transcript()[digest_at]['text'])
 
@@ -428,20 +433,19 @@ def run(check):
         ui.run('click-text', 'not-a-link')
         time.sleep(1.5)
         require(selected_workspace() == coordinator_id, 'A link to no task opened something')
-        require(not ui.exists('topbar.workspace.back-to-coordinator'), 'The way back shows before any chip was used')
+        require(not ui.has_label(BACK), 'The way back shows before any chip was used')
         ui.run('click-text', chip_title)
         wait_for('the task\'s space', lambda: selected_workspace() == task_space, timeout=30)
-        wait_for('the way back', lambda: ui.exists('topbar.workspace.back-to-coordinator'), timeout=30)
+        wait_for('the way back', lambda: ui.has_label(BACK), timeout=30)
         capture('task-space-with-way-back')
-        ui.run('click', 'topbar.workspace.back-to-coordinator')
+        ui.run('click-label', BACK)
         wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id, timeout=30)
         wait_for('the chat again', lambda: ui.exists('coordinator.chat'), timeout=30)
         capture('back-in-coordinator')
         instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=task_space)))
         wait_for('the task\'s space', lambda: selected_workspace() == task_space, timeout=30)
         time.sleep(1)
-        require(not ui.exists('topbar.workspace.back-to-coordinator'),
-                'The way back still shows after the user went back to the coordinator')
+        require(not ui.has_label(BACK), 'The way back still shows after the user went back to the coordinator')
         instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=coordinator_id)))
         wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id, timeout=30)
         step('a chip opened the task and the way back returned', taskID=task_id, chat=ui.texts()[-500:])
@@ -539,6 +543,13 @@ def run(check):
                 'The message after the restart went to the old conversation')
         capture('after-restart-send')
         step('the chat followed the restarted agent', restarted=restarted)
+    except Exception:
+        # What the window showed when the check stopped.
+        try:
+            capture('failure')
+        except Exception:  # noqa: BLE001 - the first error matters
+            pass
+        raise
     finally:
         try:
             instance.kill()

@@ -48,6 +48,12 @@ public struct ConversationProjector: Sendable {
     /// the short stabilization window for this exact completion observation.
     public private(set) var pendingPromptStabilizationToken:
         ConversationPromptStabilizationToken?
+    /// When the last turn of the bound runtime ended. A provider can report
+    /// the end of a turn before the host has read the turn's own transcript
+    /// records: Claude's Stop hook arrives at once, and the transcript is
+    /// read on a timer. A user message from before this time belongs to
+    /// that finished turn. It is history, not the start of a new turn.
+    private var lastTurnEndedAt: Date?
 
     private var currentEpoch: RemoteInputEpoch
     /// A confirmed managed-runtime bootstrap may authorize the first prompt
@@ -136,7 +142,8 @@ public struct ConversationProjector: Sendable {
         case .transcript(let payload):
             guard payload.kind.isProviderDerived else { return [] }
             emitted.append(appendProviderEvent(payload, from: observation))
-            if authorizesCurrentRuntime, observation.isMidTurnInput == false, case .userMessage = payload {
+            if authorizesCurrentRuntime, observation.isMidTurnInput == false, case .userMessage = payload,
+               lastTurnEndedAt.map({ observation.timestamp > $0 }) ?? true {
                 // A user message means the prompt was consumed; treat it as an
                 // authoritative prompt-closed signal even before task_started.
                 pendingPromptStabilizationToken = nil
@@ -199,6 +206,7 @@ public struct ConversationProjector: Sendable {
 
         case .turnEnded(_, let reason):
             if authorizesCurrentRuntime {
+                lastTurnEndedAt = max(lastTurnEndedAt ?? observation.timestamp, observation.timestamp)
                 pendingPromptStabilizationToken = nil
                 supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
                 // Every turn end retires the turn's epoch, even when the next

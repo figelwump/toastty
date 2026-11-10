@@ -10,6 +10,8 @@
 //   click <identifier>            Click the middle of the element with the mouse.
 //   click-prefix <prefix>         Click the first element whose identifier starts with `prefix`.
 //   click-in <identifier> <label> Click the element with that label inside the element.
+//   click-label <prefix>          Click the first element whose label starts with `prefix`.
+//   label-frame <prefix>          Print the frame of the first element whose label starts with `prefix`.
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
@@ -134,6 +136,22 @@ case "click-prefix":
     activate()
     click(at: CGPoint(x: rect.midX, y: rect.midY))
     print("clicked \(attribute(target, kAXIdentifierAttribute) as? String ?? argument) at \(Int(rect.midX)),\(Int(rect.midY))")
+case "click-label", "label-frame":
+    let target = waitFor("label \(argument)…") {
+        find(app) { candidate in
+            [kAXTitleAttribute, kAXDescriptionAttribute].contains {
+                (attribute(candidate, $0) as? String)?.hasPrefix(argument) == true
+            }
+        }
+    }
+    guard let rect = frame(target) else { exit(2) }
+    if command == "label-frame" {
+        print("\(Int(rect.minX)) \(Int(rect.minY)) \(Int(rect.width)) \(Int(rect.height))")
+        break
+    }
+    activate()
+    click(at: CGPoint(x: rect.midX, y: rect.midY))
+    print("clicked label \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
 case "click-in":
     let label = arguments.count > 4 ? arguments[4] : ""
     let container = element(identifier: argument)
