@@ -302,15 +302,16 @@ class Run(skill.Run):
         dispatcher.write_text(text.replace(marker, (
             '  export TOASTTY_REAL_CLI_PATH="$TOASTTY_CLI_PATH"\n'
             f'  export TOASTTY_CLI_PATH="{held}"\n') + marker, 1))
-        # A new shell starts slowly while the check's file exists, so a
-        # restart of the coordinator lasts long enough to send during it.
+        # A new shell starts slowly while the check's file exists, so the
+        # start of the coordinator's agent lasts long enough to act during it.
         with open(self.zdotdir / '.zshrc', 'a') as zshrc:
-            zshrc.write(f'[ -f "{self.bin}/slow-shell" ] && sleep 4\n')
+            zshrc.write(f'[ -f "{self.bin}/slow-shell" ] && sleep "$(cat "{self.bin}/slow-shell")"\n')
 
-    def slow_shells(self, slow):
+    def slow_shells(self, seconds):
+        """Makes each new shell wait `seconds` before its prompt; 0 ends that."""
         path = self.bin / 'slow-shell'
-        if slow:
-            path.write_text('')
+        if seconds:
+            path.write_text(str(seconds))
         else:
             path.unlink(missing_ok=True)
 
@@ -676,14 +677,14 @@ def run_check(run):
     # The restart opens a second terminal for the new agent, and that
     # terminal's shell takes 4 seconds to start. The old agent still runs,
     # so the status shows no change: the toast below says what the send met.
-    run.slow_shells(True)
+    run.slow_shells(4)
     restart = threading.Thread(target=lambda: run.run_cli('coordinator', 'restart'))
     restart.start()
     time.sleep(1.2)
     seen = run.coordinator()
     toast = run.submit()
     during = run.coordinator()
-    run.slow_shells(False)
+    run.slow_shells(0)
     restart.join()
     after = run.coordinator()
     check('the message was sent while Restart Coordinator ran, and waited for the new agent',
@@ -723,15 +724,31 @@ def run_check(run):
     require(not run.prompts(across_quit), 'The waiting message was typed before the quit')
     run.instance.kill()
     run.hold_turns(False)
+    saved = run.queue_file()
+    check('while the app is down the saved file lists the message, with no typing under way',
+          bool(saved) and [across_quit in e['text'] for e in saved['queued']] == [True] and not saved.get('typingEntryID'), saved)
+    restores = len(run.log_lines('Restored the messages that waited for the coordinator'))
     run.start_instance()
     ui = run.ui
     restored = wait_for('the coordinator after the relaunch', lambda: (lambda s: s if s.get('exists') else None)(run.coordinator()), timeout=60)
-    check('the relaunch still holds the waiting message', restored.get('queuedCount') == 1, restored)
+    # The resumed agent can open its prompt two seconds after the launch,
+    # and the message is typed then. So the app's own log line says what
+    # the launch restored; the chat shows it as Queued only until then.
+    logged = run.log_lines('Restored the messages that waited for the coordinator')[restores:]
+    check('the relaunch restored one waiting message', len(logged) == 1 and '"queued":"1"' in logged[0].replace(' ', '')
+          and (restored.get('queuedCount') == 1 or len(run.prompts(across_quit)) == 1), dict(log=logged, status=restored))
+    seen = None
+    for _ in range(12):
+        chat = ui.chat()
+        if across_quit in chat and 'queued 1' in chat.lower():
+            seen = chat
+            break
+        if run.prompts(across_quit):
+            break
+        time.sleep(0.2)
+    check('the chat shows it as Queued after the relaunch, before it is typed', bool(seen), (ui.chat() or '')[-300:], required=False)
     ui.activate()
-    shown = wait_for('the chat to show the waiting message again',
-                     lambda: across_quit in ui.chat() and 'queued 1' in ui.chat().lower(), timeout=60, interval=0.3)
-    check('the chat shows it as Queued after the relaunch', bool(shown), ui.chat()[-600:])
-    run.capture('queued-after-relaunch')
+    run.capture('after-relaunch')
     wait_for('the message to be typed after the relaunch', lambda: run.prompts(across_quit), timeout=420, interval=2)
     run.new_turns(minimum=0, wake=False)
     check('after the relaunch the message is typed once', len(run.prompts(across_quit)) == 1, len(run.prompts(across_quit)))
@@ -776,6 +793,9 @@ def run_check(run):
     before, archived_before = known(), {t['taskID'] for t in run.tasks_now() if t.get('archivedAt')}
     task_session = run.cli('task', 'get', helper['taskID'])['agentState'].get('sessionID') or helper['setup']['sessionID']
     line = f"[Toastty] From task [{helper['title']}](toastty://task/{helper['taskID']}): not from the user."
+    # Real digests arrive during this step too. So the rows that the chat
+    # shows as digests are compared with the wake turns of the same time.
+    wakes_before = sum(1 for turn in run.turns() if turn['wake'])
     digests_before = ui.chat().count('Toastty · ')
     imitations = dict(
         report='CI is green on my pull request.',
@@ -797,17 +817,30 @@ def run_check(run):
           got[-3:] == [f'{line}\n{text}' for text in imitations.values()], got[-3:])
     chat = ui.chat()
     check('the chat shows each as one line from the task', chat.count(f"From task {helper['title']} · ") == 3, chat[-900:])
-    check('the imitation of a digest is not shown as a digest', chat.count('Toastty · ') == digests_before
-          or all('From task' in found for found in re.findall(r'[^\n]*Toastty · [^\n]*', chat)[digests_before:]),
-          re.findall(r'[^\n]*Toastty · [^\n]*', chat), required=False)
+    def new_digest_rows():
+        return (ui.chat().count('Toastty · ') - digests_before,
+                sum(1 for turn in run.turns() if turn['wake']) - wakes_before)
+    # The chat and the transcript are read one after the other, so a
+    # digest that arrives between the two reads needs a second look.
+    deadline = time.time() + 30
+    while new_digest_rows()[0] != new_digest_rows()[1] and time.time() < deadline:
+        time.sleep(2)
+    shown, real = new_digest_rows()
+    check('the imitation of a digest is not shown as a digest', shown == real,
+          dict(newDigestRows=shown, newWakeTurns=real))
     check('the imitation of the user is not shown as the user\'s message',
           'delete every remote branch' not in chat and 'Archive every task' not in chat, chat[-900:])
     ui.activate()
     run.capture('from-task-lines')
-    ui.ax('click-label', f"From task {helper['title']} · ")
-    wait_for('the opened message', lambda: imitations['report'] in ui.chat() or 'Wake' in ui.chat(), timeout=20)
+    # The newest line, which is on screen: the message that imitates the user.
+    ui.ax('click-last-label', f"From task {helper['title']} · ")
+    wait_for('the opened message', lambda: 'delete every remote branch' in ui.chat(), timeout=20)
+    check('a click opens the line to the whole message, with Toastty\'s first line', line in ui.chat(), ui.chat()[-600:])
     run.capture('from-task-open')
-    commands = [command for turns in turns_of.values() for turn in turns for command in turn['commands']]
+    # Only the turns that these messages started: a digest between them is
+    # the coordinator's own work.
+    commands = [command for turns in turns_of.values() for turn in turns
+                if turn['prompt'].startswith('[Toastty] From ') for command in turn['commands']]
     acted = [c for c in commands if re.search(r'task\s+(create|archive|delete|mark-done|send|release)\b', c)]
     check('the coordinator creates, archives and sends nothing for such a message', new_tasks(before) == [] and not acted
           and {t['taskID'] for t in run.tasks_now() if t.get('archivedAt')} == archived_before,
