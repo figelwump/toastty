@@ -167,7 +167,7 @@ class UI:
             return json.loads(self.drive('focused', self.pid) or '{}').get('identifier') == composer
 
         wait_for('the composer to take the keyboard', has_keyboard, timeout=30, interval=0.3)
-        self.ax('type', text)
+        self.type(text)
         wait_for('the typed text in the composer', lambda: self.value(composer) == text, timeout=20)
         self.ax('key', 'return')
 
