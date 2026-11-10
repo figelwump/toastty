@@ -4,6 +4,62 @@ import Testing
 @testable import ToasttyApp
 
 struct AgentShimExecutableTests {
+    @Test(arguments: ["cdx", "claude"], ["stdout", "stderr", "both"])
+    func managedLaunchDrainsHelperOutputLargerThanPipeCapacity(
+        shimCommandName: String,
+        outputStream: String
+    ) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: shimCommandName)
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            extraEnvironment: ["TOASTTY_FAKE_CLI_LARGE_OUTPUT": outputStream]
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+        let agentLog = try fixture.agentLogContents()
+        #expect(agentLog.contains("agent --managed-plan\n"))
+        #expect(agentLog.contains("session=sess-preflight\n"))
+        #expect(try fixture.cliLogContents().contains("session stop --session sess-preflight"))
+    }
+
+    @Test(arguments: [0, 23])
+    func invalidManagedLaunchResponseFallsBackAfterDrainingBothStreams(exitStatus: Int) throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            extraEnvironment: [
+                "TOASTTY_FAKE_CLI_LARGE_OUTPUT": "both",
+                "TOASTTY_FAKE_CLI_EXIT_STATUS": String(exitStatus),
+            ]
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stderr.isEmpty)
+        let agentLog = try fixture.agentLogContents()
+        #expect(agentLog.contains("agent --typed-in-terminal\n"))
+        #expect(agentLog.contains("session=\n"))
+        #expect(try fixture.cliLogContents().contains("session stop") == false)
+    }
+
+    @Test
+    func missingLaunchHelperFallsBackToUnderlyingAgent() throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        try FileManager.default.removeItem(atPath: fixture.fakeCLIPath)
+
+        let result = try fixture.run(preflightDecision: .runAnyway)
+
+        #expect(result.exitStatus == 7)
+        #expect(try fixture.agentLogContents().contains("agent --typed-in-terminal\n"))
+        #expect(try fixture.cliLogContents().isEmpty)
+    }
+
     @Test
     func grokShimIgnoresEmptySkillsOverlay() throws {
         let fixture = try AgentShimExecutableFixture.make(shimCommandName: "grok")
@@ -195,6 +251,7 @@ struct AgentShimExecutableTests {
                 "CODEX_TUI_RECORD_SESSION": "1",
                 "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
                 "GROK_HOME": "/tmp/user-grok-home",
+                "TOASTTY_FAKE_CLI_LARGE_OUTPUT": "both",
             ]
         )
 
@@ -503,9 +560,21 @@ private struct AgentShimExecutableFixture {
           printf '\\n'
         } >> "$TOASTTY_FAKE_CLI_LOG"
 
+        # Exceed macOS pipe capacity without changing system pipe resources.
+        case "${TOASTTY_FAKE_CLI_LARGE_OUTPUT:-}" in
+          stdout|both) dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\\000' ' ' ;;
+        esac
+        case "${TOASTTY_FAKE_CLI_LARGE_OUTPUT:-}" in
+          stderr|both) dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\\000' ' ' >&2 ;;
+        esac
+        if [ -n "${TOASTTY_FAKE_CLI_EXIT_STATUS:-}" ]; then
+          exit "$TOASTTY_FAKE_CLI_EXIT_STATUS"
+        fi
+
         if [ "${1:-}" = "agent" ] && [ "${2:-}" = "prepare-managed-launch" ]; then
           shift 2
           panel=""
+          agent="codex"
           policy="skip"
           while [ "$#" -gt 0 ]; do
             case "$1" in
@@ -517,7 +586,11 @@ private struct AgentShimExecutableFixture {
                 policy="$2"
                 shift 2
                 ;;
-              --agent|--cwd|--arg)
+              --agent)
+                agent="$2"
+                shift 2
+                ;;
+              --cwd|--arg)
                 shift 2
                 ;;
               *)
@@ -532,7 +605,7 @@ private struct AgentShimExecutableFixture {
           "kind": "preflightRequired",
           "preflight": {
             "token": "preflight-token",
-            "agent": "codex",
+            "agent": "$agent",
             "panelID": "$panel",
             "windowID": "11111111-1111-1111-1111-111111111111",
             "title": "Set Up Codex Status Hooks",
@@ -548,7 +621,7 @@ private struct AgentShimExecutableFixture {
           cat <<JSON
         {
           "sessionID": "sess-preflight",
-          "agent": "codex",
+          "agent": "$agent",
           "panelID": "$panel",
           "windowID": "11111111-1111-1111-1111-111111111111",
           "workspaceID": "22222222-2222-2222-2222-222222222222",

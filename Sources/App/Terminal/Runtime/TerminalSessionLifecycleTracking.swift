@@ -73,9 +73,22 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
         reason: ManagedSessionStopReason,
         at now: Date
     ) -> Bool
+    /// Toastty typed the launch command for `sessionID` into its panel's
+    /// shell. `shellWasAtPrompt` is false when the command was typed without
+    /// a check that the shell showed its prompt, as a restored launch does.
+    func noteManagedLaunchCommandSubmitted(sessionID: String, shellWasAtPrompt: Bool, at now: Date)
+    /// The shell in `panelID` is at its prompt. True while the panel's active
+    /// session still waits for the shell to start a typed launch command, so
+    /// the prompt does not yet mean that the agent has ended.
+    func isAwaitingManagedLaunchCommandStart(panelID: UUID, at now: Date) -> Bool
+    /// The shell in `panelID` runs a command or has exited.
+    func noteShellLeftPrompt(panelID: UUID, at now: Date)
 }
 
 extension TerminalSessionLifecycleTracking {
     func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID) {}
     func noteUserInput(panelID: UUID) {}
+    func noteManagedLaunchCommandSubmitted(sessionID: String, shellWasAtPrompt: Bool, at now: Date) {}
+    func isAwaitingManagedLaunchCommandStart(panelID: UUID, at now: Date) -> Bool { false }
+    func noteShellLeftPrompt(panelID: UUID, at now: Date) {}
 }
