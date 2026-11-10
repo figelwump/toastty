@@ -561,13 +561,15 @@ palette; see the [CLI reference](cli-reference.md#coordinator).
 The coordinator does not poll and keeps no watch command running. Toastty
 types a short message, a digest, into it for two reasons:
 
-- **A task's stage changed.** Each task that enters Needs you, or needs you
-  for a new reason, starts to run, goes idle, merges, finishes, or is
-  archived or deleted gets one line. These are the
-  [webhook events](#webhooks-for-task-events), from the same detector: a
-  stage that comes from an agent's status counts after it holds for 3
-  seconds, so a status that flickers wakes nothing. The coordinator gets the
-  events of every task, with no approval, because nothing leaves the Mac.
+- **A task's stage changed.** Each task whose `stage.group` or
+  `stage.attention` changed, whose pull request merged, or that was deleted
+  gets one line. The changes come from the detector behind the
+  [webhook events](#webhooks-for-task-events): a stage that comes from an
+  agent's status counts after it holds for 3 seconds, so a status that
+  flickers wakes nothing. The coordinator gets the changes of every task,
+  with Running and Idle, and also a change that has no webhook event, such
+  as To ship to Done after a release. It needs no approval, because nothing
+  leaves the Mac.
 - **The coordinator's timer came due.** See [the timer](#the-coordinators-timer).
 
 Toastty has no rule about a task that is stuck, and a digest holds no
@@ -612,10 +614,13 @@ Delivery:
   it missed while it was quit, such as a merge on GitHub. A digest counts as
   told when Toastty typed it, also when the terminal did not confirm the
   Return key. Toastty saves that at once and does not type it again.
-- A restart of the coordinator's agent keeps what waits. Closing the
-  coordinator's workspace drops it, with the timer. A coordinator that you
-  open later starts from that moment: Toastty does not tell it changes made
-  before it existed.
+- A restart of the coordinator's agent keeps what waits, and nothing is
+  typed while the restart runs. Closing the coordinator's workspace drops
+  what waits, with the timer. A coordinator that you open later starts with
+  Toastty's next check of the tasks, within about a second. That check only
+  records where the tasks stand: a change from before the coordinator
+  existed is not told. While a webhook is approved, one exception applies: a
+  stage that was inside its 3 seconds at that moment is told once it counts.
 - Toastty follows task changes for the coordinator only while its workspace
   exists. The coordinator is not a task, so its own turns wake nothing.
 
@@ -723,7 +728,10 @@ Changing a webhook's address, events, filters or `--auth` with `webhook set`,
 or editing `~/.toastty/task-webhooks.json`, needs approval again. A new
 key or hint does not. A workspace-scoped session cannot manage webhooks.
 Toastty checks for task changes only while a webhook is approved or the
-[coordinator](#when-toastty-wakes-the-coordinator)'s workspace exists.
+[coordinator](#when-toastty-wakes-the-coordinator)'s workspace exists. While
+that workspace exists the checks do not stop, so a webhook that you approve
+or start again then begins with the next check: it can get a change that was
+under way in the seconds before.
 
 ## Starting tasks
 

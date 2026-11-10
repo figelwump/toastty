@@ -598,6 +598,41 @@ struct CoordinatorWakeTests {
         #expect(service.coordinatorWake == nil)
     }
 
+    @Test func aCoordinatorOpenedWhileAWebhookListensIsNotToldEarlierChanges() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let transport = RecordingTransport()
+        let current = States([task: state("needsYou", "review")])
+        let service = makeService(fixture, clock: clock, transport: transport) { current.value }
+        var settings = TaskWebhookService.Settings()
+        settings.url = "https://hooks.example.com/w"
+        settings.auth = .hmac
+        let webhook = try service.add(name: "bot", settings: settings, secret: "s3cret-key-0123456789", requester: .init())
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        service.pass()
+
+        // A merge that the service has not looked at yet, as in the first
+        // seconds after a relaunch. Then the coordinator is opened.
+        clock.advance(600)
+        current.value[task] = state("toShip", merged: true)
+        try await fixture.openAtPrompt()
+        service.pass()
+        // The webhook catches up. The coordinator did not exist then.
+        await fixture.waitUntil("the webhook gets the merge") { Set(transport.types) == ["task.merged", "task.done"] }
+        await fixture.waitUntil("the outbox is empty") { service.entries.isEmpty }
+        #expect(fixture.typedTexts.isEmpty)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
+
+        // From here on it is told, also a change with no webhook event: a
+        // release moves the task from To ship to Done.
+        clock.advance(60)
+        current.value[task] = state("done", merged: true)
+        service.pass()
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "done, merged", at: clock.now))])
+        #expect(service.entries.isEmpty)
+        #expect(transport.types.count == 2)
+    }
+
     // MARK: - App control
 
     @Test func theNextCheckIsSetReadAndClearedThroughAppControl() async throws {

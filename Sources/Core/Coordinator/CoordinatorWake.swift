@@ -12,10 +12,6 @@ import Foundation
 /// Toastty has no rule about a task that is stuck. A digest only says which
 /// tasks changed; the coordinator reads `task list` and decides.
 public struct CoordinatorWakeState: Codable, Equatable, Sendable {
-    /// The events that wake the coordinator: every stage a task can enter.
-    /// Nothing leaves the Mac, so they need no approval.
-    public static let events: [TaskWebhookEventType] = TaskWebhookEventType.defaults + [.running, .idle]
-
     /// How long after the last wake Toastty wakes the coordinator again
     /// when it set no time and a task is open.
     public static let defaultInterval: TimeInterval = 3600
@@ -60,6 +56,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// When Toastty last typed a digest. Before the first one, when it
     /// started to follow tasks for this coordinator.
     public private(set) var lastWakeAt: Date
+    /// The first look at the tasks after this coordinator appeared is over.
+    /// That look only records where the tasks stand, as the detector's own
+    /// first look does: a change from before the coordinator existed is
+    /// not told, also when a webhook kept the detector running.
+    public private(set) var isFollowing = false
 
     public init(workspaceID: UUID, startedAt: Date) {
         self.workspaceID = workspaceID
@@ -67,9 +68,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     }
 
     /// Adds a change to the digest that waits. A task has one line: its
-    /// newest change replaces an older one that still waits.
+    /// newest change replaces an older one that still waits. Every change
+    /// of a stage that the detector counts is told, with or without a
+    /// webhook event. Nothing leaves the Mac, so none needs approval.
     public mutating func record(_ change: TaskWebhookEventDetector.Change, at: Date) {
-        guard change.events.contains(where: Self.events.contains) else { return }
+        guard isFollowing else { return }
         changes.removeAll { $0.taskID == change.taskID }
         changes.append(TaskChange(
             taskID: change.taskID,
@@ -80,6 +83,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
             deleted: change.events.contains(.deleted),
             at: at
         ))
+    }
+
+    /// Ends the first look at the tasks: changes from here on are told.
+    public mutating func startFollowing() {
+        isFollowing = true
     }
 
     /// Sets the coordinator's next check, or with `nil` removes it, so the

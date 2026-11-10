@@ -60,8 +60,10 @@ extension TaskWebhookService {
         coordinatorWake = workspaceID.map { CoordinatorWakeState(workspaceID: $0, startedAt: at) }
         guard workspaceID != nil else { return }
         // As for a first webhook: when nothing followed the tasks until
-        // now, the coordinator starts from now. Changes made before it
-        // existed are not told.
+        // now, the detector starts from now. With a webhook that keeps it
+        // running, the new state's first look tells nothing instead
+        // (`CoordinatorWakeState.isFollowing`). Either way, a change from
+        // before the coordinator existed is not told.
         if webhooks.contains(where: isActive) == false {
             detector.reset()
         }

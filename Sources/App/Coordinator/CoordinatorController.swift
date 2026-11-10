@@ -560,6 +560,12 @@ final class CoordinatorController: ObservableObject {
     /// The one place that types into the coordinator: it types `text` when
     /// the agent's prompt is open, and says why not otherwise.
     private func typeAtOpenPrompt(_ text: String, location: CoordinatorLocation, moment: Date) -> TypingOutcome {
+        // During a restart the agent that still runs is about to end with
+        // its terminal: text typed there would be lost. The start drains
+        // the queue when it ends.
+        guard isStarting == false else {
+            return .held(.agentStarting, recheckAt: nil)
+        }
         switch CoordinatorSendGate.decide(promptFacts(location: location), now: moment) {
         case .hold(let reason, let recheckAt):
             return .held(reason, recheckAt: recheckAt)

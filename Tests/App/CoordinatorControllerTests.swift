@@ -543,6 +543,31 @@ struct CoordinatorControllerTests {
         await fixture.waitUntil("the next entry is typed after the turn") { fixture.typedTexts == ["one", "two"] }
     }
 
+    @Test func textSentDuringARestartWaitsForTheNewAgent() async throws {
+        let fixture = try Fixture(readinessTimeout: .seconds(5))
+        try await fixture.openAtPrompt()
+        let oldPanelID = try #require(fixture.store.state.coordinator?.panelID)
+        // The agent that runs is at an open prompt. The terminal for the new
+        // session is not ready yet, so the restart waits.
+        fixture.tasks.router.promptStateByPanelID[oldPanelID] = .idleAtPrompt
+        fixture.tasks.router.defaultPromptState = .unavailable
+        let restart = Task { try await fixture.controller.restart() }
+        await fixture.waitUntil("the restart is under way") { fixture.controller.isStarting }
+
+        // Text typed now would go to the agent that is about to end.
+        #expect(try fixture.controller.send("a wake", queueWhenHeld: false) == .held(.agentStarting))
+        #expect(try fixture.controller.send("a message") == .queued(position: 1, hold: .agentStarting))
+        await fixture.settle()
+        #expect(fixture.typedTexts.isEmpty)
+
+        fixture.tasks.router.defaultPromptState = .idleAtPrompt
+        let restarted = try await restart.value
+        #expect(restarted.location.panelID != oldPanelID)
+        try fixture.reportAgentStarted()
+        await fixture.waitUntil("the message reaches the new agent") { fixture.typedTexts == ["a message"] }
+        #expect(fixture.typed.first?.panelID == restarted.location.panelID)
+    }
+
     @Test func closingTheCoordinatorsTerminalHoldsTheQueueUntilARestart() async throws {
         let fixture = try Fixture()
         let opened = try await fixture.openAtPrompt()

@@ -66,6 +66,8 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
 public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
     public static let defaultSettleInterval: TimeInterval = 3
 
+    /// A change of a task's stage that counted. `events` is empty for a
+    /// change that fires no webhook event, such as To ship to Done.
     public struct Change: Equatable, Sendable {
         public var taskID: UUID
         public var events: [TaskWebhookEventType]
@@ -110,11 +112,8 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
         for (id, state) in current.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             guard let previous = settled[id] else {
                 // A new task: what it is now counts as a change from nothing.
-                let events = Self.events(from: nil, to: state.key)
                 settled[id] = state
-                if events.isEmpty == false {
-                    changes.append(Change(taskID: id, events: events, state: state))
-                }
+                changes.append(Change(taskID: id, events: Self.events(from: nil, to: state.key), state: state))
                 continue
             }
             if previous.key == state.key {
@@ -134,11 +133,8 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
                 guard settleInterval <= 0 else { continue }
                 candidates[id] = nil
             }
-            let events = Self.events(from: previous.key, to: state.key)
             settled[id] = state
-            if events.isEmpty == false {
-                changes.append(Change(taskID: id, events: events, state: state))
-            }
+            changes.append(Change(taskID: id, events: Self.events(from: previous.key, to: state.key), state: state))
         }
         for (id, previous) in settled where current[id] == nil {
             settled[id] = nil

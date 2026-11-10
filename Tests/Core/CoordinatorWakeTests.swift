@@ -29,8 +29,11 @@ struct CoordinatorWakeStateTests {
         return detector.observe(after, now: t0, settleInterval: 0)
     }
 
+    /// A coordinator's state after the first look at the tasks.
     private func wake() -> CoordinatorWakeState {
-        CoordinatorWakeState(workspaceID: workspace, startedAt: t0)
+        var wake = CoordinatorWakeState(workspaceID: workspace, startedAt: t0)
+        wake.startFollowing()
+        return wake
     }
 
     private func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
@@ -189,8 +192,23 @@ struct CoordinatorWakeStateTests {
         #expect(restored.digest(now: at(40), hasOpenTasks: false) == wake.digest(now: at(40), hasOpenTasks: false))
     }
 
-    @Test func everyStageEventWakesTheCoordinator() {
-        #expect(Set(CoordinatorWakeState.events) == Set(TaskWebhookEventType.allCases))
+    @Test func aChangeWithNoWebhookEventIsToldAndTheFirstLookTellsNothing() throws {
+        // A release moves a merged task from To ship to Done. No webhook
+        // event fires for that; the coordinator's line still moves.
+        let release = changes(from: [first: state("toShip", merged: true)], to: [first: state("done", merged: true)])
+        #expect(release.map(\.events) == [[]])
+        var wake = wake()
+        for change in release { wake.record(change, at: at(5)) }
+        #expect(try #require(wake.digest(now: at(6), hasOpenTasks: false)).contains("): done, merged at "))
+
+        // Until the first look at the tasks is over, nothing is recorded.
+        var fresh = CoordinatorWakeState(workspaceID: workspace, startedAt: t0)
+        for change in release { fresh.record(change, at: at(5)) }
+        #expect(fresh.changes.isEmpty)
+        fresh.startFollowing()
+        for change in release { fresh.record(change, at: at(5)) }
+        #expect(fresh.changes.count == 1)
+
         #expect(CoordinatorWakeState.isOpen(group: "toShip"))
         #expect(CoordinatorWakeState.isOpen(group: "needsYou"))
         #expect(CoordinatorWakeState.isOpen(group: "done") == false)

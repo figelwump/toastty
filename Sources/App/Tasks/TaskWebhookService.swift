@@ -230,6 +230,7 @@ final class TaskWebhookService: ObservableObject {
             }
             coordinatorWake?.record(change, at: at)
         }
+        coordinatorWake?.startFollowing()
         // One write records the changes as seen and as waiting, before
         // anything is sent or typed.
         if queued || detector != before || coordinatorWake != wakeBefore {
