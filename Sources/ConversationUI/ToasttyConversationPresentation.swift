@@ -20,6 +20,9 @@ public struct ToasttyTranscriptRowID: Hashable, Sendable {
 public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     public enum Content: Equatable, Sendable {
         case userMessage(text: String, origin: ConversationMessageOrigin, deliveryMode: RemoteMessageDeliveryMode? = nil)
+        /// A message the host typed for the agent. It starts a turn as a
+        /// user message does.
+        case hostMessage(ToasttyHostMessagePresentation)
         case assistantMessage(text: String, phase: ConversationAssistantMessagePhase)
         case toolStarted(callID: String, name: String, detail: String?)
         case toolFinished(callID: String, name: String, outcome: ConversationToolOutcome, detail: String?)
@@ -39,6 +42,14 @@ public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
         self.timestamp = timestamp
         self.provider = provider
         self.content = content
+    }
+
+    /// The row is a message to the agent, which starts a turn.
+    var startsTurn: Bool {
+        switch content {
+        case .userMessage, .hostMessage: true
+        default: false
+        }
     }
 }
 
@@ -201,7 +212,7 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
             switch block.content {
             case .row(let row):
                 switch row.content {
-                case .userMessage:
+                case .userMessage, .hostMessage:
                     flushTurn()
                     currentID = row.id
                 case .assistantMessage(_, let phase):

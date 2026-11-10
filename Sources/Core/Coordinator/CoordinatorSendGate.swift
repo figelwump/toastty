@@ -17,6 +17,9 @@ public enum CoordinatorSendHold: String, Equatable, Sendable {
     /// The user typed in the coordinator's terminal since the last turn
     /// started, so the composer may hold their draft.
     case userDraft
+    /// The agent's conversation does not show an open prompt: the turn was
+    /// stopped or failed, or Toastty has not read the conversation yet.
+    case promptNotOpen
 }
 
 /// What Toastty knows about the coordinator's prompt at one moment.

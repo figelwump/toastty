@@ -211,6 +211,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// bare closure so the hot path stays a single optional call.
     /// Returns false when the input cannot create a draft at the current prompt.
     var localInputObserver: ((UUID, TerminalLocalInputKind) -> Bool)?
+    /// Gives the keyboard to the native view that covers a terminal panel,
+    /// such as the coordinator's chat. It answers `nil` for a panel that
+    /// nothing covers, and otherwise whether the covering view took the
+    /// keyboard.
+    var focusCoveringInput: ((UUID) -> Bool?)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -774,7 +779,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// Returns `false` when the host view is unavailable or not ready.
     @discardableResult
     func focusPanelIfPossible(panelID: UUID) -> Bool {
-        focusCoordinator.focusIfPossible { [weak self] in
+        // A native view that covers the terminal takes the keyboard for it.
+        if let didFocus = focusCoveringInput?(panelID) {
+            return didFocus
+        }
+        return focusCoordinator.focusIfPossible { [weak self] in
             guard let self,
                   let controller = self.runtimeStore.existingController(for: panelID) else {
                 return nil

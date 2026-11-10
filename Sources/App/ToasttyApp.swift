@@ -1429,6 +1429,23 @@ struct ToasttyApp: App {
             quickEntryController: quickEntryController
         )
         _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
+        // The coordinator types through its agent's conversation, the path
+        // a paired phone uses, so one prompt check covers every sender.
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            coordinatorController.conversationAccess = remoteAccessService
+            coordinatorController.chat = CoordinatorChatModel(
+                controller: coordinatorController,
+                access: remoteAccessService
+            )
+            // Keyboard focus meant for the terminal under the chat goes to
+            // the chat's composer.
+            terminalRuntimeRegistry.focusCoveringInput = { [weak coordinatorController] panelID in
+                guard let coordinatorController, coordinatorController.coversTerminal(panelID: panelID) else {
+                    return nil
+                }
+                return coordinatorController.chat?.focusComposer() ?? false
+            }
+        }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
         quickEntryController.recentModels = { [weak remoteAccessService] provider in

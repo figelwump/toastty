@@ -13,6 +13,7 @@ struct ToasttyPermissionRequestContent: View {
     let sentOptionID: String?
     let readOnlyMessage: String
     let onChoose: (String) -> Void
+    @Environment(\.toasttyTranscriptOptions) private var options
 
     private static let previewMaximumHeight: CGFloat = 220
 
@@ -58,7 +59,7 @@ struct ToasttyPermissionRequestContent: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .accessibilityIdentifier("toastty-mobile-permission-preview-\(interaction.id.rawValue)")
                 if permission.previewTruncated {
-                    Label("Preview shortened. Check the desktop for the full request.", systemImage: "scissors")
+                    Label(options.shortenedPreviewMessage, systemImage: "scissors")
                         .font(.caption)
                         .foregroundStyle(ConversationDesignTokens.amberText)
                 }

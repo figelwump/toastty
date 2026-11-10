@@ -1,0 +1,609 @@
+import AppKit
+import Combine
+import ConversationUI
+import CoreState
+import Foundation
+import RemoteProtocol
+
+/// What the coordinator's chat shows: the conversation of the coordinator's
+/// agent, read through `LocalConversationAccess`, and the messages that wait
+/// to be typed.
+///
+/// The model reads. Every write goes through `CoordinatorController`, which
+/// is the one sender into the coordinator.
+///
+/// The model reads the conversation only while the chat shows:
+/// `show(panelID:)` takes a subscription and `hide()` ends it. The rows
+/// stay, so the chat does not blink when it shows again. The controller
+/// holds its own subscription, for sending.
+@MainActor
+final class CoordinatorChatModel: ObservableObject {
+    /// A message that was typed and is not in the conversation yet.
+    private struct PendingSend: Equatable {
+        let id: String
+        let text: String
+    }
+
+    /// What the chat says above the composer, in place of sending.
+    enum Notice: Equatable {
+        /// No agent runs in the coordinator's terminal.
+        case agentNotRunning(reason: String?)
+        case agentStarting
+        /// The agent asked a question or for a permission. The chat cannot
+        /// answer it.
+        case awaitingAnswerInTerminal
+        /// Text typed in the terminal may be in the agent's prompt. Messages
+        /// and Toastty's digests wait for it.
+        case terminalDraft
+        /// A message was typed but the conversation never showed it.
+        case deliveryNotConfirmed
+        case failure(String)
+    }
+
+    @Published private(set) var presentation = ToasttyConversationPresentationState(
+        rows: [], phase: .live, revision: .initial, historyTruncated: false
+    )
+    /// The conversation's summary, or `nil` while Toastty reads none.
+    @Published private(set) var summary: RemoteConversationSummary?
+    /// The composer's text. It is kept here so that it survives a switch to
+    /// the terminal and back.
+    @Published var draft = ""
+    @Published var jumpToLiveEdgeRequest: UInt64 = 0
+    /// Counts up each time the composer should take the keyboard.
+    @Published private(set) var composerFocusRequest = 0
+    /// The task space that a chip in the chat opened last. Its header
+    /// offers the way back until the user is in the coordinator again.
+    @Published private(set) var returnWorkspaceID: UUID?
+    /// A notice that an action left, until the next action or a dismiss.
+    @Published private var transientNotice: Notice?
+
+    /// The composer's text view, so that keyboard focus meant for the
+    /// terminal under the chat can go to it.
+    weak var composerTextView: NSTextView?
+
+    static let pageSize = 200
+
+    private weak var controller: CoordinatorController?
+    private let access: any LocalConversationAccess
+    private let now: () -> Date
+    private var subscription: (any LocalConversationSubscription)?
+    private var observer: Task<Void, Never>?
+    private var cancellables: Set<AnyCancellable> = []
+
+    private var events: [ConversationEvent] = []
+    private var loaded: LoadedPage?
+    private var pendingSends: [PendingSend] = []
+    private var lastJumpRequest: UInt64 = 0
+    /// The conversation's events stopped arriving after the chat showed,
+    /// so the newest page was read. See `waitForTheConversationToSettle`.
+    private var isSettled = false
+    private var settleTask: Task<Void, Never>?
+    private var settleDeadline: Date?
+
+    /// How long no event must arrive before the chat reads the newest page.
+    static let settleInterval: TimeInterval = 0.15
+    /// The chat reads what there is after this time, also while events
+    /// still arrive.
+    static let maximumSettleInterval: TimeInterval = 3
+
+    /// The sequence space the loaded events belong to.
+    fileprivate struct LoadedPage: Equatable {
+        var conversationID: RemoteConversationID
+        var projectionRunID: RemoteProjectionRunID
+        var projectionGeneration: UInt64
+        var firstAvailableSequence: UInt64
+    }
+
+    init(
+        controller: CoordinatorController,
+        access: any LocalConversationAccess,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.controller = controller
+        self.access = access
+        self.now = now
+        // What waits, and why, changes the tail of the chat and the notice.
+        // `sink` runs before the new value is stored.
+        controller.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.publishMetadata() }
+            }
+            .store(in: &cancellables)
+        controller.typedEntries
+            .sink { [weak self] entry in self?.noteTyped(entry) }
+            .store(in: &cancellables)
+    }
+
+    deinit {
+        observer?.cancel()
+        settleTask?.cancel()
+    }
+
+    // MARK: - Lifetime
+
+    /// The panel whose conversation the model reads now.
+    var shownPanelID: UUID? { subscription?.panelID }
+
+    /// Starts to read the conversation in `panelID`, the coordinator's
+    /// terminal. Call it while the chat is on screen.
+    func show(panelID: UUID) {
+        guard subscription?.panelID != panelID else { return }
+        hide()
+        let subscription = access.subscribeToConversation(inPanel: panelID)
+        self.subscription = subscription
+        let changes = subscription.changes
+        observer = Task { @MainActor [weak self] in
+            for await _ in changes {
+                self?.refresh()
+            }
+        }
+        settleDeadline = now().addingTimeInterval(Self.maximumSettleInterval)
+        refresh()
+    }
+
+    /// Stops reading. The rows stay as they are.
+    func hide() {
+        observer?.cancel()
+        observer = nil
+        settleTask?.cancel()
+        settleTask = nil
+        isSettled = false
+        subscription?.cancel()
+        subscription = nil
+        // A later subscription can number its events anew, so an echo of
+        // these could not be matched.
+        pendingSends.removeAll()
+        loaded = nil
+    }
+
+    // MARK: - Reading
+
+    private func refresh() {
+        guard let subscription else { return }
+        let snapshot = subscription.snapshot(at: now())
+        summary = snapshot?.summary
+        guard let summary = snapshot?.summary else {
+            // No agent conversation in the terminal: none started yet, or
+            // Toastty cannot read this agent's.
+            isSettled = true
+            if events.isEmpty == false || loaded != nil || presentation.rows.isEmpty == false {
+                events = []
+                loaded = nil
+                pendingSends.removeAll()
+                publishRows(revision: .rebuilt)
+            } else {
+                publishMetadata()
+            }
+            return
+        }
+        guard isSettled else {
+            waitForTheConversationToSettle(latestSequence: summary.latestSequence)
+            return
+        }
+        if let loaded, loaded.conversationID == summary.conversationID {
+            appendNewEvents(from: subscription, loaded: loaded)
+        } else {
+            loadNewestPage(from: subscription)
+        }
+    }
+
+    /// With Remote Access off, Toastty starts to read the agent's
+    /// transcript when the chat shows, and its events arrive over a short
+    /// time. The chat waits until no more arrive, and then reads the newest
+    /// page once. Until then it keeps the rows it showed before.
+    private func waitForTheConversationToSettle(latestSequence: UInt64) {
+        settleTask?.cancel()
+        guard now() < (settleDeadline ?? .distantPast) else {
+            finishSettling()
+            return
+        }
+        if presentation.rows.isEmpty, presentation.phase != .loading {
+            presentation = ToasttyConversationPresentationState(
+                rows: [], sendItems: sendItems(), phase: .loading, revision: .initial, historyTruncated: false
+            )
+        }
+        settleTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(Self.settleInterval))
+            } catch {
+                return
+            }
+            self?.finishSettling()
+        }
+    }
+
+    private func finishSettling() {
+        settleTask = nil
+        guard isSettled == false else { return }
+        isSettled = true
+        refresh()
+    }
+
+    private func loadNewestPage(from subscription: any LocalConversationSubscription) {
+        let wasEmpty = presentation.rows.isEmpty
+        guard case .page(let page) = subscription.events(before: nil, limit: Self.pageSize) else {
+            events = []
+            loaded = nil
+            publishRows(revision: .rebuilt)
+            return
+        }
+        events = page.events
+        loaded = LoadedPage(page)
+        reconcilePendingSends(with: page.events)
+        publishRows(revision: wasEmpty ? .initial : .rebuilt)
+    }
+
+    private func appendNewEvents(from subscription: any LocalConversationSubscription, loaded: LoadedPage) {
+        var appended: [ConversationEvent] = []
+        var afterSequence = events.last?.sequence ?? 0
+        // Bounded, so a conversation that grows faster than it is read
+        // cannot hold the main actor. The next change continues.
+        for _ in 0 ..< 20 {
+            let cursor = ConversationEventCursor(
+                projectionRunID: loaded.projectionRunID,
+                projectionGeneration: loaded.projectionGeneration,
+                afterSequence: afterSequence
+            )
+            guard case .page(let page) = subscription.events(after: cursor, limit: Self.pageSize) else {
+                // The event sequence restarted: read the conversation anew.
+                pendingSends.removeAll()
+                loadNewestPage(from: subscription)
+                return
+            }
+            self.loaded?.firstAvailableSequence = page.firstAvailableSequence ?? loaded.firstAvailableSequence
+            guard let last = page.events.last else { break }
+            appended.append(contentsOf: page.events)
+            afterSequence = last.sequence
+            if last.sequence >= page.latestSequence { break }
+        }
+        guard appended.isEmpty == false else {
+            publishMetadata()
+            return
+        }
+        events.append(contentsOf: appended)
+        reconcilePendingSends(with: appended)
+        publishRows(revision: .appended)
+    }
+
+    /// Reads the page before the oldest loaded event.
+    func loadOlder() {
+        guard let subscription, let loaded, let first = events.first else { return }
+        let cursor = ConversationEventBackwardCursor(
+            projectionRunID: loaded.projectionRunID,
+            projectionGeneration: loaded.projectionGeneration,
+            beforeSequence: first.sequence
+        )
+        guard case .page(let page) = subscription.events(before: cursor, limit: Self.pageSize) else {
+            refresh()
+            return
+        }
+        self.loaded?.firstAvailableSequence = page.firstAvailableSequence ?? loaded.firstAvailableSequence
+        guard page.events.isEmpty == false else {
+            publishMetadata()
+            return
+        }
+        let anchor = presentation.rows.first?.id
+        events.insert(contentsOf: page.events, at: 0)
+        publishRows(revision: .prepended, prependAnchorID: anchor)
+    }
+
+    private var hasOlder: Bool {
+        guard let loaded, let first = events.first else { return false }
+        return first.sequence > loaded.firstAvailableSequence
+    }
+
+    /// Toastty keeps a bounded number of events. Say so once the reader
+    /// reached the oldest one it has.
+    private var historyTruncated: Bool {
+        guard let loaded else { return false }
+        return hasOlder == false && loaded.firstAvailableSequence > 1
+    }
+
+    // MARK: - Publishing
+
+    private func publishRows(revision: ToasttyTranscriptRevision, prependAnchorID: ToasttyTranscriptRowID? = nil) {
+        let rows: [ToasttyTranscriptRow]
+        if let loaded {
+            rows = CoordinatorChatTranscript.rows(
+                from: events,
+                projectionRunID: loaded.projectionRunID,
+                projectionGeneration: loaded.projectionGeneration,
+                isSentFromThisMac: { [weak controller] id in controller?.didType(messageID: id) ?? false },
+                timeText: { $0.formatted(date: .omitted, time: .shortened) }
+            )
+        } else {
+            rows = []
+        }
+        presentation = ToasttyConversationPresentationState(
+            rows: rows,
+            sendItems: sendItems(),
+            phase: .live,
+            revision: revision,
+            historyTruncated: historyTruncated,
+            hasOlder: hasOlder,
+            prependAnchorID: prependAnchorID
+        )
+    }
+
+    /// Publishes what changed around the rows: the waiting messages and the
+    /// notice.
+    private func publishMetadata() {
+        let next = presentation.updatingMetadata(
+            sendItems: sendItems(),
+            phase: presentation.phase,
+            revision: .metadataOnly,
+            historyTruncated: historyTruncated,
+            hasOlder: hasOlder,
+            isLoadingOlder: false,
+            prependAnchorID: nil
+        )
+        if next != presentation { presentation = next }
+    }
+
+    /// The tail of the chat: messages typed but not shown yet, then the
+    /// messages that wait, in the order they will be typed.
+    private func sendItems() -> [ToasttySendPresentationItem] {
+        var items = pendingSends.map { pending in
+            ToasttySendPresentationItem(
+                clientRequestID: pending.id,
+                text: pending.text,
+                content: .optimistic(response: .accepted)
+            )
+        }
+        guard let controller else { return items }
+        for (index, entry) in controller.pausedEntries.enumerated() {
+            items.append(ToasttySendPresentationItem(
+                clientRequestID: entry.id,
+                text: entry.text,
+                content: .queued(ToasttyQueuedSendPresentation(
+                    position: index + 1, attachmentCount: 0, isPaused: true, canSteer: false
+                ))
+            ))
+        }
+        // A phone's queue is in the conversation. Its messages go first:
+        // Toastty types them as the prompt opens, before the controller
+        // looks. The chat cannot change them.
+        var position = 0
+        let control = summary?.inputControl
+        for message in control?.queuedMessages ?? [] {
+            position += 1
+            items.append(ToasttySendPresentationItem(
+                clientRequestID: message.clientRequestID,
+                text: message.text,
+                content: .queued(ToasttyQueuedSendPresentation(
+                    position: position,
+                    attachmentCount: message.attachmentCount,
+                    isPaused: control?.isQueuePaused ?? false,
+                    canSteer: false,
+                    canChange: false
+                ))
+            ))
+        }
+        if control?.isQueuePaused == true { position = 0 }
+        for entry in controller.queuedEntries {
+            position += 1
+            items.append(ToasttySendPresentationItem(
+                clientRequestID: entry.id,
+                text: entry.text,
+                content: .queued(ToasttyQueuedSendPresentation(
+                    position: position,
+                    attachmentCount: 0,
+                    isPaused: false,
+                    canSteer: false,
+                    waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
+                ))
+            ))
+        }
+        return items
+    }
+
+    /// Why a message waits, when that is not the running turn.
+    static func waitingCaption(position: Int, hold: CoordinatorSendHold?) -> String? {
+        switch hold {
+        case .busy, .awaitingTurn, .settling, nil:
+            nil
+        case .noSession:
+            "Queued \(position) · waits for the agent"
+        case .agentStarting:
+            "Queued \(position) · waits for the agent to start"
+        case .userDraft:
+            "Queued \(position) · waits for the text in the terminal"
+        case .terminalUnavailable, .promptNotOpen:
+            "Queued \(position) · waits for the prompt"
+        }
+    }
+
+    /// What the chat says above the composer now. It reads the session's
+    /// state, so a view that shows it also observes the session store.
+    var notice: Notice? {
+        transientNotice ?? standingNotice()
+    }
+
+    private func standingNotice() -> Notice? {
+        guard let controller, let status = controller.status else { return nil }
+        switch status.agentState {
+        case .notRunning:
+            return .agentNotRunning(reason: status.startFailure)
+        case .starting:
+            return .agentStarting
+        case .running:
+            break
+        }
+        if status.session?.status?.kind == .needsApproval {
+            return .awaitingAnswerInTerminal
+        }
+        guard let summary else {
+            // The agent's process runs, but Toastty has no conversation of
+            // its to read: it has not reported its session. A login or a
+            // folder-trust prompt in the terminal looks like this.
+            return .agentStarting
+        }
+        switch summary.inputAvailability {
+        case .pendingInteraction:
+            return .awaitingAnswerInTerminal
+        case .localDraft:
+            return .terminalDraft
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Messages that were typed
+
+    private func noteTyped(_ entry: CoordinatorController.TypedEntry) {
+        // Without the conversation there is no echo to wait for.
+        guard entry.echoesInConversation, subscription != nil else { return }
+        guard events.contains(where: { Self.echoedRequestID($0) == entry.id }) == false else { return }
+        pendingSends.append(PendingSend(id: entry.id, text: entry.text))
+        publishMetadata()
+    }
+
+    /// Drops each pending message that the conversation now shows, and
+    /// reports each one that the conversation gave up on.
+    private func reconcilePendingSends(with newEvents: [ConversationEvent]) {
+        guard pendingSends.isEmpty == false else { return }
+        for event in newEvents {
+            if let id = Self.echoedRequestID(event) {
+                pendingSends.removeAll { $0.id == id }
+            } else if case .sendDeliveryUnconfirmed(let payload) = event.payload,
+                      pendingSends.contains(where: { $0.id == payload.clientRequestID }) {
+                pendingSends.removeAll { $0.id == payload.clientRequestID }
+                transientNotice = .deliveryNotConfirmed
+            }
+        }
+    }
+
+    private static func echoedRequestID(_ event: ConversationEvent) -> String? {
+        guard case .userMessage(let payload) = event.payload else { return nil }
+        return payload.clientRequestID
+    }
+
+    // MARK: - The composer's actions
+
+    var canSend: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    /// A turn runs that Stop can end.
+    var canStop: Bool {
+        summary?.inputControl?.canInterrupt == true
+    }
+
+    /// Sends the composer's text as the user's message.
+    func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.isEmpty == false, let controller else { return }
+        do {
+            try controller.send(text, byUser: true)
+            draft = ""
+            transientNotice = nil
+            lastJumpRequest &+= 1
+            jumpToLiveEdgeRequest = lastJumpRequest
+        } catch {
+            transientNotice = .failure(error.localizedDescription)
+        }
+        publishMetadata()
+    }
+
+    func stop() {
+        do {
+            try controller?.stopTurn()
+            transientNotice = nil
+        } catch {
+            transientNotice = .failure(error.localizedDescription)
+        }
+        publishMetadata()
+    }
+
+    /// The user said that the terminal holds none of their text.
+    func sendPastTerminalDraft() {
+        controller?.releaseUserDraft()
+        publishMetadata()
+    }
+
+    func dismissNotice() {
+        transientNotice = nil
+    }
+
+    func perform(_ action: ToasttyQueuedMessageAction) {
+        switch action {
+        case .edit(let id, _):
+            // Back into the composer, in front of what is there.
+            guard let removed = controller?.removeQueuedEntry(id: id) else { return }
+            draft = draft.isEmpty ? removed.text : removed.text + "\n" + draft
+            composerFocusRequest += 1
+        case .remove(let id):
+            controller?.removeQueuedEntry(id: id)
+        case .resume:
+            controller?.resumeQueue()
+        case .steer:
+            // Not offered: the chat types only at an open prompt.
+            break
+        }
+        publishMetadata()
+    }
+
+    func requestComposerFocus() {
+        composerFocusRequest += 1
+    }
+
+    // MARK: - The keyboard
+
+    /// Gives the composer the keyboard, in place of the terminal under the
+    /// chat. Returns whether the chat has the keyboard now. A reader who
+    /// selects text in the transcript keeps the keyboard there, so that
+    /// Copy still copies the selection.
+    @discardableResult
+    func focusComposer() -> Bool {
+        guard let composerTextView, let window = composerTextView.window else { return false }
+        if window.firstResponder === composerTextView || window.firstResponder is ToasttyTranscriptTextView {
+            return true
+        }
+        return window.makeFirstResponder(composerTextView)
+    }
+
+    // MARK: - Task links
+
+    /// Remembers the task space a chip opened, so its header can offer the
+    /// way back to the coordinator.
+    func noteOpenedTaskSpace(workspaceID: UUID) {
+        returnWorkspaceID = workspaceID
+    }
+
+    /// The user is in the coordinator again: no way back is needed.
+    func noteCoordinatorSelected() {
+        if returnWorkspaceID != nil { returnWorkspaceID = nil }
+    }
+
+    // MARK: - What the transcript needs about the session
+
+    var sessionStatus: ToasttyTranscriptSessionStatus? {
+        guard let summary else { return nil }
+        switch summary.state {
+        case .working: return .working
+        case .ready: return .ready
+        default: return ToasttyTranscriptSessionStatus(activity: .other, epoch: summary.state.rawValue)
+        }
+    }
+
+    var workingIndicator: ToasttyTranscriptWorkingIndicator? {
+        guard let summary, summary.state == .working else { return nil }
+        return ToasttyTranscriptWorkingIndicator(turnElapsed: summary.turnStartedAt.map { startedAt in
+            ToasttyTranscriptWorkingIndicator.TurnElapsed(
+                secondsAtReceipt: Int(max(0, now().timeIntervalSince(startedAt))),
+                receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
+            )
+        })
+    }
+}
+
+private extension CoordinatorChatModel.LoadedPage {
+    init(_ page: ConversationEventPage) {
+        self.init(
+            conversationID: page.conversationID,
+            projectionRunID: page.projectionRunID,
+            projectionGeneration: page.projectionGeneration,
+            firstAvailableSequence: page.firstAvailableSequence ?? 1
+        )
+    }
+}

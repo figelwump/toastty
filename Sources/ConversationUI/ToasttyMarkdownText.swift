@@ -4,6 +4,7 @@ struct ToasttyMarkdownText: View {
     let text: String
     var preparedBlocks: [ToasttyMarkdownBlock]?
     var textColor: Color = ConversationDesignTokens.primaryText
+    @Environment(\.conversationLinkPresenter) private var linkPresenter
 
     var body: some View {
         // Matches the transcript stack spacing so the seams between chunks of
@@ -22,9 +23,9 @@ struct ToasttyMarkdownText: View {
     private func blockView(_ block: ToasttyMarkdownBlock) -> some View {
         switch block.style {
         case .paragraph:
-            ToasttySelectableText(block.content, textColor: textColor)
+            ToasttySelectableText(presented(block.content), textColor: textColor)
         case .heading(let level):
-            ToasttySelectableText(block.content,
+            ToasttySelectableText(presented(block.content),
                                   textStyle: level <= 2 ? .headline : .subheadline,
                                   weight: .semibold, textColor: textColor)
                 .padding(.top, block.id == 0 ? 0 : 2)
@@ -34,7 +35,7 @@ struct ToasttyMarkdownText: View {
                     .font(.body.monospaced())
                     .foregroundStyle(ConversationDesignTokens.secondaryText)
                     .frame(minWidth: 16, alignment: .trailing)
-                ToasttySelectableText(block.content, textColor: textColor)
+                ToasttySelectableText(presented(block.content), textColor: textColor)
             }
             .padding(.leading, CGFloat(max(0, depth - 1)) * 16)
         case .blockQuote:
@@ -42,7 +43,7 @@ struct ToasttyMarkdownText: View {
                 RoundedRectangle(cornerRadius: 1)
                     .fill(ConversationDesignTokens.border)
                     .frame(width: 3)
-                ToasttySelectableText(block.content, textColor: ConversationDesignTokens.secondaryText)
+                ToasttySelectableText(presented(block.content), textColor: ConversationDesignTokens.secondaryText)
             }
         case .table(let table):
             ToasttyMarkdownTableView(table: table)
@@ -77,6 +78,13 @@ struct ToasttyMarkdownText: View {
                 style: .continuous
             ))
         }
+    }
+
+    /// The host's presenter decides how each link is drawn. It runs when the
+    /// text is drawn, after the parsed-block cache, because its answer can
+    /// change while the message does not.
+    private func presented(_ content: AttributedString) -> AttributedString {
+        ConversationLinkDecoration.apply(content, presenter: linkPresenter)
     }
 
     /// Parsed-block cache: with eager transcript layout every message re-parses

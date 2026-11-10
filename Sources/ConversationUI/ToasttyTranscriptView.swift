@@ -25,6 +25,7 @@ public struct ToasttyTranscriptView: View {
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: () -> Void
+    let options: ToasttyTranscriptOptions
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
@@ -61,7 +62,8 @@ public struct ToasttyTranscriptView: View {
         workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
         canAcknowledgeRead: Bool,
-        onVisibleLiveEdge: @escaping () -> Void = {}
+        onVisibleLiveEdge: @escaping () -> Void = {},
+        options: ToasttyTranscriptOptions = ToasttyTranscriptOptions()
     ) {
         self.state = state
         self.isSubmitting = isSubmitting
@@ -76,6 +78,7 @@ public struct ToasttyTranscriptView: View {
         self.workingIndicator = workingIndicator
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
+        self.options = options
         _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
         _followsLiveEdge = State(initialValue:
             readAcknowledgementEpoch?.activity != .ready || state.phase == .loading || state.phase == .resyncing
@@ -116,6 +119,7 @@ public struct ToasttyTranscriptView: View {
                         }
                     }
                     .scrollTargetLayout()
+                    .modifier(TranscriptContentWidth(maximum: options.maximumContentWidth))
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
                 }
@@ -265,6 +269,7 @@ public struct ToasttyTranscriptView: View {
                                 .foregroundStyle(ConversationDesignTokens.inkOnAmber)
                                 .shadow(color: .black.opacity(0.45), radius: 7, y: 3)
                         }
+                        .conversationPlainButtonOnMac()
                         .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
                         .padding(14)
                     }
@@ -424,6 +429,7 @@ public struct ToasttyTranscriptView: View {
                 }
             }
             .background(ConversationDesignTokens.background)
+            .environment(\.toasttyTranscriptOptions, options)
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
             .onChange(of: toolBatchActivity, initial: true) { _, activity in
@@ -974,8 +980,7 @@ struct TranscriptEntryScrollPosition {
     ) -> TranscriptScrollCoordinator.Target {
         guard opensLatestResponse,
               let response = state.rows.reversed().prefix(while: { row in
-                  if case .userMessage = row.content { return false }
-                  return true
+                  row.startsTurn == false
               }).first(where: { row in
                   guard case .assistantMessage(_, let phase) = row.content else { return false }
                   // Unknown phases are responses too, as in turn folding.
@@ -1646,7 +1651,7 @@ private struct ToasttySendTailItemView: View {
         VStack(alignment: .trailing, spacing: 7) {
             Text(queued.isPaused
                 ? "Paused · queued \(queued.position)"
-                : "Queued \(queued.position) · sends after this turn")
+                : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
                 .font(.caption2.monospaced().weight(.semibold))
                 .foregroundStyle(ConversationDesignTokens.amberText)
                 .textCase(.uppercase)
@@ -1659,23 +1664,29 @@ private struct ToasttySendTailItemView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
-            HStack(spacing: 16) {
-                if queued.isPaused {
-                    queuedAction("Send next", "resume") { queuedMessageAction(.resume) }
-                }
-                queuedAction("Edit", "edit") {
-                    queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
-                }
-                if queued.canSteer {
-                    queuedAction("Steer now", "steer") {
-                        queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+            if queued.canChange || queued.canSteer {
+                HStack(spacing: 16) {
+                    if queued.isPaused, queued.canChange {
+                        queuedAction("Send next", "resume") { queuedMessageAction(.resume) }
+                    }
+                    if queued.canChange {
+                        queuedAction("Edit", "edit") {
+                            queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
+                        }
+                    }
+                    if queued.canSteer {
+                        queuedAction("Steer now", "steer") {
+                            queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+                        }
+                    }
+                    if queued.canChange {
+                        queuedAction("Remove", "remove") {
+                            queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
+                        }
                     }
                 }
-                queuedAction("Remove", "remove") {
-                    queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
-                }
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
         }
         .padding(12)
         .overlay {
@@ -1693,6 +1704,7 @@ private struct ToasttySendTailItemView: View {
 
     private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
+            .conversationPlainButtonOnMac()
             .font(.caption.weight(.semibold))
             .foregroundStyle(ConversationDesignTokens.mutedText)
             .frame(minHeight: 32)
@@ -1751,6 +1763,7 @@ private struct ToasttySendTailItemView: View {
                         .font(.caption.weight(.bold))
                         .frame(width: 44, height: 44)
                 }
+                .conversationPlainButtonOnMac()
                 .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .accessibilityLabel("Dismiss delivery receipt")
                 .accessibilityIdentifier(
@@ -1765,6 +1778,7 @@ private struct ToasttySendTailItemView: View {
                     .font(.caption.weight(.semibold))
                     .frame(minHeight: 44)
             }
+            .conversationPlainButtonOnMac()
             .foregroundStyle(ConversationDesignTokens.amberText)
             .padding(.leading, 28)
             .accessibilityIdentifier("toastty-mobile-send-receipt-copy-\(item.clientRequestID)")
@@ -1804,6 +1818,7 @@ private struct ToasttyTranscriptRowView: View {
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
+    @Environment(\.toasttyTranscriptOptions) private var options
 
     @ViewBuilder
     var body: some View {
@@ -1824,7 +1839,7 @@ private struct ToasttyTranscriptRowView: View {
                         Color.clear
                             .accessibilityElement()
                             .accessibilityLabel(
-                                "Read-only interaction, \(interaction.prompt), Respond on the desktop"
+                                "Read-only interaction, \(interaction.prompt), \(options.readOnlyInteractionMessage)"
                             )
                             .accessibilityIdentifier("toastty-mobile-readonly-interaction")
                     }
@@ -1852,6 +1867,8 @@ private struct ToasttyTranscriptRowView: View {
                 isUser: false,
                 metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
             )
+        case .hostMessage(let message):
+            hostMessage(message)
         case .interaction:
             EmptyView()
         case .interactionResolved(_, let resolution):
@@ -1939,6 +1956,42 @@ private struct ToasttyTranscriptRowView: View {
         }
     }
 
+    /// One muted, centered line that opens to the text the host typed. The
+    /// row's disclosure state is the one a subagent row uses.
+    private func hostMessage(_ message: ToasttyHostMessagePresentation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: toggleSubagentExpansion) {
+                HStack(spacing: 6) {
+                    Text(message.summary)
+                    Image(systemName: subagentIsExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                }
+                .font(.caption)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(message.summary)
+            .accessibilityValue(subagentIsExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("toastty-mobile-transcript-host-message-\(row.id.accessibilitySuffix)")
+
+            if subagentIsExpanded {
+                ToasttySelectableText(AttributedString(message.text), monospaced: true,
+                                      textColor: ConversationDesignTokens.secondaryText, lineSpacing: 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ConversationDesignTokens.raisedSurface)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    ))
+            }
+        }
+    }
+
     private func marker(icon: String, text: String) -> some View {
         Label(text, systemImage: icon)
             .font(.caption2.monospaced())
@@ -2004,6 +2057,23 @@ private struct ToasttyTranscriptRowView: View {
         case .pending: "hourglass"
         case .resolved: "checkmark.circle"
         case .superseded: "arrow.trianglehead.2.clockwise.rotate.90"
+        }
+    }
+}
+
+/// Centers the column of messages under a host's width limit. With no
+/// limit the content is left as it is.
+private struct TranscriptContentWidth: ViewModifier {
+    let maximum: CGFloat?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let maximum {
+            content
+                .frame(maxWidth: maximum)
+                .frame(maxWidth: .infinity)
+        } else {
+            content
         }
     }
 }

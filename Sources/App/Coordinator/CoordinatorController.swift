@@ -1,6 +1,7 @@
 import Combine
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// The part of the agent launcher the coordinator uses. A protocol so tests
 /// can start the coordinator without terminals.
@@ -143,7 +144,84 @@ final class CoordinatorController: ObservableObject {
         var replacedPanelID: UUID?
     }
 
-    private var queue: [String] = []
+    /// One message that waits for the coordinator's prompt.
+    struct QueuedEntry: Equatable, Identifiable {
+        /// Names the message for its sender. A message typed through the
+        /// agent's conversation is echoed there under this ID.
+        let id: String
+        let text: String
+        /// A person sent it, for example from the chat's composer.
+        let byUser: Bool
+    }
+
+    /// A message that reached the coordinator's terminal.
+    struct TypedEntry: Equatable {
+        let id: String
+        let text: String
+        /// The agent's conversation will show the message under `id`.
+        let echoesInConversation: Bool
+    }
+
+    /// Entries that wait for an open prompt, in the order they are typed.
+    @Published private(set) var queuedEntries: [QueuedEntry] = []
+    /// Entries that the user's Stop set aside. They are not typed, and do
+    /// not hold later entries back, until `resumeQueue`.
+    @Published private(set) var pausedEntries: [QueuedEntry] = []
+    /// Each message as it is typed, for a view that shows it until the
+    /// agent's conversation does.
+    let typedEntries = PassthroughSubject<TypedEntry, Never>()
+
+    /// What the coordinator's chat shows. Set once the app has the
+    /// conversation access the chat reads through.
+    var chat: CoordinatorChatModel?
+
+    /// The coordinator's panel shows its terminal in place of the chat.
+    var showsTerminal: Bool {
+        get { store.coordinatorShowsTerminal }
+        set {
+            guard store.coordinatorShowsTerminal != newValue else { return }
+            store.coordinatorShowsTerminal = newValue
+            ToasttyLog.info("Changed what the coordinator's panel shows", category: .tasks, metadata: [
+                "shows": newValue ? "terminal" : "chat",
+            ])
+        }
+    }
+
+    /// The chat needs the shared transcript view, which needs macOS 15.
+    /// On macOS 14 the coordinator's panel shows its terminal, and no
+    /// switch is offered.
+    static var systemSupportsChat: Bool {
+        if #available(macOS 15.0, *) { return true }
+        return false
+    }
+
+    /// Whether the chat can show at all. A test sets it to see the panel
+    /// as macOS 14 shows it.
+    var supportsChat = CoordinatorController.systemSupportsChat
+
+    /// Whether the chat covers this terminal. Keyboard focus and clicks
+    /// meant for a covered terminal go to the chat.
+    func coversTerminal(panelID: UUID) -> Bool {
+        supportsChat && chat != nil && showsTerminal == false && location?.panelID == panelID
+    }
+
+    /// Reads and sends to agent conversations inside the app. Set once the
+    /// app has it. Without it every agent gets its text through
+    /// `CoordinatorSendGate`.
+    var conversationAccess: (any LocalConversationAccess)? {
+        didSet {
+            syncConversationSubscription()
+            drain()
+        }
+    }
+
+    private static let rememberedTypedMessages = 500
+
+    /// The controller's own subscription to the agent's conversation, and
+    /// the task that follows its changes. See `syncConversationSubscription`.
+    private var conversationSubscription: (any LocalConversationSubscription)?
+    private var conversationObserver: Task<Void, Never>?
+    private var typedMessageIDs: [String] = []
     /// The coordinator's workspace the queue was filled for. The queue goes
     /// with that workspace: entries never reach a coordinator opened later.
     private var queueWorkspaceID: UUID?
@@ -188,14 +266,27 @@ final class CoordinatorController: ObservableObject {
                 Task { @MainActor [weak self] in self?.drain() }
             }
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
+            // Back in the coordinator, by any way: a task space no longer
+            // needs to offer the way back.
+            if let coordinator = nextState.coordinator,
+               nextState.selectedWorkspaceID(in: coordinator.windowID) == coordinator.workspaceID,
+               previousState.selectedWorkspaceID(in: coordinator.windowID) != coordinator.workspaceID {
+                self?.chat?.noteCoordinatorSelected()
+            }
+            if previousState.coordinator != nextState.coordinator {
+                self?.syncConversationSubscription()
+            }
             let workspaceID = nextState.coordinatorWorkspaceID
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
+            // A coordinator opened later starts with the chat.
+            self?.showsTerminal = false
             self?.onWorkspaceChange?(workspaceID)
         }
     }
 
     deinit {
         recheckTask?.cancel()
+        conversationObserver?.cancel()
         if let storeObserverToken {
             Task { @MainActor [store] in store.removeActionAppliedObserver(storeObserverToken) }
         }
@@ -233,8 +324,8 @@ final class CoordinatorController: ObservableObject {
             agentState: session != nil ? .running : (isStarting ? .starting : .notRunning),
             session: session,
             startFailure: session == nil && isStarting == false ? startFailure : nil,
-            queuedCount: queue.count,
-            hold: queue.isEmpty ? nil : hold
+            queuedCount: queuedEntries.count + pausedEntries.count,
+            hold: queuedEntries.isEmpty ? nil : hold
         )
     }
 
@@ -474,9 +565,13 @@ final class CoordinatorController: ObservableObject {
     /// Gives the coordinator's agent a message. The text is typed now when
     /// the agent is at an open prompt, and waits in order otherwise: while
     /// the agent works, while the user has a draft in that terminal, and
-    /// while no agent runs. One entry is typed for each open prompt. The
-    /// text is typed as programmatic input, so it never counts as the
-    /// user's own typing.
+    /// while no agent runs. One entry is typed for each open prompt.
+    ///
+    /// This is the one way into the coordinator for the chat's composer,
+    /// `coordinator send` and Toastty's own digests, so their text cannot
+    /// interleave. Pass `byUser: true` only when a person sent the message.
+    /// `id` names the message for its sender; the conversation's echo of a
+    /// typed message carries it.
     ///
     /// With `queueWhenHeld` off, text that cannot be typed now is not kept:
     /// the answer is `held`, and the caller sends its text again later. A
@@ -484,7 +579,12 @@ final class CoordinatorController: ObservableObject {
     /// change while it waits and is typed at most once. Such text never
     /// goes in front of entries that wait in the queue.
     @discardableResult
-    func send(_ text: String, queueWhenHeld: Bool = true) throws -> SendResult {
+    func send(
+        _ text: String,
+        queueWhenHeld: Bool = true,
+        byUser: Bool = false,
+        id: String = UUID().uuidString
+    ) throws -> SendResult {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.isEmpty == false else {
             throw CoordinatorError("The message is empty.")
@@ -493,52 +593,137 @@ final class CoordinatorController: ObservableObject {
         guard let location else {
             throw CoordinatorError("There is no coordinator. Open it first.")
         }
+        let entry = QueuedEntry(id: id, text: text, byUser: byUser)
         guard queueWhenHeld else {
-            guard queue.isEmpty else { return .held(hold ?? .awaitingTurn) }
-            switch typeAtOpenPrompt(text, location: location, moment: now()) {
+            guard queuedEntries.isEmpty else { return .held(hold ?? .awaitingTurn) }
+            switch typeAtOpenPrompt(entry, location: location, moment: now(), isSendersOwnCall: true) {
             case .typed(.delivered): return .sent
             case .typed: return .sentUnconfirmed
             case .held(let reason, _): return .held(reason)
             }
         }
-        guard queue.count < Self.maximumQueuedEntries else {
+        guard queuedEntries.count + pausedEntries.count < Self.maximumQueuedEntries else {
             throw CoordinatorError("The coordinator already has \(Self.maximumQueuedEntries) messages waiting.")
         }
-        queue.append(text)
-        let waitingBefore = queue.count - 1
-        switch drain() {
+        queuedEntries.append(entry)
+        let waitingBefore = queuedEntries.count - 1
+        switch drain(isSendersOwnCall: true) {
         case .delivered? where waitingBefore == 0:
             return .sent
         case .uncertain? where waitingBefore == 0:
             return .sentUnconfirmed
         default:
-            return .queued(position: queue.count, hold: hold ?? .awaitingTurn)
+            return .queued(position: queuedEntries.count, hold: hold ?? .awaitingTurn)
         }
+    }
+
+    /// Stops the coordinator's running turn, as Escape in its terminal
+    /// does. Entries that wait are set aside, so none starts a new turn
+    /// right after the stop: they wait until `resumeQueue`.
+    func stopTurn() throws {
+        guard let subscription = syncConversationSubscription() else {
+            throw CoordinatorError("The coordinator has no turn to stop.")
+        }
+        guard let summary = subscription.snapshot(at: now())?.summary,
+              let turnEpoch = summary.inputControl?.turnEpoch else {
+            throw CoordinatorError("The coordinator is not working on a turn.")
+        }
+        switch subscription.interrupt(RemoteConversationInterruptRequest(
+            conversationID: summary.conversationID,
+            expectedTurnEpoch: turnEpoch
+        )) {
+        case .accepted:
+            ToasttyLog.info("Stopped the coordinator's turn", category: .tasks, metadata: [
+                "set_aside": String(queuedEntries.count),
+            ])
+            pausedEntries.append(contentsOf: queuedEntries)
+            queuedEntries.removeAll()
+            drain()
+        case .rejected(let reason):
+            throw CoordinatorError("Toastty could not stop the coordinator's turn (\(reason.rawValue)).")
+        }
+    }
+
+    /// Lets the entries that a stop set aside go again, before any entry
+    /// that came later.
+    func resumeQueue() {
+        guard pausedEntries.isEmpty == false else { return }
+        queuedEntries.insert(contentsOf: pausedEntries, at: 0)
+        pausedEntries.removeAll()
+        drain()
+    }
+
+    /// Takes a waiting entry out of the queue. Returns it, or `nil` when it
+    /// was typed or removed already.
+    @discardableResult
+    func removeQueuedEntry(id: String) -> QueuedEntry? {
+        let removed: QueuedEntry
+        if let index = queuedEntries.firstIndex(where: { $0.id == id }) {
+            removed = queuedEntries.remove(at: index)
+        } else if let index = pausedEntries.firstIndex(where: { $0.id == id }) {
+            removed = pausedEntries.remove(at: index)
+        } else {
+            return nil
+        }
+        drain()
+        return removed
+    }
+
+    /// Reopens a prompt that text typed in the coordinator's terminal holds
+    /// closed. Call it only after the user said that the agent's prompt
+    /// holds none of their text: the next entry is then typed there.
+    /// Returns whether the prompt reopened.
+    @discardableResult
+    func releaseUserDraft() -> Bool {
+        guard let subscription = syncConversationSubscription() else { return false }
+        guard let summary = subscription.snapshot(at: now())?.summary,
+              case .localDraft(let draftEpoch) = summary.inputAvailability else { return false }
+        let result = subscription.releaseLocalDraft(RemoteConversationLocalDraftReleaseRequest(
+            conversationID: summary.conversationID,
+            expectedDraftEpoch: draftEpoch
+        ))
+        guard result == .released else { return false }
+        drain()
+        return true
+    }
+
+    /// The agent's conversation shows an open prompt now.
+    var promptIsOpenForTesting: Bool {
+        syncConversationSubscription()?.snapshot(at: now())?.summary.inputAvailability.allowsRemoteSend == true
+    }
+
+    /// The message was typed by this controller in this run of the app.
+    func didType(messageID: String) -> Bool {
+        typedMessageIDs.contains(messageID)
     }
 
     /// Types the first queued entry when the prompt is open. Returns that
     /// delivery's result, or `nil` when nothing was typed.
     @discardableResult
-    private func drain() -> TerminalInputDeliveryResult? {
+    private func drain(isSendersOwnCall: Bool = false) -> TerminalInputDeliveryResult? {
         recheckTask?.cancel()
         recheckTask = nil
         dropQueueOfAClosedCoordinator()
         defer {
-            if queuedCount != queue.count { queuedCount = queue.count }
+            let waiting = queuedEntries.count + pausedEntries.count
+            if queuedCount != waiting { queuedCount = waiting }
         }
-        guard let location, let text = queue.first else {
+        guard let location, let entry = queuedEntries.first else {
             setHold(nil)
             return nil
         }
         let moment = now()
-        switch typeAtOpenPrompt(text, location: location, moment: moment) {
+        // Only the entry its sender just gave is typed in the sender's own
+        // call. Any other entry was queued earlier.
+        let isSendersOwnCall = isSendersOwnCall && queuedEntries.count == 1
+        switch typeAtOpenPrompt(entry, location: location, moment: moment, isSendersOwnCall: isSendersOwnCall) {
         case .held(let reason, let recheckAt):
             setHold(reason)
             if let recheckAt { scheduleRecheck(at: recheckAt, from: moment) }
             return nil
         case .typed(let result):
-            queue.removeFirst()
-            if queue.isEmpty {
+            queuedEntries.removeFirst()
+            if queuedEntries.isEmpty {
                 setHold(nil)
             } else {
                 // Sets the hold of the next entry, which waits for this
@@ -557,14 +742,37 @@ final class CoordinatorController: ObservableObject {
         case held(CoordinatorSendHold, recheckAt: Date?)
     }
 
-    /// The one place that types into the coordinator: it types `text` when
-    /// the agent's prompt is open, and says why not otherwise.
-    private func typeAtOpenPrompt(_ text: String, location: CoordinatorLocation, moment: Date) -> TypingOutcome {
+    /// The one place that types into the coordinator: it types the entry
+    /// when the agent's prompt is open, and says why not otherwise.
+    ///
+    /// An agent whose conversation Toastty reads gets the text through
+    /// that conversation's send path. That path also serves a paired
+    /// phone, so one check of the prompt covers every sender, and each
+    /// open prompt is used once. Any other agent gets the text through
+    /// `CoordinatorSendGate`, which rests on the session's reported status.
+    private func typeAtOpenPrompt(
+        _ entry: QueuedEntry,
+        location: CoordinatorLocation,
+        moment: Date,
+        isSendersOwnCall: Bool
+    ) -> TypingOutcome {
         // During a restart the agent that still runs is about to end with
         // its terminal: text typed there would be lost. The start drains
         // the queue when it ends.
         guard isStarting == false else {
             return .held(.agentStarting, recheckAt: nil)
+        }
+        if let session, ProviderTranscriptSupport.isManagedProvider(session.agent),
+           let subscription = syncConversationSubscription() {
+            return typeThroughConversation(
+                entry,
+                subscription: subscription,
+                session: session,
+                moment: moment,
+                // A queued entry was the user's action when it was queued,
+                // not now that Toastty types it.
+                byUser: entry.byUser && isSendersOwnCall
+            )
         }
         switch CoordinatorSendGate.decide(promptFacts(location: location), now: moment) {
         case .hold(let reason, let recheckAt):
@@ -576,7 +784,7 @@ final class CoordinatorController: ObservableObject {
         guard let panelID = location.panelID, let session else {
             return .held(.noSession, recheckAt: nil)
         }
-        let result = deliverText(text, panelID)
+        let result = deliverText(entry.text, panelID)
         switch result {
         case .unavailable:
             return .held(.terminalUnavailable, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
@@ -586,21 +794,146 @@ final class CoordinatorController: ObservableObject {
                 at: moment,
                 submitConfirmed: result == .delivered
             )
-            ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
-                "session_id": session.sessionID,
-                "submit_confirmed": result == .delivered ? "true" : "false",
-                "queue_depth": String(max(0, queue.count - 1)),
-            ])
+            noteTyped(entry, session: session, result: result, throughConversation: false)
             return .typed(result)
         }
+    }
+
+    /// Types the entry through the conversation's send path, under the
+    /// prompt epoch the conversation shows now.
+    private func typeThroughConversation(
+        _ entry: QueuedEntry,
+        subscription: any LocalConversationSubscription,
+        session: SessionRecord,
+        moment: Date,
+        byUser: Bool
+    ) -> TypingOutcome {
+        guard let summary = subscription.snapshot(at: moment)?.summary else {
+            // Toastty does not know the agent's conversation yet. Its first
+            // report does not always change the session.
+            return .held(.agentStarting, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+        }
+        let epoch: RemoteInputEpoch
+        switch summary.inputAvailability {
+        case .openPrompt(let openEpoch):
+            epoch = openEpoch
+        case .localDraft:
+            return .held(.userDraft, recheckAt: nil)
+        case .pendingInteraction:
+            return .held(.busy, recheckAt: nil)
+        case .unavailable(let reason):
+            return .held(Self.hold(for: reason), recheckAt: nil)
+        }
+        let result = subscription.send(RemoteMessageSendRequest(
+            conversationID: summary.conversationID,
+            clientRequestID: entry.id,
+            expectedInputEpoch: epoch,
+            text: entry.text
+        ), byUser: byUser)
+        switch result {
+        case .accepted, .duplicate:
+            noteTyped(entry, session: session, result: .delivered, throughConversation: true)
+            return .typed(.delivered)
+        case .uncertain:
+            noteTyped(entry, session: session, result: .uncertain, throughConversation: true)
+            return .typed(.uncertain)
+        case .queued:
+            // Not reached: the request asks for the open prompt.
+            return .held(.busy, recheckAt: nil)
+        case .rejected(let reason):
+            switch reason {
+            case .localDraftPresent:
+                return .held(.userDraft, recheckAt: nil)
+            case .pendingInteraction:
+                return .held(.busy, recheckAt: nil)
+            case .surfaceUnavailable:
+                return .held(.terminalUnavailable, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+            case .notBound:
+                return .held(.agentStarting, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+            default:
+                // The prompt changed between the snapshot and the send. The
+                // conversation reports its next state.
+                return .held(.promptNotOpen, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+            }
+        }
+    }
+
+    private static func hold(for reason: RemoteInputUnavailableReason) -> CoordinatorSendHold {
+        switch reason {
+        case .starting:
+            .agentStarting
+        case .working:
+            .busy
+        case .surfaceUnavailable:
+            .terminalUnavailable
+        case .ended, .offline:
+            .noSession
+        case .interrupted, .error, .sessionWritesDisabled, .unknownProviderState:
+            .promptNotOpen
+        }
+    }
+
+    private func noteTyped(
+        _ entry: QueuedEntry,
+        session: SessionRecord,
+        result: TerminalInputDeliveryResult,
+        throughConversation: Bool
+    ) {
+        typedMessageIDs.append(entry.id)
+        if typedMessageIDs.count > Self.rememberedTypedMessages {
+            typedMessageIDs.removeFirst(typedMessageIDs.count - Self.rememberedTypedMessages)
+        }
+        ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
+            "session_id": session.sessionID,
+            "submit_confirmed": result == .delivered ? "true" : "false",
+            "path": throughConversation ? "conversation" : "status_gate",
+            "by_user": entry.byUser ? "true" : "false",
+            "queue_depth": String(max(0, queuedEntries.count - 1)),
+        ])
+        typedEntries.send(TypedEntry(id: entry.id, text: entry.text, echoesInConversation: throughConversation))
     }
 
     private func dropQueueOfAClosedCoordinator() {
         let workspaceID = location?.workspaceID
         guard workspaceID != queueWorkspaceID else { return }
-        queue.removeAll()
+        queuedEntries.removeAll()
+        pausedEntries.removeAll()
         lastDelivery = nil
         queueWorkspaceID = workspaceID
+    }
+
+    // MARK: - The conversation the controller sends through
+
+    /// Holds one subscription to the conversation in the coordinator's
+    /// terminal for as long as that terminal exists, and returns it.
+    ///
+    /// Toastty must read the conversation the whole time, not only when a
+    /// message waits. What decides whether the prompt is open is seen only
+    /// while it happens: text the user types in the terminal, and the use
+    /// of a prompt by a message. A reader that starts later would take a
+    /// prompt with the user's draft in it, or a prompt just used, for an
+    /// open one.
+    @discardableResult
+    private func syncConversationSubscription() -> (any LocalConversationSubscription)? {
+        let panelID = conversationAccess == nil ? nil : location?.panelID
+        if conversationSubscription?.panelID == panelID {
+            return conversationSubscription
+        }
+        conversationObserver?.cancel()
+        conversationObserver = nil
+        conversationSubscription?.cancel()
+        conversationSubscription = nil
+        guard let panelID, let conversationAccess else { return nil }
+        let subscription = conversationAccess.subscribeToConversation(inPanel: panelID)
+        let changes = subscription.changes
+        conversationSubscription = subscription
+        // A change can open the prompt for the next queued entry.
+        conversationObserver = Task { @MainActor [weak self] in
+            for await _ in changes {
+                self?.drain()
+            }
+        }
+        return subscription
     }
 
     private func promptFacts(location: CoordinatorLocation) -> CoordinatorPromptFacts {

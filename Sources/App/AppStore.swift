@@ -91,6 +91,11 @@ final class AppStore: ObservableObject {
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
 
+    /// The coordinator's panel shows its terminal in place of the chat. The
+    /// user sets it for a login, a folder-trust or a permission prompt. It
+    /// is not saved: a relaunch shows the chat again.
+    @Published var coordinatorShowsTerminal = false
+
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
     @Published var pendingRenameWorkspaceRequest: PendingWorkspaceRenameRequest?

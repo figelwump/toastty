@@ -3639,11 +3639,21 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationInterruptRequest,
         device: RemoteDeviceRecord
     ) -> RemoteConversationInterruptResult {
+        performInterrupt(request, origin: .device(device))
+    }
+
+    /// The one interrupt path for a paired device and for the Mac. As for a
+    /// send, the origin decides which caller checks apply.
+    private func performInterrupt(
+        _ request: RemoteConversationInterruptRequest,
+        origin: InputOrigin
+    ) -> RemoteConversationInterruptResult {
         let conversationID = request.conversationID
-        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID) else {
             return .rejected(reason: .notBound)
         }
-        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let context = deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         let result: RemoteConversationInterruptResult
         switch coordinator.evaluateInterrupt(
             for: conversationID,
@@ -3653,7 +3663,7 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             result = .rejected(reason: reason)
         case .accept:
-            recordRemoteInput(panelID: panelID)
+            recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
             let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3677,6 +3687,7 @@ final class RemoteAccessService: ObservableObject {
             category: .automation,
             metadata: [
                 "conversation_id": conversationID.rawValue.uuidString,
+                "origin": origin.logLabel,
                 "result": String(describing: result),
             ]
         )
@@ -3692,8 +3703,16 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationLocalDraftReleaseRequest,
         device: RemoteDeviceRecord
     ) -> RemoteConversationLocalDraftReleaseResult {
+        performLocalDraftRelease(request, origin: .device(device))
+    }
+
+    private func performLocalDraftRelease(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        origin: InputOrigin
+    ) -> RemoteConversationLocalDraftReleaseResult {
         let conversationID = request.conversationID
-        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID) else {
             return .rejected(reason: .notBound)
         }
         // Apply any provider transition the debounced sync has not pushed yet,
@@ -3704,7 +3723,7 @@ final class RemoteAccessService: ObservableObject {
         switch coordinator.releaseLocalDraft(
             for: conversationID,
             expectedDraftEpoch: request.expectedDraftEpoch,
-            context: deliveryContext(for: conversationID, panelID: panelID, device: device)
+            context: deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         ) {
         case .reject(let reason):
             result = .rejected(reason: reason)
@@ -4745,6 +4764,33 @@ extension RemoteAccessService: LocalConversationAccess {
         )
         return result
     }
+
+    /// Stops the running turn for an in-app caller, under the turn check of
+    /// a phone's Stop. Like `sendLocal`, it needs a live subscription that
+    /// holds the panel of the request's conversation.
+    fileprivate func interruptLocal(
+        _ request: RemoteConversationInterruptRequest,
+        subscriptionID: UUID
+    ) -> RemoteConversationInterruptResult {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID,
+              panelIDByConversationID[request.conversationID] == panelID else {
+            return .rejected(reason: .notBound)
+        }
+        return performInterrupt(request, origin: .mac(byUser: true))
+    }
+
+    /// Reopens a prompt that a draft in the terminal holds closed, for an
+    /// in-app caller. Nothing is typed.
+    fileprivate func releaseLocalDraftLocal(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        subscriptionID: UUID
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID,
+              panelIDByConversationID[request.conversationID] == panelID else {
+            return .rejected(reason: .notBound)
+        }
+        return performLocalDraftRelease(request, origin: .mac(byUser: true))
+    }
 }
 
 /// The subscription a caller holds. It forwards to the service, which
@@ -4789,6 +4835,16 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     func send(_ request: RemoteMessageSendRequest, byUser: Bool) -> RemoteMessageSendResult {
         service?.sendLocal(request, subscriptionID: id, byUser: byUser) ?? .rejected(reason: .notBound)
+    }
+
+    func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
+        service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        service?.releaseLocalDraftLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
     }
 
     func cancel() {

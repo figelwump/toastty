@@ -36,6 +36,8 @@ struct ToasttySelectableText: NSViewRepresentable {
         // TextKit 1, so the separate sizing stack below measures the same
         // layout that the view draws.
         let view = ToasttyTranscriptTextView(usingTextLayoutManager: false)
+        // Draws the outline of a chip behind its text.
+        view.textContainer?.replaceLayoutManager(ToasttyChipLayoutManager())
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
@@ -148,6 +150,7 @@ struct ToasttySelectableText: NSViewRepresentable {
             ]
             if let color = run.backgroundColor { attributes[.backgroundColor] = NSColor(color) }
             if let link = run.link { attributes[.link] = link }
+            if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = true }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
         }
@@ -185,21 +188,62 @@ struct ToasttySelectableText: NSViewRepresentable {
     }
 }
 
+/// Public so a host can tell that a reader is selecting transcript text.
 @MainActor
-final class ToasttyTranscriptTextView: NSTextView {
-    override func setFrameSize(_ newSize: NSSize) {
+public final class ToasttyTranscriptTextView: NSTextView {
+    override public func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         textContainer?.containerSize = CGSize(width: newSize.width,
                                              height: CGFloat.greatestFiniteMagnitude)
     }
 
-    override func copy(_ sender: Any?) {
+    override public func copy(_ sender: Any?) {
         let range = selectedRange()
         guard range.length > 0 else { return }
         // Transcript colors belong to Toastty. Pasting elsewhere must not carry
         // its dark-theme rich text or inline-code backgrounds.
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString((string as NSString).substring(with: range), forType: .string)
+        // A chip keeps its words together with no-break spaces. A copy
+        // gets ordinary spaces.
+        let copied = (string as NSString).substring(with: range).replacingOccurrences(of: "\u{00A0}", with: " ")
+        NSPasteboard.general.setString(copied, forType: .string)
+    }
+}
+
+extension NSAttributedString.Key {
+    /// Marks the characters of a chip. See `ConversationChipAttribute`.
+    static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
+}
+
+/// Draws a rounded outline behind each run of chip text. The text itself,
+/// its colors and its link are ordinary attributes.
+final class ToasttyChipLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let textStorage, let container = textContainers.first else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            // The whole chip, also when only a part of it is drawn now.
+            var chipRange = NSRange()
+            _ = textStorage.attribute(.toasttyChip, at: range.location,
+                                      longestEffectiveRange: &chipRange,
+                                      in: NSRange(location: 0, length: textStorage.length))
+            let glyphs = glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+            enumerateEnclosingRects(
+                forGlyphRange: glyphs,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: container
+            ) { rect, _ in
+                let outline = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.5, dy: 1.5)
+                let path = NSBezierPath(roundedRect: outline, xRadius: outline.height / 2, yRadius: outline.height / 2)
+                NSColor.white.withAlphaComponent(0.08).setFill()
+                path.fill()
+                NSColor.white.withAlphaComponent(0.22).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+        }
     }
 }
 #endif
