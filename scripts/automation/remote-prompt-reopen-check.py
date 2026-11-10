@@ -312,10 +312,14 @@ def run_failed_turn(check, expect):
         timer = cli('coordinator', 'wake', '--in', '60s')['wake']
         due = datetime.fromisoformat(timer['nextWakeAt'].replace('Z', '+00:00')).timestamp()
         if expect == 'stuck':
+            require(after_failure.get('status') == 'working', f'The failed turn is not shown as working: {after_failure}')
             time.sleep(max(0, due - time.time()) + 45)
             held = status()
             require(not digests(), f'The digest was typed: {digests()}')
-            require(held.get('status') == 'working', f'The session is not shown as working: {held}')
+            # Claude's idle reminder returns the status to ready after a
+            # minute. The conversation still shows a running turn.
+            require(held['wake']['nextWakeSource'] == 'coordinator' and held['wake']['nextWakeAt'] == timer['nextWakeAt'],
+                    f'The timer is not waiting: {held}')
             step('the digest is held, 45 seconds after its time', status=held, timer=timer, userMessages=user_messages())
             return
         require(after_failure.get('status') == 'error', f'The failed turn is not shown as an error: {after_failure}')
@@ -335,6 +339,12 @@ def run_failed_turn(check, expect):
         step('the digest and a later message were typed', digest=typed[0], secondsAfterDue=round(arrived - due, 1),
              status=after_digest, apiErrors=api_errors(), userMessages=user_messages(),
              modelRequests=len(stub.model_requests()))
+
+        # 3. Claude reminds an idle prompt after a minute. The failure stays.
+        time.sleep(80)
+        reminded = status()
+        require(reminded.get('status') == 'error', f"Claude's idle reminder hid the failure: {reminded}")
+        step('the failure is still shown after a minute at the prompt', status=reminded)
     finally:
         check.evidence['stubRequests'] = stub.requests[:200]
         try:
