@@ -195,11 +195,15 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
                 window: try XCTUnwrap(state.window(id: fixture.windowID)),
                 workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
             )
+            #if os(macOS)
+            // ToasttyCommandMenus is the macOS menu layer (SwiftUI); Linux
+            // checks the AppStore entry point below.
             XCTAssertEqual(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
                 state: state,
                 commandSelection: selection,
                 activePanelIDs: [tab.panelIDs[2]]
             ), expectedAvailability)
+            #endif
             XCTAssertEqual(fixture.store.canFocusNextUnreadOrActivePanelFromCommand(
                 preferredWindowID: fixture.windowID,
                 sessionRuntimeStore: fixture.sessions

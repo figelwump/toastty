@@ -3,6 +3,12 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
+#if os(Linux)
+private let runsOnCorelibsFoundation = true
+#else
+private let runsOnCorelibsFoundation = false
+#endif
+
 @MainActor
 struct AgentHookDispatcherTests {
     private static let workspaceID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
@@ -540,7 +546,10 @@ struct AgentHookDispatcherTests {
         #expect(result.completion == .exited(code: 0))
     }
 
-    @Test
+    // swift-corelibs-foundation reports a Process's exit only after every
+    // inheritor of its internal monitoring descriptor exits, so the orphaned
+    // `sleep` hides the SIGTERM exit and the runner escalates to SIGKILL.
+    @Test(.disabled(if: runsOnCorelibsFoundation))
     func realProcessHonoringSIGTERMReportsTimeoutWithoutForceKill() async throws {
         let scriptURL = try AgentHookTestSupport.makeTemporaryExecutableScript(contents: """
         #!/bin/sh

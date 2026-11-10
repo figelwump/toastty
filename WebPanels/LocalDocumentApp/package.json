@@ -7,6 +7,9 @@
     "test": "node --test test/*.test.mjs && npm run check-bundle-sync"
   },
   "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.14",
     "@wooorm/starry-night": "^3.9.0",
     "hast-util-to-html": "^9.0.5",
     "highlight.js": "^11.11.1",

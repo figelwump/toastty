@@ -2,6 +2,8 @@
 import XCTest
 
 final class ToasttyAppDefaultsTests: XCTestCase {
+    #if os(macOS)
+    // AppKitDefaultPreferences tunes AppKit tooltips and window restoration (macOS only).
     func testAppKitDefaultPreferencesRegistersFasterToolTipDelay() throws {
         let suiteName = "toastty-appkit-defaults-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -20,7 +22,10 @@ final class ToasttyAppDefaultsTests: XCTestCase {
             defaults.persistentDomain(forName: suiteName)?[AppKitDefaultPreferences.initialToolTipDelayKey]
         )
     }
+    #endif
 
+    #if os(macOS)
+    // AppKitDefaultPreferences tunes AppKit tooltips and window restoration (macOS only).
     func testAppKitDefaultPreferencesDoesNotOverrideExplicitToolTipDelay() throws {
         let suiteName = "toastty-appkit-defaults-override-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -35,7 +40,10 @@ final class ToasttyAppDefaultsTests: XCTestCase {
 
         XCTAssertEqual(defaults.integer(forKey: AppKitDefaultPreferences.initialToolTipDelayKey), 900)
     }
+    #endif
 
+    #if os(macOS)
+    // AppKitDefaultPreferences tunes AppKit tooltips and window restoration (macOS only).
     func testAppKitDefaultPreferencesRegistersToolTipDelayForStandardDefaultsWhenUsingIsolatedSuite() throws {
         let isolatedSuiteName = "toastty-appkit-defaults-isolated-tests-\(UUID().uuidString)"
         let standardSuiteName = "toastty-appkit-defaults-standard-tests-\(UUID().uuidString)"
@@ -77,6 +85,7 @@ final class ToasttyAppDefaultsTests: XCTestCase {
             ]
         )
     }
+    #endif
 
     func testRuntimeHomeUsesIsolatedDefaultsSuite() {
         let key = "toastty-app-defaults-tests-\(UUID().uuidString)"

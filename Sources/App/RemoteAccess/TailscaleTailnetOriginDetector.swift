@@ -44,11 +44,22 @@ struct TailscaleTailnetOriginDetector: Sendable {
             return [URL(fileURLWithPath: path)]
         }
 #endif
+#if os(Linux)
+        // Distribution packages install to /usr/bin; snaps and manual
+        // installs use the others.
+        return [
+            URL(fileURLWithPath: "/usr/bin/tailscale"),
+            URL(fileURLWithPath: "/usr/local/bin/tailscale"),
+            URL(fileURLWithPath: "/usr/sbin/tailscale"),
+            URL(fileURLWithPath: "/snap/bin/tailscale"),
+        ]
+#else
         return [
             URL(fileURLWithPath: "/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
             URL(fileURLWithPath: "/usr/local/bin/tailscale"),
             URL(fileURLWithPath: "/opt/homebrew/bin/tailscale"),
         ]
+#endif
     }
 
     private let executableCandidates: [URL]

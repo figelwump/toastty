@@ -182,7 +182,16 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
             annotation: try #require(WorkspaceAnnotation.validated(text: "PR #7", url: "https://github.com/test/repo/pull/7"))
         ))
 
+        #if os(Linux)
+        // SwiftPM puts the toastty CLI next to the test runner, and the test
+        // runner has no app bundle resources (the Linux app resolves them).
+        let cliPath = Bundle.main.bundleURL.appendingPathComponent("toastty").path
+        let scriptPath = LinuxAppLogic.defaultAppResourcesPath(environment: ProcessInfo.processInfo.environment)
+            .map { "\($0)/workspace-pull-request.py" }
+        #else
         let cliPath = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/toastty").path
+        let scriptPath = Bundle.main.url(forResource: "workspace-pull-request", withExtension: "py")?.path
+        #endif
         #expect(FileManager.default.isExecutableFile(atPath: cliPath))
         let scenario = Scenario(
             repo: repo,
@@ -202,6 +211,7 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
                 cliExecutablePath: cliPath,
                 pathOverride: "\(fakeBin.path):/usr/bin:/bin"
             ),
+            scriptPath: scriptPath,
             userDefaults: nil,
             notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") },
             presentFailure: { [scenario] title, message in scenario.failureAlerts.append("\(title): \(message)") }

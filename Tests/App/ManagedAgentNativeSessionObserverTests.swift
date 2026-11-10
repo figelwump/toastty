@@ -170,6 +170,8 @@ struct ManagedAgentNativeSessionObserverTests {
         )
     }
 
+    #if os(macOS)
+    // Backdates a snapshot's mtime; Linux file birth times cannot move earlier (macOS lowers birthtime with mtime), so contentUpdatedAt stays at now.
     @Test
     func observerCapturesCodexSessionFromShellSnapshot() async throws {
         let fixture = try makeNativeSessionScannerFixture()
@@ -234,6 +236,7 @@ struct ManagedAgentNativeSessionObserverTests {
         #expect(record.cwd == fixture.cwdURL.path)
         #expect(record.capturedAt == capturedAt)
     }
+    #endif
 
     @Test
     func scannerFindsCodexResumeFromShellSnapshotWhenRolloutIsOldAndCwdDiffers() async throws {

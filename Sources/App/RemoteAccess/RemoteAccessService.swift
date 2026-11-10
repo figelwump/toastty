@@ -582,6 +582,9 @@ final class RemoteAccessService: ObservableObject {
     ] = [:]
 
     private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
+    /// Conversations whose replay from the start changed the projection
+    /// without broadcasting it; each gets one resnapshot when it catches up.
+    private var conversationIDsAwaitingReplayResnapshot: Set<RemoteConversationID> = []
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
     private var panelIDByConversationID: [RemoteConversationID: UUID] = [:]
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
@@ -2517,7 +2520,7 @@ final class RemoteAccessService: ObservableObject {
         if isEnabled, projectionStore.isConversationRegistered(conversationID) {
             server.broadcast(.resnapshotRequired(conversationID: conversationID))
         }
-        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop(reason: "conversation_removed")
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
         controlCPromptEpochByConversationID.removeValue(forKey: conversationID)
@@ -2692,7 +2695,7 @@ final class RemoteAccessService: ObservableObject {
             if let tailer = tailersByConversationID.removeValue(forKey: candidate.conversationID) {
                 let path = tailer.fileURL.path
                 let provider = tailer.provider
-                tailer.stop()
+                tailer.stop(reason: "provider_feed_rewritten")
                 startTailer(for: candidate.conversationID, provider: provider, path: path)
             }
             changed = true
@@ -2741,7 +2744,7 @@ final class RemoteAccessService: ObservableObject {
             if existing.fileURL.path == path {
                 return
             }
-            existing.stop()
+            existing.stop(reason: "transcript_path_changed")
             tailersByConversationID[conversationID] = nil
         }
         startTailer(for: conversationID, provider: provider, path: path)
@@ -2755,7 +2758,7 @@ final class RemoteAccessService: ObservableObject {
         for conversationID: RemoteConversationID,
         runtimeBound: Bool
     ) -> Bool {
-        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop(reason: "transcript_path_cleared")
 
         guard let projector = projectionStore.projectorState(for: conversationID),
               projector.providerSessionFilePath != nil else {
@@ -2828,12 +2831,24 @@ final class RemoteAccessService: ObservableObject {
             // Profile reports have no transcript sequence or lifecycle event.
             // Publish them through the session list even when nothing else
             // changed, so an in-session model switch reaches subscribers.
-            broadcastEvents(
-                emitted,
-                for: conversationID,
-                sessionListChanged: previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
-            )
+            let profileChanged = previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
+            if tailersByConversationID[conversationID]?.hasCaughtUp == false {
+                // A long transcript replays as hundreds of pages. A phone that
+                // opened the conversation mid-replay overflows its live buffer
+                // and stops on a partial history, so send one resnapshot when
+                // the replay catches up instead.
+                if emitted.isEmpty == false || profileChanged {
+                    conversationIDsAwaitingReplayResnapshot.insert(conversationID)
+                }
+            } else {
+                broadcastEvents(emitted, for: conversationID, sessionListChanged: profileChanged)
+            }
             drainSendQueue(for: conversationID)
+
+        case .caughtUp:
+            guard conversationIDsAwaitingReplayResnapshot.remove(conversationID) != nil else { return }
+            server.broadcast(.resnapshotRequired(conversationID: conversationID))
+            broadcastSessionList()
 
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
@@ -2844,7 +2859,7 @@ final class RemoteAccessService: ObservableObject {
             guard let tailer = tailersByConversationID[conversationID] else { return }
             let path = tailer.fileURL.path
             let provider = tailer.provider
-            tailer.stop()
+            tailer.stop(reason: "file_replaced")
             tailersByConversationID[conversationID] = nil
             projectionStore.forceResnapshot(for: conversationID, bindingID: UUID(), at: Date())
             if isEnabled {

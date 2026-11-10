@@ -1,0 +1,328 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:16:07 -0700
+Subject: [PATCH 3/6] embedded: add a Linux/OpenGL platform with host-presented
+ frames
+
+The embedded apprt only accepted macOS and iOS surfaces. Add
+GHOSTTY_PLATFORM_LINUX for non-Darwin targets. As in the GTK apprt, the
+OpenGL renderer renders on its own thread into a surfaceless EGL
+framebuffer and exports each finished frame as a DMA-BUF or a CPU pixel
+buffer; the host is told to redraw through the existing render action.
+
+New embedder API:
+- ghostty_surface_take_frame / ghostty_frame_release: pull the latest
+  exported frame (ghostty_frame_s) from the host's draw handler and
+  release it once the compositor is done with it.
+- ghostty_surface_set_presentation_health: report that DMA-BUF frames
+  cannot be imported so the renderer falls back to CPU frames.
+- ghostty_surface_set_display_realized: release or rebuild GPU
+  resources when the host widget is unrealized or realized.
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index a11c95119..e527d83cb 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -70,6 +70,7 @@ typedef enum {
+   GHOSTTY_PLATFORM_INVALID,
+   GHOSTTY_PLATFORM_MACOS,
+   GHOSTTY_PLATFORM_IOS,
++  GHOSTTY_PLATFORM_LINUX,
+ } ghostty_platform_e;
+ 
+ typedef enum {
+@@ -494,9 +495,18 @@ typedef struct {
+   void* uiview;
+ } ghostty_platform_ios_s;
+ 
++// Linux/OpenGL: the renderer draws on its own thread into an offscreen
++// (surfaceless EGL) framebuffer and exports each finished frame. The host
++// is notified with GHOSTTY_ACTION_RENDER and presents frames it pulls with
++// ghostty_surface_take_frame.
++typedef struct {
++  void* reserved;  // must be NULL
++} ghostty_platform_linux_s;
++
+ typedef union {
+   ghostty_platform_macos_s macos;
+   ghostty_platform_ios_s ios;
++  ghostty_platform_linux_s opengl;  // GHOSTTY_PLATFORM_LINUX (`linux` is a GNU C macro)
+ } ghostty_platform_u;
+ 
+ typedef enum {
+@@ -520,6 +530,36 @@ typedef struct {
+   ghostty_surface_context_e context;
+ } ghostty_surface_config_s;
+ 
++// Frames exported by renderers that do not draw into a host view
++// (OpenGL on Linux). See ghostty_surface_take_frame.
++typedef enum {
++  GHOSTTY_FRAME_NONE = 0,
++  GHOSTTY_FRAME_DMABUF = 1,
++  GHOSTTY_FRAME_MEMORY = 2,
++} ghostty_frame_kind_e;
++
++typedef struct {
++  ghostty_frame_kind_e kind;
++  uint32_t width;
++  uint32_t height;
++  // Row 0 is the bottom row (OpenGL origin); flip when compositing.
++  bool flip_y;
++  bool premultiplied;
++  // GHOSTTY_FRAME_MEMORY: tightly packed RGBA8 (sRGB-encoded) pixels.
++  const uint8_t* pixels;
++  size_t pixels_len;
++  uint32_t stride;
++  // GHOSTTY_FRAME_DMABUF: the fds remain owned by the frame and are
++  // closed by ghostty_frame_release.
++  uint32_t fourcc;
++  uint64_t modifier;
++  uint32_t n_planes;
++  int fds[4];
++  uint32_t offsets[4];
++  uint32_t strides[4];
++  void* handle;
++} ghostty_frame_s;
++
+ typedef struct {
+   uint16_t columns;
+   uint16_t rows;
+@@ -1236,6 +1276,13 @@ GHOSTTY_API bool ghostty_surface_is_at_prompt(ghostty_surface_t);
+ GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
++// Linux/OpenGL frame presentation. See ghostty_frame_s.
++GHOSTTY_API bool ghostty_surface_take_frame(ghostty_surface_t, ghostty_frame_s*);
++GHOSTTY_API void ghostty_frame_release(ghostty_frame_s*);
++GHOSTTY_API void ghostty_surface_set_presentation_health(
++    ghostty_surface_t,
++    ghostty_action_renderer_health_e);
++GHOSTTY_API void ghostty_surface_set_display_realized(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
+ GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 10c34de5a..9444c6220 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -386,6 +386,7 @@ pub const App = struct {
+ pub const Platform = union(PlatformTag) {
+     macos: MacOS,
+     ios: IOS,
++    linux: Linux,
+ 
+     // If our build target for libghostty is not darwin then we do
+     // not include macos support at all.
+@@ -399,6 +400,14 @@ pub const Platform = union(PlatformTag) {
+         uiview: objc.Object,
+     } else void;
+ 
++    /// Linux (and other EGL/OpenGL targets). The host owns presentation:
++    /// the OpenGL renderer renders on its own thread into an offscreen
++    /// (surfaceless EGL) framebuffer and exports each finished frame as a
++    /// DMA-BUF or a CPU pixel buffer. The host is notified with the
++    /// `render` action and pulls frames with `ghostty_surface_take_frame`,
++    /// exactly like Ghostty's GTK apprt does from its snapshot handler.
++    pub const Linux = if (!builtin.target.os.tag.isDarwin()) struct {} else void;
++
+     // The C ABI compatible version of this union. The tag is expected
+     // to be stored elsewhere.
+     pub const C = extern union {
+@@ -409,6 +418,11 @@ pub const Platform = union(PlatformTag) {
+         ios: extern struct {
+             uiview: ?*anyopaque,
+         },
++
++        linux: extern struct {
++            /// Reserved for future use. Must be null.
++            reserved: ?*anyopaque,
++        },
+     };
+ 
+     /// Initialize a Platform a tag and configuration from the C ABI.
+@@ -428,6 +442,11 @@ pub const Platform = union(PlatformTag) {
+                     break :ios error.UIViewMustBeSet);
+                 break :ios .{ .ios = .{ .uiview = uiview } };
+             } else error.UnsupportedPlatform,
++
++            .linux => if (Linux != void)
++                .{ .linux = .{} }
++            else
++                error.UnsupportedPlatform,
+         };
+     }
+ };
+@@ -438,6 +457,7 @@ pub const PlatformTag = enum(c_int) {
+ 
+     macos = 1,
+     ios = 2,
++    linux = 3,
+ };
+ 
+ pub const EnvVar = extern struct {
+@@ -1504,6 +1524,50 @@ pub const CAPI = struct {
+         }
+     };
+ 
++    /// ghostty_frame_kind_e
++    const FrameKind = enum(c_int) {
++        none = 0,
++        dmabuf = 1,
++        memory = 2,
++    };
++
++    /// ghostty_frame_s
++    ///
++    /// A finished frame exported by the renderer for presentation by the
++    /// host. Only produced by renderers that export frames (OpenGL); the
++    /// host must release every taken frame with ghostty_frame_release.
++    const Frame = extern struct {
++        kind: FrameKind = .none,
++        width: u32 = 0,
++        height: u32 = 0,
++
++        /// True when row 0 is the bottom row (OpenGL origin). The host
++        /// must flip vertically when compositing.
++        flip_y: bool = false,
++
++        /// True when color values are premultiplied by alpha.
++        premultiplied: bool = true,
++
++        /// Memory frames: tightly packed RGBA8 (sRGB-encoded) pixels.
++        pixels: ?[*]const u8 = null,
++        pixels_len: usize = 0,
++        stride: u32 = 0,
++
++        /// DMA-BUF frames: DRM format, modifier and planes. The fds stay
++        /// owned by the frame and are closed by ghostty_frame_release.
++        fourcc: u32 = 0,
++        modifier: u64 = 0,
++        n_planes: u32 = 0,
++        fds: [4]c_int = .{ -1, -1, -1, -1 },
++        offsets: [4]u32 = .{ 0, 0, 0, 0 },
++        strides: [4]u32 = .{ 0, 0, 0, 0 },
++
++        /// Opaque owner of the frame's resources.
++        handle: ?*anyopaque = null,
++    };
++
++    const ExportedFrame = renderer.Renderer.ExportedFrame;
++
+     const SurfaceSize = extern struct {
+         columns: u16,
+         rows: u16,
+@@ -1960,6 +2024,101 @@ pub const CAPI = struct {
+         surface.draw();
+     }
+ 
++    /// Take the latest frame the renderer exported, if any. Returns false
++    /// (leaving `out` zeroed with kind NONE) when no new frame is pending
++    /// or the renderer does not export frames (Metal). Call this from the
++    /// host's draw/snapshot handler after a `render` action. Thread-safe.
++    export fn ghostty_surface_take_frame(
++        surface: *Surface,
++        out: *Frame,
++    ) bool {
++        out.* = .{};
++        if (comptime ExportedFrame == void) return false;
++
++        const frame = surface.core_surface.renderer.takeFrame() orelse
++            return false;
++        const alloc = global.alloc();
++        const owned = alloc.create(ExportedFrame) catch |err| {
++            log.warn("error allocating frame err={}", .{err});
++            frame.deinit();
++            return false;
++        };
++        owned.* = frame;
++
++        out.handle = owned;
++        out.flip_y = !renderer.Renderer.custom_shader_y_is_down;
++        switch (frame) {
++            .memory => |m| {
++                out.kind = .memory;
++                out.width = m.width;
++                out.height = m.height;
++                out.premultiplied = true;
++                out.pixels = m.pixels.ptr;
++                out.pixels_len = m.pixels.len;
++                out.stride = m.width * 4;
++            },
++
++            .dmabuf => |d| {
++                out.kind = .dmabuf;
++                out.width = d.width;
++                out.height = d.height;
++                out.premultiplied = d.premultiplied;
++                out.fourcc = d.fourcc;
++                out.modifier = d.modifier;
++                out.n_planes = d.planes.count;
++                for (0..d.planes.count) |i| {
++                    out.fds[i] = d.planes.fds[i];
++                    out.offsets[i] = @intCast(d.planes.offsets[i]);
++                    out.strides[i] = @intCast(d.planes.strides[i]);
++                }
++            },
++        }
++
++        return true;
++    }
++
++    /// Release a frame returned by ghostty_surface_take_frame: frees the
++    /// pixel memory or closes the DMA-BUF fds. Safe to call on any thread
++    /// and after the surface has been freed. Resets `frame` to NONE.
++    export fn ghostty_frame_release(frame: *Frame) void {
++        if (comptime ExportedFrame == void) return;
++        if (frame.handle) |h| {
++            const owned: *ExportedFrame = @ptrCast(@alignCast(h));
++            owned.deinit();
++            global.alloc().destroy(owned);
++        }
++        frame.* = .{};
++    }
++
++    /// Report whether the host can present the frames the renderer
++    /// exports (ghostty_action_renderer_health_e). Report UNHEALTHY when
++    /// a DMA-BUF frame could not be imported (or the host has no GPU
++    /// compositor, e.g. GDK Broadway) so the renderer switches to CPU
++    /// memory frames. Mirrors the GTK apprt.
++    export fn ghostty_surface_set_presentation_health(
++        surface: *Surface,
++        health: c_int,
++    ) void {
++        const h = std.enums.fromInt(renderer.Health, health) orelse return;
++        surface.core_surface.reportPresentationHealth(h);
++    }
++
++    /// Tell the renderer whether the host's display for this surface is
++    /// realized. While unrealized the renderer releases GPU resources and
++    /// stops drawing. Surfaces start realized.
++    export fn ghostty_surface_set_display_realized(
++        surface: *Surface,
++        realized: bool,
++    ) void {
++        if (realized) {
++            surface.core_surface.displayRealized() catch |err| {
++                log.warn("error realizing display err={}", .{err});
++            };
++        } else {
++            surface.core_surface.displayUnrealized();
++        }
++    }
++
+     /// Update the size of a surface. This will trigger resize notifications
+     /// to the pty and the renderer.
+     export fn ghostty_surface_set_size(surface: *Surface, w: u32, h: u32) void {
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index a98dce87a..805260cc7 100644
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -82,6 +82,8 @@ pub fn init(
+             .view = switch (opts.rt_surface.platform) {
+                 .macos => |v| v.nsview,
+                 .ios => |v| v.uiview,
++                // Rejected by Platform.init on Darwin targets.
++                .linux => unreachable,
+             },
+         },
+ 

@@ -830,6 +830,10 @@ final class WorkspaceLayoutDisplayDiagnosticsObserver {
     private let resolutionProvider: ResolutionProvider
     private let logger: Logger
     private var lastResolution: WorkspaceLayoutProfileResolution
+    #if os(Linux)
+    // No Objective-C selectors on Linux; observe with a block instead.
+    nonisolated(unsafe) private var displayChangeObserver: (any NSObjectProtocol)?
+    #endif
 
     init(
         persistenceProfileID: String,
@@ -846,23 +850,46 @@ final class WorkspaceLayoutDisplayDiagnosticsObserver {
         self.resolutionProvider = resolutionProvider
         self.logger = logger
         lastResolution = resolutionProvider()
+        #if os(Linux)
+        // No target queue: LinuxPlatform posts this from the main actor, and
+        // swift-corelibs-foundation would enqueue-and-wait for `.main`
+        // (a deadlock when the poster is not `OperationQueue.current`).
+        displayChangeObserver = notificationCenter.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recordDisplayChangeIfNeeded()
+            }
+        }
+        #else
         notificationCenter.addObserver(
             self,
             selector: #selector(handleDisplayConfigurationChange),
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        #endif
     }
 
     deinit {
+        #if os(Linux)
+        if let displayChangeObserver {
+            notificationCenter.removeObserver(displayChangeObserver)
+        }
+        #else
         notificationCenter.removeObserver(self)
+        #endif
     }
 
+    #if !os(Linux)
     @objc
     private func handleDisplayConfigurationChange(_ notification: Notification) {
         _ = notification
         recordDisplayChangeIfNeeded()
     }
+    #endif
 
     func recordDisplayChangeIfNeeded() {
         let nextResolution = resolutionProvider()

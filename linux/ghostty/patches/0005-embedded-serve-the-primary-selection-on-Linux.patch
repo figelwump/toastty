@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Toastty Linux Port <farazrkhan@gmail.com>
+Date: Tue, 20 Oct 2026 12:16:07 -0700
+Subject: [PATCH 5/6] embedded: serve the primary selection on Linux
+
+On Linux the selection clipboard is the X11/Wayland primary selection,
+which the GTK apprt also uses for the primary clipboard (OSC 52 'p').
+Report the primary clipboard as supported when the embedder supports
+the selection clipboard on non-Darwin targets.
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 74dc0c0df..9aa2d20ee 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -735,11 +735,12 @@ pub const Surface = struct {
+             .standard => true,
+             .selection => self.app.opts.supports_selection_clipboard,
+ 
+-            // No embedder can serve the primary selection: the embedding
+-            // API has no option to declare support for it, and macOS (the
+-            // only GUI embedder) has no primary selection. The selection
+-            // flag above covers a distinct custom pasteboard, not this.
+-            .primary => false,
++            // macOS has no primary selection; the selection flag there
++            // covers a distinct custom pasteboard. On Linux the selection
++            // flag means the X11/Wayland primary selection, which the GTK
++            // apprt also uses for `.primary`, so mirror that.
++            .primary => (comptime !builtin.target.os.tag.isDarwin()) and
++                self.app.opts.supports_selection_clipboard,
+         };
+     }
+ 
