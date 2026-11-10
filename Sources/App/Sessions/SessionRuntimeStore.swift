@@ -123,6 +123,21 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
+    /// A launch command that Toastty typed into a shell and that the shell has
+    /// not been seen to start. While one is pending for a session, a shell at
+    /// its prompt does not mean that the session's agent has ended.
+    private struct PendingManagedLaunchCommand {
+        let submittedAt: Date
+        /// The shell showed its prompt at or after submission. Only then does
+        /// a busy shell mean that it runs the typed command. Before the first
+        /// prompt, a starting shell is busy too.
+        var shellShowedPrompt: Bool
+    }
+    private var pendingManagedLaunchCommandsBySessionID: [String: PendingManagedLaunchCommand] = [:]
+    /// How long a typed launch command may wait for its shell to start it.
+    /// The longest wait seen on a loaded machine was 2 s. The limit leaves a
+    /// wide margin, and still ends a launch whose command never starts.
+    static let managedLaunchCommandStartTimeout: TimeInterval = 30
     /// When someone last typed into each panel, with or without a session.
     private var lastLocalInputAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
@@ -336,6 +351,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID = [:]
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
+        pendingManagedLaunchCommandsBySessionID = [:]
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -702,6 +718,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID[sessionID] = UUID()
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
         if providerConversationFeedsBySessionID.removeValue(forKey: sessionID) != nil {
             providerConversationRevision &+= 1
         }
@@ -3061,6 +3078,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
@@ -5909,6 +5927,72 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         stopSessionForPanel(panelID: panelID, reason: reason, at: now)
         return true
+    }
+
+    func noteManagedLaunchCommandSubmitted(sessionID: String, shellWasAtPrompt: Bool, at now: Date) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else {
+            return
+        }
+        pendingManagedLaunchCommandsBySessionID[sessionID] = PendingManagedLaunchCommand(
+            submittedAt: now,
+            shellShowedPrompt: shellWasAtPrompt
+        )
+    }
+
+    func isAwaitingManagedLaunchCommandStart(panelID: UUID, at now: Date) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              var pending = pendingManagedLaunchCommandsBySessionID[record.sessionID] else {
+            return false
+        }
+        let waited = now.timeIntervalSince(pending.submittedAt)
+        guard waited < Self.managedLaunchCommandStartTimeout else {
+            // The command never started: for example the user cleared the
+            // typed line. The prompt now counts as the end of the session.
+            pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+            ToasttyLog.warning(
+                "Managed launch command did not start in time",
+                category: .terminal,
+                metadata: [
+                    "session_id": record.sessionID,
+                    "panel_id": panelID.uuidString,
+                    "agent": record.agent.rawValue,
+                    "waited_seconds": String(format: "%.3f", waited),
+                ]
+            )
+            return false
+        }
+        if pending.shellShowedPrompt == false {
+            pending.shellShowedPrompt = true
+            pendingManagedLaunchCommandsBySessionID[record.sessionID] = pending
+        }
+        return true
+    }
+
+    func noteShellLeftPrompt(panelID: UUID, at now: Date) {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              let pending = pendingManagedLaunchCommandsBySessionID[record.sessionID] else {
+            return
+        }
+        let waited = now.timeIntervalSince(pending.submittedAt)
+        guard pending.shellShowedPrompt else {
+            // The shell has not shown a prompt since the command was typed, so
+            // it may still run its own startup. Keep waiting, up to the limit.
+            if waited >= Self.managedLaunchCommandStartTimeout {
+                pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+            }
+            return
+        }
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+        ToasttyLog.info(
+            "Managed launch command started",
+            category: .terminal,
+            metadata: [
+                "session_id": record.sessionID,
+                "panel_id": panelID.uuidString,
+                "agent": record.agent.rawValue,
+                "waited_seconds": String(format: "%.3f", waited),
+            ]
+        )
     }
 }
 
