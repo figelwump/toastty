@@ -563,7 +563,7 @@ survive an app quit; a message from `coordinator send` waits in memory, and
 an app quit loses it. Closing the coordinator's workspace drops the queue.
 
 Each message from `coordinator send` gets a first line that names its
-sender; see [who a message is from](#the-coordinator) below.
+sender; see "Who a message is from" below.
 
 The chat's composer, quick entry, `coordinator send` and Toastty's own
 digests all go through this one queue, so their text never mixes. For an agent whose
@@ -590,7 +590,9 @@ text:
 | no `[Toastty]` line | You, in the chat or in the terminal. |
 
 The sender's text starts on the second line, and the coordinator's
-instructions say that only the first line counts. So text that an agent
+instructions say that only the first line counts. Claude Code records a
+long typed message inside `<pasted_content>` tags; the first line inside
+them is then the message's first line, for the coordinator and for the chat. So text that an agent
 sends with `coordinator send` cannot read as yours, as a digest or as a
 quick entry message, whatever it says. The coordinator treats such a message
 as data from that sender, as it treats a task's reply. Toastty takes the

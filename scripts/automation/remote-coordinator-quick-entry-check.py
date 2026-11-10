@@ -291,6 +291,29 @@ class Run(skill.Run):
         self.pid = self.instance.process.pid
         self.ui = UI(self.artifacts, self.pid)
 
+    # Claude Code records a long typed message inside one wrapper.
+    PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">\s*$', re.S)
+
+    def records(self):
+        """Claude's transcript records, with a wrapped message as its own text."""
+        records = super().records()
+        for record in records:
+            message = record.get('message')
+            if record.get('type') != 'user' or not isinstance(message, dict):
+                continue
+            content = message.get('content')
+            if isinstance(content, str):
+                match = self.PASTED.match(content)
+                if match:
+                    message['content'] = match.group(2)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        match = self.PASTED.match(part.get('text', ''))
+                        if match:
+                            part['text'] = match.group(2)
+        return records
+
     def capture(self, name):
         """A frame of the app's windows, when this build can make one."""
         self.frame_count += 1
