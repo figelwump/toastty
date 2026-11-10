@@ -83,7 +83,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's seven shipped skills and accepted
+The read-only inventory includes Toastty's eight shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -1004,7 +1004,11 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   is given, and starts the agent when none runs. It returns after the start
   attempt, with the `status` fields, `createdWorkspace` and `startedAgent`.
   `--window` names the window that gets a new coordinator; without it, the
-  selected window does.
+  selected window does. Before the agent starts, `open` and `restart` make
+  sure that the coordinator's folder holds its instruction files, `policy.md`
+  and `ledger.md`, in a git repository; see
+  [The coordinator's folder](tasks.md#the-coordinators-folder). They fail
+  when Toastty cannot write the instructions.
 - `restart` starts a fresh agent session in the same workspace, without
   selecting it. An agent that still runs is ended once the new one started;
   a start that fails leaves it alone.

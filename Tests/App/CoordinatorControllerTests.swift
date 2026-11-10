@@ -27,10 +27,16 @@ struct CoordinatorControllerTests {
             var result: (() -> TerminalInputDeliveryResult?)?
         }
 
+        /// What Toastty ships as the coordinator's instructions; a test can
+        /// change it, as an update of Toastty does. `nil` is an app that
+        /// cannot read them.
+        let instructions = CoordinatorFolderTests.Instructions()
+
         init(readinessTimeout: Duration = .seconds(3)) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
             self.tasks = tasks
             directory = tasks.root.appendingPathComponent("runtime-home/coordinator", isDirectory: true)
+            let folder = CoordinatorFolderTests.folder(at: directory, instructions: instructions)
             terminals.bind(sessionLifecycleTracker: tasks.sessionRuntimeStore)
             let terminals = terminals
             let deliveryOverride = deliveryOverride
@@ -39,6 +45,7 @@ struct CoordinatorControllerTests {
                 sessionRuntimeStore: tasks.sessionRuntimeStore,
                 launcher: tasks.launcher,
                 directoryURL: directory,
+                folder: folder,
                 configLoader: { [unowned tasks] in
                     if let configError = tasks.configError { throw configError }
                     return tasks.config

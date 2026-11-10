@@ -12,6 +12,7 @@ from pathlib import Path
 
 EXPECTED_SKILLS = [
     "toastty-capabilities",
+    "toastty-coordinator",
     "toastty-open-markdown",
     "toastty-read-terminal",
     "toastty-scratchpad",
