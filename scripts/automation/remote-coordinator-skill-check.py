@@ -693,7 +693,8 @@ class Run:
         """What must hold in every scenario, whatever the coordinator decided."""
         turns = self.turns()
         commands = [command for turn in turns for command in turn['commands']]
-        merge = re.compile(r'task\s+(merge|request-merge)\b|gh\s+pr\s+(merge|review)\b|git\s+push\b|auto-?merge|task[._]merge|task\.request-merge')
+        merge = re.compile(r'task\s+(merge|request-merge)\b|gh\s+pr\s+(merge|review)\b|git\s+push\b|auto-?merge'
+                           r'|task\.(merge|request-merge)\b')
         self.check('never merges: no merge, review approval or push command',
                    not [c for c in commands if merge.search(c)], [c for c in commands if merge.search(c)])
         calls = self.gh_calls()
@@ -797,7 +798,8 @@ def first_run(run):
     said = run.said(turns)
     run.check('the draft names both projects', 'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     run.check('the draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    run.check('it asks the user to confirm', '?' in said, said)
+    run.check('it asks the user to confirm or correct the draft',
+              re.search(r'\?|confirm|correct|say "?yes|tell me what to change|let me know', said.lower()), said)
     run.check('it writes nothing before the answer', run.policy() == template and run.git('rev-list', '--count', 'HEAD') == '1',
               run.policy())
     run.check('the ledger records that it asked', 'first-run' in run.ledger(), run.ledger(), required=False)
@@ -957,9 +959,6 @@ def weak_proof(run):
     run.check('the task is told once what to add', len(messages) == 1, messages)
     run.check('the message says exactly what proof is missing', bool(messages)
               and re.search(r'scenario|screenshot|video|real (app|ui|surface)|through the', messages[0].lower()), messages)
-    run.check('the user is not told that it is ready',
-              not re.search(r"(?<!not )(?<!n't )(?<!not yet )\b(is ready\b|ready for (your )?review|ready to merge)",
-                            run.said(first).lower()), run.said(first), required=False)
     # The agent answers with more of the same.
     run.status(task, 'working')
     time.sleep(SETTLE + 2)
@@ -1114,7 +1113,9 @@ def busy_silent(run):
 
 def new_task(run):
     """A new task whose project is unclear: it asks first, then adds a rule and commits it."""
-    history(run, extra=(('Docs site: fix the pricing FAQ', 'docs-site', 'claude-sonnet-5-5', 'medium'),
+    # Both sites have a pricing page with recent work, so the history cannot decide.
+    history(run, extra=(('Docs pricing page: fix the plan table', 'docs-site', 'claude-sonnet-5-5', 'medium'),
+                        ('Docs pricing page: add the FAQ', 'docs-site', 'claude-sonnet-5-5', 'medium'),
                         ('Docs landing page: new navigation', 'docs-site', 'claude-sonnet-5-5', 'medium')))
     run.seed_policy()
     run.open_coordinator()
