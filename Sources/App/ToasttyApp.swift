@@ -1411,6 +1411,10 @@ struct ToasttyApp: App {
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
             }
         )
+        // Task changes and the coordinator's timer wake it from here on.
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            taskWebhooks.attach(coordinator: coordinatorController)
+        }
         let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,

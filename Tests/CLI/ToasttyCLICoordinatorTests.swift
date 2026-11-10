@@ -39,6 +39,18 @@ struct ToasttyCLICoordinatorTests {
     }
 
     @Test
+    func wakeSetsTheNextCheckByDurationByTimeOrClearsIt() throws {
+        func wake(_ arguments: String...) throws -> CLICommand { try command(["wake"] + arguments) }
+        for (duration, seconds) in [("90s", 90), ("20m", 1200), ("2h", 7200), ("1h30m", 5400), ("1d", 86400), ("2H", 7200)] {
+            #expect(try wake("--in", duration)
+                == .appControlRun(kind: .action, id: "coordinator.wake", args: ["inSeconds": .int(seconds)]), "\(duration)")
+        }
+        #expect(try wake("--at", "2026-11-09T18:30:00Z")
+            == .appControlRun(kind: .action, id: "coordinator.wake", args: ["at": .string("2026-11-09T18:30:00Z")]))
+        #expect(try wake("--clear") == .appControlRun(kind: .action, id: "coordinator.wake", args: ["clear": .bool(true)]))
+    }
+
+    @Test
     func rejectsWrongOrAmbiguousArguments() {
         for arguments in [
             [],
@@ -51,6 +63,16 @@ struct ToasttyCLICoordinatorTests {
             ["send", "one", "two"],
             ["send", "one", "--text", "two"],
             ["send", "--text-file", "/nonexistent/toastty-coordinator-wake.md"],
+            ["wake"],
+            ["wake", "--in", "20"],
+            ["wake", "--in", "soon"],
+            ["wake", "--in", "m"],
+            ["wake", "--in", "-5m"],
+            ["wake", "--in", "20m", "--clear"],
+            ["wake", "--at", "2026-11-09T18:30:00Z", "--in", "5m"],
+            ["wake", "now", "--clear"],
+            ["send", "hello", "--clear"],
+            ["open", "--in", "5m"],
         ] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { _ = try command(arguments) }
         }

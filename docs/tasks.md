@@ -527,7 +527,8 @@ runs in its own workspace, named **Coordinator**, with a terminal in
   makes a new one. The files in its folder stay.
 
 The coordinator is not a task. It has no task record, so `task list`, the
-Tasks view, the Status segment's groups and webhook events never show it. It
+Tasks view, the Status segment's groups, webhook events and its own digests
+never show it. It
 is not a project either: a task cannot be placed in its workspace, nothing
 nests under it, and quick entry and the workspace picker do not offer it. A
 task that the coordinator creates has no parent task. Without `--workspace` or
@@ -554,6 +555,100 @@ Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
 
 `toastty coordinator open|restart|status` run the same actions as the command
 palette; see the [CLI reference](cli-reference.md#coordinator).
+
+### When Toastty wakes the coordinator
+
+The coordinator does not poll and keeps no watch command running. Toastty
+types a short message, a digest, into it for two reasons:
+
+- **A task's stage changed.** Each task that enters Needs you, or needs you
+  for a new reason, starts to run, goes idle, merges, finishes, or is
+  archived or deleted gets one line. These are the
+  [webhook events](#webhooks-for-task-events), from the same detector: a
+  stage that comes from an agent's status counts after it holds for 3
+  seconds, so a status that flickers wakes nothing. The coordinator gets the
+  events of every task, with no approval, because nothing leaves the Mac.
+- **The coordinator's timer came due.** See [the timer](#the-coordinators-timer).
+
+Toastty has no rule about a task that is stuck, and a digest holds no
+judgment. It says which tasks changed; the coordinator reads `task list`,
+with [how long each task has been in its state](#how-long-a-task-has-been-in-its-state),
+and decides by your policy.
+
+A digest looks like this:
+
+```text
+[Toastty] Wake: this message is from Toastty, not from the user.
+- [Fix the unread dot](toastty://task/8C2F1D3A-…): needsYou (review) at 2026-11-09T18:02:11Z
+- [Add the export API](toastty://task/41B7E9C0-…): done, merged at 2026-11-09T18:03:40Z
+- Scheduled check: the time you set, 2026-11-09T18:20:00Z, has come.
+Read `toastty task list` for details.
+```
+
+- The first line is always the same and starts with `[Toastty] Wake`.
+- Each task has one line: its title as a link to `toastty://task/<task-id>`,
+  the `stage.group` and `stage.attention` that `task list` reports, `merged`
+  for a task whose pull request merged, and the time Toastty counted the
+  change. A deleted task shows `deleted`. A task that changed again before
+  the digest was typed has its newest stage only. A title is cut after 80
+  characters, and control characters in it are not typed.
+- A digest lists up to 40 tasks and counts the rest in one line.
+- The `Scheduled check` line is there when the timer came due.
+- The last line is always the same.
+- A digest never holds an agent's reply or question, a prompt or an
+  attachment.
+
+Delivery:
+
+- Toastty types a digest only at the coordinator's open prompt, through the
+  same path as `coordinator send`. While the coordinator works or waits for
+  an approval, while you have a draft in its terminal, while its agent starts
+  and while no agent runs, nothing is typed: the digest waits and grows. A
+  burst of changes is one message, and one digest is typed for each turn.
+- Messages from `coordinator send` that wait go first.
+- The waiting digest is saved in `task-webhook-outbox.json` in the same
+  write as the detector's last known stages, before anything is typed. After
+  a quit or a crash, Toastty types what waited once, and reports changes that
+  it missed while it was quit, such as a merge on GitHub. A digest counts as
+  told when Toastty typed it, also when the terminal did not confirm the
+  Return key. Toastty saves that at once and does not type it again.
+- A restart of the coordinator's agent keeps what waits. Closing the
+  coordinator's workspace drops it, with the timer. A coordinator that you
+  open later starts from that moment: Toastty does not tell it changes made
+  before it existed.
+- Toastty follows task changes for the coordinator only while its workspace
+  exists. The coordinator is not a task, so its own turns wake nothing.
+
+### The coordinator's timer
+
+Before it ends a turn, the coordinator says when Toastty wakes it next if no
+task changes first:
+
+```bash
+toastty coordinator wake --in 20m
+toastty coordinator wake --at 2026-11-09T18:30:00Z
+toastty coordinator wake --clear
+```
+
+- `--in` takes `s`, `m`, `h` and `d`, such as `90s`, `20m`, `2h` or `1h30m`.
+  `--at` takes an ISO 8601 time. The time must be at least 1 minute from now.
+- Toastty saves the time. A time that came while Toastty was quit wakes the
+  coordinator once after the relaunch.
+- **Every digest that Toastty types removes the time**, whether the digest
+  was for a task change or for the timer, and whether the time had come or
+  not. The coordinator sets its next check again in the turn that the digest
+  starts. A time that it sets during a turn stays until the next digest.
+- **With no time set, the timer is 1 hour after the last digest, while a
+  task is open.** A task is open until it is Done or Archived; a task that
+  waits for a release is open. With no time set and no open task there is no
+  timer. Before the first digest, the hour counts from the moment the
+  coordinator's workspace was created.
+- `--clear` removes the time the coordinator set, so the 1 hour default
+  applies again.
+
+`toastty coordinator status` shows `wake.nextWakeAt` with `wake.nextWakeSource`
+(`coordinator` or `default`), `wake.lastWakeAt`, and `wake.pendingTaskCount`,
+the number of tasks whose changes wait for the next digest.
 
 ## Webhooks for task events
 
@@ -627,7 +722,8 @@ Delivery:
 Changing a webhook's address, events, filters or `--auth` with `webhook set`,
 or editing `~/.toastty/task-webhooks.json`, needs approval again. A new
 key or hint does not. A workspace-scoped session cannot manage webhooks.
-Toastty checks for task changes only while a webhook is approved.
+Toastty checks for task changes only while a webhook is approved or the
+[coordinator](#when-toastty-wakes-the-coordinator)'s workspace exists.
 
 ## Starting tasks
 
@@ -1196,7 +1292,8 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   for the workspace picker.
 - `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`:
   task webhooks and the events waiting to send. Webhook secrets and approvals
-  are in the login Keychain.
+  are in the login Keychain. The outbox file also holds the task changes that
+  wait for the coordinator, and its timer.
 
 Deleting a task does not remove its worktree or branch; archiving it does.
 

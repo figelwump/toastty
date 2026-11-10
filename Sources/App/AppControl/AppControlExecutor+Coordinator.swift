@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
         switch self {
-        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend: true
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorWake: true
         default: false
         }
     }
@@ -79,7 +79,7 @@ extension AppControlExecutor {
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
-        var response = Self.coordinatorSnapshot(controller)
+        var response = coordinatorSnapshot(controller)
         response["createdWorkspace"] = .bool(result.createdWorkspace)
         response["startedAgent"] = .bool(result.startedAgent)
         return .init(didMutateState: true, result: response)
@@ -107,14 +107,70 @@ extension AppControlExecutor {
             response["delivery"] = .string("queued")
             response["position"] = .int(position)
             response["hold"] = .string(hold.rawValue)
+        case .held(let hold):
+            // Only a caller that asks for no queue gets this; the action
+            // always queues.
+            response["delivery"] = .string("held")
+            response["hold"] = .string(hold.rawValue)
         }
         return .init(didMutateState: false, result: response)
+    }
+
+    /// Sets, moves or removes the coordinator's next check.
+    func runCoordinatorWake(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard let wakes = taskCoordinator?.webhooks else {
+            throw AutomationSocketError.invalidPayload("coordinator wakes are not available in this Toastty instance")
+        }
+        let clear = try optionalBooleanParameter("clear", args: args, defaultValue: false)
+        guard [args["inSeconds"] != nil, args["at"] != nil, clear].filter({ $0 }).count == 1 else {
+            throw AutomationSocketError.invalidPayload("pass exactly one of inSeconds, at and clear")
+        }
+        let request: TaskWebhookService.CoordinatorWakeRequest
+        if clear {
+            request = .clear
+        } else if args["inSeconds"] != nil {
+            guard let seconds = args.coordinatorInteger("inSeconds") else {
+                throw AutomationSocketError.invalidPayload("inSeconds must be a whole number of seconds")
+            }
+            request = .after(TimeInterval(seconds))
+        } else {
+            guard let text = args.coordinatorString("at"),
+                  let date = (try? Date(text, strategy: .iso8601))
+                    ?? (try? Date(text, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))) else {
+                throw AutomationSocketError.invalidPayload("at must be an ISO 8601 time, such as 2026-11-09T18:30:00Z")
+            }
+            request = .at(date)
+        }
+        do {
+            try wakes.setCoordinatorWake(request)
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: coordinatorSnapshot(controller))
     }
 
     func coordinatorQuery() throws -> [String: AutomationJSONValue] {
         let controller = try requiredCoordinatorController()
         try enforceCoordinatorAccess()
-        return Self.coordinatorSnapshot(controller)
+        return coordinatorSnapshot(controller)
+    }
+
+    func coordinatorSnapshot(_ controller: CoordinatorController) -> [String: AutomationJSONValue] {
+        var snapshot = Self.coordinatorSnapshot(controller)
+        if let wake = taskCoordinator?.webhooks?.coordinatorWakeStatus {
+            func time(_ date: Date?) -> AutomationJSONValue {
+                date.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
+            }
+            snapshot["wake"] = .object([
+                "pendingTaskCount": .int(wake.pendingTaskCount),
+                "nextWakeAt": time(wake.nextWake?.at),
+                "nextWakeSource": wake.nextWake.map { .string($0.isRequested ? "coordinator" : "default") } ?? .null,
+                "lastWakeAt": time(wake.lastWakeAt),
+            ])
+        }
+        return snapshot
     }
 
     static func coordinatorSnapshot(_ controller: CoordinatorController) -> [String: AutomationJSONValue] {
@@ -144,5 +200,14 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
     func coordinatorString(_ key: String) -> String? {
         guard case .string(let value)? = self[key] else { return nil }
         return value
+    }
+
+    /// A number, or the text of one, as `action run key=value` sends it.
+    func coordinatorInteger(_ key: String) -> Int? {
+        switch self[key] {
+        case .int(let value): value
+        case .string(let value): Int(value.trimmingCharacters(in: .whitespaces))
+        default: nil
+        }
     }
 }

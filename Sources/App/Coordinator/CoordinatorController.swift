@@ -96,6 +96,14 @@ final class CoordinatorController: ObservableObject {
         case sentUnconfirmed
         /// Kept until the agent's prompt is open. `position` counts from 1.
         case queued(position: Int, hold: CoordinatorSendHold)
+        /// Not typed and not kept: the caller asked for no queue, and still
+        /// has the text.
+        case held(CoordinatorSendHold)
+
+        /// The text went into the terminal.
+        var wasTyped: Bool {
+            self == .sent || self == .sentUnconfirmed
+        }
     }
 
     /// Entries waiting for an open prompt. They are kept in memory only: an
@@ -142,6 +150,11 @@ final class CoordinatorController: ObservableObject {
     private var lastDelivery: CoordinatorPromptFacts.Delivery?
     private var recheckTask: Task<Void, Never>?
     private var sessionObserver: AnyCancellable?
+    private var storeObserverToken: UUID?
+
+    /// Called after the coordinator's workspace was created, closed or
+    /// replaced, with the workspace it is now.
+    var onWorkspaceChange: ((UUID?) -> Void)?
 
     /// `deliverText` types text plus Return into a terminal panel as
     /// programmatic input, which is not the user's own.
@@ -174,10 +187,18 @@ final class CoordinatorController: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.drain() }
             }
+        storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
+            let workspaceID = nextState.coordinatorWorkspaceID
+            guard previousState.coordinatorWorkspaceID != workspaceID else { return }
+            self?.onWorkspaceChange?(workspaceID)
+        }
     }
 
     deinit {
         recheckTask?.cancel()
+        if let storeObserverToken {
+            Task { @MainActor [store] in store.removeActionAppliedObserver(storeObserverToken) }
+        }
     }
 
     // MARK: - State
@@ -456,15 +477,29 @@ final class CoordinatorController: ObservableObject {
     /// while no agent runs. One entry is typed for each open prompt. The
     /// text is typed as programmatic input, so it never counts as the
     /// user's own typing.
+    ///
+    /// With `queueWhenHeld` off, text that cannot be typed now is not kept:
+    /// the answer is `held`, and the caller sends its text again later. A
+    /// caller that keeps its own durable copy uses this, so its text can
+    /// change while it waits and is typed at most once. Such text never
+    /// goes in front of entries that wait in the queue.
     @discardableResult
-    func send(_ text: String) throws -> SendResult {
+    func send(_ text: String, queueWhenHeld: Bool = true) throws -> SendResult {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.isEmpty == false else {
             throw CoordinatorError("The message is empty.")
         }
         dropQueueOfAClosedCoordinator()
-        guard location != nil else {
+        guard let location else {
             throw CoordinatorError("There is no coordinator. Open it first.")
+        }
+        guard queueWhenHeld else {
+            guard queue.isEmpty else { return .held(hold ?? .awaitingTurn) }
+            switch typeAtOpenPrompt(text, location: location, moment: now()) {
+            case .typed(.delivered): return .sent
+            case .typed: return .sentUnconfirmed
+            case .held(let reason, _): return .held(reason)
+            }
         }
         guard queue.count < Self.maximumQueuedEntries else {
             throw CoordinatorError("The coordinator already has \(Self.maximumQueuedEntries) messages waiting.")
@@ -496,34 +531,13 @@ final class CoordinatorController: ObservableObject {
             return nil
         }
         let moment = now()
-        switch CoordinatorSendGate.decide(promptFacts(location: location), now: moment) {
-        case .hold(let reason, let recheckAt):
+        switch typeAtOpenPrompt(text, location: location, moment: moment) {
+        case .held(let reason, let recheckAt):
             setHold(reason)
             if let recheckAt { scheduleRecheck(at: recheckAt, from: moment) }
             return nil
-        case .open:
-            break
-        }
-        // `open` implies a session and its panel.
-        guard let panelID = location.panelID, let session else { return nil }
-        let result = deliverText(text, panelID)
-        switch result {
-        case .unavailable:
-            setHold(.terminalUnavailable)
-            scheduleRecheck(at: moment.addingTimeInterval(CoordinatorSendGate.pollInterval), from: moment)
-            return nil
-        case .delivered, .uncertain:
+        case .typed(let result):
             queue.removeFirst()
-            lastDelivery = CoordinatorPromptFacts.Delivery(
-                sessionID: session.sessionID,
-                at: moment,
-                submitConfirmed: result == .delivered
-            )
-            ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
-                "session_id": session.sessionID,
-                "submit_confirmed": result == .delivered ? "true" : "false",
-                "queue_depth": String(queue.count),
-            ])
             if queue.isEmpty {
                 setHold(nil)
             } else {
@@ -532,6 +546,46 @@ final class CoordinatorController: ObservableObject {
                 drain()
             }
             return result
+        }
+    }
+
+    private enum TypingOutcome {
+        /// `delivered` or `uncertain`: the text is in the terminal.
+        case typed(TerminalInputDeliveryResult)
+        /// `recheckAt` is set when the hold can lift without a change to
+        /// the session.
+        case held(CoordinatorSendHold, recheckAt: Date?)
+    }
+
+    /// The one place that types into the coordinator: it types `text` when
+    /// the agent's prompt is open, and says why not otherwise.
+    private func typeAtOpenPrompt(_ text: String, location: CoordinatorLocation, moment: Date) -> TypingOutcome {
+        switch CoordinatorSendGate.decide(promptFacts(location: location), now: moment) {
+        case .hold(let reason, let recheckAt):
+            return .held(reason, recheckAt: recheckAt)
+        case .open:
+            break
+        }
+        // `open` implies a session and its panel.
+        guard let panelID = location.panelID, let session else {
+            return .held(.noSession, recheckAt: nil)
+        }
+        let result = deliverText(text, panelID)
+        switch result {
+        case .unavailable:
+            return .held(.terminalUnavailable, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+        case .delivered, .uncertain:
+            lastDelivery = CoordinatorPromptFacts.Delivery(
+                sessionID: session.sessionID,
+                at: moment,
+                submitConfirmed: result == .delivered
+            )
+            ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
+                "session_id": session.sessionID,
+                "submit_confirmed": result == .delivered ? "true" : "false",
+                "queue_depth": String(max(0, queue.count - 1)),
+            ])
+            return .typed(result)
         }
     }
 

@@ -16,11 +16,12 @@ struct TaskWebhookOutboxEntry: Codable, Equatable, Sendable {
     var nextAttemptAt: Date
 }
 
-/// Sends task events to the webhooks the user approved.
+/// Sends task events to the webhooks the user approved, and to the
+/// coordinator.
 ///
-/// About once a second, while an approved webhook exists, it reads every
-/// task's stage from the task board, turns changes into events
-/// (`TaskWebhookEventDetector`), and adds one outbox entry for each
+/// About once a second, while an approved webhook or a coordinator exists,
+/// it reads every task's stage from the task board, turns changes into
+/// events (`TaskWebhookEventDetector`), and adds one outbox entry for each
 /// webhook whose filters match. The outbox is saved before the first send.
 /// Each webhook sends one request at a time, oldest first, and retries with
 /// backoff for up to a day. `task list --changed-since` stays the source of
@@ -28,6 +29,10 @@ struct TaskWebhookOutboxEntry: Codable, Equatable, Sendable {
 ///
 /// A webhook added through the socket waits for approval, which only the
 /// app's UI gives (`approve(id:)`): no socket command calls it.
+///
+/// The coordinator is one more destination of the same events, inside
+/// Toastty: its changes wait in one digest that is typed at its open
+/// prompt. See `TaskWebhookService+Coordinator.swift`.
 @MainActor
 final class TaskWebhookService: ObservableObject {
     struct Timing: Sendable {
@@ -50,7 +55,7 @@ final class TaskWebhookService: ObservableObject {
     private let outboxFileURL: URL?
     private let secrets: any TaskWebhookSecretStoring
     private let transport: any TaskWebhookTransport
-    private let now: () -> Date
+    let now: () -> Date
     private let timing: Timing
     private let userAgent: String
     private let startedAt: Date
@@ -58,8 +63,14 @@ final class TaskWebhookService: ObservableObject {
     /// The Keychain items, read once at launch and kept current by every
     /// write, so a pass never waits on the Keychain.
     private var keychainItems: [UUID: TaskWebhookKeychainItem] = [:]
-    private var detector: TaskWebhookEventDetector
+    var detector: TaskWebhookEventDetector
     private(set) var entries: [TaskWebhookOutboxEntry]
+    /// The coordinator that gets a digest of the events, once the app has
+    /// one. Set with `attach(coordinator:)`.
+    weak var coordinator: CoordinatorController?
+    /// What waits for the coordinator, and its timer. `nil` while there is
+    /// no coordinator.
+    var coordinatorWake: CoordinatorWakeState?
     /// Events being sent now, one per webhook at most.
     private var inFlight: [UUID: UUID] = [:]
     /// The settings and secret each in-flight send used. A refusal of an
@@ -93,6 +104,7 @@ final class TaskWebhookService: ObservableObject {
         let outbox = Self.load(TaskWebhookOutboxSnapshot.self, from: outboxFileURL)
         detector = outbox?.detector ?? TaskWebhookEventDetector()
         entries = outbox?.entries ?? []
+        coordinatorWake = outbox?.coordinator
         loadKeychainItems()
     }
 
@@ -158,11 +170,12 @@ final class TaskWebhookService: ObservableObject {
         updatePolling()
     }
 
-    /// The pass runs only while a webhook is approved, so a Mac with no
-    /// webhooks does no work for them after launch. Events for changes made
-    /// while it was stopped are not sent: approval starts from now.
-    private func updatePolling() {
-        let needed = started && webhooks.contains { $0.status == .approved }
+    /// The pass runs only while a webhook is approved or a coordinator
+    /// exists, so a Mac with neither does no work for them after launch.
+    /// Events for changes made while it was stopped are not sent: approval
+    /// starts from now.
+    func updatePolling() {
+        let needed = started && (webhooks.contains { $0.status == .approved } || coordinator?.location != nil)
         if needed, loop == nil {
             startPolling()
         } else if needed == false, loop != nil {
@@ -195,11 +208,17 @@ final class TaskWebhookService: ObservableObject {
     func pass() {
         let at = now()
         if unreadKeychainItems.isEmpty == false { loadKeychainItems() }
-        let active = activeWebhooks
-        guard active.isEmpty == false else { return }
         guard at.timeIntervalSince(startedAt) >= timing.startupDelay else { return }
+        let active = activeWebhooks
         let before = detector
-        let changes = detector.observe(taskStates(), now: at, settleInterval: timing.settleInterval)
+        let wakeBefore = coordinatorWake
+        followCoordinator(at: at)
+        guard active.isEmpty == false || coordinatorWake != nil else {
+            if coordinatorWake != wakeBefore { saveOutbox() }
+            return
+        }
+        let states = taskStates()
+        let changes = detector.observe(states, now: at, settleInterval: timing.settleInterval)
         var queued = false
         for change in changes {
             for type in change.events {
@@ -209,11 +228,15 @@ final class TaskWebhookService: ObservableObject {
                     queued = true
                 }
             }
+            coordinatorWake?.record(change, at: at)
         }
-        if queued || detector != before {
+        // One write records the changes as seen and as waiting, before
+        // anything is sent or typed.
+        if queued || detector != before || coordinatorWake != wakeBefore {
             saveOutbox()
         }
         deliverDue(at: at)
+        wakeCoordinator(at: at, states: states)
     }
 
     private func enqueue(type: TaskWebhookEventType, taskID: UUID, state: TaskWebhookTaskState, webhook: TaskWebhook, at: Date) {
@@ -561,7 +584,8 @@ final class TaskWebhookService: ObservableObject {
     /// Detection starts from now when the first webhook becomes active:
     /// changes made while no webhook listened are not sent.
     private func startDetectingIfNoneWasActive(_ wasActive: Bool) {
-        guard wasActive == false, activeWebhooks.isEmpty == false else { return }
+        // A coordinator already follows the changes: its baseline stays.
+        guard wasActive == false, activeWebhooks.isEmpty == false, coordinatorWake == nil else { return }
         detector.reset()
         saveOutbox()
     }
@@ -617,8 +641,11 @@ final class TaskWebhookService: ObservableObject {
         Self.save(TaskWebhooksSnapshot(version: 1, webhooks: webhooks), to: webhooksFileURL)
     }
 
-    private func saveOutbox() {
-        Self.save(TaskWebhookOutboxSnapshot(version: 1, detector: detector, entries: entries), to: outboxFileURL)
+    func saveOutbox() {
+        Self.save(
+            TaskWebhookOutboxSnapshot(version: 1, detector: detector, entries: entries, coordinator: coordinatorWake),
+            to: outboxFileURL
+        )
     }
 
     private static func load<Snapshot: Decodable>(_ type: Snapshot.Type, from url: URL?) -> Snapshot? {
@@ -662,6 +689,8 @@ private struct TaskWebhookOutboxSnapshot: Codable {
     var version: Int
     var detector: TaskWebhookEventDetector
     var entries: [TaskWebhookOutboxEntry]
+    /// Absent in a file written before the coordinator had wakes.
+    var coordinator: CoordinatorWakeState?
 }
 
 extension TaskWebhookService {
