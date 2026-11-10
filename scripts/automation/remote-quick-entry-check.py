@@ -310,14 +310,15 @@ def main():
         drive('key', KEY_DELETE, 'cmd')
         wait_for_text('Keep this')
         # The mouse: a drag on the header moves the panel, a click on the
-        # Agent pill opens its picker, and a click on its first row chooses
-        # it. Each case records its outcome and the check fails at the end,
-        # so one run shows every case.
+        # Agent pill opens its picker, and a click on a row chooses it. Each
+        # case records its outcome and the check fails at the end, so one
+        # run shows every case.
         outcomes = {}
         # The task above made its preset, with xhigh, the last used one and
-        # the only Frequent one: the pill starts on it, and it is the
-        # picker's first row. Left Arrow lowers the pill to high first, so
-        # that the click on the first row must change the pill.
+        # the only Frequent one, so the pill starts on it. Left Arrow lowers
+        # the pill to high first. The picker then lists high under Current
+        # and xhigh under Frequent, and the click on the xhigh row must
+        # change the pill.
         wait_for_value('quick-entry.agent', 'opus-5.5 · xhigh')
         drive('key', KEY_2, 'cmd')
         wait_for('the agent picker', picker_windows, timeout=10)
@@ -350,10 +351,15 @@ def main():
         outcomes['click on a pill opens its picker'] = dict(ok=opened, windows_under_point=under)
         step('pill click', **outcomes['click on a pill opens its picker'])
         if opened:
-            x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
-            drive('click', x + w / 2, y + h / 2)
-            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'opus-5.5 · xhigh')
-            outcomes['click on a row chooses it'] = dict(ok=chosen, agent=drive('value', pid, 'quick-entry.agent'))
+            rows = json.loads(drive('labels', pid, 'quick-entry.picker.row'))
+            wanted = [index for index, label in enumerate(rows) if 'xhigh' in label]
+            chosen = False
+            if len(wanted) == 1:
+                x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row', wanted[0]).split())
+                drive('click', x + w / 2, y + h / 2)
+                chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'opus-5.5 · xhigh')
+            outcomes['click on a row chooses it'] = dict(ok=chosen, rows=rows, clicked=wanted,
+                                                         agent=drive('value', pid, 'quick-entry.agent'))
             step('row click', **outcomes['click on a row chooses it'])
         if picker_windows():
             drive('key', KEY_ESCAPE)
