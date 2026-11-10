@@ -224,6 +224,46 @@ Both write `remote-coordinator-wake-check-<provider>.json` and the app log
 under the run's artifacts directory. The fake run also saves the agent's
 event log and the final `task-webhook-outbox.json`.
 
+### Coordinator chat
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-chat-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers the coordinator's chat on the Mac;
+see [The coordinator's chat](../tasks.md#the-coordinators-chat). It needs the
+remote Mac's screen unlocked, and takes about eight minutes.
+
+The coordinator is the real, authenticated Claude CLI, so the run uses
+subscription usage. Tasks get a fake agent, so that a task space exists for a
+chip to open. The profile allows only the run's own `hold-turn.sh`, which
+holds a turn open: Claude Code refuses a foreground `sleep`. The run marks
+only its temporary coordinator folder trusted in `~/.claude.json`, and removes
+that entry and the folder's Claude project directory afterward.
+
+Every action a person makes goes through the real UI.
+`scripts/automation/ax-drive.swift` finds a control by its accessibility
+identifier or label, clicks it with a mouse event and types with key events.
+`--gui-session` runs the check in Terminal in the GUI session, where the
+Claude login is readable; the process that started it over SSH, which
+Accessibility trusts, makes the clicks and keys.
+
+The check sends from the composer at an open prompt and during a turn, stops
+a turn and sends the paused message, opens a folded digest, clicks a task
+chip and the task space's way back, clicks a link to no task, switches to the
+terminal and back, kills and relaunches the app, sends from a paired device
+(a seeded credential over loopback HTTP) with Remote Access on, and restarts
+the coordinator. It proves each step from Claude's transcript, the chat's own
+text and the CLI.
+
+It writes `remote-coordinator-chat-check.json`, the app log and Claude's
+transcripts under the run's artifacts directory. A build that can capture its
+window outside automation mode also writes PNG frames; a normal build cannot,
+and the check records that and continues.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

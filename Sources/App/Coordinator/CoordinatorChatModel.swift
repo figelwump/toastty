@@ -189,7 +189,7 @@ final class CoordinatorChatModel: ObservableObject {
             return
         }
         guard isSettled else {
-            waitForTheConversationToSettle(latestSequence: summary.latestSequence)
+            waitForTheConversationToSettle()
             return
         }
         if let loaded, loaded.conversationID == summary.conversationID {
@@ -203,7 +203,7 @@ final class CoordinatorChatModel: ObservableObject {
     /// and the events arrive over a short time. The chat's first read waits
     /// until no more arrive, and then takes the newest page once, not every
     /// event of a long conversation.
-    private func waitForTheConversationToSettle(latestSequence: UInt64) {
+    private func waitForTheConversationToSettle() {
         settleTask?.cancel()
         guard now() < (settleDeadline ?? .distantPast) else {
             finishSettling()

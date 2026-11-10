@@ -437,6 +437,8 @@ def run(check):
         ui.run('click-text', chip_title)
         wait_for('the task\'s space', lambda: selected_workspace() == task_space, timeout=30)
         wait_for('the way back', lambda: ui.has_label(BACK), timeout=30)
+        # The header's tab strip moves for 0.18 s after a workspace switch.
+        time.sleep(0.6)
         capture('task-space-with-way-back')
         ui.run('click-label', BACK)
         wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id, timeout=30)
