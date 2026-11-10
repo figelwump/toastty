@@ -545,15 +545,63 @@ toastty coordinator send "Task 1B32… is ready for review."
 ```
 
 Toastty types the message when the agent is at an open prompt, and holds it in
-order otherwise: while the agent works or waits for an approval, while you
-have typed in the coordinator's terminal since the last turn started, while
+order otherwise: while the agent works or waits for an approval, while text
+that you typed in the coordinator's terminal may still be in its prompt, while
 the agent starts, and while no agent runs. It types one message for each open
 prompt. The answer says `sent`, or `queued` with the position and the reason.
 `sentUnconfirmed` means the terminal did not confirm the Return key: Toastty
 does not type that message again, and holds the next ones until a turn runs.
 The queue holds up to 50 messages in memory: it survives a restart of the
 agent, and an app quit or closing the coordinator's workspace loses it.
+
+The chat's composer, `coordinator send` and Toastty's own digests all go
+through this one queue, so their text never mixes. For an agent whose
+conversation Toastty reads (Claude Code, Codex and the other agents that
+Toastty Mobile can show), each message is typed through the check that a
+paired iPhone's message gets: the agent's conversation must show an open
+prompt, and each open prompt takes one message from one sender. A message
+that a phone queued for the coordinator is typed first. For any other agent,
+Toastty goes by the session's reported status.
+
 Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
+
+### The coordinator's chat
+
+On macOS 15 and later, the coordinator's panel shows the agent's conversation
+as a chat, with the same message views as Toastty Mobile. The terminal runs
+under it. On macOS 14 the panel shows the terminal.
+
+- **Send.** Type in the field under the conversation and press Return.
+  Shift-Return starts a new line. While the coordinator works, the message
+  waits in the chat as **Queued** and is typed when the turn ends. **Edit**
+  puts a waiting message back in the field, and **Remove** drops it.
+- **Stop.** While a turn runs and the field is empty, the button stops the
+  turn, as Escape in the terminal does. Messages that waited are
+  then **Paused**, so none starts a new turn right after the stop. **Send
+  next** lets them go again. A digest from Toastty does not wait for paused
+  messages.
+- **Terminal.** The **Terminal** button in the panel's header shows the
+  terminal in place of the chat, and **Chat** switches back. Use the terminal
+  for a login, a folder-trust or a permission prompt, and to answer a
+  question: the chat shows such a prompt but cannot answer it, and it says so
+  above the field. The choice is not saved: a relaunch shows the chat.
+- **A draft in the terminal.** When you typed in the terminal and did not
+  send that text, messages and digests wait, and the chat says why. **Send
+  Anyway** tells Toastty that the terminal's prompt is empty: the next
+  message is then typed there.
+- **Digests.** A message that Toastty typed (see below) shows as one muted
+  line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
+- **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
+  text shows as a chip with the task's stage color, its current title and its
+  pull request number. A click opens the task's space, and that space's
+  header then shows **← Coordinator** until you are back. A link to a task
+  that does not exist, and any other `toastty:` link, is plain text. Other
+  links open only `http` and `https` pages, in your browser.
+
+Toastty reads the coordinator's conversation while the coordinator's
+workspace is open, also with Remote Access off, because it must see what
+happens at the prompt to type there safely. A relaunch shows the same
+conversation, because the agent resumes it.
 
 `toastty coordinator open|restart|status` run the same actions as the command
 palette; see the [CLI reference](cli-reference.md#coordinator).

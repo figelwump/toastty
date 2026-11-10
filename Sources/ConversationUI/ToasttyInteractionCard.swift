@@ -157,6 +157,7 @@ struct ToasttyInteractionCard: View {
     let answerFeedback: ToasttyInteractionAnswerFeedback
     let onEdit: (ToasttyInteractionAnswerEdit) -> Void
     let onSubmit: () -> Void
+    @Environment(\.toasttyTranscriptOptions) private var options
 
     private var interaction: RemotePendingInteraction { presentation.interaction }
 
@@ -454,7 +455,7 @@ struct ToasttyInteractionCard: View {
     }
 
     private var readOnlyMessage: String {
-        guard let reason = presentation.responseClosedReason else { return "Respond on the desktop" }
+        guard let reason = presentation.responseClosedReason else { return options.readOnlyInteractionMessage }
         return switch reason {
         case .expired: "Answer window closed on iPhone · respond on the desktop"
         default: "This answer is no longer available on iPhone · respond on the desktop"

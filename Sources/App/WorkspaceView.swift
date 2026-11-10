@@ -707,12 +707,26 @@ struct WorkspaceView: View {
     }
 
     private var workspaceTitleLabel: some View {
-        Text(selectedWorkspace?.title ?? "")
-            .font(ToastyTheme.fontTitle)
-            .foregroundStyle(ToastyTheme.primaryText)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .accessibilityIdentifier("topbar.workspace.title")
+        HStack(spacing: 6) {
+            // A task space that a chip in the coordinator's chat opened
+            // offers the way back. The store publishes which one, so the
+            // header is laid out again when the button comes or goes.
+            if let workspaceID = selectedWorkspace?.id,
+               store.coordinatorReturnWorkspaceID == workspaceID,
+               let location = store.state.coordinator {
+                WorkspaceHeaderCoordinatorReturnButton(
+                    location: location,
+                    store: store,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+            }
+            Text(selectedWorkspace?.title ?? "")
+                .font(ToastyTheme.fontTitle)
+                .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("topbar.workspace.title")
+        }
     }
 
     @ViewBuilder
@@ -3933,14 +3947,24 @@ struct PanelCardView: View {
             switch panelState {
             case .terminal(let terminalState):
                 if let terminalRuntimeContext {
+                    // The coordinator's chat covers its terminal, which
+                    // stays mounted and keeps running under it.
+                    let coveredByChat = coordinatorController?.coversTerminal(panelID: panelID) == true
                     TerminalPanelHostView(
                         workspaceID: workspaceID,
                         panelID: panelID,
                         hostState: TerminalPanelHostState(terminalState: terminalState),
-                        focused: isFocused,
+                        focused: isFocused && coveredByChat == false,
                         windowFontPoints: windowFontPoints,
                         runtimeContext: terminalRuntimeContext
                     )
+                    .allowsHitTesting(coveredByChat == false)
+                    .accessibilityHidden(coveredByChat)
+                    .overlay {
+                        if coveredByChat {
+                            coordinatorChatCover
+                        }
+                    }
                     .overlay {
                         if isWorkspaceSelected,
                            focusedPanelID != nil,
@@ -4437,6 +4461,11 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
+        if let coordinatorController, coordinatorController.supportsChat, coordinatorController.chat != nil,
+           coordinatorController.location?.panelID == panelID {
+            CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+        }
+
         switch resolvedPanelHeaderTrailingAccessory {
         case .closeButton:
             panelHeaderCloseButton
@@ -4444,6 +4473,30 @@ struct PanelCardView: View {
             shortcutBadge(label)
         case .empty:
             EmptyView()
+        }
+    }
+
+    private var coordinatorController: CoordinatorController? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController
+    }
+
+    /// The chat over the coordinator's terminal. On macOS 14 the shared
+    /// transcript is not available, and the terminal shows.
+    @ViewBuilder
+    private var coordinatorChatCover: some View {
+        if #available(macOS 15.0, *), let coordinatorController, let chat = coordinatorController.chat,
+           let location = coordinatorController.location {
+            CoordinatorChatView(
+                model: chat,
+                controller: coordinatorController,
+                sessionRuntimeStore: sessionRuntimeStore,
+                board: sessionRuntimeStore.taskCoordinator?.board ?? .disabled,
+                store: store,
+                panelID: panelID,
+                windowID: location.windowID,
+                isOnScreen: isWorkspaceSelected && isTabSelected,
+                hasPanelFocus: isFocused
+            )
         }
     }
 

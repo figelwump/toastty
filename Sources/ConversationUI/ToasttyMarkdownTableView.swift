@@ -7,6 +7,7 @@ import AppKit
 
 struct ToasttyMarkdownTableView: View {
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.conversationLinkPresenter) private var linkPresenter
 
     let table: ToasttyMarkdownTable
     @ScaledMetric(relativeTo: .body) private var minimumColumnWidth: CGFloat = 144
@@ -17,7 +18,7 @@ struct ToasttyMarkdownTableView: View {
                 ForEach(table.rows) { row in
                     HStack(alignment: .top, spacing: 0) {
                         ForEach(table.columns.indices, id: \.self) { column in
-                            ToasttySelectableText(row.cells[column],
+                            ToasttySelectableText(ConversationLinkDecoration.apply(row.cells[column], presenter: linkPresenter),
                                                   weight: row.isHeader ? .semibold : nil,
                                                   alignment: table.columns[column].textAlignment(layoutDirection: layoutDirection))
                                 .fixedSize(horizontal: false, vertical: true)

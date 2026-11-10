@@ -48,6 +48,20 @@ protocol LocalConversationSubscription: AnyObject {
     /// input.
     func send(_ request: RemoteMessageSendRequest, byUser: Bool) -> RemoteMessageSendResult
 
+    /// Stops the turn the request names by sending the agent's interrupt
+    /// key, under the turn check of a phone's Stop. A person asked for it,
+    /// so it counts as the user's input. Messages a phone queued for the
+    /// conversation then wait until a device resumes them.
+    func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult
+
+    /// Reopens a prompt that text typed in the terminal holds closed, after
+    /// the user said that the agent's prompt holds none of their text. The
+    /// request names the draft epoch from the snapshot, so a key typed in
+    /// the terminal since then refuses the release. Nothing is typed.
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) -> RemoteConversationLocalDraftReleaseResult
+
     /// Ends the subscription. When no other subscription holds the panel,
     /// messages the Mac queued for it that still wait are dropped, and
     /// tracking of the panel stops unless Remote Access needs it.

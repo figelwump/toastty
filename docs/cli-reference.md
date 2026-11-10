@@ -1024,7 +1024,7 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
 - `send` types a message at the agent's open prompt and returns
   `delivery: sent`, or holds it and returns `delivery: queued` with
   `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
-  `settling`, `awaitingTurn` or `terminalUnavailable`). `sentUnconfirmed`
+  `settling`, `awaitingTurn`, `terminalUnavailable` or `promptNotOpen`). `sentUnconfirmed`
   means the terminal did not confirm the Return key; Toastty does not type the
   text again, and holds later messages until a turn runs. It fails when there
   is no coordinator.

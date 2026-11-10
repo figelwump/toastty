@@ -44,12 +44,28 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
     public let isPaused: Bool
     /// "Steer now" is offered on the row.
     public let canSteer: Bool
+    /// "Edit", "Remove" and, while paused, "Send next" are offered on the
+    /// row. False for a message that this view cannot change, such as one
+    /// another device queued.
+    public let canChange: Bool
+    /// Says why the message waits when that is not the running turn, for
+    /// example "Queued 1 · waits for the agent to start".
+    public let waitingCaption: String?
 
-    public init(position: Int, attachmentCount: Int, isPaused: Bool, canSteer: Bool) {
+    public init(
+        position: Int,
+        attachmentCount: Int,
+        isPaused: Bool,
+        canSteer: Bool,
+        canChange: Bool = true,
+        waitingCaption: String? = nil
+    ) {
         self.position = position
         self.attachmentCount = attachmentCount
         self.isPaused = isPaused
         self.canSteer = canSteer
+        self.canChange = canChange
+        self.waitingCaption = waitingCaption
     }
 }
 

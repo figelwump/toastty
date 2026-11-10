@@ -713,7 +713,7 @@ enum GatewayStop: Sendable {
     case listenerFailed
 }
 
-private enum LocalConversationFixtureError: Error {
+enum LocalConversationFixtureError: Error {
     case couldNotPublishResumeRecord
     case couldNotAddSecondPanel
     case timedOut
@@ -727,14 +727,15 @@ private final class ChangeCounter {
 }
 
 @MainActor
-private final class DeliveredText {
+final class DeliveredText {
     var texts: [String] = []
 }
 
 /// One Codex session in the bootstrap panel, with Remote Access off until a
-/// test turns it on.
+/// test turns it on. With `inCoordinatorWorkspace`, the session is in the
+/// terminal of a coordinator's workspace instead.
 @MainActor
-private final class LocalConversationFixture {
+final class LocalConversationFixture {
     let store: AppStore
     let sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -754,9 +755,18 @@ private final class LocalConversationFixture {
         addsSecondAgentPanel: Bool = false,
         pairsNativeDevice: Bool = false,
         startsSession: Bool = true,
-        savedConversationID: RemoteConversationID? = nil
+        savedConversationID: RemoteConversationID? = nil,
+        inCoordinatorWorkspace: Bool = false
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        if inCoordinatorWorkspace {
+            let windowID = try #require(store.state.windows.first?.id)
+            #expect(store.send(.createCoordinatorWorkspace(
+                windowID: windowID, workspaceID: UUID(), panelID: UUID(), terminalCWD: "/repo"
+            )))
+            let coordinator = try #require(store.state.coordinator)
+            #expect(store.send(.selectWorkspace(windowID: windowID, workspaceID: coordinator.workspaceID)))
+        }
         let selection = try #require(store.state.selectedWorkspaceSelection())
         panelID = try #require(selection.workspace.focusedPanelID)
         sessionID = "local-conversation-\(UUID().uuidString)"
@@ -949,7 +959,7 @@ private final class LocalConversationFixture {
 }
 
 @MainActor
-private final class LocalConversationGatewayServerSpy: RemoteAccessGatewayServing {
+final class LocalConversationGatewayServerSpy: RemoteAccessGatewayServing {
     var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
     var onDeviceRevoked: ((UUID) -> Void)?
     var onListenerReady: ((UInt16) -> Void)?

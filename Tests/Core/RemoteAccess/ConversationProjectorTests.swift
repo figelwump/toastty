@@ -237,6 +237,58 @@ struct ConversationProjectorTests {
         #expect(projector.inputAvailability.allowsRemoteSend)
     }
 
+    @Test func claudeTurnThatEndsBeforeItsTranscriptIsReadStillOpensThePrompt() throws {
+        var projector = Self.makeClaudeProjector()
+        // The Stop hook reports the end of a short turn at once. The host
+        // reads the transcript on a timer, so the turn's own records come
+        // afterwards, with the earlier times at which Claude wrote them.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(2),
+            fingerprint: "claude:turn-end-fast",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+
+        let lateUserMessage = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.3),
+            turnID: "turn-1",
+            fingerprint: "claude:user-late",
+            payload: .transcript(.userMessage(.init(text: "Reply with one word")))
+        ))
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.9),
+            turnID: "turn-1",
+            fingerprint: "claude:assistant-late",
+            payload: .transcript(.assistantMessage(.init(text: "Done")))
+        ))
+        // The message is in the conversation, and the turn stays ended.
+        #expect(lateUserMessage.contains { $0.kind == .userMessage })
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.pendingPromptStabilizationToken == token)
+        projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(2.5))
+        #expect(projector.inputAvailability.allowsRemoteSend)
+
+        // A record of the finished turn that is read after the prompt opened
+        // does not close it either.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.5),
+            turnID: "turn-1",
+            fingerprint: "claude:user-later-still",
+            payload: .transcript(.userMessage(.init(text: "A second record of that turn")))
+        ))
+        #expect(projector.inputAvailability.allowsRemoteSend)
+
+        // A message written after the turn ended starts the next turn.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(3),
+            turnID: "turn-2",
+            fingerprint: "claude:user-next",
+            payload: .transcript(.userMessage(.init(text: "Next")))
+        ))
+        #expect(projector.state == .working)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+    }
+
     @Test func claudePromptStabilizationSurvivesLatePassiveObservations() throws {
         var projector = Self.makeClaudeProjector()
         _ = projector.ingest(ProviderTranscriptObservation(
