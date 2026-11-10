@@ -217,10 +217,13 @@ struct QuickEntryView: View {
             .layoutPriority(1)
 
             if sendsToCoordinator {
+                // Short, so that a usual project and model name fit next
+                // to two buttons. The tooltip says the rest.
                 Button(action: model.createTask) {
-                    SubmitButtonLabel(title: "Create Task", shortcut: "⌥⌘↩", isSubmitting: false, isProminent: false)
+                    SubmitButtonLabel(title: "Create", shortcut: "⌥⌘↩", isSubmitting: false, isProminent: false)
                 }
                 .buttonStyle(QuietButtonStyle())
+                .accessibilityLabel("Create Task")
                 .disabled(model.canCreateTask == false)
                 .help(model.missingChoiceHint.map { "\($0) to create the task directly." }
                     ?? "Create the task now in \(model.workspaceTitle) with \(model.agentTitle), without the coordinator")

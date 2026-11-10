@@ -88,6 +88,17 @@ KEY_1, KEY_2, KEY_DOWN, KEY_RIGHT = 18, 19, 125, 124
 SHORTCUT = 'ctrl,opt,shift'
 QUICK_ENTRY = '[Toastty] Quick entry from the user'
 TOOLS = {'ax-drive': 'ax-drive.swift', 'quick-entry-ui-driver': 'quick-entry-ui-driver.swift'}
+PNG = b'\x89PNG\r\n\x1a\n'
+
+# The coordinator's Toastty CLI. While the check's hold file exists, its
+# read of the tasks waits, so the turn that reads them lasts as long as the
+# check needs. Every other call goes through at once.
+HELD_CLI = r'''#!/bin/sh
+case " $* " in
+  *" task list "*) while [ -f "__BIN__/hold-task-list" ]; do sleep 0.2; done ;;
+esac
+exec "$TOASTTY_REAL_CLI_PATH" "$@"
+'''
 
 
 def say(*parts):
@@ -151,8 +162,12 @@ class UI:
     def dismiss_notice(self):
         """A new runtime home shows a notice about skills over the top of
         the window. It is not part of the chat."""
-        if self.has_label('Dismiss'):
-            self.ax('click-label', 'Dismiss', check=False)
+        # The notice's own identifier hides its buttons from a search by
+        # label, so the click goes to where its close button is.
+        code, frame = self.ax('frame', 'banner.managed-agent-skills-provisioned', check=False)
+        if code == 0:
+            x, y, width, height = map(float, frame.split())
+            self.drive('click', x + width - 24, y + height / 2)
             time.sleep(0.5)
 
     def send_in_chat(self, text):
@@ -275,6 +290,38 @@ class Run(skill.Run):
         self.captures = []
         self.ui = None
 
+    def write_tools(self):
+        super().write_tools()
+        held = self.bin / 'toastty-held'
+        held.write_text(HELD_CLI.replace('__BIN__', str(self.bin)))
+        held.chmod(0o755)
+        dispatcher = self.bin / 'claude'
+        text = dispatcher.read_text()
+        marker = '  export PATH="'
+        require(marker in text, 'The dispatcher has no line for the coordinator\'s PATH')
+        dispatcher.write_text(text.replace(marker, (
+            '  export TOASTTY_REAL_CLI_PATH="$TOASTTY_CLI_PATH"\n'
+            f'  export TOASTTY_CLI_PATH="{held}"\n') + marker, 1))
+        # A new shell starts slowly while the check's file exists, so a
+        # restart of the coordinator lasts long enough to send during it.
+        with open(self.zdotdir / '.zshrc', 'a') as zshrc:
+            zshrc.write(f'[ -f "{self.bin}/slow-shell" ] && sleep 4\n')
+
+    def slow_shells(self, slow):
+        path = self.bin / 'slow-shell'
+        if slow:
+            path.write_text('')
+        else:
+            path.unlink(missing_ok=True)
+
+    def hold_turns(self, held):
+        """Makes the coordinator's next read of the tasks wait, or lets it go."""
+        path = self.bin / 'hold-task-list'
+        if held:
+            path.write_text('')
+        else:
+            path.unlink(missing_ok=True)
+
     def write_config(self):
         super().write_config()
         with open(self.user_home / '.toastty/tasks.toml', 'a') as config:
@@ -340,8 +387,9 @@ class Run(skill.Run):
         raise AssertionError(f'No open workspace for {project}')
 
     def prompts(self, fragment):
-        """The messages the coordinator got that hold `fragment`."""
-        return [turn for turn in self.turns() if fragment in turn['prompt']]
+        """The messages the coordinator got that hold `fragment`. A digest
+        is not one of them: it can name a task by the same words."""
+        return [turn for turn in self.turns() if fragment in turn['prompt'] and not turn['wake']]
 
     def tasks_now(self):
         return self.cli('task', 'list')['tasks']
@@ -528,9 +576,12 @@ def run_check(run):
     check('the first line carries the chosen project and agent', len(sent) == 1 and header == expected, header)
     folders = run.attachment_folders()
     copies = sorted(folders[-1].iterdir()) if folders else []
+    # The panel saves a pasted image as a PNG of its own, under the message's ID.
+    named = re.findall(r'^`(/[^`\n]+)`$', sent[0]['prompt'], re.M) if sent else []
     check('the image is copied into the coordinator\'s folder, and the message names it in a code span',
-          len(copies) == 1 and copies[0].read_bytes() == image.read_bytes()
-          and bool(sent) and f'`{copies[0]}`' in sent[0]['prompt'], [str(c) for c in copies])
+          len(copies) == 1 and copies[0].read_bytes().startswith(PNG) and len(named) == 1
+          and os.path.realpath(named[0]) == os.path.realpath(copies[0])
+          and Path(named[0]).name == 'Pasted-image.png', dict(copies=[str(c) for c in copies], named=named))
     created = new_tasks(before)
     commands = [command for turn in chosen for command in turn['commands']]
     check('it creates one task in the chosen project, though a rule and the history point elsewhere',
@@ -541,7 +592,9 @@ def run_check(run):
           [(t.get('agent'), t.get('model'), t.get('effort')) for t in created])
     files = created[0].get('files') or [] if created else []
     check('the image reaches the new task',
-          len(files) == 1 and Path(files[0]).is_file() and Path(files[0]).read_bytes() == image.read_bytes(), files)
+          len(files) == 1 and len(copies) == 1 and Path(files[0]).is_file()
+          and Path(files[0]).read_bytes() == copies[0].read_bytes()
+          and os.path.realpath(files[0]).startswith(os.path.realpath(run.runtime_home / 'task-attachments')), files)
     check('it asks no question about the project', 'which project' not in run.said(chosen).lower()
           and 'marketing' not in run.said(chosen).lower(), run.said(chosen), required=False)
     wait_for('the chat to show the message', lambda: explicit in ui.chat(), timeout=60)
@@ -553,9 +606,11 @@ def run_check(run):
     # 4. A message sent while the coordinator works waits, then is typed once.
     # 5. A waiting message can be removed.
     def wait_for_work(description):
-        """A digest starts a turn that reads every task: long enough to queue behind."""
+        """A digest starts a turn that reads every task. The check holds
+        that read, so the turn lasts until `run.hold_turns(False)`."""
         run.wait_idle()
         run.seen_turns = len(run.turns())
+        run.hold_turns(True)
         run.cli('coordinator', 'wake', '--in', '61s')
         wait_for(description, lambda: run.coordinator().get('status') == 'working', timeout=180, interval=0.3)
 
@@ -597,6 +652,7 @@ def run_check(run):
           dict(saved=saved, folder=doomed_folder.exists()))
     run.capture('after-remove')
     require(not run.prompts(waiting), 'The waiting message was typed during the turn')
+    run.hold_turns(False)
     run.new_turns(wake=False)
     check('the waiting message is typed once after the turn', len(run.prompts(waiting)) == 1, len(run.prompts(waiting)))
     check('the removed message is never typed', run.prompts(removed) == [], run.prompts(removed))
@@ -617,15 +673,22 @@ def run_check(run):
     run.pick(KEY_1, typed='app')
     ui.type(during_restart)
     wait_for('the typed text', lambda: ui.value('quick-entry.text') == during_restart, timeout=20)
+    # The restart opens a second terminal for the new agent, and that
+    # terminal's shell takes 4 seconds to start. The old agent still runs,
+    # so the status shows no change: the toast below says what the send met.
+    run.slow_shells(True)
     restart = threading.Thread(target=lambda: run.run_cli('coordinator', 'restart'))
     restart.start()
-    seen = wait_for('the restart to be under way', lambda: (lambda s: s if s.get('agentState') == 'starting' else None)(
-        run.coordinator()), timeout=30, interval=0.02)
-    logged = len(run.log_lines('Sent a quick entry message to the coordinator'))
-    ui.key(KEY_RETURN, 'cmd')
+    time.sleep(1.2)
+    seen = run.coordinator()
+    toast = run.submit()
+    during = run.coordinator()
+    run.slow_shells(False)
     restart.join()
-    wait_for('the panel to close', ui.panel_closed, timeout=20)
     after = run.coordinator()
+    check('the message was sent while Restart Coordinator ran, and waited for the new agent',
+          toast == 'Waits: the coordinator is starting' and during.get('queuedCount') == 1
+          and during.get('sessionID') == old.get('sessionID'), dict(toast=toast, during=during))
     check('Restart Coordinator started a fresh agent', after.get('sessionID') != old.get('sessionID'), after)
     wait_for('the message in the new conversation', lambda: run.prompts(during_restart), timeout=300, interval=2)
     run.new_turns(minimum=0, wake=False)
@@ -635,9 +698,6 @@ def run_check(run):
               if path.name in new_files and during_restart in path.read_text(errors='replace')]
     check('the message sent during the restart is typed once, into the new agent',
           len(typed) == 1 and len(in_new) == 1, dict(typed=len(typed), new=[p.name for p in in_new]))
-    waited = run.log_lines('Sent a quick entry message to the coordinator')[logged:]
-    check('it waited for the new agent', len(waited) == 1 and 'true' not in waited[0].split('typed', 1)[-1][:12],
-          waited, required=False)
     created = new_tasks(before)
     check('the new coordinator creates its task', len(created) == 1, [(t['title'], t.get('projectRoot')) for t in created])
     step('a message sent during the restart was kept', seen=seen, after=after)
@@ -662,6 +722,7 @@ def run_check(run):
     time.sleep(2)
     require(not run.prompts(across_quit), 'The waiting message was typed before the quit')
     run.instance.kill()
+    run.hold_turns(False)
     run.start_instance()
     ui = run.ui
     restored = wait_for('the coordinator after the relaunch', lambda: (lambda s: s if s.get('exists') else None)(run.coordinator()), timeout=60)

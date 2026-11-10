@@ -641,7 +641,7 @@ you when it is not sure, and creates the task.
   not type a message that the file lists as waiting, because a relaunch
   could then type it a second time: the message waits, the chat says that
   Toastty could not save it, and Toastty tries again every 5 seconds.
-- **Create the task directly** with `Option+Cmd+Return` or **Create Task**.
+- **Create the task directly** with `Option+Cmd+Return` or **Create**.
   This is the panel without a coordinator: the task goes to the workspace
   and the agent of the pills, and a pill that shows Auto uses the value it
   would start on without a coordinator (see [Quick entry](#quick-entry)),

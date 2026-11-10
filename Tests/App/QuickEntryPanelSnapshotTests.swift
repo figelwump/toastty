@@ -239,6 +239,15 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         let auto = try render("quick-entry-coordinator-auto")
         XCTAssertEqual(auto.size.height, empty.size.height)
 
+        // The user's choices with usual names, for the visual review: both
+        // show whole next to the two buttons.
+        let usual = try XCTUnwrap(store.state.workspacesByID.values.first { $0.isCoordinator == false })
+        _ = store.send(.renameWorkspace(workspaceID: usual.id, title: "docs-site"))
+        model.workspaceOptions = [QuickEntryModel.Option(id: usual.id.uuidString, title: "docs-site")]
+        model.chooseWorkspace(usual.id)
+        model.choosePreset(QuickEntryPreset(agent: "claude", model: "claude-sonnet-5-5", effort: "high"))
+        try render("quick-entry-coordinator-usual-names")
+
         // The user's choices, with long names: the footer stays one row
         // with both buttons whole.
         let workspace = try XCTUnwrap(store.state.workspacesByID.values.first { $0.isCoordinator == false })
