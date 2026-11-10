@@ -193,7 +193,7 @@ def main():
         # No workspace was used before, so the selected one; no preset was
         # used before, so [defaults].
         wait_for_value('quick-entry.workspace', workspace['title'])
-        wait_for_value('quick-entry.agent', 'claude-opus-5-5 · high')
+        wait_for_value('quick-entry.agent', 'opus-5.5 · high')
         drive('key', KEY_1, 'cmd')
         wait_for('the workspace picker', picker_windows, timeout=10)
         drive('type', workspace['title'])
@@ -211,7 +211,7 @@ def main():
         drive('key', KEY_RIGHT)
         drive('key', KEY_RETURN)
         wait_for('the agent picker to close', picker_closed, timeout=10)
-        wait_for_value('quick-entry.agent', 'claude-opus-5-5 · xhigh')
+        wait_for_value('quick-entry.agent', 'opus-5.5 · xhigh')
         drive('pasteboard-png', image)
         drive('key', KEY_V, 'cmd')
         time.sleep(0.5)
@@ -341,7 +341,7 @@ def main():
         if opened:
             x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
             drive('click', x + w / 2, y + h / 2)
-            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'claude-opus-5-5 · high')
+            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'opus-5.5 · high')
             outcomes['click on a row chooses it'] = dict(ok=chosen, agent=drive('value', pid, 'quick-entry.agent'))
             step('row click', **outcomes['click on a row chooses it'])
         if picker_windows():
@@ -357,7 +357,7 @@ def main():
         drive('type', 'low')
         drive('key', KEY_RETURN)
         wait_for('the columns to close', picker_closed, timeout=10)
-        wait_for_value('quick-entry.agent', 'claude-sonnet-5-5 · low')
+        wait_for_value('quick-entry.agent', 'sonnet-5.5 · low')
         step('columns pinned a typed model', agent=drive('value', pid, 'quick-entry.agent'))
         drive('key', KEY_ESCAPE)
         wait_for('the panel to close', panel_closed, timeout=10)

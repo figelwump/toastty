@@ -114,10 +114,6 @@ func type(_ text: String) {
         for keyDown in [true, false] {
             let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown)
             event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            // Plain characters: an event takes the system's current modifier
-            // state otherwise, and with a stale modifier the text never
-            // reaches the field.
-            event?.flags = []
             event?.post(tap: .cghidEventTap)
             usleep(12_000)
         }
