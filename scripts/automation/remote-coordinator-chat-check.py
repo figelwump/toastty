@@ -214,7 +214,8 @@ def run(check):
     helper.write_text(HELPER_AGENT)
     helper.chmod(0o755)
     with open(user_home / '.toastty/agents.toml', 'a') as agents:
-        agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helper)])}\n')
+agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helper)])}\n'
+                     'initialPromptPlacement = "trailing"\n')
     (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "helper"\n\n[coordinator]\nagent = "claude"\n')
     # The first terminal starts in the user home, which is the tasks' project.
     subprocess.run(['git', 'init', '-q', str(user_home)], check=True)

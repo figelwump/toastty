@@ -574,7 +574,7 @@ under it. On macOS 14 the panel shows the terminal.
   waits in the chat as **Queued** and is typed when the turn ends. **Edit**
   puts a waiting message back in the field, and **Remove** drops it.
 - **Stop.** While a turn runs and the field is empty, the button stops the
-  turn (also ⌘.), as Escape in the terminal does. Messages that waited are
+  turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send
   next** lets them go again. A digest from Toastty does not wait for paused
   messages.

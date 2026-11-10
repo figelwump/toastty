@@ -42,6 +42,10 @@ struct CoordinatorChatSendPathTests {
         // The chat shows it as sent until the conversation does. Then the
         // row is the conversation's, with no mark that says how it came.
         #expect(fixture.chat.presentation.sendItems.map(\.text) == ["Summarize the open tasks"])
+        // A switch to the terminal and back does not lose it.
+        fixture.chat.hide()
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["Summarize the open tasks"])
         try fixture.startTurn(1, userText: "Summarize the open tasks")
         try await fixture.waitUntil("the message in the conversation") {
             fixture.chat.presentation.sendItems.isEmpty && fixture.chat.presentation.rows.isEmpty == false
@@ -324,33 +328,50 @@ struct CoordinatorChatSendPathTests {
         guard #available(macOS 15.0, *) else { return }
         let fixture = try CoordinatorChatFixture()
         defer { fixture.tearDown() }
-        let view = CoordinatorChatView(
-            model: fixture.chat,
-            controller: fixture.controller,
-            sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
-            board: .disabled,
-            store: fixture.store,
-            panelID: fixture.panelID,
-            windowID: try #require(fixture.store.state.coordinator?.windowID),
-            isOnScreen: true,
-            hasPanelFocus: true
-        )
-        .frame(width: 900, height: 600)
-        .environment(\.colorScheme, .dark)
-        let hostingView = NSHostingView(rootView: view)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-            styleMask: [.borderless], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.contentView = hostingView
+        let windowID = try #require(fixture.store.state.coordinator?.windowID)
+        func host(isOnScreen: Bool) -> NSWindow {
+            let view = CoordinatorChatView(
+                model: fixture.chat,
+                controller: fixture.controller,
+                sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+                board: .disabled,
+                store: fixture.store,
+                panelID: fixture.panelID,
+                windowID: windowID,
+                isOnScreen: isOnScreen,
+                hasPanelFocus: isOnScreen
+            )
+            .frame(width: 900, height: 600)
+            .environment(\.colorScheme, .dark)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: view)
+            return window
+        }
+
+        // A chat whose workspace is not the selected one stays mounted. It
+        // does not read the conversation and does not take the keyboard.
+        let hiddenWindow = host(isOnScreen: false)
+        let hiddenComposer = try await fixture.waitFor("the hidden composer") { fixture.chat.composerTextView }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(hiddenWindow.firstResponder !== hiddenComposer)
+        #expect(fixture.chat.shownPanelID == nil)
+        hiddenWindow.close()
+
+        let window = host(isOnScreen: true)
         defer { window.close() }
-        // The view on screen reads the conversation.
+        // The view on screen reads the conversation and has the keyboard.
         try await fixture.waitUntil("the chat to read the conversation") {
             fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
         }
-        let composer = try await fixture.waitFor("the composer") { fixture.chat.composerTextView }
+        let composer = try await fixture.waitFor("the composer") {
+            fixture.chat.composerTextView.flatMap { $0.window === window ? $0 : nil }
+        }
         #expect(composer is CoordinatorComposerTextView)
+        try await fixture.waitUntil("the composer to take the keyboard") { window.firstResponder === composer }
 
         func key(_ modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
             try #require(NSEvent.keyEvent(
@@ -375,6 +396,47 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.chat.draft.isEmpty)
     }
 
+    // MARK: - The keyboard and the covered terminal
+
+    @MainActor
+    @Test func textForTheCoveredTerminalDoesNotMoveTheKeyboardThere() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let other = UUID()
+        var policies: [UUID: TerminalInputFocusPolicy] = [:]
+        registry.setAutomationSendTextHandlerForTesting { _, _, panelID, focusPolicy in
+            policies[panelID] = focusPolicy
+            return true
+        }
+        let composerFocus = FocusRequests()
+        let controller = fixture.controller
+        registry.coveringInputFocus = { panelID in
+            guard controller.coversTerminal(panelID: panelID) else { return nil }
+            return {
+                composerFocus.count += 1
+                return true
+            }
+        }
+
+        // The command that resumes the agent after a relaunch asks for the
+        // keyboard. Under the chat it must not get it.
+        #expect(registry.sendManagedAgentCommand("claude --resume x", panelID: fixture.panelID, focusPolicy: .focusTarget))
+        #expect(registry.sendManagedAgentCommand("claude", panelID: other, focusPolicy: .focusTarget))
+        #expect(policies[fixture.panelID] == .preserveFirstResponder)
+        #expect(policies[other] == .focusTarget)
+        // Focus for the covered terminal goes to the chat.
+        #expect(registry.focusPanelIfPossible(panelID: fixture.panelID))
+        #expect(composerFocus.count == 1)
+
+        // With the terminal showing, it takes the keyboard as any terminal.
+        fixture.controller.showsTerminal = true
+        #expect(registry.sendManagedAgentCommand("claude", panelID: fixture.panelID, focusPolicy: .focusTarget))
+        #expect(policies[fixture.panelID] == .focusTarget)
+        _ = registry.focusPanelIfPossible(panelID: fixture.panelID)
+        #expect(composerFocus.count == 1)
+    }
+
     // MARK: - macOS 14
 
     @MainActor
@@ -395,6 +457,11 @@ struct CoordinatorChatSendPathTests {
         fixture.controller.supportsChat = false
         #expect(fixture.controller.coversTerminal(panelID: fixture.panelID) == false)
     }
+}
+
+@MainActor
+private final class FocusRequests {
+    var count = 0
 }
 
 private extension CoordinatorController.SendResult {

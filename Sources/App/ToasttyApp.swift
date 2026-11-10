@@ -1439,11 +1439,13 @@ struct ToasttyApp: App {
             )
             // Keyboard focus meant for the terminal under the chat goes to
             // the chat's composer.
-            terminalRuntimeRegistry.focusCoveringInput = { [weak coordinatorController] panelID in
+            terminalRuntimeRegistry.coveringInputFocus = { [weak coordinatorController] panelID in
                 guard let coordinatorController, coordinatorController.coversTerminal(panelID: panelID) else {
                     return nil
                 }
-                return coordinatorController.chat?.focusComposer() ?? false
+                return { [weak coordinatorController] in
+                    coordinatorController?.chat?.focusComposer() ?? false
+                }
             }
         }
         // The quick entry Agent picker offers the models the iPhone's

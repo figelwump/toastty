@@ -38,8 +38,7 @@ struct CoordinatorComposerView: View {
             // the field the button sends: the message then waits its turn.
             if canStop, canSend == false {
                 button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
-                    .keyboardShortcut(".", modifiers: .command)
-                    .help("Stop the coordinator's turn (⌘.)")
+                    .help("Stop the coordinator's turn")
             } else {
                 button(systemImage: "arrow.up", label: "Send", identifier: "coordinator.chat.send", action: onSend)
                     .disabled(canSend == false)
@@ -128,6 +127,9 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        // Only a later request gives the field the keyboard. A composer
+        // that is made while its workspace is hidden must not take it.
+        context.coordinator.lastFocusRequestID = focusRequestID
         configure(textView)
         onTextView(textView)
         return scrollView

@@ -22,7 +22,13 @@ final class CoordinatorChatModel: ObservableObject {
     private struct PendingSend: Equatable {
         let id: String
         let text: String
+        let typedAt: Date
     }
+
+    /// A typed message that the newest page does not show after this time
+    /// is not waited for: the conversation moved past it while the chat
+    /// was hidden.
+    static let pendingSendLifetime: TimeInterval = 120
 
     /// What the chat says above the composer, in place of sending.
     enum Notice: Equatable {
@@ -150,9 +156,8 @@ final class CoordinatorChatModel: ObservableObject {
         isSettled = false
         subscription?.cancel()
         subscription = nil
-        // A later subscription can number its events anew, so an echo of
-        // these could not be matched.
-        pendingSends.removeAll()
+        // The messages that wait for their echo stay: the conversation
+        // still gets it while the chat is hidden.
         loaded = nil
     }
 
@@ -230,6 +235,8 @@ final class CoordinatorChatModel: ObservableObject {
         events = page.events
         loaded = LoadedPage(page)
         reconcilePendingSends(with: page.events)
+        let oldest = now().addingTimeInterval(-Self.pendingSendLifetime)
+        pendingSends.removeAll { $0.typedAt < oldest }
         publishRows(revision: wasEmpty ? .initial : .rebuilt)
     }
 
@@ -454,7 +461,7 @@ final class CoordinatorChatModel: ObservableObject {
         // Without the conversation there is no echo to wait for.
         guard entry.echoesInConversation, subscription != nil else { return }
         guard events.contains(where: { Self.echoedRequestID($0) == entry.id }) == false else { return }
-        pendingSends.append(PendingSend(id: entry.id, text: entry.text))
+        pendingSends.append(PendingSend(id: entry.id, text: entry.text, typedAt: now()))
         publishMetadata()
     }
 

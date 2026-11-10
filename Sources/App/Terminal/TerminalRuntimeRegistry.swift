@@ -211,11 +211,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// bare closure so the hot path stays a single optional call.
     /// Returns false when the input cannot create a draft at the current prompt.
     var localInputObserver: ((UUID, TerminalLocalInputKind) -> Bool)?
-    /// Gives the keyboard to the native view that covers a terminal panel,
-    /// such as the coordinator's chat. It answers `nil` for a panel that
-    /// nothing covers, and otherwise whether the covering view took the
-    /// keyboard.
-    var focusCoveringInput: ((UUID) -> Bool?)?
+    /// The way to give the keyboard to the native view that covers a
+    /// terminal panel, such as the coordinator's chat, or `nil` for a panel
+    /// that nothing covers. The answer says whether the covering view took
+    /// the keyboard. A covered terminal never takes the keyboard itself.
+    var coveringInputFocus: ((UUID) -> (@MainActor () -> Bool)?)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -559,6 +559,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> TerminalInputDeliveryResult {
+        let focusPolicy = inputFocusPolicy(focusPolicy, panelID: panelID)
         if let automationSendTextHandlerForTesting {
             return automationSendTextHandlerForTesting(text, submit, panelID, focusPolicy)
                 ? .delivered
@@ -588,7 +589,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard let controller = runtimeStore.existingController(for: panelID) else {
             return .unavailable
         }
-        return controller.automationSendInterruptResult(focusPolicy: focusPolicy)
+        return controller.automationSendInterruptResult(
+            focusPolicy: inputFocusPolicy(focusPolicy, panelID: panelID)
+        )
     }
 
     func readVisibleText(panelID: UUID) -> String? {
@@ -615,12 +618,24 @@ final class TerminalRuntimeRegistry: ObservableObject {
         #endif
     }
 
+    /// Text for a terminal under a native view goes in without moving the
+    /// keyboard to that terminal, whatever its sender asked for: the user
+    /// types in the covering view, and would otherwise type into a
+    /// terminal they cannot see.
+    private func inputFocusPolicy(
+        _ requested: TerminalInputFocusPolicy,
+        panelID: UUID
+    ) -> TerminalInputFocusPolicy {
+        coveringInputFocus?(panelID) == nil ? requested : .preserveFirstResponder
+    }
+
     private func deliverTextWithoutLocalDraftTracking(
         _ text: String,
         submit: Bool,
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool {
+        let focusPolicy = inputFocusPolicy(focusPolicy, panelID: panelID)
         if let automationSendTextHandlerForTesting {
             return automationSendTextHandlerForTesting(text, submit, panelID, focusPolicy)
         }
@@ -780,8 +795,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     @discardableResult
     func focusPanelIfPossible(panelID: UUID) -> Bool {
         // A native view that covers the terminal takes the keyboard for it.
-        if let didFocus = focusCoveringInput?(panelID) {
-            return didFocus
+        if let focusCoveringInput = coveringInputFocus?(panelID) {
+            return focusCoveringInput()
         }
         return focusCoordinator.focusIfPossible { [weak self] in
             guard let self,
