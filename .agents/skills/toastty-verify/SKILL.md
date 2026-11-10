@@ -16,10 +16,22 @@ Use this as the Toastty verification decision layer. Keep detailed command seman
    - `working-tree`: current uncommitted changes, usually before commit.
    - `head`: the current commit only, usually after commit or for a baseline.
    - `ref --ref <rev>`: an explicit branch, tag, or commit.
-3. List the user-visible behaviors and adjacent regressions that could have changed.
-4. Choose 1-4 high-signal checks from the decision tree below. Prefer deterministic tests and smoke scripts before exploratory GUI work.
+3. List the scenarios a user could hit for the changed behavior, not only the main path: state combinations, relaunch and restore, interruption and cancellation, failure and retry paths, concurrent or repeated actions, boundary inputs, and interaction with adjacent features such as other panels, sessions, or the iOS client. Add any "Scenarios to verify" from a second-opinion review.
+4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks, Computer Use, or the `qa` subagent for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
-6. Report the exact command family, scope, remote/local target, fallback status, result, and any artifact paths.
+6. Report the exact command family, scope, remote/local target, fallback status, result, and any artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
+
+## CI Coverage
+
+PR CI runs selected Linux script and web-panel checks. It does not build or test
+native apps, and merged commits do not trigger another CI run. Continue to select
+native build, test, and runtime checks below for the changed behavior. A green
+`CI gate` on a PR does not replace this verification.
+
+Full hosted native validation is available by manually dispatching `Toastty CI`.
+Before TestFlight, that full run must pass on the exact `main` release commit;
+follow `docs/ios-release-ci.md`. It retains macOS checks and both iOS
+configurations, including full Debug UI and performance budgets.
 
 ## Decision Tree
 
@@ -31,7 +43,7 @@ For docs-only or agent-instruction-only changes, do not run the full app gate by
 
 - Skills: run the active runtime's `skill-creator` `quick_validate.py <skill-dir>` when available. If the script is unavailable or its Python environment is missing dependencies, at minimum parse `SKILL.md` frontmatter and `agents/openai.yaml`, then state the validator blocker in the handoff.
 - Shell snippets or scripts in docs: run `bash -n` only for real shell files, not Markdown examples.
-- Agent workflow changes: get the required second-opinion review if the repo instructions or active runtime require it.
+- Agent workflow changes: follow the global Review Gate; it does not call for second-opinion review of instruction changes.
 
 If the docs change alters build, release, automation, or validation behavior, also run a representative command or dry validation path.
 
