@@ -214,7 +214,7 @@ def run(check):
     helper.write_text(HELPER_AGENT)
     helper.chmod(0o755)
     with open(user_home / '.toastty/agents.toml', 'a') as agents:
-agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helper)])}\n'
+        agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helper)])}\n'
                      'initialPromptPlacement = "trailing"\n')
     (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "helper"\n\n[coordinator]\nagent = "claude"\n')
     # The first terminal starts in the user home, which is the tasks' project.
@@ -344,7 +344,7 @@ agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helpe
         ui.send('Reply with exactly this one word and nothing else: CHAT-THREE')
         queued = wait_for('the message to wait', lambda: (s := status())['queuedCount'] == 1 and s)
         require(queued.get('hold') in ('busy', 'awaitingTurn'), f'Unexpected hold: {queued}')
-        wait_for('the chat to show it as Queued', lambda: 'Queued 1' in ui.texts())
+        wait_for('the chat to show it as Queued', lambda: 'queued 1' in ui.texts().lower())
         capture('queued-while-busy')
         time.sleep(5)
         require(index_of('user', 'CHAT-THREE') is None and status()['queuedCount'] == 1,
@@ -354,7 +354,7 @@ agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helpe
         require(index_of('user', 'CHAT-THREE') > index_of('assistant', 'CHAT-TWO'),
                 f'The queued message was typed during the turn: {transcript()[-6:]}')
         wait_for('the queue to empty', lambda: status()['queuedCount'] == 0 and at_prompt(), timeout=120)
-        require('Queued 1' not in ui.texts(), 'The chat still shows the typed message as Queued')
+        require('queued 1' not in ui.texts().lower(), 'The chat still shows the typed message as Queued')
         capture('queued-typed')
         step('a message during a turn waited and was typed after it', queued=queued)
 
@@ -371,7 +371,7 @@ agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helpe
                  lambda: index_of('user', '[Request interrupted by user') is not None, timeout=60)
         wait_for('the turn to end', at_prompt, timeout=60)
         require(time.time() - stopped_at < 60, 'Stop did not end the turn in time')
-        wait_for('the chat to show the message as Paused', lambda: 'Paused' in ui.texts())
+        wait_for('the chat to show the message as Paused', lambda: 'paused' in ui.texts().lower())
         time.sleep(8)
         require(index_of('user', 'CHAT-FIVE') is None and not replied('CHAT-FOUR') and status()['queuedCount'] == 1,
                 f'A message started a turn right after the stop: {transcript()[-4:]} {status()}')
@@ -493,7 +493,7 @@ agents.write(f'\n[helper]\ndisplayName = "Helper"\nargv = {json.dumps([str(helpe
         wait_for('the Mac\'s message to wait', lambda: status()['queuedCount'] == 1)
         phone_send('phone-2', 'Reply with exactly this one word and nothing else: PHONE-TWO', 'queue',
                    busy['inputControl']['turnEpoch'])
-        wait_for('the chat to list both', lambda: 'PHONE-TWO' in ui.texts() and 'Queued 2' in ui.texts(), timeout=30)
+        wait_for('the chat to list both', lambda: 'PHONE-TWO' in ui.texts() and 'queued 2' in ui.texts().lower(), timeout=30)
         capture('device-and-mac-queued')
         wait_for_reply('CHAT-SEVEN')
         wait_for_reply('PHONE-TWO')
