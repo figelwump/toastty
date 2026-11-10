@@ -253,8 +253,9 @@ API and answers every request with an overloaded error, so Claude Code ends
 each turn with an API error and fires `StopFailure`. Claude gets a placeholder
 token for the stub (`ANTHROPIC_AUTH_TOKEN` in the run's own `--settings`), so
 the login token is not sent to it. The stub never keeps a header or a body: it
-keeps the method and path of each request, and whether the request carried
-the placeholder token. The check fails if a model request did not. The run marks only
+keeps the method and path of each request, and which kind of credential the
+request carried (the placeholder, none, or another one). The check fails if
+any request carried another one. The run marks only
 its temporary coordinator folder trusted in `~/.claude.json`, and removes that
 entry and the folder's Claude project directory afterward. The check proves
 from Claude's transcript that the turn failed, that the status reads `error`,

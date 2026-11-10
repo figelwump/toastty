@@ -14,8 +14,9 @@ answers every request with an overloaded error, so each turn ends with an API
 error and Claude Code fires its StopFailure hook in place of Stop. Claude
 gets a placeholder token for the stub, so the login token is not sent to it.
 The stub reads each request only to discard it: it never keeps a header or a
-body. It keeps the method, the path, and whether the request carried the
-placeholder token, and the check fails if a model request did not. The check
+body. It keeps the method, the path, and which kind of credential the request
+carried (the placeholder, none, or another one), and the check fails if any
+request carried another one. The check
 proves from Claude's transcript that the turn failed, and then that the next
 wake digest is typed.
 
@@ -172,7 +173,8 @@ class StubAPI:
 
     A request's headers and body carry the caller's login. This server reads
     them only to take them off the socket. It keeps the method, the path,
-    and whether the request carried the placeholder token and no other key.
+    and which kind of credential the request carried: the placeholder token,
+    none, or another one. It never keeps the credential.
     """
 
     def __init__(self):
@@ -192,9 +194,14 @@ class StubAPI:
                         break
                     remaining -= len(discarded)
                 path = urllib.parse.urlsplit(self.path).path
-                placeholder = (self.headers.get('Authorization') == f'Bearer {PLACEHOLDER_TOKEN}'
-                               and self.headers.get('x-api-key') is None)
-                requests.append(dict(method=self.command, path=path, at=time.time(), placeholderToken=placeholder))
+                authorization, api_key = self.headers.get('Authorization'), self.headers.get('x-api-key')
+                if authorization is None and api_key is None:
+                    credential = 'none'
+                elif authorization == f'Bearer {PLACEHOLDER_TOKEN}' and api_key is None:
+                    credential = 'placeholder'
+                else:
+                    credential = 'other'
+                requests.append(dict(method=self.command, path=path, at=time.time(), credential=credential))
                 if self.command == 'POST' and path.startswith('/v1/messages'):
                     status, kind, message = 529, 'overloaded_error', 'Overloaded'
                 else:
@@ -312,8 +319,9 @@ def run_failed_turn(check, expect):
         failed = wait_for('the turn to fail with an API error', lambda: api_errors() or None, timeout=600, interval=2)
         time.sleep(5)
         after_failure = status()
-        require(all(request['placeholderToken'] for request in stub.model_requests()),
-                'A model request did not carry the placeholder token')
+        require(all(request['credential'] == 'placeholder' for request in stub.model_requests())
+                and all(request['credential'] != 'other' for request in stub.requests),
+                'A request to the stub carried a credential other than the placeholder token')
         step('the API failed the turn', apiErrors=failed, modelRequests=len(stub.model_requests()),
              userMessages=user_messages(), status=after_failure)
 
