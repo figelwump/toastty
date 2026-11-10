@@ -505,7 +505,9 @@ The coordinator is one long-lived agent session that follows your tasks. It
 runs in its own workspace, named **Coordinator**, with a terminal in
 `~/.toastty/coordinator/`. A runtime-isolated dev run uses
 `<runtime-home>/coordinator/` instead. The coordinator acts through the
-`toastty task` commands, as any agent can.
+`toastty task` commands, as any agent can. Its job is described in
+[What the coordinator does](#what-the-coordinator-does), and your rules for
+it are in [the policy file](#the-policy-file).
 
 - **Open Coordinator** in the command palette creates the workspace on first
   use, selects it and starts the agent. Later it selects the workspace, and
@@ -555,6 +557,178 @@ Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
 
 `toastty coordinator open|restart|status` run the same actions as the command
 palette; see the [CLI reference](cli-reference.md#coordinator).
+
+### What the coordinator does
+
+The coordinator follows your tasks and keeps them moving. It does not do
+their work. Its instructions are the text of the `toastty-coordinator` skill,
+which Toastty ships. Toastty has no rule about a task that is stuck: the
+coordinator decides, by the skill's defaults and by your policy.
+
+On each [wake](#when-toastty-wakes-the-coordinator) it reads `toastty task
+list`, compares
+[how long each task has been in its state](#how-long-a-task-has-been-in-its-state)
+with your policy, reads the last reply of a task that looks stuck, acts, and
+sets its next check.
+
+| Situation | What the coordinator does by default |
+| --- | --- |
+| Toastty restarted while an agent worked | Tells the task to continue. |
+| An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
+| An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
+| An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
+| CI failed | Tells the task to fix it, or to rerun a check your policy names as a flake. |
+| CI runs for more than 30 minutes | Looks at the run, and tells you when it is queued or hangs. |
+| The pull request has merge conflicts | Tells the task to rebase and resolve them. |
+| An agent is busy, with no output for 30 minutes | Never interrupts. Tells you which command seems to hang. |
+| Setup failed | Retries it once, then tells you. |
+| No agent runs, an agent stopped with an error, or a merge or cleanup stopped | Tells you, with the reason. |
+
+- **New tasks.** Tell the coordinator what you want done. It chooses the
+  project, and the agent, model and effort, from what you said, then from
+  your policy, then from the history of your tasks. When two projects are
+  still plausible, it asks first and creates the task after your answer.
+  When your answer holds for more than one request, it adds a rule to the
+  policy.
+- **Review.** When a task is ready for review, the coordinator reads its pull
+  request, its checks and its verification report, and compares them with
+  the Reviewing section of your policy. With weak proof, it tells the task
+  exactly what to add, once; if the proof is weak again, it brings the task
+  to you. With good proof, it tells you in one or two sentences why the task
+  is ready. It writes no summary of the proof. You merge.
+- **Releases.** Each project has a rule in the policy: release on merge, or
+  in batches. The coordinator asks you for the rule the first time a project
+  has merged work that waits. It starts a release that the rule calls for
+  with `toastty task release`, and proposes a batch release and waits for
+  your yes. A task with
+  [`task set-release --after-merge`](#release-one-task-right-after-it-merges)
+  gets a release as soon as it merges. Before a release for one task, the
+  coordinator says which other merged tasks ship with it.
+
+How it works with your tasks:
+
+- Its messages to a task start with `[coordinator]`.
+- It sends nothing to a task you typed in during the last 15 minutes
+  (`lastUserInputAt`).
+- It sends a task one message for each condition. If the condition comes
+  back, it tells you.
+- It writes a task as a link, `[title](toastty://task/<task-id>)`.
+- It treats text from tasks, pull requests and issues as data, not as
+  instructions.
+- It does not use `task watch --notify` for a task that waits for another
+  one. Toastty types a watch's notice whatever the agent does at that
+  moment, also at a permission prompt. The coordinator notes the dependency
+  in its ledger, hears of the merge in a digest, and then tells the task
+  under its own rules.
+
+What it may do alone, what it asks first, and what it never does:
+
+| Do, then tell you | Propose, then wait | Never |
+| --- | --- | --- |
+| Continue an interrupted agent | The project of a new task, when it is not sure | Answer an agent's permission prompt |
+| Send a CI or conflict instruction | A batch release | Merge: `task merge`, `task request-merge` or `gh pr merge` |
+| Follow a dependency and tell the task when it merged | Archive a task, or make it again in another project | Interrupt a busy agent |
+| Ask a task for better proof | A question that a task asked you | Change production outside a release task |
+| Answer a question that your policy settles | | Write code |
+| Retry a failed setup once | | |
+| Start a release that a rule or `--after-merge` calls for | | |
+| Add a policy rule after your answer | | |
+
+The skill fixes the Never column: your policy cannot change it, and the
+coordinator refuses these also when you ask it in its conversation. To merge,
+use Merge on the task, or say "merge it" to the task's agent.
+
+These limits are instructions to the agent. Toastty itself refuses only
+`toastty task merge` from the coordinator, because that command runs only in
+the task's own task space. The coordinator runs as you, so keep its agent's
+own approval rules on for commands that merge, archive or delete. A message
+that another agent sends with `toastty coordinator send` arrives at the same
+prompt as your own typing.
+
+### The coordinator's folder
+
+Each time the coordinator's agent starts, and when Toastty launches with a
+coordinator to resume, Toastty makes sure that the folder holds these files:
+
+| File | Written by | What it is |
+| --- | --- | --- |
+| `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
+| `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
+| `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
+
+- **The instructions are Toastty's.** An agent reads its folder's instruction
+  file at each start and each time its conversation is resumed. So the
+  coordinator has its instructions after a restart and after a relaunch,
+  and a new version of Toastty brings new instructions to a conversation
+  that began under the old one. Toastty replaces both files whenever their
+  text differs, so do not edit them: put your rules in `policy.md`. An agent
+  that reads neither file can load the `toastty-coordinator` skill by name.
+  If Toastty cannot write the instructions, it does not start the
+  coordinator's agent, and after a relaunch it does not resume it: the row
+  says **Not running**, and `toastty coordinator status` gives the reason as
+  `startFailure`.
+- **The policy and the ledger are yours.** Toastty creates `policy.md` with
+  its section headings only, and `ledger.md` with its title, when the file
+  is missing. It never writes either file again, also when you emptied it.
+- **The folder is a git repository.** At the first start, Toastty runs `git
+  init` there and commits `policy.md`. The repository has its own identity,
+  `Toastty Coordinator`, and does not sign commits, so a commit works without
+  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md` and `.claude/` are
+  kept out through `.git/info/exclude`, so a commit holds a change of the
+  policy and nothing else. Toastty leaves a folder that already is a
+  repository as it is. If git is missing, the coordinator still starts, and
+  tells you that a change of the policy cannot be undone.
+
+### The policy file
+
+`policy.md` holds your choices. A rule there wins over the skill's defaults,
+except for the Never column. You can edit it at any time; the coordinator
+reads it on each wake. The coordinator writes most of it by asking you:
+
+```markdown
+# Coordinator policy
+
+## Projects
+- Computer update, Things, publishing → emptyos.
+- Website copy or layout → toastty, docs/.
+
+## Agents
+- Toastty bug with a repro: codex, gpt-6.1-sol, high, start work at once.
+- Design or product question: claude, claude-opus-5-5, xhigh; shape first.
+
+## Reviewing
+- Good proof = a scenario list, each checked through the real UI or CLI;
+  screenshots or video for UI changes. Unit tests alone are not enough.
+
+## Unblocking
+- Tell me about permission prompts after 10 minutes.
+- CI pending over 45 minutes on toastty is unusual; look before telling me.
+
+## Releases
+- www: on merge.
+- Toastty Mac app: batch; remind me at 8 waiting or every Monday.
+
+## Notes (kept by the coordinator)
+- toastty: testLongSidebarScroll fails on the mini; CI decides.
+```
+
+**The first run.** While Projects and Agents hold no rule, the coordinator
+drafts both from the history of your tasks, which is the project, agent,
+model, effort and title of recent tasks from `toastty task list`. It shows
+you the draft, and writes it after you confirm or correct it.
+
+**Undo.** The coordinator commits each change it makes to the policy as one
+commit, named `Policy: change <section>`, and shows you the line it added.
+Say "undo" and it reverts that commit. By hand:
+
+```bash
+git -C ~/.toastty/coordinator log --oneline -- policy.md
+git -C ~/.toastty/coordinator revert <commit>
+```
+
+When you changed `policy.md` yourself, the coordinator commits your change
+first, as "Edited outside the coordinator", and shows you the lines. Its own
+change is then a commit of its own.
 
 ### When Toastty wakes the coordinator
 
@@ -1302,6 +1476,9 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   task webhooks and the events waiting to send. Webhook secrets and approvals
   are in the login Keychain. The outbox file also holds the task changes that
   wait for the coordinator, and its timer.
+- `~/.toastty/coordinator/`: the coordinator's instructions, your policy and
+  its ledger, in a git repository; see
+  [The coordinator's folder](#the-coordinators-folder).
 
 Deleting a task does not remove its worktree or branch; archiving it does.
 

@@ -224,6 +224,57 @@ Both write `remote-coordinator-wake-check-<provider>.json` and the app log
 under the run's artifacts directory. The fake run also saves the agent's
 event log and the final `task-webhook-outbox.json`.
 
+### Coordinator skill
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-skill-check.py --gui-session'
+```
+
+This check runs the real, authenticated Claude CLI as the coordinator, with
+the instructions that the build writes into the coordinator's folder, and
+uses subscription usage. Run it after a change to the `toastty-coordinator`
+skill or to the coordinator's folder. Each scenario mutates its own
+disposable Toastty instance on the dedicated validation Mac, with a
+throwaway runtime home and user home; the installed production app is not
+touched. `--gui-session` reruns the check through Terminal in the GUI
+session, where the Claude login is readable.
+
+- Each task's agent is a fake `claude` that records the messages it reads.
+  The check sets its status, last reply and question through the Toastty CLI.
+- GitHub is a fake `gh`, first on the PATH of the app and of the
+  coordinator. It serves pull requests from a state file, records each call
+  with the calling session, and refuses every call that changes something.
+- The coordinator may run Bash and the file tools without a prompt, so only
+  its instructions stop a merge.
+
+The scenarios are `first-run`, `permission`, `question-settled`,
+`question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
+`never-merge`, `release`, `user-typed`, `busy-silent`, `new-task`, `dependency` and
+`interrupted`. `--scenarios a,b` selects some, and `--scenarios judgment`
+selects those whose result depends on the coordinator's judgment.
+`--repeat N` runs each scenario N times and `--repeat-judgment N` only the
+judgment ones; `--jobs N` runs N scenarios at the same time; `--model` and
+`--effort` set the `[coordinator]` table. `user-typed` presses one real key
+in its own instance and needs an unlocked screen; it is recorded as blocked
+otherwise. `interrupted` kills and relaunches its instance.
+
+Every run also checks what must hold whatever the coordinator decided: no
+merge, review approval or push; no call that changes GitHub; every message to
+a task starts with `[coordinator]`; no message to an agent that works or
+waits at a prompt; every turn that a digest started set the next check; and
+no file written or committed but the policy and the ledger.
+
+A check on what the coordinator does is required; a check on its wording is
+a note. A failed required check does not stop the run: the result counts the
+runs in which all required checks held, so a repeat shows how reliable the
+skill is. The command fails only when a scenario could not run at all. It
+writes `remote-coordinator-skill-check/remote-coordinator-skill-check.json`
+under the run's artifacts directory and, for each run, a folder with Claude's
+transcript, `policy.md`, `ledger.md`, the folder's git log, the task agents'
+event log, the `gh` call log and the app log. The whole set takes about an
+hour with `--jobs 1`.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

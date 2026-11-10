@@ -4490,7 +4490,10 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             launcher: nil,
-            directoryURL: FileManager.default.temporaryDirectory,
+            // Its own folder: the controller writes the coordinator's files
+            // there when the layout already holds a coordinator.
+            directoryURL: FileManager.default.temporaryDirectory
+                .appending(path: "toastty-sidebar-coordinator-\(UUID().uuidString)", directoryHint: .isDirectory),
             configLoader: { tasksConfig },
             deliverText: { _, _ in .unavailable },
             promptState: { _ in .idleAtPrompt }

@@ -68,8 +68,12 @@ Toastty is designed to run locally on your machine. The app itself does not send
     Archived with its task space closed. The task record keeps the file names.
 - `~/.toastty/coordinator/`
   - The working directory of the coordinator's agent, created when you first
-    open the coordinator. Toastty writes nothing else there; the agent keeps
-    its own notes in it. Closing the coordinator's workspace leaves it.
+    open the coordinator, and a git repository of its own. Toastty writes the
+    agent's instructions there (`AGENTS.md`, `CLAUDE.md`) and creates
+    `policy.md` and `ledger.md` once; see
+    [The coordinator's folder](tasks.md#the-coordinators-folder). The policy
+    holds your rules for your tasks, and the ledger holds task titles and
+    what the coordinator did. Closing the coordinator's workspace leaves it.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.

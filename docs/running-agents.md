@@ -662,7 +662,7 @@ without a task record are never cleaned up on their own.
 
 ## User-created skills
 
-Alongside the seven shipped skills, Toastty delivers your own skills to managed
+Alongside the eight shipped skills, Toastty delivers your own skills to managed
 Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi sessions.
 
 Running and merging a task are built in, through the shipped
