@@ -10,9 +10,10 @@ The check starts its own instance of the wrapper's build with a throwaway
 runtime home and user home (a git repository, so the first terminal's
 directory is the project root), a fake agent, and a tasks.toml with
 `release_tags`. Through the real CLI it checks that:
-- a started task reports stage `running`; a linked pull request with no answer
-  from GitHub makes it `needsYou`/`review`, and the link is copied to the
-  record; the task space's done mark makes it `done`;
+- a started task reports stage `running`, and `idle` once its agent ended its
+  first turn; a linked pull request with no answer from GitHub makes it
+  `needsYou`/`review`, and the link is copied to the record; the task space's
+  done mark makes it `done`;
 - `task adopt` gives a task space made by `workspace.create` a record;
 - `window.sidebar.set-segment` and `window.tasks.show` work without changing
   the selected workspace;
@@ -166,12 +167,20 @@ def main():
         terminal_panel = snapshot['slotPanelIDs'][0]
         step('booted', workspaceID=workspace_id, panelID=terminal_panel)
 
-        # 1. A started task whose agent sits at its prompt is idle; a linked
-        # pull request with no answer from GitHub waits for review; the done
-        # mark finishes it.
+        # 1. A started task is running until its agent ends its first turn,
+        # which is the task's text. With its agent then at its prompt it is
+        # idle; a linked pull request with no answer from GitHub waits for
+        # review; the done mark finishes it.
         task = cli_json('task', 'create', 'Fix the unread dot', '--workspace', workspace_id, '--wait', '--timeout', '90')
         task_id, task_space = task['taskID'], task['setup']['taskSpaceWorkspaceID']
-        require(stage(task_id)['group'] == 'idle', f'A started task at its prompt should be idle: {stage(task_id)}')
+        require(stage(task_id)['group'] == 'running', f'A started task should run its first turn: {stage(task_id)}')
+        # The fake agent reports nothing, so the check reports the turn for
+        # it. Toastty ignores an idle report until the agent reported that
+        # it works: some agents report idle when they start.
+        for kind, summary in (('working', 'Working'), ('idle', 'Waiting')):
+            cli_json('session', 'status', '--session', task['setup']['sessionID'], '--kind', kind, '--summary', summary)
+            time.sleep(0.3)
+        wait_for('the task at its prompt to be idle', lambda: stage(task_id)['group'] == 'idle')
         cli_json('action', 'run', 'workspace.set-annotation', '--workspace', task_space,
                  'key=github-pr', 'text=PR #9', f'url={PULL_REQUEST}')
         review = wait_for('the review stage', lambda: (s := stage(task_id)).get('attention') == 'review' and s)

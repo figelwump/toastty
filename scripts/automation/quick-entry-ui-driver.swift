@@ -15,7 +15,10 @@
 //   press-menu <pid> <identifier> <item-title>
 //   activate-pid <pid>                  makes an app frontmost by process ID
 //   frontmost-pid                       prints the frontmost app's process ID
-//   frame <pid> <identifier>            prints an element's frame: x y width height
+//   frame <pid> <identifier> [index]    prints an element's frame: x y width height;
+//                                       with an index, the frame of that one of the
+//                                       elements with the identifier, in tree order
+//                                       from 0, as `labels` lists them
 //   drag <from-x> <from-y> <to-x> <to-y>
 //                                       drags with the mouse between two points
 //   click <x> <y>                       clicks at a point
@@ -475,8 +478,19 @@ case "frontmost-pid":
 case "frame":
     // An element's frame as "x y width height", in global coordinates with
     // the origin at the top left, as CGEvent uses.
-    guard arguments.count == 3 else { fail("frame <pid> <identifier>") }
-    guard let found = element(in: application(arguments[1]), identifier: arguments[2]) else {
+    guard arguments.count == 3 || arguments.count == 4 else { fail("frame <pid> <identifier> [index]") }
+    var matches: [AXUIElement] = []
+    if arguments.count == 4 {
+        guard let index = Int(arguments[3]), index >= 0 else { fail("frame <pid> <identifier> [index]") }
+        for window in windows(of: application(arguments[1])) {
+            visit(window) { if identifier($0) == arguments[2] { matches.append($0) } }
+        }
+        guard index < matches.count else { fail("no element \(arguments[2]) at \(index) of \(matches.count)") }
+        matches = [matches[index]]
+    } else if let first = element(in: application(arguments[1]), identifier: arguments[2]) {
+        matches = [first]
+    }
+    guard let found = matches.first else {
         fail("no element \(arguments[2])")
     }
     var origin = CGPoint.zero, size = CGSize.zero
