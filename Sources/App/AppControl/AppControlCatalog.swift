@@ -96,6 +96,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorOpen = "coordinator.open"
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
+    case coordinatorWake = "coordinator.wake"
     case webhookAdd = "webhook.add"
     case webhookSet = "webhook.set"
     case webhookRemove = "webhook.remove"
@@ -616,6 +617,18 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [],
                 parameters: [.taskMessage(required: true)]
             )
+        case .coordinatorWake:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Set the coordinator's next check: the time when Toastty wakes it if nothing else does. Pass exactly one of inSeconds, at and clear. The time must be at least 1 minute from now. Toastty saves it across a relaunch, and a time that came while Toastty was quit wakes the coordinator once after the relaunch. Every wake that Toastty types, for a task change or for the timer, removes the time: the coordinator sets its next check again in the turn that the wake starts. With no time set, Toastty wakes the coordinator 1 hour after the last wake while a task is open (not done or archived), and not at all while none is. clear removes the time, so that default applies. Returns the coordinator.get fields. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [
+                    .init(name: "inSeconds", summary: "Wake the coordinator this many seconds from now.", valueType: .integer, required: false),
+                    .init(name: "at", summary: "Wake the coordinator at this ISO 8601 time, such as 2026-11-09T18:30:00Z.", valueType: .string, required: false),
+                    .init(name: "clear", summary: "Remove the time the coordinator set.", valueType: .boolean, required: false),
+                ]
+            )
         case .taskWatch:
             return .init(
                 id: rawValue,
@@ -929,7 +942,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits.",
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes wait for the next digest; nextWakeAt, the time of the next timer wake, with nextWakeSource coordinator when coordinator.wake set it and default when it is 1 hour after the last wake (both null when no time is set and no task is open); and lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator.",
                 selectors: []
             )
         case .webhookList:

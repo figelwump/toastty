@@ -976,8 +976,8 @@ public enum ToasttyCLI {
         }
         let parsed = try parseCommandArguments(
             Array(arguments.dropFirst()),
-            valueOptions: ["--window", "--text", "--text-file"],
-            flagOptions: ["--no-select"]
+            valueOptions: ["--window", "--text", "--text-file", "--in", "--at"],
+            flagOptions: ["--no-select", "--clear"]
         )
         func windowArgs() throws -> [String: AutomationJSONValue] {
             guard let window = parsed.singleValue("--window") else { return [:] }
@@ -985,6 +985,10 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("--window must be a window ID\n\n\(usage)")
             }
             return ["windowID": .string(window)]
+        }
+        let hasWakeOption = parsed.singleValue("--in") != nil || parsed.singleValue("--at") != nil || parsed.hasFlag("--clear")
+        guard verb == "wake" || hasWakeOption == false else {
+            throw ToasttyCLIError.usage("--in, --at and --clear belong to coordinator wake\n\n\(usage)")
         }
         switch verb {
         case "open":
@@ -1021,9 +1025,52 @@ public enum ToasttyCLI {
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string(text)]))
 
+        case "wake":
+            let wakeUsage = "usage: toastty coordinator wake (--in <duration> | --at <ISO time> | --clear)"
+            let chosen = [parsed.singleValue("--in") != nil, parsed.singleValue("--at") != nil, parsed.hasFlag("--clear")].filter { $0 }.count
+            guard parsed.positionals.isEmpty, chosen == 1 else {
+                throw ToasttyCLIError.usage("\(wakeUsage)\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let duration = parsed.singleValue("--in") {
+                guard let seconds = durationSeconds(duration) else {
+                    throw ToasttyCLIError.usage("--in takes a duration such as 90s, 20m, 2h or 1h30m\n\n\(usage)")
+                }
+                args["inSeconds"] = .int(seconds)
+            } else if let time = parsed.singleValue("--at") {
+                args["at"] = .string(time)
+            } else {
+                args["clear"] = .bool(true)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.wake", args: args))
+
         default:
             throw ToasttyCLIError.usage("unknown coordinator subcommand: \(verb)\n\n\(usage)")
         }
+    }
+
+    /// The seconds in a duration written as whole numbers with units:
+    /// `90s`, `20m`, `2h`, `1d`, or several in a row such as `1h30m`.
+    static func durationSeconds(_ text: String) -> Int? {
+        let units: [Character: Int] = ["s": 1, "m": 60, "h": 3600, "d": 86400]
+        var total = 0
+        var digits = ""
+        var sawUnit = false
+        for character in text.lowercased() {
+            if character.isASCII, character.isNumber {
+                digits.append(character)
+            } else if let unit = units[character], let amount = Int(digits) {
+                let (product, overflowed) = amount.multipliedReportingOverflow(by: unit)
+                let (sum, sumOverflowed) = total.addingReportingOverflow(product)
+                guard overflowed == false, sumOverflowed == false else { return nil }
+                total = sum
+                digits = ""
+                sawUnit = true
+            } else {
+                return nil
+            }
+        }
+        return sawUnit && digits.isEmpty ? total : nil
     }
 
     static let usage = """
@@ -1064,6 +1111,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator restart [--window <id>]
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>)
+      toastty [--json] [--socket-path <path>] coordinator wake (--in <duration> | --at <ISO time> | --clear)
       toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
       toastty [--json] [--socket-path <path>] webhook rotate-secret <name> --secret-stdin

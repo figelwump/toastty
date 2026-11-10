@@ -78,6 +78,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
     where to find the key, and the events waiting to send with the task
     states they came from. Webhook secrets and approvals
     are in the login Keychain, not in these files.
+  - The outbox file also holds what waits for the coordinator: the titles and
+    stages of tasks that changed, and the time of its next check.
 - Task webhooks
   - After you approve a webhook in the Tasks view, Toastty POSTs to its HTTPS
     address when a task needs you, merges, finishes, or is archived or

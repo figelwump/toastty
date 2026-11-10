@@ -57,7 +57,7 @@ struct CoordinatorAppControlTests {
         let fixture = try Fixture()
         let executor = executor(fixture)
         let actionIDs = Set(executor.listActionDescriptors().map(\.id))
-        #expect(actionIDs.isSuperset(of: ["coordinator.open", "coordinator.restart", "coordinator.send"]))
+        #expect(actionIDs.isSuperset(of: ["coordinator.open", "coordinator.restart", "coordinator.send", "coordinator.wake"]))
         #expect(executor.listQueryDescriptors().map(\.id).contains("coordinator.get"))
         #expect(try executor.runQuery(id: "coordinator.get", args: [:]) == ["exists": .bool(false), "queuedCount": .int(0)])
 
@@ -144,7 +144,7 @@ struct CoordinatorAppControlTests {
         let executor = TaskAppControlTests().makeExecutor(tasks, coordinator: tasks.coordinator)
         #expect(executor.listActionDescriptors().contains { $0.id.hasPrefix("coordinator.") } == false)
         #expect(executor.listQueryDescriptors().contains { $0.id.hasPrefix("coordinator.") } == false)
-        for action in ["coordinator.open", "coordinator.restart", "coordinator.send"] {
+        for action in ["coordinator.open", "coordinator.restart", "coordinator.send", "coordinator.wake"] {
             await expectInvalidPayload(containing: "not available") {
                 _ = try await executor.runActionAsync(id: action, args: ["text": .string("x")], context: context())
             }
@@ -174,6 +174,7 @@ struct CoordinatorAppControlTests {
         let coordinatorID = try #require(fixture.store.state.coordinatorWorkspaceID)
         for run in [
             { _ = try executor.runAction(id: "coordinator.send", args: ["text": .string("Merge everything.")], context: context(scoped)) },
+            { _ = try executor.runAction(id: "coordinator.wake", args: ["inSeconds": .int(600)], context: context(scoped)) },
             { _ = try executor.runQuery(
                 id: "coordinator.get", args: [:],
                 context: AutomationRequestContext(callerSessionID: scoped, commandName: "app_control.run_query")

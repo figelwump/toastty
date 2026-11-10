@@ -187,6 +187,43 @@ through Terminal in the GUI session, where the Claude login is readable.
 Both write `remote-coordinator-check-<provider>.json` and the app logs under
 the run's artifacts directory.
 
+### Coordinator wakes
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-wake-check.py'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-wake-check.py --provider claude --gui-session'
+```
+
+These checks mutate one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. They cover the digests that Toastty types into
+the coordinator; see
+[When Toastty wakes the coordinator](../tasks.md#when-toastty-wakes-the-coordinator).
+
+The default run takes about six minutes. A fake `claude` script is the agent
+of the coordinator and of every task. It turns on bracketed paste, records
+each message it reads, and holds a turn open while its hold file exists.
+Through the built CLI the check creates tasks and moves them through stages,
+and reads the digests the coordinator's agent received: nothing for changes
+made before the coordinator existed, one digest for one stage change, one
+digest after a held turn for several changes, nothing for a stage that
+returns in under 3 seconds, and the timer set, cleared and fired with
+`coordinator wake`. It then kills the app with a digest waiting and a timer
+set, keeps it down until the timer's time passed, and checks that the
+relaunched app types the waiting change once and the scheduled check once,
+and that a second relaunch repeats neither.
+
+The `--provider claude` run uses the real, authenticated Claude CLI and
+subscription usage, with the same narrow profile and folder trust handling as
+the coordinator check. It sets the timer and proves from Claude's transcript
+that the typed digest started a turn.
+
+Both write `remote-coordinator-wake-check-<provider>.json` and the app log
+under the run's artifacts directory. The fake run also saves the agent's
+event log and the final `task-webhook-outbox.json`.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

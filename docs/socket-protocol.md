@@ -266,6 +266,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.open`
 - `coordinator.restart`
 - `coordinator.send`
+- `coordinator.wake`
 - `window.tasks.show`
 - `window.tasks.hide`
 - `window.sidebar.set-segment`
@@ -737,12 +738,18 @@ Common query IDs include:
 `coordinator.get` returns `exists`, and for an open coordinator `windowID`,
 `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
 `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
-`queuedCount` and `hold`. `coordinator.open` (optional `windowID` and
+`queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt`,
+`nextWakeSource` (`coordinator` or `default`) and `lastWakeAt`.
+`coordinator.open` (optional `windowID` and
 `select`) and `coordinator.restart` (optional `windowID`) return the same
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.
 `coordinator.send` requires `args.text` and returns `delivery` (`sent`,
 `sentUnconfirmed` or `queued`), `queuedCount`, and for a queued message
-`position` and `hold`. See [The coordinator](tasks.md#the-coordinator).
+`position` and `hold`. `coordinator.wake` takes exactly one of
+`args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
+removes the coordinator's next check, and returns the `coordinator.get`
+fields. See [The coordinator](tasks.md#the-coordinator) and
+[When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,

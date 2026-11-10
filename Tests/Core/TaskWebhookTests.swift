@@ -60,8 +60,11 @@ struct TaskWebhookEventDetectorTests {
         var detector = primed(state("needsYou", "review"))
         let merged = detector.observe([task: state("toShip", merged: true)], now: t0.addingTimeInterval(1))
         #expect(merged.map(\.events) == [[.merged, .done]])
-        // To ship then Done is still done: no second event.
-        #expect(detector.observe([task: state("done", merged: true)], now: t0.addingTimeInterval(2)).isEmpty)
+        // To ship then Done is still done: the change counts, with no
+        // second event.
+        let shipped = detector.observe([task: state("done", merged: true)], now: t0.addingTimeInterval(2))
+        #expect(shipped.map(\.events) == [[]])
+        #expect(shipped.first?.state.key.group == "done")
         #expect(detector.observe([task: state("archived", merged: true)], now: t0.addingTimeInterval(3)).map(\.events) == [[.archived]])
     }
 
