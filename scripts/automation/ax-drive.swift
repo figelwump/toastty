@@ -9,6 +9,7 @@
 //   status                        Print whether this process is trusted and the screen is locked.
 //   click <identifier>            Click the middle of the element with the mouse.
 //   click-prefix <prefix>         Click the first element whose identifier starts with `prefix`.
+//   click-in <identifier> <label> Click the element with that label inside the element.
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
@@ -133,6 +134,18 @@ case "click-prefix":
     activate()
     click(at: CGPoint(x: rect.midX, y: rect.midY))
     print("clicked \(attribute(target, kAXIdentifierAttribute) as? String ?? argument) at \(Int(rect.midX)),\(Int(rect.midY))")
+case "click-in":
+    let label = arguments.count > 4 ? arguments[4] : ""
+    let container = element(identifier: argument)
+    let target = waitFor("\(label) in \(argument)") {
+        find(container) { candidate in
+            [kAXTitleAttribute, kAXDescriptionAttribute].contains { attribute(candidate, $0) as? String == label }
+        }
+    }
+    guard let rect = frame(target) else { exit(2) }
+    activate()
+    click(at: CGPoint(x: rect.midX, y: rect.midY))
+    print("clicked \(label) in \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
 case "activate":
     activate()
     print("frontmost \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)")

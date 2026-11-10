@@ -76,7 +76,15 @@ status ready Ready
 while IFS= read -r line; do :; done
 '''
 
-NO_BREAK_SPACE = ' '
+NO_BREAK_SPACE = '\u00a0'
+HOLD_COMMAND = './hold-turn.sh'
+
+
+def long_turn(seconds, marker):
+    """A message whose turn lasts `seconds`."""
+    return (f'Run the shell command `{HOLD_COMMAND} {seconds}` with the Bash tool, in the foreground and with a '
+            f'timeout of {seconds + 30} seconds. Do not run it in the background. '
+            f'When it ends, reply with exactly: {marker}')
 
 
 # MARK: - The real UI
@@ -206,8 +214,10 @@ def run(check):
     check.evidence['cliVersion'] = version
 
     # Only this disposable app sees the profiles. The coordinator may run
-    # `sleep`, which holds a turn open, and nothing else.
-    argv = [claude, '--setting-sources=', '--allowedTools', 'Bash(sleep:*)', '--tools', 'Bash', '--strict-mcp-config']
+    # the run's own wait script, which holds a turn open, and nothing else.
+    # Claude Code refuses a plain `sleep` in the foreground.
+    argv = [claude, '--setting-sources=', '--allowedTools', f'Bash({HOLD_COMMAND}:*)', '--tools', 'Bash',
+            '--strict-mcp-config']
     runtime_home, user_home = check.home('chat', argv)
     helper = check.root / 'bin/helper-agent'
     helper.parent.mkdir()
@@ -234,6 +244,9 @@ def run(check):
     run_cli, cli = check.cli_runner(environment)
     directory = runtime_home / 'coordinator'
     directory.mkdir(parents=True)
+    hold = directory / 'hold-turn.sh'
+    hold.write_text('#!/bin/sh\nsleep "$1"\necho waited "$1" seconds\n')
+    hold.chmod(0o755)
     # Typed text cannot answer the folder-trust dialog, so trust only this
     # run's folder for the run.
     steer.set_directory_trust(directory, True)
@@ -323,6 +336,11 @@ def run(check):
         wait_for('the chat', lambda: ui.exists('coordinator.chat') and ui.exists('coordinator.chat.composer'))
         require(ui.exists('coordinator.panel.mode-toggle'), 'The panel header has no Chat and Terminal switch')
         wait_for('Claude at its first prompt', at_prompt, timeout=180)
+        # A new runtime home shows a notice about skills over the top of
+        # the window. It is not part of the chat.
+        if ui.exists('banner.managed-agent-skills-provisioned'):
+            ui.run('click-in', 'banner.managed-agent-skills-provisioned', 'Dismiss', check=False)
+            time.sleep(0.5)
         capture('chat-open')
         step('open shows the chat', opened=opened, version=version)
 
@@ -339,7 +357,7 @@ def run(check):
         step('Return in the composer sent a message', chat=ui.texts()[-600:])
 
         # 3. A message sent during a turn waits as Queued, then gets its own turn.
-        ui.send('Run the shell command `sleep 25` with the Bash tool, then reply with exactly: CHAT-TWO')
+        ui.send(long_turn(25, 'CHAT-TWO'))
         wait_for('the long turn to run', lambda: status().get('status') == 'working', timeout=60)
         ui.send('Reply with exactly this one word and nothing else: CHAT-THREE')
         queued = wait_for('the message to wait', lambda: (s := status())['queuedCount'] == 1 and s)
@@ -359,7 +377,7 @@ def run(check):
         step('a message during a turn waited and was typed after it', queued=queued)
 
         # 4. Stop ends the turn and sets the waiting message aside.
-        ui.send('Run the shell command `sleep 120` with the Bash tool, then reply with exactly: CHAT-FOUR')
+        ui.send(long_turn(90, 'CHAT-FOUR'))
         wait_for('the long turn to run', lambda: status().get('status') == 'working', timeout=60)
         ui.send('Reply with exactly this one word and nothing else: CHAT-FIVE')
         wait_for('the message to wait', lambda: status()['queuedCount'] == 1)
@@ -486,7 +504,7 @@ def run(check):
         wait_for('the prompt to open again', at_prompt, timeout=120)
         capture('message-from-a-paired-device')
         # While the coordinator works: the Mac queues first, the device second.
-        ui.send('Run the shell command `sleep 25` with the Bash tool, then reply with exactly: CHAT-SEVEN')
+        ui.send(long_turn(25, 'CHAT-SEVEN'))
         busy = wait_for('the turn the device can queue into',
                         lambda: (c := conversation()) and (c.get('inputControl') or {}).get('turnEpoch') and c, timeout=60)
         ui.send('Reply with exactly this one word and nothing else: CHAT-EIGHT')

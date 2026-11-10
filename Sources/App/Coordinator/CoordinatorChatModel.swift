@@ -89,8 +89,8 @@ final class CoordinatorChatModel: ObservableObject {
     /// How long no event must arrive before the chat reads the newest page.
     static let settleInterval: TimeInterval = 0.15
     /// The chat reads what there is after this time, also while events
-    /// still arrive.
-    static let maximumSettleInterval: TimeInterval = 3
+    /// still arrive, as they do while the agent works.
+    static let maximumSettleInterval: TimeInterval = 1.5
 
     /// The sequence space the loaded events belong to.
     fileprivate struct LoadedPage: Equatable {
@@ -143,22 +143,22 @@ final class CoordinatorChatModel: ObservableObject {
                 self?.refresh()
             }
         }
+        // A chat that shows rows already reads on from them. The first
+        // read of a conversation waits until its events are in.
+        isSettled = presentation.rows.isEmpty == false
         settleDeadline = now().addingTimeInterval(Self.maximumSettleInterval)
         refresh()
     }
 
-    /// Stops reading. The rows stay as they are.
+    /// Stops reading. The rows stay as they are, and so do the messages
+    /// that wait for their echo: the next `show` reads on from here.
     func hide() {
         observer?.cancel()
         observer = nil
         settleTask?.cancel()
         settleTask = nil
-        isSettled = false
         subscription?.cancel()
         subscription = nil
-        // The messages that wait for their echo stay: the conversation
-        // still gets it while the chat is hidden.
-        loaded = nil
     }
 
     // MARK: - Reading
@@ -171,7 +171,8 @@ final class CoordinatorChatModel: ObservableObject {
             // No agent conversation in the terminal: none started yet, or
             // Toastty cannot read this agent's.
             isSettled = true
-            if events.isEmpty == false || loaded != nil || presentation.rows.isEmpty == false {
+            if events.isEmpty == false || loaded != nil || presentation.rows.isEmpty == false
+                || presentation.phase != .live {
                 events = []
                 loaded = nil
                 pendingSends.removeAll()
@@ -192,10 +193,10 @@ final class CoordinatorChatModel: ObservableObject {
         }
     }
 
-    /// With Remote Access off, Toastty starts to read the agent's
-    /// transcript when the chat shows, and its events arrive over a short
-    /// time. The chat waits until no more arrive, and then reads the newest
-    /// page once. Until then it keeps the rows it showed before.
+    /// After a launch, Toastty reads the agent's transcript from its start,
+    /// and the events arrive over a short time. The chat's first read waits
+    /// until no more arrive, and then takes the newest page once, not every
+    /// event of a long conversation.
     private func waitForTheConversationToSettle(latestSequence: UInt64) {
         settleTask?.cancel()
         guard now() < (settleDeadline ?? .distantPast) else {
