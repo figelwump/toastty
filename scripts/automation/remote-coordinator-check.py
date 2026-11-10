@@ -12,7 +12,8 @@ or moves focus, and it does not touch the installed production app.
 
 With the default fake agent, a shell script stands in for Claude Code: it
 reports its start as Claude's SessionStart hook does, reports a turn for each
-line it reads, and can hold a turn open. Through the real CLI the check then
+line it reads as Claude's UserPromptSubmit and Stop hooks do, and can hold a
+turn open. Through the real CLI the check then
 proves that:
 - `coordinator open` creates one workspace named Coordinator, with a
   terminal in <runtime home>/coordinator, and starts the agent
@@ -71,6 +72,12 @@ EFFORT = 'high'
 # Reads one message for each line. A turn lasts a second, or as long as the
 # `hold` file exists. `/exit` ends the agent. The line that Toastty puts
 # before the text of `coordinator send` belongs to the message after it.
+#
+# The agent reports each turn as Claude Code does, with the UserPromptSubmit
+# and the Stop hook. Toastty types into the coordinator through the agent's
+# conversation, and that conversation opens the prompt again only when the
+# provider reports that the turn ended. A turn reported with
+# `toastty session status` alone would leave the prompt closed for good.
 FAKE_AGENT = r'''#!/bin/sh
 case "$1" in
   --version) echo "2.1.288 (Claude Code)"; exit 0 ;;
@@ -89,19 +96,24 @@ printf '%s\n' "$@" > "$dir/$TOASTTY_SESSION_ID.argv"
 printf '{"sessionID":"%s","panelID":"%s","cwd":"%s","native":"%s","resumed":%s}\n' \
   "$TOASTTY_SESSION_ID" "$TOASTTY_PANEL_ID" "$PWD" "$native" "$resumed" > "$dir/$TOASTTY_SESSION_ID.json"
 status() { "$TOASTTY_CLI_PATH" session status --session "$TOASTTY_SESSION_ID" --kind "$1" --summary "$2" >/dev/null 2>&1; }
-printf '{"hook_event_name":"SessionStart","session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$native" "$transcript" "$PWD" \
-  | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks --session "$TOASTTY_SESSION_ID" --panel "$TOASTTY_PANEL_ID" >/dev/null 2>&1
+hook() {
+  printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$1" "$native" "$transcript" "$PWD" \
+    | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks --session "$TOASTTY_SESSION_ID" --panel "$TOASTTY_PANEL_ID" >/dev/null 2>&1
+}
+hook SessionStart
 status idle Waiting
 while IFS= read -r line; do
   [ "$line" = "/exit" ] && exit 0
   case "$line" in
     "[Toastty] From "*) printf '%s\n' "$line" >> "$dir/senders.log"; continue ;;
   esac
-  status working Working
+  # Sets the status to working, and starts the turn in the conversation.
+  hook UserPromptSubmit
   printf '%s\t%s\n' "$TOASTTY_SESSION_ID" "$line" >> "$dir/received.log"
   while [ -f "$dir/hold" ]; do sleep 0.2; done
   sleep 1
-  status idle Waiting
+  # Sets the status to ready, and ends the turn in the conversation.
+  hook Stop
 done
 '''
 
@@ -221,8 +233,10 @@ def run_fake(check):
         return json.loads(wait_for(f'the agent to record session {session_id}', lambda: path.is_file() and path.read_text()))
 
     def at_prompt():
+        # Idle before the first turn, ready after a turn: the Stop hook
+        # sets ready, as it does for Claude Code.
         current = status()
-        return current.get('status') == 'idle' and current.get('agentState') == 'running' and current
+        return current.get('status') in ('idle', 'ready') and current.get('agentState') == 'running' and current
 
     def send(text):
         return cli('coordinator', 'send', text)
@@ -418,7 +432,7 @@ def capture_sidebar(check, agent):
         capture('coordinator-pinned-status-segment')
         (agent.parent / 'coordinator/hold').unlink()
         cli('coordinator', 'open')
-        wait_for('the turn to end', lambda: cli('coordinator', 'status').get('status') == 'idle')
+        wait_for('the turn to end', lambda: cli('coordinator', 'status').get('status') in ('idle', 'ready'))
         capture('coordinator-selected')
         instance.request('app_control.run_action', dict(id='terminal.send-text', args=dict(
             panelID=opened['panelID'], text='/exit', submit=True)))

@@ -60,7 +60,7 @@ PASTE_TEXT = 'Pasted words from the clipboard'
 FINDER = 'com.apple.finder'
 # Virtual key codes on a US keyboard.
 KEY_T, KEY_V, KEY_W, KEY_RETURN, KEY_ESCAPE = 17, 9, 13, 36, 53
-KEY_1, KEY_2, KEY_TAB, KEY_DELETE, KEY_RIGHT = 18, 19, 48, 51, 124
+KEY_1, KEY_2, KEY_TAB, KEY_DELETE, KEY_LEFT, KEY_RIGHT = 18, 19, 48, 51, 123, 124
 PANEL = 'quick-entry.panel'
 PICKER = 'quick-entry.picker'
 
@@ -310,10 +310,21 @@ def main():
         drive('key', KEY_DELETE, 'cmd')
         wait_for_text('Keep this')
         # The mouse: a drag on the header moves the panel, a click on the
-        # Agent pill opens its picker, and a click on its first row, the
-        # [defaults] preset the pill starts on, chooses it. Each case records its outcome and the check fails at
-        # the end, so one run shows every case.
+        # Agent pill opens its picker, and a click on its first row chooses
+        # it. Each case records its outcome and the check fails at the end,
+        # so one run shows every case.
         outcomes = {}
+        # The task above made its preset, with xhigh, the last used one and
+        # the only Frequent one: the pill starts on it, and it is the
+        # picker's first row. Left Arrow lowers the pill to high first, so
+        # that the click on the first row must change the pill.
+        wait_for_value('quick-entry.agent', 'opus-5.5 · xhigh')
+        drive('key', KEY_2, 'cmd')
+        wait_for('the agent picker', picker_windows, timeout=10)
+        drive('key', KEY_LEFT)
+        drive('key', KEY_RETURN)
+        wait_for('the agent picker to close', picker_closed, timeout=10)
+        wait_for_value('quick-entry.agent', 'opus-5.5 · high')
 
         def poll(probe, timeout=5):
             deadline = time.time() + timeout
@@ -341,7 +352,7 @@ def main():
         if opened:
             x, y, w, h = map(float, drive('frame', pid, 'quick-entry.picker.row').split())
             drive('click', x + w / 2, y + h / 2)
-            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'opus-5.5 · high')
+            chosen = poll(lambda: picker_closed() and drive('value', pid, 'quick-entry.agent') == 'opus-5.5 · xhigh')
             outcomes['click on a row chooses it'] = dict(ok=chosen, agent=drive('value', pid, 'quick-entry.agent'))
             step('row click', **outcomes['click on a row chooses it'])
         if picker_windows():

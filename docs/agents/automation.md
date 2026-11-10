@@ -165,7 +165,10 @@ Mac. Each instance has a throwaway runtime home and user home; the installed
 production app is not touched.
 
 The default run uses a fake `claude` script that reports its start and its
-turns through the Toastty CLI. Through the built CLI it opens the coordinator
+turns through the Toastty CLI, with the hook events that Claude Code sends:
+`SessionStart`, then `UserPromptSubmit` and `Stop` for each turn. Toastty
+opens the coordinator's prompt for the next message only after the `Stop`
+hook. Through the built CLI it opens the coordinator
 twice, sends messages at an open prompt and during a held turn, checks that
 the coordinator is in no task list or workspace choice and that a task it
 creates has no parent, restarts the agent, sends a message while no agent
@@ -204,7 +207,8 @@ the coordinator; see
 
 The default run takes about six minutes. A fake `claude` script is the agent
 of the coordinator and of every task. It turns on bracketed paste, records
-each message it reads, and holds a turn open while its hold file exists.
+each message it reads, reports each turn with the `UserPromptSubmit` and
+`Stop` hook events, and holds a turn open while its hold file exists.
 Through the built CLI the check creates tasks and moves them through stages,
 and reads the digests the coordinator's agent received: nothing for changes
 made before the coordinator existed, one digest for one stage change, one

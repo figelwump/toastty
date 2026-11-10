@@ -13,7 +13,8 @@ not touch the installed production app.
 With the default fake agent, a script stands in for Claude Code, for the
 coordinator and for every task: it reports its start as Claude's
 SessionStart hook does, turns on bracketed paste as Claude does, records
-each message it reads, and reports a turn for it. A turn lasts a second, or
+each message it reads, and reports a turn for it as Claude's
+UserPromptSubmit and Stop hooks do. A turn lasts a second, or
 as long as its hold file exists. Through the real CLI the check then proves
 that:
 - with no coordinator, a task's changes are saved nowhere, and a
@@ -75,6 +76,12 @@ SETTLE = 3
 # Reads one message for each line, or for each bracketed paste. A turn lasts
 # a second, or as long as `hold` or `hold-<session>` exists. `/exit` ends it.
 # A task's first prompt comes as the last argument and is a turn too.
+#
+# The agent reports each turn as Claude Code does, with the UserPromptSubmit
+# and the Stop hook. Toastty types a digest through the coordinator's
+# conversation, and that conversation opens the prompt again only when the
+# provider reports that the turn ended. A turn reported with
+# `toastty session status` alone would leave the prompt closed for good.
 FAKE_AGENT = r'''#!__PYTHON__
 import json, os, subprocess, sys, time, uuid
 
@@ -103,24 +110,31 @@ def status(kind, summary):
                    capture_output=True)
 
 
+def hook(event, **fields):
+    subprocess.run(
+        [cli, 'session', 'ingest-agent-event', '--source', 'claude-hooks', '--session', session, '--panel', panel],
+        input=json.dumps(dict(hook_event_name=event, session_id=native, transcript_path=transcript, cwd=os.getcwd(),
+                              **fields)),
+        text=True, capture_output=True)
+
+
 record('started', panel=panel, cwd=os.getcwd(), native=native, resumed=resumed, argv=arguments)
-subprocess.run(
-    [cli, 'session', 'ingest-agent-event', '--source', 'claude-hooks', '--session', session, '--panel', panel],
-    input=json.dumps(dict(hook_event_name='SessionStart', session_id=native, transcript_path=transcript, cwd=os.getcwd())),
-    text=True, capture_output=True)
+hook('SessionStart')
 sys.stdout.write('\033[?2004h')
 sys.stdout.flush()
 
 
 def turn(message, **facts):
-    status('working', 'Working')
+    # Sets the status to working, and starts the turn in the conversation.
+    hook('UserPromptSubmit', prompt=message)
     record('message', text=message, **facts)
     while os.path.exists(os.path.join(here, 'hold')) or os.path.exists(os.path.join(here, 'hold-' + session)):
         time.sleep(0.2)
     time.sleep(1)
     record('turn ended')
-    # A finished turn that nobody has read: the task needs the user.
-    status('ready', 'Ready')
+    # Sets the status to ready, and ends the turn in the conversation. A
+    # finished turn that nobody has read: the task needs the user.
+    hook('Stop')
 
 
 # Only a prompt has a space; the options before it are names and paths.
