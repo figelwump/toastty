@@ -484,9 +484,11 @@ def run_claude(check):
             'Claude CLI needs an interactive login on the remote host; add --gui-session over SSH')
     check.evidence['cliVersion'] = version
 
-    # Only this disposable app sees the profile. It may run `sleep` and
-    # nothing else, so a `toastty task list` that the digest suggests stops
-    # at Claude's permission prompt.
+    # Only this disposable app sees the profile, which names `sleep` as the
+    # one command allowed without a prompt. The digest suggests
+    # `toastty task list`. Where Claude's permission mode lets it run that
+    # read-only command, it reads this instance; elsewhere the turn stops at
+    # Claude's permission prompt. The check accepts both.
     argv = [claude, '--setting-sources=', '--allowedTools', 'Bash(sleep:*)', '--tools', 'Bash', '--strict-mcp-config']
     runtime_home, user_home = check.home('claude', argv)
     (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "claude"\n')
