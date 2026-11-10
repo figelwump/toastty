@@ -174,8 +174,12 @@ def main():
         task = cli_json('task', 'create', 'Fix the unread dot', '--workspace', workspace_id, '--wait', '--timeout', '90')
         task_id, task_space = task['taskID'], task['setup']['taskSpaceWorkspaceID']
         require(stage(task_id)['group'] == 'running', f'A started task should run its first turn: {stage(task_id)}')
-        # The fake agent reports nothing, so the check ends the turn for it.
-        cli_json('session', 'status', '--session', task['setup']['sessionID'], '--kind', 'idle', '--summary', 'Waiting')
+        # The fake agent reports nothing, so the check reports the turn for
+        # it. Toastty ignores an idle report until the agent reported that
+        # it works: some agents report idle when they start.
+        for kind, summary in (('working', 'Working'), ('idle', 'Waiting')):
+            cli_json('session', 'status', '--session', task['setup']['sessionID'], '--kind', kind, '--summary', summary)
+            time.sleep(0.3)
         wait_for('the task at its prompt to be idle', lambda: stage(task_id)['group'] == 'idle')
         cli_json('action', 'run', 'workspace.set-annotation', '--workspace', task_space,
                  'key=github-pr', 'text=PR #9', f'url={PULL_REQUEST}')
