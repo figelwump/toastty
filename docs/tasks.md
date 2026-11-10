@@ -557,6 +557,12 @@ the agent starts, and while no agent runs. It types one message for each open
 prompt. The answer says `sent`, or `queued` with the position and the reason.
 `sentUnconfirmed` means the terminal did not confirm the Return key: Toastty
 does not type that message again, and holds the next ones until a turn runs.
+A message that was typed with its Return, but starts no turn within 10
+seconds while the agent is at rest, does not hold the next ones: Toastty
+opens the prompt again and types the next message. It does not type the lost
+message again. Toastty cannot read the agent's prompt, so text that the agent
+kept there goes out with the next message. A turn that an API error ends
+(Claude Code shows **Error**) also opens the prompt again.
 The queue holds up to 50 messages. It survives a restart of the agent.
 Messages that you sent, from the chat or from quick entry, are also saved and
 survive an app quit; a message from `coordinator send` waits in memory, and

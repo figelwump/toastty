@@ -850,6 +850,9 @@ private extension AgentLaunchInstrumentation {
         appendClaudeHookEntry(commandHook, to: "SessionStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
+        // Claude Code fires StopFailure in place of Stop when an API error
+        // ends the turn. Without it, such a turn would never end here.
+        appendClaudeHookEntry(commandHook, to: "StopFailure", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SessionEnd", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStop", in: &hooks)

@@ -357,6 +357,7 @@ When the profile ID is `claude`, Toastty:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
+   - `StopFailure` — fires in place of `Stop` when an API error (rate limit, overload, authentication, output limit) ends the turn. Toastty shows **Error** with Claude's error text and ends the turn, so the next message can be typed
    - `PostToolUse` — tracks launched subagents and named teammates with available metadata; child tool completion clears that child's approval
    - `PostToolUseFailure` — clears completed child approvals and question requests
    - `SubagentStart` — tracks Workflow children and resumes known teammates
@@ -364,7 +365,7 @@ When the profile ID is `claude`, Toastty:
    - `TeammateIdle` — removes an idle teammate's active row when Claude supplies its agent ID
    - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
-   - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
+   - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready** (except after a failed turn, whose **Error** stays until the next turn), `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 5. **Writes a private process-lifetime settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.

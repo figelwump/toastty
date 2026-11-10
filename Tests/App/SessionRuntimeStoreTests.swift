@@ -7,6 +7,39 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreTests {
+    /// Claude Code's idle reminder reports Ready a minute after any turn.
+    /// After a turn that an API error ended, the session keeps the failure
+    /// until the next turn; the next turn's own end reads as usual.
+    @Test func claudeIdleReminderDoesNotHideAFailedTurn() {
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let sessionID = "sess-failed-turn"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        store.startSession(
+            sessionID: sessionID, agent: .claude, panelID: UUID(),
+            windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported,
+            cwd: "/repo", repoRoot: "/repo", at: date
+        )
+        func report(_ kind: SessionStatusKind, _ summary: String, _ detail: String, after seconds: TimeInterval) {
+            store.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: kind, summary: summary, detail: detail),
+                at: date.addingTimeInterval(seconds)
+            )
+        }
+        var status: SessionStatus? { store.sessionRegistry.activeSession(sessionID: sessionID)?.status }
+
+        report(.working, "Working", "Responding to your prompt", after: 1)
+        report(.error, "Error", "API Error: Rate limit reached", after: 2)
+        report(.ready, "Ready", "Claude is waiting for your input", after: 62)
+        #expect(status == SessionStatus(kind: .error, summary: "Error", detail: "API Error: Rate limit reached"))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.lastTurnEndedAt == date.addingTimeInterval(2))
+
+        report(.working, "Working", "Responding to your prompt", after: 70)
+        report(.ready, "Ready", "Done", after: 75)
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Done")
+    }
+
     /// Providers save their generated title before the first turn ends.
     /// The row should update while the status remains working.
     @Test(arguments: [AgentKind.claude, .codex, .grok])

@@ -451,6 +451,34 @@ public struct ConversationProjector: Sendable {
         return emitted
     }
 
+    /// Opens the prompt under a new epoch after a delivery consumed
+    /// `expectedEpoch` and the provider showed no turn for it. The host
+    /// decides when the wait is over. This only succeeds while the provider
+    /// has reported nothing since that prompt opened, so a turn that did
+    /// start, or a later prompt, is never replaced. The old epoch stays
+    /// consumed: a client that still holds it cannot send with it.
+    @discardableResult
+    public mutating func reopenPromptAfterLostSend(
+        expectedEpoch: RemoteInputEpoch,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard isRuntimeBound,
+              inputAvailability == .openPrompt(epoch: expectedEpoch) else {
+            return []
+        }
+
+        currentEpoch = currentEpoch.next()
+        var emitted: [ConversationEvent] = []
+        transition(
+            to: .awaitingInput,
+            availability: .openPrompt(epoch: currentEpoch),
+            at: date,
+            emitting: &emitted
+        )
+        updatedAt = max(updatedAt, date)
+        return emitted
+    }
+
     /// Removes a historical file association while preserving the projected
     /// transcript. Runtime-bound callers should use `noteBinding` with
     /// `clearsProviderSessionFilePath` so the input epoch is also invalidated.

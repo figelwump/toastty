@@ -228,6 +228,49 @@ Both write `remote-coordinator-wake-check-<provider>.json` and the app log
 under the run's artifacts directory. The fake run also saves the agent's
 event log and the final `task-webhook-outbox.json`.
 
+### Prompt reopen
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario lost-send'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario failed-turn --gui-session'
+```
+
+These checks mutate one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. They cover the two cases in which no turn end
+would open the coordinator's prompt again. Run them after a change to Claude's
+hooks, to the send confirmation deadline, or to the prompt epochs.
+
+`lost-send` takes about three minutes and uses a fake `claude` script that
+reports its turns as Claude's `UserPromptSubmit` and `Stop` hooks do. The
+script leaves one Return unanswered, and later starts one turn after the
+10-second limit. The check proves that the next message is typed about 10
+seconds after the lost one, that no message is typed twice, and that a
+message taken late and the one behind it each run one turn.
+
+`failed-turn` takes about five minutes and runs the real Claude CLI as the
+coordinator, in the GUI session like the other checks with the real CLI. It
+uses no subscription usage: a stub on a loopback port stands in for the model
+API and answers every request with an overloaded error, so Claude Code ends
+each turn with an API error and fires `StopFailure`. Claude gets a placeholder
+token for the stub (`ANTHROPIC_AUTH_TOKEN` in the run's own `--settings`), so
+the login token is not sent to it. The stub never keeps a header or a body: it
+keeps the method and path of each request, and which kind of credential the
+request carried (the placeholder, none, or another one). The check fails if
+any request carried another one. The run marks only
+its temporary coordinator folder trusted in `~/.claude.json`, and removes that
+entry and the folder's Claude project directory afterward. The check proves
+from Claude's transcript that the turn failed, that the status reads `error`,
+that the next wake digest and a later message are typed, and that the error
+is still shown after Claude's idle reminder.
+
+`--expect stuck` records the fault instead of the repair, for a build without
+it. Both write `remote-prompt-reopen-check-<scenario>.json` and the app log
+under the run's artifacts directory; `failed-turn` also saves Claude's
+transcripts and the stub's request list (methods and paths).
+
 ### Coordinator chat
 
 ```bash

@@ -625,6 +625,10 @@ final class RemoteAccessService: ObservableObject {
         /// The normal deadline passed while `runningCodexTurnID` was set, so
         /// the end of that turn decides the outcome.
         var isWaitingForCodexTurn = false
+        /// The open prompt this send consumed with a confirmed Return. Nil
+        /// for a steer, and for a send whose Return was not confirmed: its
+        /// text may still be in the agent's composer.
+        var consumedPromptEpoch: RemoteInputEpoch?
     }
     private var pendingSendConfirmationWork: [
         PendingSendConfirmationKey: PendingSendConfirmationWork
@@ -4030,7 +4034,13 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
+                recordPendingSend(
+                    request,
+                    for: conversationID,
+                    deliveredText: deliveredText,
+                    deliveryMode: recordedDeliveryMode,
+                    consumedPromptEpoch: epoch
+                )
                 broadcastSessionList()
                 return .accepted(epoch: epoch)
             }
@@ -4182,7 +4192,8 @@ final class RemoteAccessService: ObservableObject {
         for conversationID: RemoteConversationID,
         deliveredText: String? = nil,
         confirmationTimeout: Duration? = nil,
-        deliveryMode: RemoteMessageDeliveryMode = .prompt
+        deliveryMode: RemoteMessageDeliveryMode = .prompt,
+        consumedPromptEpoch: RemoteInputEpoch? = nil
     ) {
         precondition(request.conversationID == conversationID)
         let confirmationTimeout = confirmationTimeout ?? sendConfirmationTimeout
@@ -4209,7 +4220,8 @@ final class RemoteAccessService: ObservableObject {
         }
         pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
             acceptedAt: acceptedAt,
-            task: task
+            task: task,
+            consumedPromptEpoch: consumedPromptEpoch
         )
     }
 
@@ -4260,18 +4272,79 @@ final class RemoteAccessService: ObservableObject {
             clientRequestID: key.clientRequestID,
             at: Date()
         )
-        guard emitted.isEmpty == false else { return }
-        let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+        if emitted.isEmpty == false {
+            let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+            ToasttyLog.warning(
+                "Remote send was not confirmed by the provider transcript",
+                category: .automation,
+                metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                    "latency_ms": String(latencyMs),
+                    "waited_for_codex_turn": String(work.isWaitingForCodexTurn),
+                ]
+            )
+            broadcastEvents(emitted, for: conversationID)
+        }
+        // Only the deadline's own expiry means that no turn was seen. The
+        // other callers settle a send whose Codex turn ran.
+        if allowingLateEcho, let consumedEpoch = work.consumedPromptEpoch {
+            reopenPromptAfterLostSend(consumedEpoch: consumedEpoch, for: conversationID)
+        }
+    }
+
+    /// A delivered send starts a turn, and the end of that turn opens the
+    /// next prompt. When the send's deadline passes and the provider showed
+    /// no turn, nothing else would open the prompt: every later message,
+    /// from the Mac or a phone, would wait for good. Open the prompt under a
+    /// new epoch instead, so the next message can be typed.
+    ///
+    /// This happens only while the provider still shows the prompt that the
+    /// send consumed and the agent's session is at rest. A turn that started
+    /// late closes the new prompt as any turn does. The lost message stays
+    /// processed: Toastty never types it a second time. Toastty cannot read
+    /// the agent's composer, so text that the agent kept there is submitted
+    /// with the next message.
+    private func reopenPromptAfterLostSend(
+        consumedEpoch: RemoteInputEpoch,
+        for conversationID: RemoteConversationID
+    ) {
+        guard projectionStore.projectorState(for: conversationID)?.inputAvailability
+                == .openPrompt(epoch: consumedEpoch),
+              let sessionID = activeSessionIDByConversationID[conversationID],
+              let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            return
+        }
+        // The agent's status can report a turn before the conversation does.
+        switch session.status?.kind {
+        case .working, .needsApproval:
+            return
+        case .idle, .ready, .error, nil:
+            break
+        }
+        let emitted = projectionStore.reopenPromptAfterLostSend(
+            for: conversationID,
+            expectedEpoch: consumedEpoch,
+            at: Date()
+        )
+        guard emitted.isEmpty == false,
+              case .openPrompt(let reopenedEpoch)? = projectionStore.projectorState(for: conversationID)?.inputAvailability else {
+            return
+        }
+        // A prompt opened from the native binding keeps its send-time checks.
+        if bootstrappedPromptAuthorityByConversationID[conversationID]?.inputEpoch == consumedEpoch {
+            bootstrappedPromptAuthorityByConversationID[conversationID]?.inputEpoch = reopenedEpoch
+        }
+        syncCoordinatorAvailability(for: conversationID)
         ToasttyLog.warning(
-            "Remote send was not confirmed by the provider transcript",
+            "Opened the prompt again after a send that started no turn",
             category: .automation,
             metadata: [
                 "conversation_id": conversationID.rawValue.uuidString,
-                "latency_ms": String(latencyMs),
-                "waited_for_codex_turn": String(work.isWaitingForCodexTurn),
+                "session_id": sessionID,
             ]
         )
         broadcastEvents(emitted, for: conversationID)
+        drainSendQueue(for: conversationID)
     }
 
     /// Codex starts a turn before it records the turn's user message. Track a

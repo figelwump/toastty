@@ -955,6 +955,45 @@ extension ConversationProjectorTests {
         #expect(projector.inputAvailability == .unavailable(reason: .interrupted))
     }
 
+    @Test func lostSendReopensOnlyThePromptItConsumed() throws {
+        var projector = Self.makeProjector()
+        _ = projector.ingest(Self.observation("end-0", at: 1, .turnEnded(turnID: "turn-0", reason: .completed)))
+        guard case .openPrompt(let consumed) = projector.inputAvailability else {
+            Issue.record("Expected an open prompt")
+            return
+        }
+
+        // The provider showed nothing since the send: a new epoch opens.
+        var quiet = projector
+        let emitted = quiet.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12))
+        #expect(emitted.map(\.kind) == [.statusChanged])
+        #expect(quiet.inputAvailability == .openPrompt(epoch: consumed.next()))
+        #expect(quiet.state == .awaitingInput)
+        // The consumed epoch reopens once.
+        #expect(quiet.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(13)).isEmpty)
+        #expect(quiet.inputAvailability == .openPrompt(epoch: consumed.next()))
+
+        // The turn started: its end opens the next prompt, not the deadline.
+        var working = projector
+        _ = working.ingest(Self.observation("start-1", at: 2, .turnStarted(turnID: "turn-1")))
+        #expect(working.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+        #expect(working.turnEpoch == consumed)
+
+        // The turn ran and ended: the prompt it opened is not replaced.
+        var finished = working
+        _ = finished.ingest(Self.observation("end-1", at: 3, .turnEnded(turnID: "turn-1", reason: .completed)))
+        let afterTurn = finished.inputAvailability
+        #expect(finished.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(finished.inputAvailability == afterTurn)
+
+        // No runtime, no prompt.
+        var ended = projector
+        _ = ended.noteBinding(reason: .runtimeEnded, bindingID: Self.bindingID, at: Self.epochDate.addingTimeInterval(2))
+        #expect(ended.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(ended.inputAvailability == .unavailable(reason: .offline))
+    }
+
     @Test func claudeCompletionRetiresTheTurnEpochBeforeStabilization() throws {
         var projector = Self.makeClaudeProjector()
         _ = projector.ingest(Self.observation("user-1", at: 1, .transcript(.userMessage(.init(text: "Go")))))
