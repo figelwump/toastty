@@ -1,0 +1,8 @@
+[
+  "CI gate",
+  "iOS tests (Debug)",
+  "iOS tests (Release)",
+  "macOS contract tests",
+  "Web panel tests",
+  "Script tests"
+]

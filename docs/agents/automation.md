@@ -4,16 +4,25 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets all automatic checks; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR and manual dispatch. It does not run on pushes to `main`. A newer PR commit cancels that PR's older run; manual runs have separate groups and are not cancelled.
 
-- Desktop sources, tests, scripts, and build inputs select the full macOS Debug test suite and an unsigned Release build.
-- Native iOS sources select Debug and Release simulator tests. Automatic Debug runs app/domain tests plus four fixture UI methods; Release runs app/domain tests. Both exclude the provisional numeric domain performance budget while retaining its large-page correctness check. Shared protocol changes select both platforms.
-- Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
-- Documentation-only PR changes skip app jobs.
+PRs run short checks on disposable Linux runners. `.github/ci-paths.yml` selects:
 
-Branch protection on `main` requires the **CI gate** check, so renaming the gate job also means updating that rule. The gate requires selection to succeed, all selected jobs to pass, and rejects failed or cancelled jobs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs local selection and gate regression tests without launching either app; it installs test dependencies under `Tests/CI/node_modules`.
+- **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run portable dispatcher, release-evidence, and remote runner contracts with fake tools. They do not build or launch either app.
+- **Web panel tests** for web-panel sources, generated bundles, and shared CI configuration. Each package's `npm test` also checks generated bundle synchronization.
+- Documentation-only and native macOS source changes skip these jobs. CI selection and gate tests still run on every PR.
 
-GitHub jobs use disposable runners and no production host. The macOS commands build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check is not release validation: it does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
+The separate `.github/workflows/push-worker.yml` runs the existing checks and bundle dry runs for affected push-worker PRs, or by manual dispatch. It does not run again after merge. The `iOS TestFlight` archive/upload workflow is also manual-only.
+
+Branch protection on `main` still requires the **CI gate** check. For PRs, it requires selection and the selected Linux checks to pass. For manual runs, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
+
+Use **Run workflow** to request full validation on a branch or the exact `main` release commit. Mac-only release-script and device-plist fixtures use `sips` and Apple plist tools, so they stay in the manual macOS job. The workflow tests check that every script fixture is assigned to Linux or manual macOS coverage.
+
+A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
+
+Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green lightweight PR gate does not establish native build or runtime coverage. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
+
+GitHub jobs use disposable runners and no production host. Manual macOS jobs build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 
 ## Remote Smoke Validation
 
@@ -32,6 +41,41 @@ Use `--require-remote` when the remote path itself must succeed. Supported smoke
 - `shortcut-trace`
 
 Use `--scope`, `--ref`, and `--run-label` when you need a non-default export scope or stable artifact label. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI env is injected there.
+
+Remote wrappers generate a unique label by default. An explicit `--run-label`
+must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
+letter or number. Each label is for one run: the wrappers refuse existing local
+artifact directories and remote run or worktree directories. Choose a new label
+for a retry. Exclusive directory creation prevents collisions among updated
+wrappers, including validation and test runs that share the remote worktree
+root. Older wrappers in other worktrees can still replace explicit labels.
+
+By default, artifact transfers keep result bundles, build logs, screenshots,
+recordings, runtime metadata, and other evidence. They omit known build product,
+intermediate, dependency, and compiler cache directories under `Derived/` and
+`run/Derived/`. Use `--full-artifacts` at the start of a run to also copy those
+directories, including app binaries and dSYMs. This option controls the local
+copy; `--keep-remote` separately retains the remote files. A failed evidence
+copy makes the wrapper fail and retains the remote run for inspection. Early
+Computer Use exits also retain remote evidence. No historical artifacts are
+removed by these options.
+
+Each allocated local run writes `run-metadata.json` next to `result.json`. It
+records the local source commit, scope, dirty state, selected check family,
+execution target, fallback reason, artifact mode, exit code, intended remote
+paths, whether allocation was confirmed, and
+phase durations in whole seconds. Test and smoke phases include their builds;
+Computer Use records build/launch and agent time separately. Wrapper retries
+are zero; test attempt counts remain unknown and must be read from `.xcresult`.
+For `head` and `ref`, the resolved commit is also used for the Git archive.
+`working-tree` transfers are mutable and are not a pinned snapshot of dirty
+files. Ignored dependencies such as Ghostty remain outside the source commit.
+The existing result and ownership schemas remain unchanged.
+Missing or invalid results cannot authorize remote removal. Invalid result
+bytes are retained as `result.remote.json` when available. A failed Git
+worktree removal stops cleanup and fails the wrapper; it does not fall back to
+recursive worktree deletion. Collection and directory cleanup failures add
+`infrastructureFailureSummary` while preserving an existing check failure.
 
 For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` copies local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree. Keep the local worktree bootstrapped before invoking that path.
 
@@ -213,23 +257,19 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. Automatic PR and `main` Debug runs use `node ios/scripts/toastty-ios.mjs test --ui-tests smoke --skip-performance-budgets`. This retains app/domain functional tests and four UI methods: `ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction` covers fixture navigation, and `testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble` covers composing and enqueueing a message. `testReadyResponseInLongHistoryShowsPrecedingContext` and `testReadyResponseOpensWithItsCollapsedWorkCardAboveIt` check entry alignment in long histories. Automatic Release runs use `--skip-performance-budgets` with the app/domain suites. Every CI invocation also passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`: a hosted runner under load can time out the first UI test launch or lose the target app's background assertion, and the same tests pass moments later, so each failed test gets one more attempt. The uploaded xcresult records both attempts; a test that needed the retry is still worth a look. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures stay distinguishable during triage.
+`Toastty CI` runs native simulator tests only on manual dispatch. Its Debug job includes the full UI suite; Debug and Release both include the provisional 5,000-event numeric budget and the separate event/cursor correctness test. Debug has a 90-minute limit because the full UI suite can exceed 60 minutes on hosted runners; Release keeps its 45-minute limit.
 
-`--skip-performance-budgets` excludes only the provisional 5,000-event numeric budget test. Its separate event/cursor correctness test still runs. The full UI suite has timing-sensitive fixture failures, and hosted simulator load makes the one-second benchmark threshold unreliable; automatic CI no longer enforces those checks. This does not establish that every full-UI failure is harmless. Investigate failures when running that coverage before a release or a change to the affected flow.
+Each hosted simulator invocation passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`. The uploaded xcresult records both attempts. Investigate tests that need a retry. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures remain distinguishable.
 
-Manual `Toastty CI` runs retain the full Debug UI suite and the numeric budget test in both configurations. The full Debug job has a 90-minute limit because the full UI suite can exceed 60 minutes on hosted runners. Automatic iOS jobs and manual Release jobs retain their 45-minute limit. Select the branch in the workflow's **Run workflow** menu to run this coverage before TestFlight or after event decode/reduce changes. The default dispatcher remains unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that UI coverage, and both UI selector values require Debug. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
+Select the branch in **Run workflow** for broader validation, and select `main` before TestFlight. The default dispatcher is unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that coverage, and both UI selector values require Debug. `--skip-performance-budgets` remains available for focused checks, but full manual CI does not use it. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
 
-The `iOS TestFlight` workflow reuses successful trusted main CI for the exact
-release SHA instead of repeating simulator tests. Its CI gate and toolchain pin
-are described in [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
-Both ordinary iOS jobs and the archive job verify `.github/ios-xcode-version`;
-missing CI evidence or an unavailable pinned Xcode blocks release validation.
+The `iOS TestFlight` workflow reuses a successful full manual `Toastty CI` run for the exact release SHA. It does not repeat simulator tests. Its evidence check and toolchain pin are described in [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow). Both the manual simulator jobs and the archive job verify `.github/ios-xcode-version`; missing full CI evidence or an unavailable pinned Xcode blocks release validation.
 
 Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects the existing `ToasttyMobileApp-Release` scheme with only app/domain test targets and enables internal test imports without defining `DEBUG`. The UI test bundle is not built in this tier; fixture UI launches require Debug. Dispatcher test invocations pass `ONLY_ACTIVE_ARCH=YES`, letting the selected simulator determine the architecture without assuming the hosted runner architecture. App builds and signed archives retain their existing architecture settings. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
-  --run-label ios-release-tests -- \
+  -- \
   -scheme ToasttyMobileApp-Release -configuration Release \
   ENABLE_TESTABILITY=YES ONLY_ACTIVE_ARCH=YES \
   -only-testing:ToasttyMobileAppTests \
@@ -240,7 +280,7 @@ For a focused remote check of the PR UI tier, pass its exact test identifiers to
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
-  --run-label ios-ui-smoke -- \
+  -- \
   -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction \
   -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble
 ```
@@ -438,36 +478,105 @@ sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
 ```
 
-Use this scheduled-task prompt so local artifacts and remote simulators retain
-separate failure boundaries:
+### Scheduled cleanup on the remote Mac
 
-```text
-In /Users/vishal/GiantThings/repos/toastty, run these four cleanup groups independently. Within each group, run the dry-run first and run apply only when that dry-run succeeds. If a command fails, skip the rest of that group, record the failure, and continue to the next group.
+Use the host service when remote cleanup must continue without the local computer
+or Codex App. It runs the three existing remote cleaners every four hours, each
+with a dry-run before apply. A failed preview skips that group's apply; the other
+groups continue. Run retention stays at 24 hours, with a cap of 30 test runs per
+execution. Active processes, `.keep` markers, invalid ownership and booted
+simulators remain protected. Failed process inventories stop run deletion.
 
-1. Local artifacts:
-./scripts/automation/cleanup-artifacts.sh --dry-run
-./scripts/automation/cleanup-artifacts.sh --apply
+Install only after reviewing, testing and committing the four service source
+files. From that commit's checkout, these commands target the existing configured
+remote Mac through the repository's `.secrets` manifest:
 
-2. Manifest-owned remote runs and their simulator clones:
-sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
-
-3. Legacy remote simulators:
-sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
-
-4. Stale Simulator.app window shells:
-sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
-sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
-
-Do not edit source, use --include-unowned, invoke simctl directly, or manually shut down/delete booted simulators. Report all eight summary lines, every manual-review count, and every skipped or failed group.
+```bash
+# Installs a per-user LaunchAgent and a versioned script snapshot on the mini.
+sv exec -- python3 scripts/remote/cleanup-service.py install
+# Requests one guarded cleanup through launchd; this can delete eligible data.
+sv exec -- python3 scripts/remote/cleanup-service.py run-now
+# Read-only installed hashes, job state, disk space and last-run evidence.
+sv exec -- python3 scripts/remote/cleanup-service.py status
+# Stops future scheduling and removes only the job plist; refuses a busy run.
+sv exec -- python3 scripts/remote/cleanup-service.py disable
 ```
 
-The scheduled task must use the main local checkout, not an isolated worktree,
-because artifact directories belong to that checkout. If the machine or Codex
-App is not running, cleanup waits until a later scheduled run; there is no cron
-or LaunchAgent fallback. The remote steps also require the three
-`TOASTTY_REMOTE_GUI_*` values from the repository's `.secrets` manifest.
+The job is `com.giantthings.toastty.remote-cleanup`. Its plist is in the remote
+user's `~/Library/LaunchAgents/`. It runs while that user is logged in, including
+when the screen is locked. It loads again at login. A powered-off or logged-out
+mini cannot run this user agent. See [Apple's launchd guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
+
+Installed files live under the configured validation root's `.cleanup-service/`,
+outside `test-runs`, `worktrees` and `runs`. `versions/<commit>/bundle.json`
+records the exact SHA-256 hashes of the installed scripts. Each run verifies them
+before invoking a cleaner. The job uses `/usr/bin/python3 -I`, an explicit PATH
+and a fixed locale. Cleaner processes receive only a minimal environment, so
+shell startup hooks and Git overrides cannot change their target. Status,
+run-now and disable dispatch to the installed controller version. The job
+needs no credentials on the mini and does not depend on
+the task worktree. Installation refuses an existing job. To update or roll back,
+disable the idle job, then install the reviewed target commit. Old script
+snapshots remain available for inspection; the installer does not delete them.
+
+`status.json` records each step's exit code, summary and log path, plus disk space
+before and after. It reports a backlog, manual-review counts, cleanup/reporting
+failures and free space below 30 GiB. The read-only status command also warns if
+no run has completed within 8 hours 15 minutes, or if the job is absent, disabled
+or its plist differs from the installed configuration. `run-now` returns after
+requesting execution; inspect status until the new run completes. A successful
+request alone does not establish cleanup success.
+
+Each step has one log file, replaced on the next run and trimmed to its last
+1 MiB after completion. `launchd-error.log` retains startup errors and is trimmed
+when the next run starts. A running step can temporarily exceed that limit.
+Status-write failures, corrupt prior status and startup-log trim failures do
+not suppress cleanup. Unsafe file ownership still blocks the operation. A missing summary is a reporting
+failure, but a successful preview exit still permits its guarded apply. Disk
+space changes can include other concurrent work; use the cleaner's summary for
+reclaimed storage.
+
+The service holds one file lock across all steps. Cleaner children inherit that
+lock and write directly to files, so a crashed supervisor cannot admit another
+run while a cleaner is still active. Read-only previews have a 120-second timeout;
+apply operations are never killed on a timeout. A busy service returns exit 75
+without changing the current report. Existing per-cleaner locks still protect
+manual invocations. If a run remains incomplete, inspect its recorded PID, step
+log and cleaner lock before recovery. Do not delete an ambiguous lock or stop an
+active test to force cleanup.
+
+GUI runs without ownership manifests, unpaired worktrees, ordinary simulators,
+Xcode installations and release artifacts remain outside automatic deletion.
+Review those paths separately. The run cleaner now logs its retention reason
+and matched PID, so an unexpected preview/apply difference can be investigated
+without recording process command text.
+
+### Local daily maintenance after service installation
+
+Keep the daily task in the main local checkout for that checkout's artifacts.
+After the mini service completes a verified run, remove the daily task's remote
+apply groups and use read-only service health reporting instead. Preserve the
+local artifact dry-run/apply policy and its failure boundary. Do not leave two
+schedulers deliberately applying remote cleanup.
+
+```text
+Run local artifact cleanup in the main checkout, using the existing policy:
+PATH="/usr/bin:$PATH" ./scripts/automation/cleanup-artifacts.sh --dry-run
+PATH="/usr/bin:$PATH" ./scripts/automation/cleanup-artifacts.sh --apply
+Run apply only when preview succeeds and cleanup scripts/policy are clean.
+Independently inspect the remote cleanup service:
+sv exec -- python3 scripts/remote/cleanup-service.py status
+Report local summaries and manual-review counts, remote free space, service
+revision, last completed run and every warning or unavailable measurement.
+Do not apply remote cleanup or change service, retention or ownership policy.
+```
+
+Local maintenance still requires the local computer and Codex App. Remote cleanup
+runs independently in the mini's login session. If the service command is not yet
+in the main checkout, retain a checksum-verified copy of its committed controller
+beside the automation configuration for read-only `status` calls. Replace that
+copy intentionally when the service interface changes; do not reference a task
+worktree that can be removed.
 
 Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
