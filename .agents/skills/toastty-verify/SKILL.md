@@ -43,7 +43,7 @@ For docs-only or agent-instruction-only changes, do not run the full app gate by
 
 - Skills: run the active runtime's `skill-creator` `quick_validate.py <skill-dir>` when available. If the script is unavailable or its Python environment is missing dependencies, at minimum parse `SKILL.md` frontmatter and `agents/openai.yaml`, then state the validator blocker in the handoff.
 - Shell snippets or scripts in docs: run `bash -n` only for real shell files, not Markdown examples.
-- Agent workflow changes: follow the global Review Gate; it does not call for second-opinion review of instruction changes.
+- Agent workflow changes: follow the global Review Gate.
 
 If the docs change alters build, release, automation, or validation behavior, also run a representative command or dry validation path.
 
