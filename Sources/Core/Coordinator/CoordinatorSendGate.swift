@@ -20,6 +20,9 @@ public enum CoordinatorSendHold: String, Equatable, Sendable {
     /// The agent's conversation does not show an open prompt: the turn was
     /// stopped or failed, or Toastty has not read the conversation yet.
     case promptNotOpen
+    /// Toastty could not save that it types the user's message. It does
+    /// not type a message that a relaunch could then type a second time.
+    case notSaved
 }
 
 /// What Toastty knows about the coordinator's prompt at one moment.

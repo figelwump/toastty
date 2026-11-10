@@ -11,6 +11,8 @@ struct QuickEntryTextEditor: NSViewRepresentable {
     let isEditable: Bool
     let focusRequestID: Int
     let onSubmit: () -> Void
+    /// ⌥⌘↩: create the task directly.
+    var onCreateTask: () -> Void = {}
     let onCancel: () -> Void
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
@@ -102,6 +104,7 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         textView.placeholder = placeholder
         textView.isEditable = isEditable
         textView.onSubmit = onSubmit
+        textView.onCreateTask = onCreateTask
         textView.onCancel = onCancel
         textView.onPasteAttachments = onPasteAttachments
         textView.dropTarget = dropTarget
@@ -128,6 +131,7 @@ final class QuickEntryNSTextView: NSTextView {
         didSet { needsDisplay = true }
     }
     var onSubmit: () -> Void = {}
+    var onCreateTask: () -> Void = {}
     var onCancel: () -> Void = {}
     var onPasteAttachments: (NSPasteboard) -> Bool = { _ in false }
     weak var dropTarget: QuickEntryDropTarget?
@@ -165,7 +169,11 @@ final class QuickEntryNSTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if Self.isReturn(event), modifiers.contains(.command), hasMarkedText() == false {
-            onSubmit()
+            if modifiers.contains(.option) {
+                onCreateTask()
+            } else {
+                onSubmit()
+            }
             return
         }
         // Handled here as well as in cancelOperation(_:), because a key

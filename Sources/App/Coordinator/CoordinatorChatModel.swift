@@ -43,6 +43,9 @@ final class CoordinatorChatModel: ObservableObject {
         case terminalDraft
         /// A message was typed but the conversation never showed it.
         case deliveryNotConfirmed
+        /// Toastty quit while it typed a message. The message waits,
+        /// paused, until the user sends it again or removes it.
+        case typingInterrupted
         case failure(String)
     }
 
@@ -357,10 +360,12 @@ final class CoordinatorChatModel: ObservableObject {
     /// The tail of the chat: messages typed but not shown yet, then the
     /// messages that wait, in the order they will be typed.
     private func sendItems() -> [ToasttySendPresentationItem] {
+        // A waiting message shows as its row will: a quick entry message
+        // without Toastty's first line.
         var items = pendingSends.map { pending in
             ToasttySendPresentationItem(
                 clientRequestID: pending.id,
-                text: pending.text,
+                text: CoordinatorMessageHeader.displayText(of: pending.text),
                 content: .optimistic(response: .accepted)
             )
         }
@@ -368,7 +373,7 @@ final class CoordinatorChatModel: ObservableObject {
         for (index, entry) in controller.pausedEntries.enumerated() {
             items.append(ToasttySendPresentationItem(
                 clientRequestID: entry.id,
-                text: entry.text,
+                text: CoordinatorMessageHeader.displayText(of: entry.text),
                 content: .queued(ToasttyQueuedSendPresentation(
                     position: index + 1, attachmentCount: 0, isPaused: true, canSteer: false
                 ))
@@ -398,7 +403,7 @@ final class CoordinatorChatModel: ObservableObject {
             position += 1
             items.append(ToasttySendPresentationItem(
                 clientRequestID: entry.id,
-                text: entry.text,
+                text: CoordinatorMessageHeader.displayText(of: entry.text),
                 content: .queued(ToasttyQueuedSendPresentation(
                     position: position,
                     attachmentCount: 0,
@@ -424,6 +429,8 @@ final class CoordinatorChatModel: ObservableObject {
             "Queued \(position) · waits for the text in the terminal"
         case .terminalUnavailable, .promptNotOpen:
             "Queued \(position) · waits for the prompt"
+        case .notSaved:
+            "Queued \(position) · Toastty could not save it, and tries again"
         }
     }
 
@@ -458,7 +465,7 @@ final class CoordinatorChatModel: ObservableObject {
         case .localDraft:
             return .terminalDraft
         default:
-            return nil
+            return controller.hasInterruptedEntry ? .typingInterrupted : nil
         }
     }
 
@@ -542,12 +549,14 @@ final class CoordinatorChatModel: ObservableObject {
     func perform(_ action: ToasttyQueuedMessageAction) {
         switch action {
         case .edit(let id, _):
-            // Back into the composer, in front of what is there.
+            // Back into the composer, in front of what is there. It is the
+            // text as it would be typed, so a quick entry message keeps
+            // Toastty's first line and the paths of its files, which stay.
             guard let removed = controller?.removeQueuedEntry(id: id) else { return }
             draft = draft.isEmpty ? removed.text : removed.text + "\n" + draft
             composerFocusRequest += 1
         case .remove(let id):
-            controller?.removeQueuedEntry(id: id)
+            controller?.removeQueuedEntry(id: id, discardingAttachments: true)
         case .resume:
             controller?.resumeQueue()
         case .steer:

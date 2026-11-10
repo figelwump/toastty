@@ -745,7 +745,9 @@ Common query IDs include:
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.
 `coordinator.send` requires `args.text` and returns `delivery` (`sent`,
 `sentUnconfirmed` or `queued`), `queuedCount`, and for a queued message
-`position` and `hold`. `coordinator.wake` takes exactly one of
+`position` and `hold`. Toastty types the text after a first line that names
+the sender, from the request's `callerSessionID`: the task whose space that
+session is in, else the session, else "a terminal command". `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. See [The coordinator](tasks.md#the-coordinator) and

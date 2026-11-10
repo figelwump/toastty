@@ -36,6 +36,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let taskWebhooksFileName = "task-webhooks.json"
     private static let coordinatorDirectoryName = "coordinator"
     private static let taskWebhookOutboxFileName = "task-webhook-outbox.json"
+    private static let coordinatorQueueFileName = "coordinator-queue.json"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -116,6 +117,12 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     /// so they never read or change the real coordinator's files.
     public var coordinatorDirectoryURL: URL {
         configDirectoryURL.appending(path: Self.coordinatorDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// The user's messages that wait for the coordinator's prompt, kept
+    /// across an app quit.
+    public var coordinatorQueueFileURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorQueueFileName, directoryHint: .notDirectory)
     }
 
     /// Webhooks that receive task events. Runtime-isolated runs get their

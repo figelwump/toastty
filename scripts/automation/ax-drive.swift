@@ -11,6 +11,7 @@
 //   click-prefix <prefix>         Click the first element whose identifier starts with `prefix`.
 //   click-in <identifier> <label> Click the element with that label inside the element.
 //   click-label <prefix>          Click the first element whose label starts with `prefix`.
+//   click-last-label <prefix>     Click the last such element: in a transcript, the newest row.
 //   label-frame <prefix>          Print the frame of the first element whose label starts with `prefix`.
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
@@ -46,6 +47,13 @@ func find(_ element: AXUIElement, where matches: (AXUIElement) -> Bool, depth: I
         if let found = find(child, where: matches, depth: depth + 1) { return found }
     }
     return nil
+}
+
+func findAll(_ element: AXUIElement, where matches: (AXUIElement) -> Bool, depth: Int = 0) -> [AXUIElement] {
+    var found = matches(element) ? [element] : []
+    guard depth < 60 else { return found }
+    for child in children(element) { found += findAll(child, where: matches, depth: depth + 1) }
+    return found
 }
 
 func waitFor(_ description: String, _ probe: () -> AXUIElement?) -> AXUIElement {
@@ -152,6 +160,18 @@ case "click-label", "label-frame":
     activate()
     click(at: CGPoint(x: rect.midX, y: rect.midY))
     print("clicked label \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
+case "click-last-label":
+    let target = waitFor("label \(argument)…") {
+        findAll(app) { candidate in
+            [kAXTitleAttribute, kAXDescriptionAttribute].contains {
+                (attribute(candidate, $0) as? String)?.hasPrefix(argument) == true
+            }
+        }.last
+    }
+    guard let rect = frame(target) else { exit(2) }
+    activate()
+    click(at: CGPoint(x: rect.midX, y: rect.midY))
+    print("clicked the last label \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
 case "click-in":
     let label = arguments.count > 4 ? arguments[4] : ""
     let container = element(identifier: argument)

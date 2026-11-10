@@ -16,6 +16,8 @@ final class QuickEntryPickerPanel: NSPanel {
     var onPickerShortcut: (QuickEntryPickerKind) -> Void = { _ in }
     /// ⌘↩: choose, then create the task.
     var onSubmitTask: () -> Void = {}
+    /// ⌥⌘↩: choose the row, then create the task directly.
+    var onCreateTask: () -> Void = {}
     /// ⌘→. Returns false when the picker has no use for it, so the search
     /// field moves its caret.
     var onCommandRight: () -> Bool = { false }
@@ -81,6 +83,8 @@ final class QuickEntryPickerPanel: NSPanel {
             onPickerShortcut(kind)
         case .submit:
             onSubmitTask()
+        case .createTask:
+            onCreateTask()
         case .close:
             onClose()
         case .application:

@@ -652,11 +652,18 @@ class Run:
         return fresh
 
     def tell(self, text):
-        """A message from the user, typed at the coordinator's prompt."""
+        """A message from the user, typed at the coordinator's prompt.
+
+        Typed into the coordinator's terminal, as a person types there.
+        `coordinator send` is not the user's voice: Toastty puts a first
+        line before its text that names the sender, and the coordinator
+        reads such a message as data.
+        """
         self.wait_idle()
         time.sleep(1.5)
-        answer = self.cli('coordinator', 'send', text)
-        require(answer['delivery'] in ('sent', 'sentUnconfirmed', 'queued'), f'The message was not taken: {answer}')
+        answer = self.instance.request('app_control.run_action', dict(id='terminal.send-text', args=dict(
+            panelID=self.coordinator()['panelID'], text=text, submit=True)))
+        require(answer.get('ok'), f'The message was not typed: {answer}')
         return self.new_turns(wake=False)
 
     def timer_wake(self):

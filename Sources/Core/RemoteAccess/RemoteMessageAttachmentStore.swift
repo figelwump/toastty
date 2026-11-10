@@ -14,12 +14,22 @@ public actor RemoteMessageAttachmentStore {
         }
 
         public func deliveryText(text: String) -> String {
+            Self.deliveryText(text: text, paths: files.map(\.path))
+        }
+
+        /// The line before the list of attached files.
+        static let attachmentsIntroduction = "Read the following files attached to this message on this Mac:"
+
+        /// `text` followed by the attached files, each as a path in a code
+        /// span on its own line. With no path, `text` alone.
+        public static func deliveryText(text: String, paths: [String]) -> String {
+            guard paths.isEmpty == false else { return text }
             // Claude Code turns a pasted bare or quoted image path into an
             // image attachment asynchronously and drops a Return that arrives
             // meanwhile, so the send would wait unsubmitted in its prompt.
             // Paths in code spans stay plain text.
-            let paths = files.map { Self.codeSpan($0.path) }.joined(separator: "\n")
-            return [text, "Read the following files attached to this message on this Mac:\n" + paths]
+            let spans = paths.map(codeSpan).joined(separator: "\n")
+            return [text, attachmentsIntroduction + "\n" + spans]
                 .filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
 

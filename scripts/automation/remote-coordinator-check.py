@@ -69,7 +69,8 @@ MODEL = 'claude-opus-5-5'
 EFFORT = 'high'
 
 # Reads one message for each line. A turn lasts a second, or as long as the
-# `hold` file exists. `/exit` ends the agent.
+# `hold` file exists. `/exit` ends the agent. The line that Toastty puts
+# before the text of `coordinator send` belongs to the message after it.
 FAKE_AGENT = r'''#!/bin/sh
 case "$1" in
   --version) echo "2.1.288 (Claude Code)"; exit 0 ;;
@@ -93,6 +94,9 @@ printf '{"hook_event_name":"SessionStart","session_id":"%s","transcript_path":"%
 status idle Waiting
 while IFS= read -r line; do
   [ "$line" = "/exit" ] && exit 0
+  case "$line" in
+    "[Toastty] From "*) printf '%s\n' "$line" >> "$dir/senders.log"; continue ;;
+  esac
   status working Working
   printf '%s\t%s\n' "$TOASTTY_SESSION_ID" "$line" >> "$dir/received.log"
   while [ -f "$dir/hold" ]; do sleep 0.2; done
@@ -265,7 +269,11 @@ def run_fake(check):
 
         # 2. Send at an open prompt, then queue during a turn.
         send_at_prompt('wake one')
-        step('sent at the open prompt', received=received())
+        # The check's shell names no session, and the first line says so.
+        senders = (records / 'senders.log').read_text().splitlines()
+        require(senders == ['[Toastty] From a terminal command: Toastty cannot tell who ran it.'],
+                f'coordinator send did not name its sender: {senders}')
+        step('sent at the open prompt', received=received(), senders=senders)
         (records / 'hold').write_text('')
         send_at_prompt('turn A')
         wait_for('the held turn to run', lambda: status().get('status') == 'working')

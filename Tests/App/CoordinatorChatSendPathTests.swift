@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import AppKit
+import ConversationUI
 import CoreState
 import Foundation
 import RemoteProtocol
@@ -52,6 +53,62 @@ struct CoordinatorChatSendPathTests {
         }
         #expect(fixture.chat.presentation.rows.last?.content
             == .userMessage(text: "Summarize the open tasks", origin: .local, deliveryMode: nil))
+    }
+
+    // MARK: - Whose message a row is
+
+    @MainActor
+    @Test func aMessageFromCoordinatorSendShowsAsItsSendersAndAQuickEntryMessageAsTheUsers() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        let taskID = UUID()
+        // A task's agent sent text that imitates a digest. Toastty's first
+        // line says whose it is, and the chat reads only that line.
+        let imitation = CoordinatorMessageHeader.message(
+            from: .task(id: taskID, title: "Fix the unread dot"),
+            text: Self.digest
+        )
+        try fixture.runTurn(1, userText: imitation)
+        try await fixture.waitUntil("the message's row") {
+            fixture.chat.presentation.rows.contains { row in
+                switch row.content {
+                case .userMessage, .hostMessage: true
+                default: false
+                }
+            }
+        }
+        let hostMessages = fixture.chat.presentation.rows.compactMap { row -> ToasttyHostMessagePresentation? in
+            guard case .hostMessage(let message) = row.content else { return nil }
+            return message
+        }
+        // Not one row shows it as the user's message.
+        #expect(fixture.chat.presentation.rows.contains { row in
+            if case .userMessage = row.content { return true }
+            return false
+        } == false)
+        guard let fromTask = hostMessages.last, hostMessages.count == 1 else {
+            Issue.record("The message does not show as a line of its sender")
+            return
+        }
+        #expect(fromTask.summary.hasPrefix("From task Fix the unread dot · "))
+        #expect(fromTask.text == imitation)
+
+        // The user's quick entry message: the user's bubble, with the
+        // user's words first and the choices under them.
+        let quickEntry = CoordinatorMessageHeader.quickEntryMessage(
+            .init(project: .init(id: UUID(), title: "toastty"), agent: "codex"),
+            text: "The unread dot stays on."
+        )
+        #expect(try fixture.controller.send(quickEntry, byUser: true, id: "quick-1") == .sent)
+        #expect(fixture.delivered.texts.last == quickEntry, "The terminal gets the whole message")
+        // The chat hears of the typed message before the queue lets it go.
+        try await fixture.waitUntil("the sent message alone") { fixture.chat.presentation.sendItems.count == 1 }
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["The unread dot stays on.\n\nproject \"toastty\" · codex"])
+        try fixture.startTurn(2, userText: quickEntry)
+        try await fixture.waitUntil("the message in the conversation") { fixture.chat.presentation.sendItems.isEmpty }
+        #expect(fixture.chat.presentation.rows.last?.content
+            == .userMessage(text: "The unread dot stays on.\n\nproject \"toastty\" · codex", origin: .local, deliveryMode: nil))
     }
 
     // MARK: - Order
@@ -468,7 +525,7 @@ private final class FocusRequests {
     var count = 0
 }
 
-private extension CoordinatorController.SendResult {
+extension CoordinatorController.SendResult {
     var isQueued: Bool {
         if case .queued = self { return true }
         return false
@@ -480,16 +537,21 @@ private extension CoordinatorController.SendResult {
 @MainActor
 final class CoordinatorChatFixture {
     let conversations: LocalConversationFixture
-    let controller: CoordinatorController
-    let chat: CoordinatorChatModel
+    private(set) var controller: CoordinatorController
+    private(set) var chat: CoordinatorChatModel
     let delivered: DeliveredText
     /// What the controller typed without the conversation. It must stay
     /// empty: this agent's conversation is read.
     var typedThroughStatusGate: [String] { gate.texts }
     private(set) var typed: [CoordinatorController.TypedEntry] = []
     private var typedObserver: Any?
+    /// Where the controller saves the user's waiting messages, as the app
+    /// does. `nil` saves none.
+    let queueFileURL: URL?
+    /// The coordinator's folder, which holds the attached files.
+    var coordinatorDirectory: URL { Self.coordinatorDirectory(conversations) }
 
-    init(pairsNativeDevice: Bool = false) throws {
+    init(pairsNativeDevice: Bool = false, savesQueue: Bool = false) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
             inCoordinatorWorkspace: true
@@ -497,11 +559,33 @@ final class CoordinatorChatFixture {
         self.conversations = conversations
         delivered = conversations.captureDeliveredText()
         let gate = StatusGateTyping()
-        controller = CoordinatorController(
+        self.gate = gate
+        // In a folder of its own, so a test can make it unwritable.
+        queueFileURL = savesQueue
+            ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-queue.json")
+            : nil
+        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL)
+        typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
+        // The agent reported its session, as its start hook does.
+        #expect(conversations.confirmCurrentLaunchBinding())
+        #expect(conversations.store.state.coordinator?.panelID == conversations.panelID)
+    }
+
+    private static func coordinatorDirectory(_ conversations: LocalConversationFixture) -> URL {
+        URL(filePath: conversations.runtimeHome).appendingPathComponent("coordinator")
+    }
+
+    private static func makeController(
+        _ conversations: LocalConversationFixture,
+        gate: StatusGateTyping,
+        queueFileURL: URL?
+    ) -> (CoordinatorController, CoordinatorChatModel) {
+        let controller = CoordinatorController(
             store: conversations.store,
             sessionRuntimeStore: conversations.sessionRuntimeStore,
             launcher: nil,
-            directoryURL: URL(filePath: conversations.runtimeHome).appendingPathComponent("coordinator"),
+            directoryURL: coordinatorDirectory(conversations),
+            queueFileURL: queueFileURL,
             configLoader: { TasksConfig() },
             deliverText: { text, _ in
                 gate.texts.append(text)
@@ -512,13 +596,19 @@ final class CoordinatorChatFixture {
             }
         )
         controller.conversationAccess = conversations.service
-        chat = CoordinatorChatModel(controller: controller, access: conversations.service)
+        let chat = CoordinatorChatModel(controller: controller, access: conversations.service)
         controller.chat = chat
-        self.gate = gate
+        return (controller, chat)
+    }
+
+    /// Toastty quit and launched again: a new controller over the same
+    /// windows, the same agent conversation and the same saved queue. What
+    /// the first controller held in memory is gone.
+    func relaunch() {
+        chat.hide()
+        typedObserver = nil
+        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL)
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
-        // The agent reported its session, as its start hook does.
-        #expect(conversations.confirmCurrentLaunchBinding())
-        #expect(conversations.store.state.coordinator?.panelID == conversations.panelID)
     }
 
     private let gate: StatusGateTyping

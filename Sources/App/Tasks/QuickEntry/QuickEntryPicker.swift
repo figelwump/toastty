@@ -52,6 +52,8 @@ final class QuickEntryPicker: ObservableObject {
     enum Choice: Equatable {
         case workspace(UUID)
         case agent(QuickEntryPreset)
+        /// No choice: the coordinator decides.
+        case coordinatorDecides
     }
 
     struct Row: Identifiable, Equatable {
@@ -60,6 +62,8 @@ final class QuickEntryPicker: ObservableObject {
             case preset(QuickEntryPreset)
             /// Opens the columns with this agent and model chosen.
             case columns(agent: String?, model: String?)
+            /// Clears the pill: the coordinator decides.
+            case coordinatorDecides
         }
 
         let id: String
@@ -99,6 +103,9 @@ final class QuickEntryPicker: ObservableObject {
             && (columns == nil || columns?.agentID == AgentKind.codex.rawValue)
     }
 
+    /// The panel sends to the coordinator, so the pill can stay unset:
+    /// the list starts with a row that clears it.
+    private let offersCoordinatorChoice: Bool
     private let workspaces: [QuickEntryModel.Option]
     private(set) var profiles: [QuickEntryAgentProfile]
     private let frequent: [QuickEntryPreset]
@@ -111,8 +118,9 @@ final class QuickEntryPicker: ObservableObject {
     /// Presets whose effort was changed with ← →, by row.
     private var adjustedPresets: [Row.ID: QuickEntryPreset] = [:]
 
-    init(workspaces: [QuickEntryModel.Option], current: UUID?) {
+    init(workspaces: [QuickEntryModel.Option], current: UUID?, offersCoordinatorChoice: Bool = false) {
         kind = .workspace
+        self.offersCoordinatorChoice = offersCoordinatorChoice
         self.workspaces = workspaces
         profiles = []
         frequent = []
@@ -122,8 +130,14 @@ final class QuickEntryPicker: ObservableObject {
         rebuildRows(highlightingCurrent: true)
     }
 
-    init(profiles: [QuickEntryAgentProfile], frequent: [QuickEntryPreset], current: QuickEntryPreset?) {
+    init(
+        profiles: [QuickEntryAgentProfile],
+        frequent: [QuickEntryPreset],
+        current: QuickEntryPreset?,
+        offersCoordinatorChoice: Bool = false
+    ) {
         kind = .agent
+        self.offersCoordinatorChoice = offersCoordinatorChoice
         workspaces = []
         self.profiles = profiles
         let offered = { (preset: QuickEntryPreset) in profiles.contains { $0.id == preset.agent } }
@@ -275,7 +289,34 @@ final class QuickEntryPicker: ObservableObject {
             onChoose(.agent(preset))
         case .columns(let agent, let model):
             openColumns(agent: agent, model: model)
+        case .coordinatorDecides:
+            onChoose(.coordinatorDecides)
         }
+    }
+
+    static let coordinatorDecidesRowID = "coordinator-decides"
+
+    /// The row that clears the pill, or none when the picker does not
+    /// offer it or the search does not match it.
+    private var coordinatorDecidesRow: Row? {
+        guard offersCoordinatorChoice else { return nil }
+        return Self.ranked([Row(
+            id: Self.coordinatorDecidesRowID,
+            section: "Coordinator",
+            title: kind == .workspace ? "Auto: the coordinator chooses the project" : "Auto: the coordinator chooses the agent",
+            action: .coordinatorDecides,
+            searchText: "Auto coordinator chooses none"
+        )], query: query).first
+    }
+
+    /// First in the list, so a picker that opens with nothing chosen
+    /// starts on it. In a search it is last: the letters of a project's or
+    /// an agent's name can also match the row's words, and Return must
+    /// then choose the project or the agent. "auto" finds it alone when no
+    /// name holds those letters.
+    private func addingCoordinatorDecidesRow(to rows: [Row]) -> [Row] {
+        guard let row = coordinatorDecidesRow else { return rows }
+        return query.normalizedPaletteQuery.isEmpty ? [row] + rows : rows + [row]
     }
 
     private func queryChanged() {
@@ -307,6 +348,7 @@ final class QuickEntryPicker: ObservableObject {
                 }
             }
         }
+        rows = addingCoordinatorDecidesRow(to: rows)
         if highlightingCurrent, let id = currentRowID, rows.contains(where: { $0.id == id }) {
             highlightedID = id
         } else if query.isEmpty, let previous, rows.contains(where: { $0.id == previous }) {
