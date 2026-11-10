@@ -1,7 +1,8 @@
 import Foundation
 import RemoteProtocol
 
-/// Messages a remote client asked the Mac to hold while the agent works.
+/// Messages a remote client, or an in-app caller on the Mac, asked the Mac to
+/// hold while the agent works. Both share one queue per conversation.
 ///
 /// Toastty owns this queue rather than relying on each provider's own
 /// type-ahead queue: Claude and Codex queue differently, their queues live
@@ -13,10 +14,17 @@ import RemoteProtocol
 /// Pure value type; the host serializes access on the main actor.
 public struct RemoteSendQueue: Sendable {
     public struct Entry: Equatable, Sendable {
+        /// Who queued a message.
+        public enum Origin: Equatable, Sendable {
+            /// A paired device. Re-checked at delivery so a device that lost
+            /// send scope or was revoked in the meantime delivers nothing.
+            case device(UUID)
+            /// An in-app caller on this Mac. No device stands behind it.
+            case mac
+        }
+
         public var request: RemoteMessageSendRequest
-        /// The device that queued it. Re-checked at delivery so a device that
-        /// lost send scope or was revoked in the meantime delivers nothing.
-        public var deviceID: UUID
+        public var origin: Origin
         /// The runtime binding the client queued against. An entry never
         /// outlives its binding: a resumed or relaunched runtime is a
         /// different conversation as far as queued text is concerned.
@@ -27,16 +35,32 @@ public struct RemoteSendQueue: Sendable {
 
         public init(
             request: RemoteMessageSendRequest,
-            deviceID: UUID,
+            origin: Origin,
             bindingID: UUID,
             deliveredText: String? = nil,
             enqueuedAt: Date
         ) {
             self.request = request
-            self.deviceID = deviceID
+            self.origin = origin
             self.bindingID = bindingID
             self.deliveredText = deliveredText
             self.enqueuedAt = enqueuedAt
+        }
+
+        public init(
+            request: RemoteMessageSendRequest,
+            deviceID: UUID,
+            bindingID: UUID,
+            deliveredText: String? = nil,
+            enqueuedAt: Date
+        ) {
+            self.init(
+                request: request,
+                origin: .device(deviceID),
+                bindingID: bindingID,
+                deliveredText: deliveredText,
+                enqueuedAt: enqueuedAt
+            )
         }
 
         public var clientRequestID: String { request.clientRequestID }
