@@ -2050,10 +2050,21 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 continue
             }
 
+            // The resume command is typed without waiting for the prompt, so
+            // the shell may still run its own startup.
+            let shellWasAtPrompt = promptState(panelID: panelID) == .idleAtPrompt
             if sendRestoredManagedLaunchCommand(launch.commandLine, panelID: panelID) {
                 var submittedLaunch = launch
                 submittedLaunch.commandSubmittedAt = now
                 restoredManagedLaunchesByPanelID[panelID] = submittedLaunch
+                // This handoff ends when the shell is busy or after a short
+                // grace. The session keeps its own wait for the command start,
+                // so a slow shell's prompt does not end the restored session.
+                sessionLifecycleTracker?.noteManagedLaunchCommandSubmitted(
+                    sessionID: launch.sessionID,
+                    shellWasAtPrompt: shellWasAtPrompt,
+                    at: now
+                )
                 ToasttyLog.info(
                     "Submitted restored managed agent resume command",
                     category: .terminal,

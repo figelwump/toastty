@@ -2,19 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+source "$ROOT_DIR/scripts/remote/run-support.sh"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 SCRIPT_PATH="scripts/remote/computer-use-run.sh"
 
 REMOTE_PREPARE=0
 REMOTE_STOP=0
-RUN_LABEL="${RUN_LABEL:-computer-use-$(date +%Y%m%d-%H%M%S)}"
+RUN_LABEL="${RUN_LABEL:-$(toastty_default_run_label computer-use)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 KEEP_REMOTE=0
+FULL_ARTIFACTS=0
 PROMPT_FILE=""
 PROMPT_TEXT=""
-CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-6-luna}"
+CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-6.1-terra}"
 CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-high}"
 CODEX_COMPUTER_USE_SERVICE_TIER="${CODEX_COMPUTER_USE_SERVICE_TIER:-fast}"
 CURRENT_CODEX_APP_CLI="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
@@ -67,6 +69,7 @@ Options:
   --ref <git-ref>                       Git ref to export when --scope ref is used
   --run-label <label>                   Stable run label for local and remote artifacts
   --timeout-seconds <seconds>           Hard timeout for the Codex turn (default: 300)
+  --full-artifacts                      Copy build products and caches as well as evidence
   --keep-remote                         Keep the remote worktree and run directory after completion
   --remote-prepare                      Internal mode used on the remote host
   --remote-stop                         Internal mode used on the remote host
@@ -78,7 +81,7 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
-  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6-luna)
+  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6.1-terra)
   CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
   CODEX_COMPUTER_USE_SERVICE_TIER       Codex service tier for app-server turns (default: fast)
 
@@ -164,7 +167,7 @@ sync_worktree_to_remote() {
   local remote_worktree_dir="$2"
 
   rsync -a --delete \
-    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
     --exclude '.git' \
     --exclude '.DS_Store' \
     --exclude 'artifacts' \
@@ -183,7 +186,7 @@ sync_worktree_to_remote() {
 
 remote_shell() {
   local script="$1"
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
+  ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
 set -euo pipefail
 $script
 EOF
@@ -192,7 +195,7 @@ EOF
 run_remote_preflight() {
   local output
   if ! output="$(
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$REMOTE_REPO_ROOT" \
       "$REMOTE_GUI_ROOT" \
       "$CURRENT_CODEX_APP_CLI" \
@@ -220,6 +223,8 @@ EOF
 
 prepare_local_artifacts() {
   LOCAL_ARTIFACTS_DIR="$ROOT_DIR/artifacts/remote-gui/$RUN_LABEL"
+  toastty_validate_run_label "$RUN_LABEL" || return 1
+  toastty_allocate_local_artifacts "$LOCAL_ARTIFACTS_DIR" || return 1
   mkdir -p "$LOCAL_ARTIFACTS_DIR/remote"
 }
 
@@ -348,7 +353,7 @@ copy_prompt_to_artifacts() {
 
 copy_remote_artifacts_back() {
   mkdir -p "$LOCAL_ARTIFACTS_DIR/remote"
-  rsync -a "$REMOTE_HOST:$1/" "$LOCAL_ARTIFACTS_DIR/remote/"
+  toastty_copy_run_artifacts "$REMOTE_HOST:$1" "$LOCAL_ARTIFACTS_DIR/remote" "$FULL_ARTIFACTS"
 }
 
 run_remote_prepare_mode() {
@@ -563,6 +568,7 @@ EOF
 
 run_remote_stop_mode() {
   [[ -n "$SOCKET_PATH_ARG" ]] || fail "--socket-path is required for --remote-stop"
+  local stop_failed=0
 
   wait_for_pid_exit() {
     local pid="$1"
@@ -583,18 +589,19 @@ run_remote_stop_mode() {
 
   if [[ -n "$APP_SERVER_LISTENER_PID_ARG" ]]; then
     kill "$APP_SERVER_LISTENER_PID_ARG" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_SERVER_LISTENER_PID_ARG" || true
+    wait_for_pid_exit "$APP_SERVER_LISTENER_PID_ARG" || stop_failed=1
   fi
 
   if [[ -n "$APP_SERVER_PID_ARG" ]]; then
     kill "$APP_SERVER_PID_ARG" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_SERVER_PID_ARG" || true
+    wait_for_pid_exit "$APP_SERVER_PID_ARG" || stop_failed=1
   fi
 
   if [[ -n "$APP_PID_ARG" ]]; then
     kill "$APP_PID_ARG" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_PID_ARG" || true
+    wait_for_pid_exit "$APP_PID_ARG" || stop_failed=1
   fi
+  return "$stop_failed"
 }
 
 run_local_mode() {
@@ -606,12 +613,14 @@ run_local_mode() {
   require_command lsof
   require_command curl
 
+  prepare_local_artifacts
+  toastty_begin_run_metadata computer-use macos computer-use
+
   [[ -n "$REMOTE_HOST" ]] || fail "TOASTTY_REMOTE_GUI_HOST is required"
   if ! run_remote_preflight; then
     fail "Remote preflight failed: $REMOTE_PREFLIGHT_ERROR"
   fi
 
-  prepare_local_artifacts
   copy_prompt_to_artifacts
   write_request_env "$LOCAL_ARTIFACTS_DIR/request.env"
 
@@ -652,7 +661,7 @@ run_local_mode() {
     fi
 
     if [[ "$CLEANUP_REMOTE_PREPARED" == "1" && "$CLEANUP_REMOTE_STOPPED" != "1" ]]; then
-      ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+      ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
         "$CLEANUP_REMOTE_WORKTREE_DIR" \
         "$SCRIPT_PATH" \
         "$RUN_LABEL" \
@@ -686,34 +695,26 @@ fi
 EOF
     fi
 
-    if [[ "$KEEP_REMOTE" != "1" && "$CLEANUP_REMOTE_WORKTREE_CREATED" == "1" && "$CLEANUP_REMOTE_REMOVED" != "1" ]]; then
-      remote_shell "
-REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
-REMOTE_WORKTREE_DIR=$(escape_sh "$CLEANUP_REMOTE_WORKTREE_DIR")
-REMOTE_RUN_ROOT=$(escape_sh "$CLEANUP_REMOTE_RUN_ROOT")
-git -C \"\$REMOTE_REPO_ROOT\" worktree remove --force \"\$REMOTE_WORKTREE_DIR\" >/dev/null 2>&1 || rm -rf \"\$REMOTE_WORKTREE_DIR\"
-rm -rf \"\$REMOTE_RUN_ROOT\"
-" >/dev/null 2>&1 || true
+    if [[ "$CLEANUP_REMOTE_WORKTREE_CREATED" == "1" && "$CLEANUP_REMOTE_REMOVED" != "1" ]]; then
+      warn "Retaining remote evidence: $CLEANUP_REMOTE_RUN_ROOT"
     fi
+    toastty_finish_run_metadata "$cleanup_exit_code" || { [[ "$cleanup_exit_code" != 0 ]] || cleanup_exit_code=1; }
 
-    return "$cleanup_exit_code"
+    exit "$cleanup_exit_code"
   }
   trap cleanup_local_mode EXIT
 
+  TOASTTY_METADATA_REMOTE_RUN_ROOT="$remote_run_root"
+  TOASTTY_METADATA_REMOTE_WORKTREE="$remote_worktree_dir"
   log "Preparing remote worktree on $REMOTE_HOST"
   remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
 REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
-git -C \"\$REMOTE_REPO_ROOT\" rev-parse --is-inside-work-tree >/dev/null
-mkdir -p \"\$(dirname \"\$REMOTE_WORKTREE_DIR\")\" \"\$(dirname \"\$REMOTE_RUN_ROOT\")\"
-rm -rf \"\$REMOTE_RUN_ROOT\"
-if [[ -e \"\$REMOTE_WORKTREE_DIR\" ]]; then
-  git -C \"\$REMOTE_REPO_ROOT\" worktree remove --force \"\$REMOTE_WORKTREE_DIR\" >/dev/null 2>&1 || rm -rf \"\$REMOTE_WORKTREE_DIR\"
-fi
-git -C \"\$REMOTE_REPO_ROOT\" worktree add --detach \"\$REMOTE_WORKTREE_DIR\" >/dev/null
-mkdir -p \"\$REMOTE_RUN_ROOT\"
+$(declare -f toastty_allocate_remote_run)
+toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
 "
+  TOASTTY_METADATA_REMOTE_ALLOCATED=true
   CLEANUP_REMOTE_WORKTREE_CREATED=1
 
   local sync_source_root="$ROOT_DIR"
@@ -722,12 +723,12 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
     working-tree)
       ;;
     head)
-      export_root="$(export_ref_tree HEAD)"
+      export_root="$(export_ref_tree "$TOASTTY_SOURCE_COMMIT")"
       sync_source_root="$export_root"
       ;;
     ref)
       [[ -n "$REF_SPEC" ]] || fail "--ref is required when --scope ref is used"
-      export_root="$(export_ref_tree "$REF_SPEC")"
+      export_root="$(export_ref_tree "$TOASTTY_SOURCE_COMMIT")"
       sync_source_root="$export_root"
       ;;
     *)
@@ -746,8 +747,9 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
     rm -rf "$export_root"
   fi
 
+  toastty_run_phase buildAndLaunch
   log "Building and launching Toastty on the remote host"
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
       "$RUN_LABEL" \
@@ -776,6 +778,7 @@ CODEX_COMPUTER_USE_SERVICE_TIER="$codex_service_tier" \
   --remote-run-root "$remote_run_root"
 EOF
     warn "Remote prepare failed"
+    toastty_run_phase artifactCopy
     copy_remote_artifacts_back "$remote_run_root" || true
     local ended_at
     ended_at="$(timestamp_utc)"
@@ -800,7 +803,7 @@ EOF
   fi
   CLEANUP_REMOTE_PREPARED=1
 
-  rsync -a "$REMOTE_HOST:$remote_run_root/launch.json" "$LOCAL_ARTIFACTS_DIR/remote/"
+  rsync -a -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' "$REMOTE_HOST:$remote_run_root/launch.json" "$LOCAL_ARTIFACTS_DIR/remote/"
 
   local launch_json="$LOCAL_ARTIFACTS_DIR/remote/launch.json"
   app_pid="$(jq -r '.appPid' "$launch_json")"
@@ -851,6 +854,7 @@ EOF
   app_bundle_id="$(jq -er '.appBundleID | select(type == "string" and length > 0)' "$launch_json")" \
     || fail "Remote launch metadata has no nonempty appBundleID"
 
+  toastty_run_phase agentTurn
   log "Running remote Codex turn"
   local client_summary="$LOCAL_ARTIFACTS_DIR/client-summary.json"
   local client_stdout="$LOCAL_ARTIFACTS_DIR/client.stdout.log"
@@ -871,8 +875,9 @@ EOF
     client_exit_code=$?
   fi
 
+  toastty_run_phase stopRemoteProcesses
   log "Stopping remote Toastty and Codex app-server"
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
       "$RUN_LABEL" \
@@ -909,8 +914,11 @@ EOF
     warn "Remote process cleanup failed"
   fi
 
+  toastty_run_phase artifactCopy
+  local copy_succeeded=1
   log "Copying remote artifacts back"
   if ! copy_remote_artifacts_back "$remote_run_root"; then
+    copy_succeeded=0
     warn "Failed copying remote artifacts back"
   fi
 
@@ -962,6 +970,14 @@ EOF
     failure_reason_json='{"kind":"agent_error","message":"Codex turn failed without a client summary"}'
   fi
 
+  if [[ "$copy_succeeded" != 1 || "$CLEANUP_REMOTE_STOPPED" != 1 ]]; then
+    summary_text="$summary_text; remote evidence copy or process cleanup failed; remote run retained"
+    if [[ "$client_status" == pass ]]; then
+      client_status=setup_error
+      failure_reason_json='{"kind":"evidence_or_cleanup_failed","message":"Remote evidence copy or process cleanup failed; remote run retained"}'
+    fi
+  fi
+
   write_result_json \
     "$LOCAL_ARTIFACTS_DIR/result.json" \
     "$client_status" \
@@ -980,19 +996,26 @@ EOF
     "$remote_worktree_dir" \
     "$model_json"
 
-  if [[ "$KEEP_REMOTE" != "1" ]]; then
+  toastty_run_phase cleanup
+  if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == 1 && "$CLEANUP_REMOTE_STOPPED" == 1 ]]; then
     log "Cleaning up remote worktree"
-    remote_shell "
+    if remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
 REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
-git -C \"\$REMOTE_REPO_ROOT\" worktree remove --force \"\$REMOTE_WORKTREE_DIR\" >/dev/null 2>&1 || rm -rf \"\$REMOTE_WORKTREE_DIR\"
-rm -rf \"\$REMOTE_RUN_ROOT\"
-"
-    CLEANUP_REMOTE_REMOVED=1
+$(declare -f toastty_remove_remote_run)
+toastty_remove_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
+"; then
+      TOASTTY_METADATA_REMOTE_REMOVED=true
+      CLEANUP_REMOTE_REMOVED=1
+    else
+      warn "Remote directory cleanup failed; inspect retained paths: $remote_run_root"
+      client_status=setup_error
+      toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote directory cleanup failed; inspect retained paths" setup_error
+    fi
   fi
 
-  trap - EXIT
+  # The existing EXIT handler finalizes metadata after any fallback cleanup.
 
   if [[ "$client_status" != "pass" ]]; then
     return 1
@@ -1030,6 +1053,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || fail "--timeout-seconds requires a value"
       TIMEOUT_SECONDS="$2"
       shift 2
+      ;;
+    --full-artifacts)
+      FULL_ARTIFACTS=1
+      shift
       ;;
     --keep-remote)
       KEEP_REMOTE=1

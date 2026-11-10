@@ -120,6 +120,85 @@ struct CodexRootTurnReconciliationTests {
         #expect(reconciler.snapshot.currentApprovalContext == expected)
     }
 
+    @Test(arguments: ["auto_review", "user"], [false, true])
+    func unidentifiedInputPreservesHookTurnPolicyUntilANewTurnStarts(
+        reviewer: String,
+        contextArrivesAfterInput: Bool
+    ) {
+        var reconciler = CodexRootTurnReconciler(authority: .hooks)
+        var approvals = CodexApprovalReconciler(authority: .hooks)
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "running",
+            fingerprint: "original-input"
+        ))
+        if contextArrivesAfterInput {
+            _ = reconciler.reduce(rootInput(fingerprint: "follow-up"))
+        }
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "running",
+            context: context(policy: .string("on-request"), reviewer: .string(reviewer))
+        ))
+
+        if !contextArrivesAfterInput {
+            _ = reconciler.reduce(rootInput(fingerprint: "follow-up"))
+        }
+        let request = CodexApprovalRequest(
+            source: .hook,
+            threadID: "thread",
+            turnID: "running",
+            turnProvenance: .sourceObserved
+        )
+        #expect(approvals.reduce(request, root: reconciler.snapshot).decision == (
+            reviewer == "auto_review"
+                ? .suppress(reason: .autoReviewApproval)
+                : .accept(reason: .humanApproval)
+        ))
+
+        let nextRequest = CodexApprovalRequest(
+            source: .hook,
+            threadID: "thread",
+            turnID: "next",
+            turnProvenance: .sourceObserved
+        )
+        // A request from an unidentified next turn cannot use the running policy.
+        let earlyRequest = approvals.reduce(nextRequest, root: reconciler.snapshot)
+        if case .deferForContext = earlyRequest.decision {} else {
+            Issue.record("A new turn must wait for its own approval context")
+        }
+        #expect(!earlyRequest.snapshot.autoReviewedTurnIDs.contains("next"))
+        // Repeating earlier text must not make an unidentified input look like
+        // an identified turn. It still cannot use the running turn's reviewer.
+        _ = reconciler.reduce(rootInput(fingerprint: "original-input"))
+        #expect(approvals.reduce(nextRequest, root: reconciler.snapshot).decision ==
+            .deferForContext(reason: .turnMismatch))
+
+        // A queued message can later start a new turn. Its hook must stop using
+        // the previous policy until the new turn's canonical context arrives.
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "next",
+            fingerprint: "follow-up"
+        ))
+        #expect(approvals.reduce(nextRequest, root: reconciler.snapshot).decision ==
+            .deferForContext(reason: .awaitingRootTurnContext))
+
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "next",
+            context: context(
+                policy: .string("on-request"),
+                reviewer: .string(reviewer == "auto_review" ? "user" : "auto_review")
+            )
+        ))
+        #expect(approvals.reduce(nextRequest, root: reconciler.snapshot).decision == (
+            reviewer == "auto_review"
+                ? .accept(reason: .humanApproval)
+                : .suppress(reason: .autoReviewApproval)
+        ))
+    }
+
     @Test
     func canonicalContextIsTurnScopedAcrossReviewerTransitions() {
         var reconciler = CodexRootTurnReconciler(authority: .hooks)
