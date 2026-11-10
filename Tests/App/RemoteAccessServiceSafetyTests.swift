@@ -2736,6 +2736,403 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    /// A delivered message whose Return the agent did not take starts no
+    /// turn, so no turn end opens the prompt again. After the send's deadline
+    /// the prompt opens under a new epoch, and the next message can be typed.
+    /// The lost message is never typed a second time.
+    @MainActor
+    @Test(arguments: [AgentKind.claude, .codex])
+    func sendThatStartsNoTurnOpensThePromptUnderANewEpoch(_ agent: AgentKind) async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: agent,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+
+        let lost = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "lost-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .accepted(epoch: epoch))
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+        #expect(nextEpoch.bindingID == epoch.bindingID)
+        #expect(nextEpoch.counter > epoch.counter)
+        #expect(Self.hasUnconfirmedReceipt(lost.clientRequestID, in: fixture))
+
+        // A retry of the lost message is not typed, under either epoch.
+        var retry = lost
+        retry.expectedInputEpoch = nextEpoch
+        #expect(fixture.service.performRemoteSend(retry, device: device) == .duplicate)
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .duplicate)
+        // The consumed epoch cannot send.
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "stale-epoch",
+            expectedInputEpoch: epoch, text: "Too late"
+        ), device: device) == .rejected(reason: .epochMismatch))
+        #expect(typed == ["First digest"])
+
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .accepted(epoch: nextEpoch))
+        #expect(typed == ["First digest", "Second digest"])
+        // One message for each prompt: the second send consumed it.
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+    }
+
+    /// The agent can take a message after the deadline, when the prompt has
+    /// opened again. Its late turn closes that prompt as any turn does, the
+    /// message is not typed again, and the next message waits for the turn.
+    @MainActor
+    @Test func turnThatStartsAfterTheDeadlineClosesTheReopenedPrompt() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-late-turn")
+
+        let slow = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "slow-send",
+            expectedInputEpoch: epoch, text: "Slow digest"
+        )
+        #expect(fixture.service.performRemoteSend(slow, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        // Claude's UserPromptSubmit hook, then the transcript's user record.
+        observe(.turnStarted(turnID: "late-turn"), "late-start", 1)
+        observe(.transcript(.userMessage(.init(text: slow.text))), "late-echo", 1.1)
+        try await Self.waitForReceipt(slow.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Next digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .rejected(reason: .promptNotOpen))
+        #expect(typed == ["Slow digest"])
+
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), "late-end", 2)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        var nextAtFinalEpoch = next
+        nextAtFinalEpoch.expectedInputEpoch = finalEpoch
+        #expect(fixture.service.performRemoteSend(nextAtFinalEpoch, device: device) == .accepted(epoch: finalEpoch))
+        #expect(typed == ["Slow digest", "Next digest"])
+    }
+
+    /// A person who types at the reopened prompt holds it as a draft, as at
+    /// any open prompt: no message is typed into their text. If the agent
+    /// then takes the first message late, the rule for every late echo
+    /// applies (see `claudeEchoAfterTheDeadlineConfirmsTheUnconfirmedSend`).
+    @MainActor
+    @Test func macTypingAtTheReopenedPromptHoldsItAsADraft() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-draft-after-reopen")
+
+        let lost = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "lost-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        guard case .localDraft = fixture.summary.inputAvailability else {
+            Issue.record("Expected the Mac draft to hold the prompt, not \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        ), device: device) == .rejected(reason: .localDraftPresent))
+        #expect(typed == ["First digest"])
+
+        observe(.turnStarted(turnID: "late-turn"), "late-start", 1)
+        observe(.transcript(.userMessage(.init(text: lost.text))), "late-echo", 1.1)
+        try await Self.waitForReceipt(lost.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), "late-end", 2)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        #expect(typed == ["First digest"])
+    }
+
+    /// Codex can start the turn of a message after its deadline, and record
+    /// the message later still. The late turn closes the reopened prompt, and
+    /// the message is typed once.
+    @MainActor
+    @Test func codexTurnThatStartsAfterTheDeadlineClosesTheReopenedPrompt() async throws {
+        let fixture = try RemoteBootstrapFixture(sendConfirmationTimeout: .milliseconds(300), pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let slow = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "slow-codex-send",
+            expectedInputEpoch: epoch, text: "Slow digest"
+        )
+        #expect(fixture.service.performRemoteSend(slow, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"late-turn"}"#, at: Self.codexTimestamp(Date())
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputAvailability == .unavailable(reason: .working) }
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Next digest"
+        ), device: device) == .rejected(reason: .promptNotOpen))
+
+        // The compaction first, then the turn's message, then its end.
+        var lines = Self.codexLine(
+            #"{"type":"item_completed","turn_id":"late-turn","item":{"type":"ContextCompaction","id":"compaction-1"}}"#,
+            at: Self.codexTimestamp(Date())
+        )
+        lines.append(Self.codexLine(
+            #"{"type":"item_completed","turn_id":"late-turn","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Slow digest"}]}}"#,
+            at: Self.codexTimestamp(Date())
+        ))
+        lines.append(Self.codexLine(#"{"type":"task_complete","turn_id":"late-turn"}"#, at: Self.codexTimestamp(Date())))
+        try transcript.write(contentsOf: lines)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        #expect(typed == ["Slow digest"])
+    }
+
+    enum TurnEvidenceBeforeTheDeadline: CaseIterable, Sendable {
+        /// The conversation shows the turn start (Claude's UserPromptSubmit hook).
+        case conversationTurnStart
+        /// Only the session's status reports the turn so far.
+        case workingStatus
+    }
+
+    /// A send whose turn started keeps the prompt closed when its deadline
+    /// passes without the transcript's copy of the message. Only the turn's
+    /// end opens the next prompt.
+    @MainActor
+    @Test(arguments: TurnEvidenceBeforeTheDeadline.allCases)
+    func promptStaysClosedAtTheDeadlineWhenATurnStarted(_ evidence: TurnEvidenceBeforeTheDeadline) async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-started-turn")
+        // A prompt that a finished turn opened, as every prompt after the
+        // first one is.
+        observe(.transcript(.userMessage(.init(text: "Earlier turn"))), "earlier-user", 1)
+        observe(.turnEnded(turnID: "earlier-turn", reason: .completed), "earlier-end", 2)
+        let open = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let epoch) = open.inputAvailability else {
+            Issue.record("Expected an open prompt, not \(open.inputAvailability)")
+            return
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "started-turn-send",
+            expectedInputEpoch: epoch, text: "Digest"
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device) == .accepted(epoch: epoch))
+        switch evidence {
+        case .conversationTurnStart:
+            observe(.turnStarted(turnID: "turn"), "turn-start", 3)
+        case .workingStatus:
+            fixture.sessionRuntimeStore.updateStatus(
+                sessionID: fixture.sessionID,
+                status: SessionStatus(kind: .working, summary: "Working"),
+                at: .now
+            )
+        }
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+        // The deadline's work ran with the receipt. The prompt did not open.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+    }
+
+    /// Claude Code's StopFailure hook reports a turn that an API error ended:
+    /// an error status, then an aborted turn end. The prompt opens again
+    /// under a new epoch, and the status keeps the failure.
+    @MainActor
+    @Test func claudeTurnThatFailsOpensThePromptAndKeepsTheErrorStatus() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-failed-turn")
+
+        let first = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "failing-turn-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(first, device: device) == .accepted(epoch: epoch))
+        // UserPromptSubmit: the working status, then the turn start.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: fixture.sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: .now
+        )
+        observe(.turnStarted(turnID: nil), "turn-start", 1)
+        observe(.transcript(.userMessage(.init(text: first.text))), "user", 1.1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+
+        // StopFailure: the error status, then the aborted turn end.
+        let failure = SessionStatus(kind: .error, summary: "Error", detail: "API Error: Rate limit reached")
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: failure, at: .now)
+        observe(.turnEnded(turnID: nil, reason: .aborted), "turn-failed", 2)
+
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the failed turn to open the prompt, not \(reopened.inputAvailability)")
+            return
+        }
+        #expect(nextEpoch.counter > epoch.counter)
+        #expect(reopened.state == .awaitingInput)
+        // The aborted turn end is not taken for the user's Esc: the session
+        // still shows the failure.
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: fixture.sessionID)?.status == failure)
+
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "after-failure-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .accepted(epoch: nextEpoch))
+        #expect(typed == ["First digest", "Second digest"])
+    }
+
+    /// Feeds observations the way Claude's hooks do: through the session's
+    /// provider conversation feed.
+    @MainActor
+    private static func claudeFeed(
+        of fixture: RemoteBootstrapFixture,
+        snapshotID: String
+    ) -> (ProviderObservationPayload, String, TimeInterval) -> Void {
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: snapshotID, at: fixture.confirmedAt
+        ))
+        return { payload, fingerprint, offset in
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: snapshotID,
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+    }
+
     /// Claude reads a Steer from its own input queue, possibly long after
     /// the deadline. Its late echo confirms the send but says nothing about
     /// the Mac composer, so a draft typed there stays protected.

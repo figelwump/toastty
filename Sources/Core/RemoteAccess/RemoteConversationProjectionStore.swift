@@ -229,6 +229,18 @@ public final class RemoteConversationProjectionStore {
     }
 
     @discardableResult
+    public func reopenPromptAfterLostSend(
+        for conversationID: RemoteConversationID,
+        expectedEpoch: RemoteInputEpoch,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard var projector = projectorsByID[conversationID] else { return [] }
+        let emitted = projector.reopenPromptAfterLostSend(expectedEpoch: expectedEpoch, at: date)
+        projectorsByID[conversationID] = projector
+        return emitted
+    }
+
+    @discardableResult
     public func completePromptStabilization(
         for conversationID: RemoteConversationID,
         token: ConversationPromptStabilizationToken,

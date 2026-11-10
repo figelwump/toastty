@@ -11,11 +11,13 @@ not touch the installed production app.
 '--scenario failed-turn --gui-session' runs the real Claude CLI as the
 coordinator. A stub on a loopback port stands in for the model API and
 answers every request with an overloaded error, so each turn ends with an API
-error and Claude Code fires its StopFailure hook in place of Stop. The stub
-reads each request only to discard it: it keeps the method and the path, and
-never a header or a body. Claude gets a placeholder token for the stub, so
-the login token is not sent to it. The check proves from Claude's transcript
-that the turn failed, and then that the next wake digest is typed.
+error and Claude Code fires its StopFailure hook in place of Stop. Claude
+gets a placeholder token for the stub, so the login token is not sent to it.
+The stub reads each request only to discard it: it never keeps a header or a
+body. It keeps the method, the path, and whether the request carried the
+placeholder token, and the check fails if a model request did not. The check
+proves from Claude's transcript that the turn failed, and then that the next
+wake digest is typed.
 
 '--scenario lost-send' runs a script that stands in for Claude Code and
 reports its turns as Claude's hooks do. It can leave one Return unanswered:
@@ -60,6 +62,8 @@ require, wait_for, Instance = coordinator_check.require, coordinator_check.wait_
 
 # How long Toastty waits for a typed message to start a turn.
 LOST_SEND_LIMIT = 10
+# What Claude sends to the stub in place of the login token.
+PLACEHOLDER_TOKEN = 'toastty-stub-placeholder'
 LOG_LINES = (
     'Remote input availability changed',
     'Typed a message into the coordinator',
@@ -167,7 +171,8 @@ class StubAPI:
     """Answers every model request with an overloaded error.
 
     A request's headers and body carry the caller's login. This server reads
-    them only to take them off the socket, and keeps the method and the path.
+    them only to take them off the socket. It keeps the method, the path,
+    and whether the request carried the placeholder token and no other key.
     """
 
     def __init__(self):
@@ -187,7 +192,9 @@ class StubAPI:
                         break
                     remaining -= len(discarded)
                 path = urllib.parse.urlsplit(self.path).path
-                requests.append(dict(method=self.command, path=path, at=time.time()))
+                placeholder = (self.headers.get('Authorization') == f'Bearer {PLACEHOLDER_TOKEN}'
+                               and self.headers.get('x-api-key') is None)
+                requests.append(dict(method=self.command, path=path, at=time.time(), placeholderToken=placeholder))
                 if self.command == 'POST' and path.startswith('/v1/messages'):
                     status, kind, message = 529, 'overloaded_error', 'Overloaded'
                 else:
@@ -242,7 +249,7 @@ def run_failed_turn(check, expect):
     stub = StubAPI()
     # Only this run's agent sees these values. The placeholder token keeps
     # the login token away from the stub, and one try keeps the failure fast.
-    settings = dict(env=dict(ANTHROPIC_BASE_URL=stub.url, ANTHROPIC_AUTH_TOKEN='toastty-stub-placeholder',
+    settings = dict(env=dict(ANTHROPIC_BASE_URL=stub.url, ANTHROPIC_AUTH_TOKEN=PLACEHOLDER_TOKEN,
                              CLAUDE_CODE_MAX_RETRIES='0', DISABLE_TELEMETRY='1', DISABLE_ERROR_REPORTING='1'))
     argv = [claude, '--setting-sources=', '--tools', 'Bash', '--strict-mcp-config', '--settings', json.dumps(settings)]
     runtime_home, user_home = check.home('claude', argv)
@@ -305,6 +312,8 @@ def run_failed_turn(check, expect):
         failed = wait_for('the turn to fail with an API error', lambda: api_errors() or None, timeout=600, interval=2)
         time.sleep(5)
         after_failure = status()
+        require(all(request['placeholderToken'] for request in stub.model_requests()),
+                'A model request did not carry the placeholder token')
         step('the API failed the turn', apiErrors=failed, modelRequests=len(stub.model_requests()),
              userMessages=user_messages(), status=after_failure)
 

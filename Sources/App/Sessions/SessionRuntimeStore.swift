@@ -864,6 +864,16 @@ final class SessionRuntimeStore: ObservableObject {
         status: SessionStatus,
         at now: Date
     ) {
+        // Claude Code reports Ready again when its prompt has been idle for
+        // a minute. After a turn that an API error ended, that reminder is
+        // not a result: the failure stays until the next turn starts. Only
+        // Claude's StopFailure hook gives a Claude session this status.
+        if status.kind == .ready,
+           let record = sessionRegistry.activeSession(sessionID: sessionID),
+           record.agent == .claude,
+           record.status?.kind == .error {
+            return
+        }
         // A root event owns the status even when its payload and timestamp
         // match the last teammate approval. Later child events cannot restore
         // the status that preceded that root event.
