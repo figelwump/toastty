@@ -609,9 +609,9 @@ enum ToasttySendPresentationAdapter {
             case .pending(let response):
                 content = .optimistic(response: ToasttyPendingSendResponse(response))
                 // The row that replaces this bubble says how the message
-                // arrived; a steer reads "steered", which is the same height.
+                // arrived. The Mac can queue a message sent at the prompt.
                 let deliveryMode: RemoteMessageDeliveryMode =
-                    if case .queued = response { .queue } else { .prompt }
+                    if case .queued = response { .queue } else { record.deliveryMode }
                 sentCaption = ToasttyUserMessageCaption.text(origin: .remote, deliveryMode: deliveryMode)
             case .confirmed:
                 return nil

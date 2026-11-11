@@ -570,7 +570,8 @@ public actor ConnectionCoordinator {
         guard let admission = await runtime.sendReconciliation.enqueue(
             clientRequestID: clientRequestID,
             text: request.displayText,
-            projectionRunID: composerStamp.projectionRunID
+            projectionRunID: composerStamp.projectionRunID,
+            deliveryMode: composerStamp.deliveryMode
         ) else {
             rollbackUnadmittedClaim(clientRequestID: clientRequestID)
             await publishComposerAuthority(for: conversationID, runtime: runtime)

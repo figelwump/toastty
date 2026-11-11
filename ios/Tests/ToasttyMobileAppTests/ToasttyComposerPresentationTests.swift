@@ -330,10 +330,14 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         // The sending bubble carries the caption its transcript row will
         // show, so the bubble keeps its height when the row replaces it.
         XCTAssertEqual(items.map(\.sentCaption), ["sent remotely", "sent remotely", "sent remotely"])
-        let queued = ToasttySendPresentationAdapter.makeItems(from: .init(records: [
+        let other = ToasttySendPresentationAdapter.makeItems(from: .init(records: [
             record("queued", text: "later", .pending(.queued(position: 1))),
+            SendReconciliationRecord(
+                clientRequestID: "steered", text: "OK", projectionRunID: nil,
+                deliveryState: .pending(.accepted), deliveryMode: .steer
+            ),
         ]))
-        XCTAssertEqual(queued.map(\.sentCaption), ["from queue"])
+        XCTAssertEqual(other.map(\.sentCaption), ["from queue", "steered"])
     }
 
     func testExactConfirmationRemovesOptimisticPresentationSoCanonicalEchoStandsAlone() {
