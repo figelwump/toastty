@@ -65,20 +65,7 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                 _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
             },
             openSecondaryURL: { [weak self] panelID, url in
-                guard let self,
-                      let store = self.store else {
-                    return false
-                }
-
-                let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-                return AppURLRouter.open(
-                    url,
-                    preferredWindowID: preferredWindowID,
-                    appStore: store,
-                    requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
-                        self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
-                    }
-                )
+                self?.openURL(url, fromPanelID: panelID) ?? false
             }
         )
         browserRuntimeByPanelID[panelID] = runtime
@@ -105,6 +92,13 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             },
             responderDidRequestFocus: { [weak self] panelID in
                 _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
+            },
+            markdownViewMode: store?.localDocumentMarkdownViewMode ?? .formatted,
+            markdownViewModeDidChange: { [weak self] mode in
+                self?.store?.setLocalDocumentMarkdownViewMode(mode)
+            },
+            linkedURLOpener: { [weak self] panelID, url in
+                self?.openURL(url, fromPanelID: panelID) ?? false
             }
         )
         localDocumentRuntimeByPanelID[panelID] = runtime
@@ -115,6 +109,24 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             runtime.requestReveal(lineNumber: pendingRevealLine)
         }
         return runtime
+    }
+
+    /// Opens a link that a web panel's page cannot open itself, in the window
+    /// that holds the panel, using the app's link routing preferences.
+    private func openURL(_ url: URL, fromPanelID panelID: UUID) -> Bool {
+        guard let store else {
+            return false
+        }
+
+        let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
+        return AppURLRouter.open(
+            url,
+            preferredWindowID: preferredWindowID,
+            appStore: store,
+            requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+            }
+        )
     }
 
     func loadedLocalDocumentRuntime(for panelID: UUID) -> LocalDocumentPanelRuntime? {

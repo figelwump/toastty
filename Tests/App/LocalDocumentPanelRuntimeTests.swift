@@ -20,6 +20,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.isForMainFrameOnly)
         XCTAssertTrue(script.source.contains("__toasttyLocalDocumentKeyboardNavigationInstalled"))
         XCTAssertTrue(script.source.contains(".local-document-code-scroll"))
+        XCTAssertTrue(script.source.contains(".local-document-formatted-scroll"))
         XCTAssertTrue(script.source.contains("ArrowDown"))
         XCTAssertTrue(script.source.contains("ArrowRight"))
     }
@@ -2254,6 +2255,142 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(nil))
     }
 
+    func testMarkdownViewChoiceResendsBootstrapReportsTheNewDefaultAndRefreshesFind() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [])
+        let bootstrapRecorder = BootstrapRecorder()
+        let reportedModes = MainActorRecorder<LocalDocumentMarkdownViewMode>()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            markdownViewMode: .source,
+            markdownViewModeDidChange: { reportedModes.record($0) },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                await bootstrapRecorder.recordCall()
+                return LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        runtime.apply(webState: WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
+        ))
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+        runtime.simulateBridgeReadyForTesting()
+        runtime.simulateBridgeMessageForTesting(["type": "searchControllerReady"])
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("Docs")
+        searchSpy.removeAllCalls()
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.markdownViewMode, .source)
+        XCTAssertTrue(try XCTUnwrap(evaluator.scripts.last).contains("\"markdownViewMode\":\"source\""))
+
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "formatted"])
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "formatted"])
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "wysiwyg"])
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.markdownViewMode, .formatted)
+        XCTAssertTrue(try XCTUnwrap(evaluator.scripts.last).contains("\"markdownViewMode\":\"formatted\""))
+        XCTAssertEqual(reportedModes.values, [.formatted])
+        XCTAssertEqual(searchSpy.commands, [.setQuery("Docs")], "Find runs again on the newly shown view")
+        let documentLoadCount = await bootstrapRecorder.snapshot()
+        XCTAssertEqual(documentLoadCount, 1, "A view change must not read the file again")
+    }
+
+    func testOpenLinkResolvesHrefAgainstDocumentFolderBeforeOpening() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let panelID = UUID()
+        let openedLinks = MainActorRecorder<(UUID, URL)>()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            linkedURLOpener: { panelID, url in
+                openedLinks.record((panelID, url))
+                return true
+            },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Plan",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        runtime.apply(webState: WebPanelState(
+            definition: .localDocument,
+            title: "plan.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty-links/docs/plan.md")
+        ))
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+
+        for href in ["../README.md#L12", "https://example.com/a?b=1#c", "javascript:alert(1)", "#setup"] {
+            runtime.simulateBridgeMessageForTesting(["type": "openLink", "href": href])
+        }
+
+        XCTAssertEqual(openedLinks.values.map(\.0), [panelID, panelID])
+        XCTAssertEqual(openedLinks.values.map(\.1.absoluteString), [
+            URL(fileURLWithPath: "/tmp/toastty-links/README.md:12").absoluteString,
+            "https://example.com/a?b=1#c",
+        ])
+    }
+
+    func testLinkURLResolution() throws {
+        let documentPath = "/Users/dev/project/docs/plan.md"
+        func resolved(_ href: String, documentPath: String? = documentPath) -> String? {
+            guard let url = LocalDocumentPanelRuntime.linkURL(forHref: href, documentFilePath: documentPath) else {
+                return nil
+            }
+            return url.isFileURL ? url.path : url.absoluteString
+        }
+
+        XCTAssertEqual(resolved("notes.md"), "/Users/dev/project/docs/notes.md")
+        XCTAssertEqual(resolved("./my%20notes.md"), "/Users/dev/project/docs/my notes.md")
+        XCTAssertEqual(resolved("../Sources/App.swift#L42"), "/Users/dev/project/Sources/App.swift:42")
+        XCTAssertEqual(resolved("../Sources/App.swift#L42-L50"), "/Users/dev/project/Sources/App.swift:42")
+        XCTAssertEqual(resolved("guide.md#setup"), "/Users/dev/project/docs/guide.md")
+        XCTAssertEqual(resolved("guide.md#L0"), "/Users/dev/project/docs/guide.md")
+        XCTAssertEqual(resolved("src/app.ts:7"), "/Users/dev/project/docs/src/app.ts:7")
+        XCTAssertEqual(resolved("/etc/hosts"), "/etc/hosts")
+        XCTAssertEqual(resolved("file:///tmp/a%20b.md#L3"), "/tmp/a b.md:3")
+        XCTAssertEqual(resolved("file://localhost/tmp/a.md"), "/tmp/a.md")
+        XCTAssertEqual(resolved("HTTPS://Example.com/x"), "HTTPS://Example.com/x")
+        XCTAssertEqual(resolved("mailto:dev@example.com"), "mailto:dev@example.com")
+
+        XCTAssertNil(resolved("#L4"), "In-document links stay in the page")
+        XCTAssertNil(resolved(""))
+        XCTAssertNil(resolved("?tab=2"))
+        XCTAssertNil(resolved("//example.com/x"))
+        XCTAssertNil(resolved("file://server/share/a.md"))
+        XCTAssertNil(resolved("javascript:alert(1)"))
+        XCTAssertNil(resolved("ftp://example.com/a"))
+        XCTAssertNil(resolved("notes.md", documentPath: nil), "A relative link needs a backing file")
+        XCTAssertEqual(resolved("/etc/hosts", documentPath: nil), "/etc/hosts")
+    }
+
     func testThemeResolvesFromEffectiveAppearance() {
         XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .darkAqua)), .dark)
         XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .aqua)), .light)
@@ -2727,6 +2864,15 @@ private func makePanelEntryURL() throws -> URL {
     try Data("<!doctype html>".utf8).write(to: entryURL)
 
     return entryURL
+}
+
+@MainActor
+private final class MainActorRecorder<Value> {
+    private(set) var values: [Value] = []
+
+    func record(_ value: Value) {
+        values.append(value)
+    }
 }
 
 @MainActor

@@ -314,11 +314,14 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias SearchExecutor = @MainActor (FocusAwareWKWebView, LocalDocumentSearchCommand, @escaping (Bool?) -> Void) -> Void
     typealias SearchSessionResetter = @MainActor (FocusAwareWKWebView) -> Void
     typealias DiagnosticLogger = @MainActor @Sendable (ToasttyLogLevel, String, [String: String]) -> Void
+    typealias LinkedURLOpener = @MainActor (UUID, URL) -> Bool
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
+    private let markdownViewModeDidChange: @MainActor (LocalDocumentMarkdownViewMode) -> Void
+    private let linkedURLOpener: LinkedURLOpener
     private let webView: FocusAwareWKWebView
     private let entryURL: URL?
     private let assetDirectoryURL: URL?
@@ -349,6 +352,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private var session: LocalDocumentEditingSession?
     private var currentTheme: LocalDocumentPanelTheme = .dark
     private var currentTextScale: Double = AppState.defaultMarkdownTextScale
+    private var currentMarkdownViewMode: LocalDocumentMarkdownViewMode
     private var searchStateValue: LocalDocumentSearchState?
     private var searchFieldFocused = false
     private var activeSearchRequestGeneration: UInt64 = 0
@@ -361,6 +365,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
+        markdownViewMode: LocalDocumentMarkdownViewMode = .formatted,
+        markdownViewModeDidChange: @escaping @MainActor (LocalDocumentMarkdownViewMode) -> Void = { _ in },
+        linkedURLOpener: @escaping LinkedURLOpener = { _, _ in false },
         bundle: Bundle = .main,
         entryURL: URL? = nil,
         documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
@@ -406,6 +413,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
+        self.currentMarkdownViewMode = markdownViewMode
+        self.markdownViewModeDidChange = markdownViewModeDidChange
+        self.linkedURLOpener = linkedURLOpener
         self.entryURL = entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle)
         self.assetDirectoryURL = (entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
         self.documentLoader = documentLoader
@@ -760,6 +770,41 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         filePathCopier(filePath)
     }
 
+    /// Applies a view choice from this panel's header. The choice also becomes
+    /// the app-wide default for Markdown panels that open later.
+    func setMarkdownViewMode(_ mode: LocalDocumentMarkdownViewMode) {
+        guard mode != currentMarkdownViewMode else { return }
+        currentMarkdownViewMode = mode
+        logDiagnostic(
+            .debug,
+            "Local document markdown view mode changed",
+            metadata: ["markdown_view_mode": mode.rawValue]
+        )
+        // The two views show different text, so an open Find runs again.
+        markSearchRefreshAfterVisibleContentChangeIfNeeded()
+        pushDisplaySettingsUpdateIfPossible()
+        markdownViewModeDidChange(mode)
+    }
+
+    func openLink(href: String) {
+        let documentFilePath = session?.filePath ?? currentBootstrap?.filePath
+        guard let url = Self.linkURL(forHref: href, documentFilePath: documentFilePath) else {
+            logDiagnostic(
+                .debug,
+                "Local document ignored a link it cannot open",
+                metadata: ["link_href": clampedDiagnosticValue(href, limit: 500) ?? "<empty>"]
+            )
+            return
+        }
+
+        let didOpen = linkedURLOpener(panelID, url)
+        logDiagnostic(
+            didOpen ? .debug : .warning,
+            didOpen ? "Local document opened a link" : "Local document could not open a link",
+            metadata: ["link_url": clampedDiagnosticValue(url.absoluteString, limit: 500) ?? "<empty>"]
+        )
+    }
+
     @discardableResult
     func focusWebView() -> Bool {
         guard let window = webView.window else {
@@ -871,7 +916,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         let nextTheme = Self.theme(for: appearance)
         guard nextTheme != currentTheme else { return }
         currentTheme = nextTheme
-        pushThemeUpdateIfPossible()
+        pushDisplaySettingsUpdateIfPossible()
     }
 
     nonisolated static func theme(for appearance: NSAppearance?) -> LocalDocumentPanelTheme {
@@ -895,11 +940,17 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     nonisolated static func bootstrap(
         for webState: WebPanelState,
         theme: LocalDocumentPanelTheme = .dark,
-        textScale: Double = AppState.defaultMarkdownTextScale
+        textScale: Double = AppState.defaultMarkdownTextScale,
+        markdownViewMode: LocalDocumentMarkdownViewMode = .formatted
     ) async -> LocalDocumentPanelBootstrap {
         let document = await loadDocument(for: webState)
         let session = LocalDocumentEditingSession(document: document)
-        return makeBootstrap(from: session, theme: theme, textScale: textScale)
+        return makeBootstrap(
+            from: session,
+            theme: theme,
+            textScale: textScale,
+            markdownViewMode: markdownViewMode
+        )
     }
 
     nonisolated static func loadDocument(for webState: WebPanelState) async -> LocalDocumentPanelDocumentSnapshot {
@@ -983,7 +1034,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
           }
           window[installFlag] = true;
 
-          const scrollContainerSelector = ".local-document-code-scroll";
+          // One view is mounted at a time: the code or Markdown source view, or the formatted Markdown view.
+          const scrollContainerSelector = ".local-document-code-scroll, .local-document-formatted-scroll";
           const handledKeys = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 
           const isInteractiveTarget = (element) => {
@@ -1080,10 +1132,71 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         return configuration
     }
 
+    /// Resolves a link from the formatted Markdown view to a URL the app's
+    /// link router can open. Web and mail links pass through. A path resolves
+    /// against the document's folder, and a GitHub line anchor (`#L42` or
+    /// `#L42-L50`) becomes the `path:42` form that local file links use.
+    /// In-document fragments, other schemes, and relative paths without a
+    /// backing file return nil.
+    nonisolated static func linkURL(forHref href: String, documentFilePath: String?) -> URL? {
+        let trimmedHref = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedHref.isEmpty == false,
+              trimmedHref.hasPrefix("#") == false,
+              let components = URLComponents(string: trimmedHref) else {
+            return nil
+        }
+
+        let filePath: String
+        switch components.scheme?.lowercased() {
+        case "http", "https", "mailto":
+            return components.url
+        case "file":
+            guard (components.host ?? "").isEmpty || components.host == "localhost" else {
+                return nil
+            }
+            filePath = components.path
+        case nil:
+            // A protocol-relative `//host/path` names a remote host, not a file.
+            guard components.host == nil, components.path.isEmpty == false else {
+                return nil
+            }
+            if components.path.hasPrefix("/") {
+                filePath = components.path
+            } else {
+                guard let documentFilePath = WebPanelState.normalizedFilePath(documentFilePath) else {
+                    return nil
+                }
+                let documentDirectoryURL = URL(fileURLWithPath: documentFilePath).deletingLastPathComponent()
+                filePath = URL(fileURLWithPath: components.path, relativeTo: documentDirectoryURL)
+                    .standardizedFileURL
+                    .path
+            }
+        default:
+            return nil
+        }
+
+        guard filePath.isEmpty == false else { return nil }
+        if let lineNumber = githubLineAnchorLineNumber(components.fragment) {
+            return URL(fileURLWithPath: "\(filePath):\(lineNumber)")
+        }
+        return URL(fileURLWithPath: filePath)
+    }
+
+    nonisolated private static func githubLineAnchorLineNumber(_ fragment: String?) -> Int? {
+        guard let fragment,
+              let match = fragment.wholeMatch(of: /L(\d+)(?:-L?\d+)?/),
+              let lineNumber = Int(match.1),
+              lineNumber > 0 else {
+            return nil
+        }
+        return lineNumber
+    }
+
     nonisolated static func makeBootstrap(
         from session: LocalDocumentEditingSession,
         theme: LocalDocumentPanelTheme,
-        textScale: Double
+        textScale: Double,
+        markdownViewMode: LocalDocumentMarkdownViewMode
     ) -> LocalDocumentPanelBootstrap {
         let classification = LocalDocumentClassifier.classification(
             format: session.format,
@@ -1110,7 +1223,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             isSaving: session.isSaving,
             saveErrorMessage: session.saveErrorMessage,
             theme: theme,
-            textScale: textScale
+            textScale: textScale,
+            markdownViewMode: markdownViewMode
         )
     }
 
@@ -1195,6 +1309,8 @@ private extension LocalDocumentPanelRuntime {
         case enterEdit
         case copyFullPath
         case openInDefaultApp
+        case setMarkdownViewMode(LocalDocumentMarkdownViewMode)
+        case openLink(href: String)
         case draftDidChange(content: String, baseContentRevision: Int)
         case save(baseContentRevision: Int)
         case cancelEdit(baseContentRevision: Int)
@@ -1244,6 +1360,17 @@ private extension LocalDocumentPanelRuntime {
                 self = .copyFullPath
             case "openInDefaultApp":
                 self = .openInDefaultApp
+            case "setMarkdownViewMode":
+                guard let rawMode = body["mode"] as? String,
+                      let mode = LocalDocumentMarkdownViewMode(rawValue: rawMode) else {
+                    return nil
+                }
+                self = .setMarkdownViewMode(mode)
+            case "openLink":
+                guard let href = body["href"] as? String else {
+                    return nil
+                }
+                self = .openLink(href: href)
             case "draftDidChange":
                 guard let content = body["content"] as? String,
                       let baseContentRevision = body["baseContentRevision"] as? Int else {
@@ -1319,6 +1446,10 @@ private extension LocalDocumentPanelRuntime {
             copyFullPath()
         case .openInDefaultApp:
             openInDefaultApp()
+        case .setMarkdownViewMode(let mode):
+            setMarkdownViewMode(mode)
+        case .openLink(let href):
+            openLink(href: href)
         case .draftDidChange(let content, let baseContentRevision):
             updateDraftContent(content, baseContentRevision: baseContentRevision)
         case .save(let baseContentRevision):
@@ -1643,18 +1774,21 @@ private extension LocalDocumentPanelRuntime {
         }
     }
 
-    func pushThemeUpdateIfPossible() {
+    /// Re-sends the bootstrap after a display setting changes: the theme or
+    /// the Markdown view mode. The document content is not read again.
+    func pushDisplaySettingsUpdateIfPossible() {
         guard let session else { return }
 
-        let themedBootstrap = Self.makeBootstrap(
+        let updatedBootstrap = Self.makeBootstrap(
             from: session,
             theme: currentTheme,
-            textScale: currentTextScale
+            textScale: currentTextScale,
+            markdownViewMode: currentMarkdownViewMode
         )
-        guard themedBootstrap != currentBootstrap else { return }
+        guard updatedBootstrap != currentBootstrap else { return }
 
         pendingBootstrapScript = nil
-        currentBootstrap = themedBootstrap
+        currentBootstrap = updatedBootstrap
         pushPendingBootstrapIfPossible()
     }
 
@@ -1663,7 +1797,8 @@ private extension LocalDocumentPanelRuntime {
         let bootstrap = Self.makeBootstrap(
             from: session,
             theme: currentTheme,
-            textScale: currentTextScale
+            textScale: currentTextScale,
+            markdownViewMode: currentMarkdownViewMode
         )
         currentBootstrap = bootstrap
         pendingBootstrapScript = nil

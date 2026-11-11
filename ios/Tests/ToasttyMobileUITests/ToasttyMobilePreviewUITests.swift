@@ -259,8 +259,10 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
     }
 
     private func documentTargetLine(in app: XCUIApplication) -> XCUIElement {
+        // Line 12 starts a two-line paragraph. The formatted Markdown view
+        // exposes the whole paragraph as one text element.
         app.webViews.staticTexts.matching(NSPredicate(format: "label MATCHES %@",
-            #"^Tap a filename in the conversation\.\s*$"#)).firstMatch
+            #"(?s)^Tap a filename in the conversation\.(\s.*)?$"#)).firstMatch
     }
 
     private func launchWorkspace() -> XCUIApplication {

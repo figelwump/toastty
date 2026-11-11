@@ -6,6 +6,13 @@ enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
     case dark
 }
 
+/// How a Markdown document shows when it is not being edited. The panel
+/// ignores it for other formats.
+enum LocalDocumentMarkdownViewMode: String, Codable, Equatable, Sendable {
+    case formatted
+    case source
+}
+
 enum LocalDocumentHighlightState: String, Codable, Equatable, Sendable {
     case enabled
     case disabledForLargeFile
@@ -32,6 +39,7 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let saveErrorMessage: String?
     let theme: LocalDocumentPanelTheme
     let textScale: Double
+    let markdownViewMode: LocalDocumentMarkdownViewMode
 
     init(
         contractVersion: Int = 7,
@@ -50,7 +58,8 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         isSaving: Bool = false,
         saveErrorMessage: String? = nil,
         theme: LocalDocumentPanelTheme,
-        textScale: Double = AppState.defaultMarkdownTextScale
+        textScale: Double = AppState.defaultMarkdownTextScale,
+        markdownViewMode: LocalDocumentMarkdownViewMode = .formatted
     ) {
         let classification = LocalDocumentClassifier.classification(
             format: format,
@@ -73,6 +82,7 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         self.saveErrorMessage = saveErrorMessage
         self.theme = theme
         self.textScale = textScale
+        self.markdownViewMode = markdownViewMode
     }
 }
 
@@ -95,7 +105,8 @@ extension LocalDocumentPanelBootstrap {
             isSaving: isSaving,
             saveErrorMessage: saveErrorMessage,
             theme: theme,
-            textScale: textScale
+            textScale: textScale,
+            markdownViewMode: markdownViewMode
         )
     }
 
@@ -117,7 +128,8 @@ extension LocalDocumentPanelBootstrap {
             isSaving: isSaving,
             saveErrorMessage: saveErrorMessage,
             theme: theme,
-            textScale: textScale
+            textScale: textScale,
+            markdownViewMode: markdownViewMode
         )
     }
 }

@@ -47,6 +47,17 @@ final class ToasttySettingsStoreTests: XCTestCase {
         XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).workspaceMergeMode, .mergeAndCleanUp)
     }
 
+    func testLocalDocumentMarkdownViewModeDefaultsToFormattedAndPersists() {
+        let userDefaults = makeUserDefaults()
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .formatted)
+
+        ToasttySettingsStore.persistLocalDocumentMarkdownViewMode(.source, userDefaults: userDefaults)
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .source)
+
+        userDefaults.set("wysiwyg", forKey: "toastty.localDocumentMarkdownViewMode")
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .formatted)
+    }
+
     func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
         let userDefaults = makeUserDefaults()
 

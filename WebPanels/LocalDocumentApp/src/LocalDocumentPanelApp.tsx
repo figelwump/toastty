@@ -1,6 +1,7 @@
 import React from "react";
 import {
   LocalDocumentLineRevealRequest,
+  LocalDocumentMarkdownViewMode,
   LocalDocumentPanelBootstrap
 } from "./bootstrap";
 import {
@@ -22,6 +23,12 @@ import {
   normalizeMarkdownLineTopOffsets,
   renderPlainMarkdownSourceHtml,
 } from "./markdownSoftWrap.mjs";
+import {
+  SOURCE_LINE_SELECTOR,
+  classifyMarkdownLinkHref,
+  renderMarkdownDocumentHtml,
+  revealBlockIndexForLine
+} from "./markdownDocument.mjs";
 import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
@@ -61,6 +68,38 @@ function computeLineCount(content: string): string {
 
 function assignObjectRef<T>(ref: React.RefObject<T | null>, value: T | null) {
   ref.current = value;
+}
+
+/**
+ * The view a Markdown document uses when it is not being edited, or null for
+ * other formats. Files too large to highlight are also too large to format,
+ * so they always use the source view.
+ */
+function effectiveMarkdownViewMode(
+  bootstrap: LocalDocumentPanelBootstrap
+): LocalDocumentMarkdownViewMode | null {
+  if (bootstrap.format !== "markdown") {
+    return null;
+  }
+  if (bootstrap.highlightState === "disabledForLargeFile") {
+    return "source";
+  }
+  return bootstrap.markdownViewMode ?? "formatted";
+}
+
+function useFormattedMarkdownHTML(content: string | null): string | null {
+  return React.useMemo(() => {
+    if (content === null) {
+      return null;
+    }
+
+    try {
+      return renderMarkdownDocumentHtml(content);
+    } catch (error) {
+      console.warn("[ToasttyLocalDocumentPanel] Markdown formatting failed; showing the source view.", error);
+      return null;
+    }
+  }, [content]);
 }
 
 function useBootstrap(): LocalDocumentPanelBootstrap | null {
@@ -111,6 +150,7 @@ function useLocalDocumentPanelState(): {
   overwriteAfterConflict: () => void;
   cancelEdit: () => void;
   updateDraftContent: (nextContent: string) => void;
+  setMarkdownViewMode: (mode: LocalDocumentMarkdownViewMode) => void;
 } {
   const bootstrap = useBootstrap();
   const [draftContent, setDraftContent] = React.useState("");
@@ -179,6 +219,14 @@ function useLocalDocumentPanelState(): {
     localDocumentNativeBridge.cancelEdit(bootstrap.contentRevision);
   }, [bootstrap]);
 
+  const setMarkdownViewMode = React.useCallback((mode: LocalDocumentMarkdownViewMode) => {
+    if (!bootstrap || bootstrap.format !== "markdown" || bootstrap.isEditing) {
+      return;
+    }
+
+    localDocumentNativeBridge.setMarkdownViewMode(mode);
+  }, [bootstrap]);
+
   const updateDraftContent = React.useCallback((nextContent: string) => {
     setDraftContent(nextContent);
 
@@ -207,13 +255,16 @@ function useLocalDocumentPanelState(): {
     saveEdit,
     overwriteAfterConflict,
     cancelEdit,
-    updateDraftContent
+    updateDraftContent,
+    setMarkdownViewMode
   };
 }
 
 function Header(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   content: string;
+  markdownViewMode: LocalDocumentMarkdownViewMode | null;
+  setMarkdownViewMode: (mode: LocalDocumentMarkdownViewMode) => void;
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
@@ -227,6 +278,8 @@ function Header(props: {
   const {
     bootstrap,
     content,
+    markdownViewMode,
+    setMarkdownViewMode,
     isDirty,
     canSave,
     canOverwrite,
@@ -304,6 +357,9 @@ function Header(props: {
           </>
         ) : (
           <>
+            {markdownViewMode && bootstrap.highlightState !== "disabledForLargeFile" && (
+              <MarkdownViewModeToggle mode={markdownViewMode} onChange={setMarkdownViewMode} />
+            )}
             {bootstrap.filePath && (
               <>
                 <button
@@ -346,6 +402,42 @@ function Header(props: {
         )}
       </div>
     </header>
+  );
+}
+
+const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
+  mode: LocalDocumentMarkdownViewMode;
+  label: string;
+}> = [
+  { mode: "formatted", label: "Formatted" },
+  { mode: "source", label: "Source" }
+];
+
+function MarkdownViewModeToggle(props: {
+  mode: LocalDocumentMarkdownViewMode;
+  onChange: (mode: LocalDocumentMarkdownViewMode) => void;
+}) {
+  return (
+    <div className="local-document-view-mode-toggle" role="group" aria-label="Markdown view">
+      {MARKDOWN_VIEW_MODE_OPTIONS.map(({ mode, label }) => {
+        const isSelected = props.mode === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            className={`local-document-view-mode-option${isSelected ? " local-document-view-mode-option-selected" : ""}`}
+            aria-pressed={isSelected}
+            onClick={() => {
+              if (!isSelected) {
+                props.onChange(mode);
+              }
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -896,7 +988,8 @@ function CodeDocumentView(props: {
   const language = props.bootstrap.syntaxLanguage;
   const statusMessage = highlightStatusMessage(
     props.bootstrap.highlightState,
-    props.bootstrap.formatLabel
+    props.bootstrap.formatLabel,
+    props.bootstrap.format
   );
   const codeClassName = props.bootstrap.format === "markdown"
     ? "starry-night"
@@ -1150,6 +1243,229 @@ function CodeDocumentView(props: {
   );
 }
 
+const MARKDOWN_REVEAL_TARGET_CLASS = "markdown-reveal-target";
+// A revealed block sits this far down the viewport, like a source-view reveal.
+const FORMATTED_REVEAL_VIEWPORT_FRACTION = 0.3;
+const FORMATTED_SCROLL_TOP_INSET = 16;
+
+// A target inside a closed <details> block has no layout until it opens.
+function openEnclosingDetails(target: HTMLElement, root: HTMLElement) {
+  for (let element = target.parentElement; element && element !== root; element = element.parentElement) {
+    if (element instanceof HTMLDetailsElement && !element.open) {
+      element.open = true;
+    }
+  }
+}
+
+function formattedScrollTopFor(
+  scrollElement: HTMLElement,
+  target: HTMLElement,
+  topInset: number
+): number {
+  const scrollRect = scrollElement.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const targetTop = scrollElement.scrollTop + (targetRect.top - scrollRect.top);
+  const maxScrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+  return Math.min(maxScrollTop, Math.max(0, targetTop - topInset));
+}
+
+function FormattedMarkdownView(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
+  html: string;
+  lineCount: number;
+  previewRootRef: React.RefObject<HTMLElement | null>;
+  previewContentRef: React.RefObject<HTMLElement | null>;
+}) {
+  const revealRequest = useRevealRequest();
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const contentRef = React.useRef<HTMLElement | null>(null);
+  const localRevealRequestIDRef = React.useRef(0);
+  const scrollFrameRef = React.useRef<{
+    outer: number | null;
+    inner: number | null;
+  }>({ outer: null, inner: null });
+  const [activeReveal, setActiveReveal] = React.useState<ActiveReveal | null>(null);
+  const { filePath, contentRevision, isEditing } = props.bootstrap;
+
+  const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
+    assignObjectRef(scrollRef, node);
+    assignObjectRef(props.previewRootRef, node);
+  }, [props.previewRootRef]);
+  const handleContentRef = React.useCallback((node: HTMLElement | null) => {
+    assignObjectRef(contentRef, node);
+    assignObjectRef(props.previewContentRef, node);
+  }, [props.previewContentRef]);
+
+  const cancelScheduledScroll = React.useCallback(() => {
+    if (scrollFrameRef.current.outer !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current.outer);
+      scrollFrameRef.current.outer = null;
+    }
+    if (scrollFrameRef.current.inner !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current.inner);
+      scrollFrameRef.current.inner = null;
+    }
+  }, []);
+
+  // WKWebView can drop a scrollTop assignment made in the same layout pass,
+  // so wait one frame for the render and one more for settled layout, as the
+  // source view does.
+  const scheduleScroll = React.useCallback((target: HTMLElement, topInset: (scrollElement: HTMLElement) => number) => {
+    cancelScheduledScroll();
+    scrollFrameRef.current.outer = window.requestAnimationFrame(() => {
+      scrollFrameRef.current.outer = null;
+      scrollFrameRef.current.inner = window.requestAnimationFrame(() => {
+        scrollFrameRef.current.inner = null;
+        const scrollElement = scrollRef.current;
+        if (!scrollElement || !target.isConnected) {
+          return;
+        }
+        scrollElement.scrollTop = formattedScrollTopFor(scrollElement, target, topInset(scrollElement));
+      });
+    });
+  }, [cancelScheduledScroll]);
+
+  React.useEffect(() => cancelScheduledScroll, [cancelScheduledScroll]);
+
+  React.useEffect(() => {
+    if (!revealRequest || isEditing) {
+      return;
+    }
+
+    setActiveReveal({
+      lineNumber: clampRevealLineNumber(revealRequest.lineNumber, props.lineCount),
+      requestID: revealRequest.requestID,
+      filePath,
+      contentRevision
+    });
+    window.ToasttyLocalDocumentPanel?.consumeRevealRequest(revealRequest.requestID);
+  }, [contentRevision, filePath, isEditing, props.lineCount, revealRequest]);
+
+  React.useEffect(() => {
+    if (activeReveal &&
+        (filePath !== activeReveal.filePath || contentRevision !== activeReveal.contentRevision)) {
+      setActiveReveal(null);
+    }
+  }, [activeReveal, contentRevision, filePath]);
+
+  React.useEffect(() => {
+    if (!activeReveal) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      cancelScheduledScroll();
+      setActiveReveal(null);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeReveal, cancelScheduledScroll]);
+
+  React.useLayoutEffect(() => {
+    const contentElement = contentRef.current;
+    if (!contentElement) {
+      return;
+    }
+
+    for (const element of Array.from(contentElement.querySelectorAll(`.${MARKDOWN_REVEAL_TARGET_CLASS}`))) {
+      element.classList.remove(MARKDOWN_REVEAL_TARGET_CLASS);
+    }
+    // A reveal from an earlier file or revision is cleared by the effect
+    // above; until then it must not mark or scroll the new content.
+    if (!activeReveal ||
+        activeReveal.filePath !== filePath ||
+        activeReveal.contentRevision !== contentRevision) {
+      cancelScheduledScroll();
+      return;
+    }
+
+    const blockElements = Array.from(contentElement.querySelectorAll<HTMLElement>(SOURCE_LINE_SELECTOR));
+    const targetIndex = revealBlockIndexForLine(
+      blockElements.map((element) => ({
+        start: Number(element.dataset.sourceStart),
+        end: Number(element.dataset.sourceEnd)
+      })),
+      activeReveal.lineNumber
+    );
+    const target = blockElements[targetIndex];
+    if (!target) {
+      return;
+    }
+
+    openEnclosingDetails(target, contentElement);
+    target.classList.add(MARKDOWN_REVEAL_TARGET_CLASS);
+    scheduleScroll(target, (scrollElement) => {
+      const targetHeight = target.getBoundingClientRect().height;
+      const revealInset = scrollElement.clientHeight * FORMATTED_REVEAL_VIEWPORT_FRACTION;
+      // A block taller than the space below the reveal position starts near the top instead.
+      return targetHeight > scrollElement.clientHeight - revealInset
+        ? FORMATTED_SCROLL_TOP_INSET
+        : revealInset;
+    });
+  }, [activeReveal, cancelScheduledScroll, contentRevision, filePath, props.html, scheduleScroll]);
+
+  const handleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const contentElement = contentRef.current;
+    const anchor = event.target instanceof Element
+      ? event.target.closest<HTMLAnchorElement>("a[href]")
+      : null;
+    if (!contentElement || !anchor || !contentElement.contains(anchor)) {
+      return;
+    }
+
+    // Links never navigate the panel page itself.
+    event.preventDefault();
+    const link = classifyMarkdownLinkHref(anchor.getAttribute("href"));
+    if (link.kind === "open") {
+      localDocumentNativeBridge.openLink(link.href);
+      return;
+    }
+    if (link.kind !== "fragment") {
+      return;
+    }
+
+    const target = link.elementIDs
+      .map((id) => document.getElementById(id))
+      .find((element): element is HTMLElement => element !== null && contentElement.contains(element));
+    if (target) {
+      openEnclosingDetails(target, contentElement);
+      scheduleScroll(target, () => FORMATTED_SCROLL_TOP_INSET);
+      return;
+    }
+
+    if (link.lineNumber !== null) {
+      localRevealRequestIDRef.current -= 1;
+      setActiveReveal({
+        lineNumber: clampRevealLineNumber(link.lineNumber, props.lineCount),
+        requestID: localRevealRequestIDRef.current,
+        filePath,
+        contentRevision
+      });
+    }
+  }, [contentRevision, filePath, props.lineCount, scheduleScroll]);
+
+  return (
+    <section className="local-document-formatted-shell">
+      <div className="local-document-formatted-scroll" ref={handleScrollRef}>
+        <article
+          ref={handleContentRef}
+          className="local-document-formatted markdown-prose"
+          onClick={handleClick}
+          dangerouslySetInnerHTML={{ __html: props.html }}
+        />
+      </div>
+    </section>
+  );
+}
+
 export function LocalDocumentPanelApp() {
   const {
     bootstrap,
@@ -1163,7 +1479,8 @@ export function LocalDocumentPanelApp() {
     saveEdit,
     overwriteAfterConflict,
     cancelEdit,
-    updateDraftContent
+    updateDraftContent,
+    setMarkdownViewMode
   } = useLocalDocumentPanelState();
 
   React.useEffect(() => {
@@ -1203,6 +1520,7 @@ export function LocalDocumentPanelApp() {
       overwriteAfterConflict={overwriteAfterConflict}
       cancelEdit={cancelEdit}
       updateDraftContent={updateDraftContent}
+      setMarkdownViewMode={setMarkdownViewMode}
     />
   );
 }
@@ -1220,15 +1538,22 @@ function LoadedLocalDocumentPanelApp(props: {
   overwriteAfterConflict: () => void;
   cancelEdit: () => void;
   updateDraftContent: (nextContent: string) => void;
+  setMarkdownViewMode: (mode: LocalDocumentMarkdownViewMode) => void;
 }) {
   const renderedContent = props.bootstrap.isEditing ? props.draftContent : props.bootstrap.content;
   const previewRootRef = React.useRef<HTMLElement | null>(null);
   const previewContentRef = React.useRef<HTMLElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const markdownViewMode = effectiveMarkdownViewMode(props.bootstrap);
+  const formattedHTML = useFormattedMarkdownHTML(
+    !props.bootstrap.isEditing && markdownViewMode === "formatted" ? renderedContent : null
+  );
+  const lineCount = React.useMemo(() => contentLines(renderedContent).length, [renderedContent]);
 
   useLocalDocumentSearchController({
     content: renderedContent,
     isEditing: props.bootstrap.isEditing,
+    surfaceKey: formattedHTML === null ? "source" : "formatted",
     previewRootRef,
     previewContentRef,
     textareaRef
@@ -1239,6 +1564,8 @@ function LoadedLocalDocumentPanelApp(props: {
       {props.bootstrap.presentation !== "mobileReadOnly" && <Header
         bootstrap={props.bootstrap}
         content={renderedContent}
+        markdownViewMode={markdownViewMode}
+        setMarkdownViewMode={props.setMarkdownViewMode}
         isDirty={props.isDirty}
         canSave={props.canSave}
         canOverwrite={props.canOverwrite}
@@ -1255,6 +1582,14 @@ function LoadedLocalDocumentPanelApp(props: {
           draftContent={props.draftContent}
           textareaRef={textareaRef}
           updateDraftContent={props.updateDraftContent}
+        />
+      ) : formattedHTML !== null ? (
+        <FormattedMarkdownView
+          bootstrap={props.bootstrap}
+          html={formattedHTML}
+          lineCount={lineCount}
+          previewRootRef={previewRootRef}
+          previewContentRef={previewContentRef}
         />
       ) : (
         <CodeDocumentView

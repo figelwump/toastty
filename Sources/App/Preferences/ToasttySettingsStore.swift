@@ -12,6 +12,8 @@ struct ToasttySettings: Equatable {
     /// its shortcut. Off until task lifecycle hooks replace it; there is no
     /// settings UI, so turn it on by writing the defaults key.
     var isWorkspaceMergeEnabled = false
+    /// How Markdown panels open. Each panel's header changes it.
+    var localDocumentMarkdownViewMode = LocalDocumentMarkdownViewMode.formatted
 }
 
 enum ToasttySettingsStore {
@@ -20,6 +22,7 @@ enum ToasttySettingsStore {
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
     private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
     private static let workspaceMergeEnabledKey = "toastty.workspaceMergeEnabled"
+    private static let localDocumentMarkdownViewModeKey = "toastty.localDocumentMarkdownViewMode"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
@@ -27,7 +30,9 @@ enum ToasttySettingsStore {
             askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults),
             workspaceMergeMode: userDefaults.string(forKey: workspaceMergeModeKey)
                 .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp,
-            isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey)
+            isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey),
+            localDocumentMarkdownViewMode: userDefaults.string(forKey: localDocumentMarkdownViewModeKey)
+                .flatMap(LocalDocumentMarkdownViewMode.init(rawValue:)) ?? .formatted
         )
     }
 
@@ -71,6 +76,13 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(mode.rawValue, forKey: workspaceMergeModeKey)
+    }
+
+    static func persistLocalDocumentMarkdownViewMode(
+        _ mode: LocalDocumentMarkdownViewMode,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(mode.rawValue, forKey: localDocumentMarkdownViewModeKey)
     }
 
     private static func loadTerminalFontSizePoints(userDefaults: UserDefaults) -> Double? {
