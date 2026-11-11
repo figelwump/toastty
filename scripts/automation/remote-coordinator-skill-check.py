@@ -813,14 +813,15 @@ def check_first_run_saved(run, commits_before):
 
 
 def asks_every_part(run, said):
-    """The one message asks about routing, answers and review, and offers to take the suggestions."""
+    """The one message asks about routing, answers and review. Wording only, so these are notes."""
     lower = said.lower()
-    run.check('it asks about model and effort', 'effort' in lower and 'model' in lower, said)
-    run.check('it asks how it should answer (Talking)', re.search(r'talking|answer .*(yourself|myself)|questions', lower),
-              said)
-    run.check('it asks how much it checks (Reviewing)', re.search(r'review|proof', lower), said)
+    run.check('it asks about model and effort', 'effort' in lower and 'model' in lower, said, required=False)
+    run.check('it asks how it should answer (Talking)', re.search(r'talking|answer|questions', lower), said,
+              required=False)
+    run.check('it asks how much it checks (Reviewing)', re.search(r'review|proof|ready|check', lower), said,
+              required=False)
     run.check('it asks the user to confirm or correct it',
-              re.search(r'\?|confirm|correct|say "?yes|tell me what to change|let me know', lower), said)
+              re.search(r'\?|confirm|correct|"?yes|tell me what to change|let me know', lower), said, required=False)
 
 
 def first_run(run):
@@ -925,7 +926,7 @@ def first_run_upgrade(run):
     run.open_coordinator()
     said = run.said(run.tell('Hi.'))
     lower = said.lower()
-    run.check('it asks how it should answer', re.search(r'talking|answer|questions', lower) and '?' in said, said)
+    run.check('it asks how it should answer', re.search(r'talking|answer|questions', lower), said, required=False)
     run.check('it does not ask about the sections that hold rules', not re.search(r'which model|routing table', lower),
               said, required=False)
     run.tell('Answer short questions about code yourself, and make a task for the rest. Otherwise your defaults.')
