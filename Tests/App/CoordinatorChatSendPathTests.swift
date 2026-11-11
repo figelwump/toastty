@@ -477,6 +477,45 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts.isEmpty)
     }
 
+    @MainActor
+    @Test func editWaitsUntilTheMessagesFilesFitNextToTheComposers() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let draft = fixture.chat.attachmentDraft
+        draft.attachText("one", named: "one.txt")
+        draft.attachText("two", named: "two.txt")
+        fixture.chat.draft = "Two files"
+        fixture.chat.send()
+        let entry = try await fixture.waitFor("the message waits") { fixture.controller.queuedEntries.first }
+
+        // Nine files in the composer leave room for one: the message's two
+        // do not fit, so it keeps waiting and the composer is as it was.
+        for index in 0 ..< 9 {
+            draft.attachText("\(index)", named: "note.txt")
+        }
+        fixture.chat.draft = "Draft"
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: ""))
+        #expect(fixture.controller.queuedEntries.map(\.id) == [entry.id])
+        #expect(fixture.chat.draft == "Draft")
+        #expect(draft.attachments.count == 9)
+        #expect(fixture.chat.notice == .failure(
+            "This message has 2 files, and a message can have at most 10. Remove files from the message you are writing first."
+        ))
+
+        // With room, Edit takes it back: its text in front, its files first.
+        for attachment in draft.attachments.dropFirst() {
+            draft.remove(id: attachment.id)
+        }
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: ""))
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.chat.draft == "Two files\nDraft")
+        #expect(draft.attachments.map(\.displayName) == ["one.txt", "two.txt", "note.txt"])
+        #expect(draft.attachments.map(\.isDraftCopy) == [false, false, true])
+    }
+
     // MARK: - A paired phone
 
     @MainActor

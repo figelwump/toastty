@@ -690,9 +690,19 @@ final class CoordinatorChatModel: ObservableObject {
             // stay in their folder; when one cannot, the text keeps every
             // path instead.
             guard isSendingFiles == false, let controller,
-                  let removed = controller.removeQueuedEntry(id: id) else { return }
-            var text = removed.text
+                  let entry = (controller.queuedEntries + controller.pausedEntries).first(where: { $0.id == id }) else { return }
+            // Its files must fit next to the composer's: a message has at
+            // most 10. Otherwise the message keeps waiting as it is.
             let room = TaskRecord.maximumAttachmentCount - attachmentDraft.attachments.count - attachmentDraft.pendingCount
+            if let count = CoordinatorMessageHeader.attachedFiles(in: entry.text)?.paths.count, count > room {
+                transientNotice = .failure(
+                    "This message has \(count) files, and a message can have at most \(TaskRecord.maximumAttachmentCount). "
+                        + "Remove files from the message you are writing first."
+                )
+                break
+            }
+            guard let removed = controller.removeQueuedEntry(id: id) else { return }
+            var text = removed.text
             if let parts = Self.editParts(of: removed.text, attachments: controller.attachments, room: room) {
                 text = parts.text
                 attachmentDraft.restore(parts.files)
