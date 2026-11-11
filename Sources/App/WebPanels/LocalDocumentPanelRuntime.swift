@@ -797,6 +797,18 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             return
         }
 
+        // A Markdown link can name any local file, and its text can hide the
+        // target. Open only files Toastty previews in a panel; never hand other
+        // local files (apps, scripts, packages) to their default handler.
+        if url.isFileURL, LocalFileLinkResolver.resolvedLocalDocumentTarget(for: url) == nil {
+            logDiagnostic(
+                .info,
+                "Local document ignored a link to a file Toastty cannot preview",
+                metadata: ["link_url": clampedDiagnosticValue(url.absoluteString, limit: 500) ?? "<empty>"]
+            )
+            return
+        }
+
         let didOpen = linkedURLOpener(panelID, url)
         logDiagnostic(
             didOpen ? .debug : .warning,

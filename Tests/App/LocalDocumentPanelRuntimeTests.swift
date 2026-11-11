@@ -2315,10 +2315,25 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(documentLoadCount, 1, "A view change must not read the file again")
     }
 
-    func testOpenLinkResolvesHrefAgainstDocumentFolderBeforeOpening() async throws {
+    func testOpenLinkOpensWebLinksAndPreviewableLocalDocumentsOnly() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let panelID = UUID()
         let openedLinks = MainActorRecorder<(UUID, URL)>()
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-links-\(UUID().uuidString)", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let docsURL = rootURL.appendingPathComponent("docs", isDirectory: true)
+        try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: rootURL.appendingPathComponent("Tool.app/Contents", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock { try? fileManager.removeItem(at: rootURL) }
+        try Data("# Readme\n".utf8).write(to: rootURL.appendingPathComponent("README.md"))
+        try Data("#!/bin/sh\necho hi\n".utf8).write(to: rootURL.appendingPathComponent("setup.command"))
+        let planPath = docsURL.appendingPathComponent("plan.md").path
 
         let runtime = LocalDocumentPanelRuntime(
             panelID: panelID,
@@ -2343,19 +2358,29 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.apply(webState: WebPanelState(
             definition: .localDocument,
             title: "plan.md",
-            localDocument: LocalDocumentState(filePath: "/tmp/toastty-links/docs/plan.md")
+            localDocument: LocalDocumentState(filePath: planPath)
         ))
         await fulfillment(of: [metadataExpectation], timeout: 5)
 
-        for href in ["../README.md#L12", "https://example.com/a?b=1#c", "javascript:alert(1)", "#setup"] {
+        let hrefs = [
+            "../README.md#L12",
+            "https://example.com/a?b=1#c",
+            "../setup.command",
+            "../Tool.app",
+            "file://\(rootURL.path)/setup.command",
+            "../missing.md",
+            "javascript:alert(1)",
+            "#setup",
+        ]
+        for href in hrefs {
             runtime.simulateBridgeMessageForTesting(["type": "openLink", "href": href])
         }
 
         XCTAssertEqual(openedLinks.values.map(\.0), [panelID, panelID])
         XCTAssertEqual(openedLinks.values.map(\.1.absoluteString), [
-            URL(fileURLWithPath: "/tmp/toastty-links/README.md:12").absoluteString,
+            URL(fileURLWithPath: rootURL.appendingPathComponent("README.md").path + ":12").absoluteString,
             "https://example.com/a?b=1#c",
-        ])
+        ], "Scripts, app bundles, and missing files are never handed to the system")
     }
 
     func testLinkURLResolution() throws {
