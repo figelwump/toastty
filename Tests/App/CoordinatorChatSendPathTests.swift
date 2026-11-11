@@ -368,10 +368,11 @@ struct CoordinatorChatSendPathTests {
         fixture.chat.show(panelID: fixture.panelID)
         try fixture.startTurn(1, userText: "Check the tasks")
         try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        // Command-Return: while a turn runs, Return would steer it.
         fixture.chat.draft = "First"
-        fixture.chat.send()
+        fixture.chat.send(queueing: true)
         fixture.chat.draft = "Second"
-        fixture.chat.send()
+        fixture.chat.send(queueing: true)
         #expect(fixture.chat.draft.isEmpty)
         let ids = fixture.controller.queuedEntries.map(\.id)
         #expect(fixture.controller.queuedEntries.map(\.text) == ["First", "Second"])
@@ -458,7 +459,8 @@ struct CoordinatorChatSendPathTests {
         try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
         fixture.chat.attachmentDraft.attachText("error: socket closed", named: "terminal log.txt")
         #expect(fixture.chat.canSend)
-        fixture.chat.send()
+        // Command-Return: while a turn runs, Return would steer it.
+        fixture.chat.send(queueing: true)
         let entry = try await fixture.waitFor("the message waits") { fixture.controller.queuedEntries.first }
         let row = try #require(fixture.chat.presentation.sendItems.first { $0.isQueued })
         #expect(row.text == "terminal-log.txt")
@@ -488,7 +490,8 @@ struct CoordinatorChatSendPathTests {
         draft.attachText("one", named: "one.txt")
         draft.attachText("two", named: "two.txt")
         fixture.chat.draft = "Two files"
-        fixture.chat.send()
+        // Command-Return: while a turn runs, Return would steer it.
+        fixture.chat.send(queueing: true)
         let entry = try await fixture.waitFor("the message waits") { fixture.controller.queuedEntries.first }
 
         // Nine files in the composer leave room for one: the message's two
@@ -620,7 +623,7 @@ struct CoordinatorChatSendPathTests {
     // MARK: - The composer's view
 
     @MainActor
-    @Test func returnInTheComposerSendsAndShiftReturnStartsANewLine() async throws {
+    @Test func returnSendsOrSteersCommandReturnQueuesAndShiftReturnStartsANewLine() async throws {
         guard #available(macOS 15.0, *) else { return }
         let fixture = try CoordinatorChatFixture()
         defer { fixture.tearDown() }
@@ -690,6 +693,18 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts == ["First line\nsecond line"])
         try await fixture.waitUntil("the composer to clear") { composer.string.isEmpty }
         #expect(fixture.chat.draft.isEmpty)
+
+        // While a turn runs, Command-Return queues and Return steers.
+        try fixture.startTurn(1, userText: "First line\nsecond line")
+        try await fixture.waitUntil("the chip that says Steer") { fixture.chat.delivery?.steers == true }
+        composer.insertText("After the turn", replacementRange: composer.selectedRange())
+        composer.keyDown(with: try key(.command))
+        try await fixture.waitUntil("the composer to clear") { composer.string.isEmpty }
+        #expect(fixture.controller.queuedEntries.map(\.text) == ["After the turn"])
+        composer.insertText("Into the turn", replacementRange: composer.selectedRange())
+        composer.keyDown(with: try key([]))
+        #expect(fixture.delivered.texts == ["First line\nsecond line", "Into the turn"])
+        #expect(fixture.controller.queuedEntries.map(\.text) == ["After the turn"])
     }
 
     // MARK: - The keyboard and the covered terminal
@@ -898,7 +913,7 @@ final class CoordinatorChatFixture {
         try conversations.appendToTranscript(Self.line(payload, second: second))
     }
 
-    private func report(_ kind: SessionStatusKind) {
+    func report(_ kind: SessionStatusKind) {
         conversations.sessionRuntimeStore.updateStatus(
             sessionID: conversations.sessionID,
             status: SessionStatus(kind: kind, summary: kind.rawValue),
@@ -910,9 +925,15 @@ final class CoordinatorChatFixture {
     /// its transcript records the message.
     func startTurn(_ turn: Int, userText: String) throws {
         report(.working)
+        try recordUserMessage(userText)
+        try append(#"{"type":"task_started","turn_id":"turn-\#(turn)","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#)
+    }
+
+    /// The transcript records a user message, as Codex records a steer
+    /// that it took into the running turn.
+    func recordUserMessage(_ userText: String) throws {
         let escaped = String(decoding: try JSONEncoder().encode(userText), as: UTF8.self)
         try append(#"{"type":"user_message","message":\#(escaped),"images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#)
-        try append(#"{"type":"task_started","turn_id":"turn-\#(turn)","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#)
     }
 
     func endTurn(_ turn: Int) throws {

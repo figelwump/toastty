@@ -226,28 +226,28 @@ def broker_request(directory, arguments):
     return result['code'], result['output']
 
 
-def run_in_gui_session(arguments):
-    """Reruns the check from Terminal in the GUI session, and serves its
-    clicks and keys from this process, which Accessibility trusts."""
+def run_in_gui_session(arguments, name=NAME, script=__file__):
+    """Reruns the check `script` from Terminal in the GUI session, and serves
+    its clicks and keys from this process, which Accessibility trusts."""
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    broker = artifacts / f'{NAME}-ui'
+    broker = artifacts / f'{name}-ui'
     shutil.rmtree(broker, ignore_errors=True)
     broker.mkdir()
     compile_tools(broker)
-    done, output = artifacts / f'{NAME}-gui.exit', artifacts / f'{NAME}-gui.log'
+    done, output = artifacts / f'{name}-gui.exit', artifacts / f'{name}-gui.log'
     done.unlink(missing_ok=True)
     command = ' '.join([
         'cd', shlex.quote(os.getcwd()), '&&',
         f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
         f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
         f'TOASTTY_UI_BROKER={shlex.quote(str(broker))}',
-        'python3', shlex.quote(str(Path(__file__).resolve())), *map(shlex.quote, arguments),
+        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
         '>', shlex.quote(str(output)), '2>&1;',
         'echo $? >', shlex.quote(str(done)), '; exit',
     ])
-    script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
+    do_script = f'tell application "Terminal" to do script {json.dumps(command)}'
+    subprocess.run(['osascript', '-e', do_script], check=True, capture_output=True, timeout=30)
     deadline = time.time() + 2 * 3600
     printed = 0
     while not done.exists():

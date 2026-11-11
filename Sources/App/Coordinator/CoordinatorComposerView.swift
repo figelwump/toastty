@@ -3,9 +3,20 @@ import CoreState
 import PhotosUI
 import SwiftUI
 
+/// While the coordinator's turn runs: what Send does with the text.
+struct CoordinatorComposerDelivery: Equatable {
+    /// Send types the text into the running turn. Otherwise the text waits
+    /// in the queue for the turn's end.
+    var steers: Bool
+    /// The running turn can take a steer now.
+    var canSteer: Bool
+}
+
 /// The composer for a message to the coordinator: a row of attached files,
 /// a ＋ menu that attaches files or photos, a text field that grows with its
-/// text, and one button that sends, or stops the running turn.
+/// text, and one button that sends, or stops the running turn. While a turn
+/// runs, a chip beside the button says whether Send steers the turn or
+/// queues the message.
 ///
 /// It knows nothing about the chat around it, so another window can host
 /// it: the host gives the text, the files, the state and the actions.
@@ -18,9 +29,16 @@ struct CoordinatorComposerView: View {
     let canStop: Bool
     /// False while the message is being sent with its files.
     var isEditable = true
+    /// While a turn runs, how Send delivers the text. `nil` hides the chip.
+    var delivery: CoordinatorComposerDelivery?
     /// Counts up each time the text field should take the keyboard.
     let focusRequestID: Int
     let onSend: () -> Void
+    /// Command-Return: the text waits for the turn's end, whatever the chip
+    /// shows.
+    var onQueue: () -> Void = {}
+    /// The user chose Queue (`true`) or Steer on the chip.
+    var onChooseQueue: (Bool) -> Void = { _ in }
     let onStop: () -> Void
     /// ＋ › Files…: opens the open panel.
     var onChooseFiles: () -> Void = {}
@@ -59,6 +77,7 @@ struct CoordinatorComposerView: View {
                     isEditable: isEditable,
                     focusRequestID: focusRequestID,
                     onSubmit: { if canSend { onSend() } },
+                    onQueue: { if canSend { onQueue() } },
                     onPasteAttachments: { attachments.pasteAttachments(from: $0) },
                     canPasteAttachments: { attachments.canPasteAttachments(from: $0) },
                     dropTarget: dropTarget,
@@ -66,15 +85,24 @@ struct CoordinatorComposerView: View {
                 )
                 .padding(.vertical, 4)
 
-                // Stop while a turn runs and the field is empty. With text in
-                // the field the button sends: the message then waits its turn.
+                // Stop while a turn runs and the field is empty. With text or
+                // a file in the field the button sends, with the chip beside
+                // it.
                 if canStop, hasMessage == false {
                     button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
                         .help("Stop the coordinator's turn")
                 } else {
-                    button(systemImage: "arrow.up", label: "Send", identifier: "coordinator.chat.send", action: onSend)
-                        .disabled(canSend == false)
-                        .help("Send (Return). Shift-Return starts a new line.")
+                    if let delivery {
+                        deliveryChip(delivery)
+                    }
+                    button(
+                        systemImage: "arrow.up",
+                        label: Self.sendLabel(delivery),
+                        identifier: "coordinator.chat.send",
+                        action: onSend
+                    )
+                    .disabled(canSend == false)
+                    .help(Self.sendHelp(delivery))
                 }
             }
         }
@@ -184,6 +212,59 @@ struct CoordinatorComposerView: View {
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
     }
+
+    /// Steer is the default and looks plain. Queue takes the accent, also
+    /// when the turn cannot take a steer: the color marks a send that does
+    /// not go into the running turn.
+    private func deliveryChip(_ delivery: CoordinatorComposerDelivery) -> some View {
+        let queues = delivery.steers == false
+        return Menu {
+            Button("Steer") { onChooseQueue(false) }
+                .disabled(delivery.canSteer == false)
+            Button("Queue") { onChooseQueue(true) }
+        } label: {
+            HStack(spacing: 4) {
+                Text(queues ? "Queue" : "Steer")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(queues ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(Capsule().fill(queues ? ToastyTheme.accent.opacity(0.16) : Color.clear))
+            .overlay {
+                Capsule().strokeBorder(queues ? ToastyTheme.accent.opacity(0.45) : ToastyTheme.subtleBorder, lineWidth: 1)
+            }
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(Self.chipHelp(delivery))
+        .accessibilityLabel(queues ? "Queue selected" : "Steer selected")
+        .accessibilityIdentifier("coordinator.chat.delivery")
+    }
+
+    static func sendLabel(_ delivery: CoordinatorComposerDelivery?) -> String {
+        guard let delivery else { return "Send" }
+        return delivery.steers ? "Steer" : "Queue"
+    }
+
+    static func sendHelp(_ delivery: CoordinatorComposerDelivery?) -> String {
+        guard let delivery else { return "Send (Return). Shift-Return starts a new line." }
+        return delivery.steers
+            ? "Steer: add to the running turn (Return). Command-Return queues. Shift-Return starts a new line."
+            : "Queue: send after this turn (Return). Shift-Return starts a new line."
+    }
+
+    static func chipHelp(_ delivery: CoordinatorComposerDelivery) -> String {
+        if delivery.canSteer == false {
+            return "The running turn cannot take a steer now, so the message waits for the turn's end."
+        }
+        return "Steer adds the message to the running turn. Queue sends it after this turn."
+    }
 }
 
 /// The composer's text field. An `NSTextView`, so Return can send while
@@ -194,6 +275,8 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     var isEditable = true
     let focusRequestID: Int
     let onSubmit: () -> Void
+    /// Command-Return.
+    var onQueue: () -> Void = {}
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
     let canPasteAttachments: (NSPasteboard) -> Bool
@@ -297,6 +380,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
             textView.isEditable = isEditable
         }
         textView.onSubmit = onSubmit
+        textView.onQueue = onQueue
         textView.onPasteAttachments = onPasteAttachments
         textView.canPasteAttachments = canPasteAttachments
         textView.dropTarget = dropTarget
@@ -323,6 +407,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
         didSet { needsDisplay = true }
     }
     var onSubmit: () -> Void = {}
+    var onQueue: () -> Void = {}
 
     private var hasPendingFocusRequest = false
 
@@ -347,11 +432,17 @@ final class CoordinatorComposerTextView: AttachmentTextView {
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        // Return sends. With Shift or Option it starts a new line. While an
-        // input method composes, Return belongs to it.
+        // Return sends, and with Command it queues. With Shift or Option it
+        // starts a new line. While an input method composes, Return belongs
+        // to it.
         if Self.isReturn(event), hasMarkedText() == false {
-            if modifiers.subtracting([.numericPad, .function]).isEmpty {
+            let keys = modifiers.subtracting([.numericPad, .function])
+            if keys.isEmpty {
                 onSubmit()
+                return
+            }
+            if keys == .command {
+                onQueue()
                 return
             }
             if modifiers.contains(.shift) || modifiers.contains(.option) {

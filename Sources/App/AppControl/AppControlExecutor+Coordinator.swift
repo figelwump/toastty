@@ -118,6 +118,9 @@ extension AppControlExecutor {
             // always queues.
             response["delivery"] = .string("held")
             response["hold"] = .string(hold.rawValue)
+        case .steered, .steeredUnconfirmed:
+            // Not reached: only the user's own messages in the chat steer.
+            response["delivery"] = .string("steered")
         }
         return .init(didMutateState: false, result: response)
     }

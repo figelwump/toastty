@@ -134,6 +134,81 @@ struct CoordinatorSavedQueueTests {
         #expect(FileManager.default.fileExists(atPath: file.path) == false)
     }
 
+    // MARK: - Steer now
+
+    @MainActor
+    @Test func aWaitingMessageThatSteersLeavesTheSavedQueue() async throws {
+        let fixture = try CoordinatorChatFixture(savesQueue: true)
+        defer { fixture.tearDown() }
+        let file = try #require(fixture.queueFileURL)
+        let folder = file.deletingLastPathComponent()
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("a turn that takes a steer") { fixture.controller.canSteer }
+        #expect(try fixture.controller.sendUserText("First", steering: false, id: "user-1").isQueued)
+        #expect(try fixture.controller.sendUserText("Second", steering: false, id: "user-2").isQueued)
+        #expect(CoordinatorQueueSnapshot.load(from: file)?.queued.map(\.id) == ["user-1", "user-2"])
+
+        // While the file cannot be written, the message is not typed: the
+        // file would still list it, and a relaunch would type it again.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        #expect(throws: CoordinatorError.self) { try fixture.controller.steerQueuedEntry(id: "user-2") }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        #expect(fixture.delivered.texts.isEmpty)
+        #expect(fixture.controller.queuedEntries.map(\.id) == ["user-1", "user-2"])
+
+        // While the text goes to the terminal, the file says which message
+        // is being typed: a crash in this moment cannot type it twice.
+        var savedWhileTyping: CoordinatorQueueSnapshot?
+        fixture.conversations.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            savedWhileTyping = CoordinatorQueueSnapshot.load(from: file)
+            fixture.delivered.texts.append(text)
+            return true
+        }
+        try fixture.controller.steerQueuedEntry(id: "user-2")
+        #expect(savedWhileTyping?.typingEntryID == "user-2")
+        #expect(fixture.delivered.texts == ["Second"])
+        let saved = try #require(CoordinatorQueueSnapshot.load(from: file))
+        #expect(saved.queued.map(\.id) == ["user-1"])
+        #expect(saved.typingEntryID == nil)
+
+        // A relaunch has the first message only, and types it once after
+        // the turn.
+        fixture.relaunch()
+        #expect(fixture.controller.queuedEntries.map(\.id) == ["user-1"])
+        #expect(fixture.controller.pausedEntries.isEmpty)
+        try fixture.endTurn(1)
+        try await fixture.waitUntil("the first message") { fixture.delivered.texts.count == 2 }
+        #expect(fixture.delivered.texts == ["Second", "First"])
+        #expect(FileManager.default.fileExists(atPath: file.path) == false)
+    }
+
+    @MainActor
+    @Test func aPausedMessageWhoseSteerAQuitInterruptedWaitsForTheUser() async throws {
+        let fixture = try CoordinatorChatFixture(savesQueue: true)
+        defer { fixture.tearDown() }
+        let file = try #require(fixture.queueFileURL)
+        let workspaceID = try #require(fixture.store.state.coordinatorWorkspaceID)
+        // The file as a crash leaves it while "Steer now" typed a message
+        // that a Stop had set aside.
+        try CoordinatorQueueSnapshot(
+            workspaceID: workspaceID,
+            queued: [.init(id: "later", text: "And a second one")],
+            paused: [.init(id: "steered", text: "Create the export task")],
+            typingEntryID: "steered"
+        ).save(to: file)
+
+        fixture.relaunch()
+        // Nobody knows whether the coordinator has it. It is marked, and it
+        // waits for the user as a paused message does.
+        #expect(fixture.controller.pausedEntries.map(\.id) == ["steered"])
+        #expect(fixture.controller.hasInterruptedEntry)
+        try await fixture.waitUntil("the later message") { fixture.delivered.texts.count == 1 }
+        #expect(fixture.delivered.texts == ["And a second one"])
+        let saved = try #require(CoordinatorQueueSnapshot.load(from: file))
+        #expect(saved.paused.map(\.typingWasInterrupted) == [true])
+        #expect(saved.typingEntryID == nil)
+    }
+
     @MainActor
     @Test func aMessageIsNotTypedWhileItsTypingCannotBeSaved() async throws {
         let fixture = try CoordinatorChatFixture(savesQueue: true)
@@ -213,7 +288,8 @@ struct CoordinatorSavedQueueTests {
         let message = CoordinatorUserMessage(text: "With a file", files: [source], quickEntry: .init())
         #expect(try await fixture.controller.sendUserMessage(message).isQueued)
         fixture.chat.draft = "From the chat"
-        fixture.chat.send()
+        // Command-Return: while a turn runs, Return would steer it.
+        fixture.chat.send(queueing: true)
         let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(message.id.uuidString)")
         #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("shot.png").path))
         #expect(CoordinatorQueueSnapshot.load(from: file)?.queued.count == 2)
@@ -284,7 +360,8 @@ struct CoordinatorSavedQueueTests {
         #expect(CoordinatorQueueSnapshot.load(from: try #require(fixture.queueFileURL)) == nil)
         // Change a word, send again from the chat's field.
         fixture.chat.draft = fixture.chat.draft.replacingOccurrences(of: "With a file", with: "With one file")
-        fixture.chat.send()
+        // Command-Return: while a turn runs, Return would steer it.
+        fixture.chat.send(queueing: true)
         let resent = try await fixture.waitFor("the message waits again") { fixture.controller.queuedEntries.first }
         #expect(resent.id != message.id.uuidString)
         #expect(resent.text == """

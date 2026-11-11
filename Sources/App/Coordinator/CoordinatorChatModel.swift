@@ -23,6 +23,7 @@ final class CoordinatorChatModel: ObservableObject {
         let id: String
         let text: String
         let typedAt: Date
+        let steered: Bool
     }
 
     /// A typed message that the newest page does not show after this time
@@ -72,6 +73,9 @@ final class CoordinatorChatModel: ObservableObject {
     /// A message with files is being sent: Toastty copies its files into
     /// the coordinator's folder. The composer waits until it is done.
     @Published private(set) var isSendingFiles = false
+    /// The turn in which the user chose Queue on the chip. Steer is the
+    /// default: the choice ends with a send, and with its turn.
+    @Published private var queueChosenInTurn: RemoteInputEpoch?
     @Published var jumpToLiveEdgeRequest: UInt64 = 0
     /// Counts up each time the composer should take the keyboard.
     @Published private(set) var composerFocusRequest = 0
@@ -409,10 +413,18 @@ final class CoordinatorChatModel: ObservableObject {
             ToasttySendPresentationItem(
                 clientRequestID: pending.id,
                 text: CoordinatorMessageHeader.displayText(of: pending.text),
-                content: .optimistic(response: .accepted)
+                content: .optimistic(response: .accepted),
+                // The caption its row will show, so the bubble keeps its
+                // size when the row replaces it.
+                sentCaption: pending.steered
+                    ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
+                    : nil
             )
         }
         guard let controller else { return items }
+        // Only a message the user wrote in the chat can go into the running
+        // turn.
+        let turnTakesSteer = controller.canSteer
         for (index, entry) in controller.pausedEntries.enumerated() {
             items.append(ToasttySendPresentationItem(
                 clientRequestID: entry.id,
@@ -421,7 +433,7 @@ final class CoordinatorChatModel: ObservableObject {
                     position: index + 1,
                     attachmentCount: Self.attachmentCount(of: entry.text),
                     isPaused: true,
-                    canSteer: false
+                    canSteer: turnTakesSteer && entry.canBeSteered
                 ))
             ))
         }
@@ -454,7 +466,7 @@ final class CoordinatorChatModel: ObservableObject {
                     position: position,
                     attachmentCount: Self.attachmentCount(of: entry.text),
                     isPaused: false,
-                    canSteer: false,
+                    canSteer: turnTakesSteer && entry.canBeSteered,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
                 ))
             ))
@@ -556,7 +568,7 @@ final class CoordinatorChatModel: ObservableObject {
         // Without the conversation there is no echo to wait for.
         guard entry.echoesInConversation, subscription != nil else { return }
         guard events.contains(where: { Self.echoedRequestID($0) == entry.id }) == false else { return }
-        pendingSends.append(PendingSend(id: entry.id, text: entry.text, typedAt: now()))
+        pendingSends.append(PendingSend(id: entry.id, text: entry.text, typedAt: now(), steered: entry.steered))
         publishMetadata()
     }
 
@@ -595,13 +607,51 @@ final class CoordinatorChatModel: ObservableObject {
         summary?.inputControl?.canInterrupt == true
     }
 
+    /// While a turn runs, what Send does with the composer's text: Steer
+    /// when the turn can take it and the user did not choose Queue, Queue
+    /// otherwise. `nil` while no turn runs: Send then types at the open
+    /// prompt, or the message waits as before.
+    var delivery: CoordinatorComposerDelivery? {
+        guard let controller else { return nil }
+        let turnIsUnderWay = summary.map(Self.turnIsUnderWay)
+            // Toastty reads no conversation of this agent: the status it
+            // reports says whether it works.
+            ?? (controller.session?.status?.kind == .working)
+        guard turnIsUnderWay else { return nil }
+        let canSteer = controller.canSteer
+        return CoordinatorComposerDelivery(steers: canSteer && queueSelected == false, canSteer: canSteer)
+    }
+
+    /// The user chose Queue on the chip in the turn that runs now.
+    var queueSelected: Bool {
+        get {
+            guard let queueChosenInTurn else { return false }
+            return queueChosenInTurn == summary?.inputControl?.turnEpoch
+        }
+        set {
+            queueChosenInTurn = newValue ? summary?.inputControl?.turnEpoch : nil
+        }
+    }
+
+    /// A turn runs, or waits within itself for the user's answer to a
+    /// question or a permission. The answer belongs in the terminal, so a
+    /// message then queues.
+    private static func turnIsUnderWay(_ summary: RemoteConversationSummary) -> Bool {
+        if case .pendingInteraction = summary.inputAvailability { return true }
+        return summary.inputControl?.turnEpoch != nil
+    }
+
     /// Sends the composer's text as the user's message, with its files.
-    func send() {
+    /// While a turn runs it goes into that turn, unless the user chose
+    /// Queue or `queueing` is set (Command-Return), or the turn cannot take
+    /// it when Toastty types it.
+    func send(queueing: Bool = false) {
         guard canSend, let controller else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let steering = queueing == false && queueSelected == false
         guard attachmentDraft.attachments.isEmpty == false else {
             do {
-                try controller.send(text, byUser: true)
+                try controller.sendUserText(text, steering: steering)
                 draft = ""
                 didSend()
             } catch {
@@ -621,7 +671,7 @@ final class CoordinatorChatModel: ObservableObject {
         isSendingFiles = true
         Task { @MainActor [weak self] in
             do {
-                _ = try await controller.sendUserMessage(message)
+                _ = try await controller.sendUserMessage(message, steering: steering)
                 guard let self else { return }
                 isSendingFiles = false
                 draft = ""
@@ -636,6 +686,8 @@ final class CoordinatorChatModel: ObservableObject {
     }
 
     private func didSend() {
+        // The next message steers again, as the default.
+        queueSelected = false
         transientNotice = nil
         lastJumpRequest &+= 1
         jumpToLiveEdgeRequest = lastJumpRequest
@@ -713,9 +765,15 @@ final class CoordinatorChatModel: ObservableObject {
             controller?.removeQueuedEntry(id: id, discardingAttachments: true)
         case .resume:
             controller?.resumeQueue()
-        case .steer:
-            // Not offered: the chat types only at an open prompt.
-            break
+        case .steer(let id, _):
+            do {
+                try controller?.steerQueuedEntry(id: id)
+                transientNotice = nil
+                lastJumpRequest &+= 1
+                jumpToLiveEdgeRequest = lastJumpRequest
+            } catch {
+                transientNotice = .failure(error.localizedDescription)
+            }
         }
         publishMetadata()
     }

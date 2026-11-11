@@ -25,8 +25,9 @@ struct CoordinatorQueueSnapshot: Codable, Equatable {
     var queued: [Entry]
     /// Set aside by the user's Stop, or by an interrupted typing.
     var paused: [Entry]
-    /// The queued entry that Toastty was typing when it saved this. After
-    /// a relaunch nobody knows whether the terminal took it.
+    /// The waiting entry that Toastty was typing when it saved this: the
+    /// first queued one, or any one that "Steer now" types into a running
+    /// turn. After a relaunch nobody knows whether the terminal took it.
     var typingEntryID: String?
 
     static func load(from url: URL) -> CoordinatorQueueSnapshot? {

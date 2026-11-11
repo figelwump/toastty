@@ -19,8 +19,9 @@ process that started it over SSH makes the clicks and keys.
 The check proves from Claude's transcript, the chat's own text and the CLI
 that:
 - Open Coordinator shows the chat, and Return in the composer sends;
-- a message sent while the coordinator works waits as Queued and is typed
-  after the turn, in its own turn;
+- a message queued with Command-Return while the coordinator works waits
+  as Queued and is typed after the turn, in its own turn (Return steers the
+  turn; remote-coordinator-steer-check.py covers that);
 - Stop ends the turn and sets the waiting message aside; Send next types it;
 - a digest that Toastty typed shows as one folded line, and a click opens it;
 - a task link shows as a chip with the task's own title, a click opens the
@@ -124,13 +125,19 @@ class UI:
         code, output = self.run('texts', identifier, check=False)
         return output if code == 0 else ''
 
-    def send(self, text):
-        """Types into the chat's composer and presses Return."""
+    def send(self, text, key='return'):
+        """Types into the chat's composer and presses Return. While a turn
+        runs, Return steers it; `key='cmd-return'` queues instead."""
         self.run('focus', 'coordinator.chat.composer')
         time.sleep(0.3)
         self.run('type', text)
         time.sleep(0.3)
-        self.run('key', 'return')
+        self.run('key', key)
+
+    def queue(self, text):
+        """Types into the chat's composer and presses Command-Return, so the
+        message waits for the running turn's end."""
+        self.send(text, key='cmd-return')
 
 
 def compile_ax_drive(binary):
@@ -373,7 +380,7 @@ def run(check):
         # 3. A message sent during a turn waits as Queued, then gets its own turn.
         ui.send(long_turn(25, 'CHAT-TWO'))
         wait_for('the long turn to run', lambda: status().get('status') == 'working', timeout=60)
-        ui.send('Reply with exactly this one word and nothing else: CHAT-THREE')
+        ui.queue('Reply with exactly this one word and nothing else: CHAT-THREE')
         queued = wait_for('the message to wait', lambda: (s := status())['queuedCount'] == 1 and s)
         require(queued.get('hold') in ('busy', 'awaitingTurn'), f'Unexpected hold: {queued}')
         wait_for('the chat to show it as Queued', lambda: 'queued 1' in ui.texts().lower())
@@ -393,7 +400,7 @@ def run(check):
         # 4. Stop ends the turn and sets the waiting message aside.
         ui.send(long_turn(90, 'CHAT-FOUR'))
         wait_for('the long turn to run', lambda: status().get('status') == 'working', timeout=60)
-        ui.send('Reply with exactly this one word and nothing else: CHAT-FIVE')
+        ui.queue('Reply with exactly this one word and nothing else: CHAT-FIVE')
         wait_for('the message to wait', lambda: status()['queuedCount'] == 1)
         wait_for('the Stop button', lambda: ui.exists('coordinator.chat.stop'), timeout=30)
         time.sleep(3)
@@ -522,7 +529,7 @@ def run(check):
         ui.send(long_turn(25, 'CHAT-SEVEN'))
         busy = wait_for('the turn the device can queue into',
                         lambda: (c := conversation()) and (c.get('inputControl') or {}).get('turnEpoch') and c, timeout=60)
-        ui.send('Reply with exactly this one word and nothing else: CHAT-EIGHT')
+        ui.queue('Reply with exactly this one word and nothing else: CHAT-EIGHT')
         wait_for('the Mac\'s message to wait', lambda: status()['queuedCount'] == 1)
         phone_send('phone-2', 'Reply with exactly this one word and nothing else: PHONE-TWO', 'queue',
                    busy['inputControl']['turnEpoch'])

@@ -395,6 +395,7 @@ case "key":
     switch argument {
     case "return": press(keyCode: 36)
     case "shift-return": press(keyCode: 36, flags: .maskShift)
+    case "cmd-return": press(keyCode: 36, flags: .maskCommand)
     case "escape": press(keyCode: 53)
     case "up": press(keyCode: 126)
     case "down": press(keyCode: 125)
