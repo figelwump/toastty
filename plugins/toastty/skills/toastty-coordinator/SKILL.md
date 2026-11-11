@@ -174,10 +174,11 @@ COORDINATOR_MESSAGE_END
    wakes you at a stage change of a task that may need you, but not for a
    task that only starts running, and it has no timer of its own. The check
    catches what changes no stage, such as a permission prompt that reaches
-   its age, slow CI, or a busy agent that goes silent. Set it only for a
-   deadline in this table, with
-   `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>`, and take the
-   shortest time that applies. With no such deadline, run
+   its age, slow CI, a busy agent that goes silent, or a batch release
+   time. Set it only for a deadline in this table, with
+   `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>` or
+   `--at <ISO time>`, and take the earliest time that applies. With no such
+   deadline, run
    `"$TOASTTY_CLI_PATH" coordinator wake --clear`. Do this also when you
    tell the user nothing, and never mention it to the user.
 
@@ -187,6 +188,7 @@ COORDINATOR_MESSAGE_END
    | Checks run on a pull request | `20m` |
    | You sent a task an instruction | `30m` |
    | An agent is `busy`, and its `silentMinutes` is under 30 | when `silentMinutes` reaches 30, at least `1m` |
+   | A project's batch rule in Releases names a time, and a task of that project waits in `toShip` | that time |
 
 **The user started the turn:** route what the user wrote.
 
