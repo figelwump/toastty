@@ -449,10 +449,14 @@ session, where the Claude login is readable.
 - The coordinator may run Bash and the file tools without a prompt, so only
   its instructions stop a merge.
 
-The scenarios are `first-run`, `permission`, `question-settled`,
-`question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
+The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
+`first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
 `never-merge`, `release`, `user-typed`, `busy-silent`, `new-task`, `dependency` and
-`interrupted`. `--scenarios a,b` selects some, and `--scenarios judgment`
+`interrupted`. The `first-run` scenarios cover the setup questions: with a
+history of choices, with a model rule in an instruction file (a `CLAUDE.md`
+above the coordinator's folder, which Claude Code reads), with a request as
+the first message, and with a policy from before the Talking section.
+`--scenarios a,b` selects some, and `--scenarios judgment`
 selects those whose result depends on the coordinator's judgment.
 `--repeat N` runs each scenario N times and `--repeat-judgment N` only the
 judgment ones; `--jobs N` runs N scenarios at the same time; `--model` and

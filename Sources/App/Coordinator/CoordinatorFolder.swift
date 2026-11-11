@@ -40,6 +40,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Agents
 
+    ## Talking
+
     ## Reviewing
 
     ## Unblocking
