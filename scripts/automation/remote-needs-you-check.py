@@ -15,7 +15,8 @@ that:
 - an idle task lists in Needs you, as context, with its child that waits for
   review, instead of apart in Idle;
 - selecting an unread finished task reads it, but its row keeps its place in
-  Needs you until another task is selected; then it moves to Idle.
+  Needs you until another task is selected or work resumes; resuming moves
+  it to Running even while selected.
 Captures of each step go to the artifacts directory when the app allows one;
 a missing capture is recorded, not failed.
 """
@@ -200,7 +201,9 @@ def main():
         status(asked_session, 'working', 'Working')
         answered = wait_for('the reply to clear the question', lambda: (t := task(asked_id))['replyRequest'] is None and t)
         require(answered['stage']['group'] == 'running', f'The answered task should run: {answered["stage"]}')
-        step('reply cleared the question', stage=answered['stage'])
+        resumed = wait_for('the answered task to list in Running', lambda: (
+            (o := sidebar_order()) and group_of(o, asked_space) == 'Running' and o))
+        step('reply cleared the question', stage=answered['stage'], order=resumed)
         status(asked_session, 'idle', 'Waiting')
 
         # 2. A family lists in its most urgent group: an idle parent with a
@@ -246,11 +249,23 @@ def main():
         require(clicked_space in kept_after and kept_before == kept_after, f'The selected row moved: {before} -> {held}')
         step('selected row holds its slot', order=held)
         capture('5-selected-holds')
+        status(clicked_session, 'working', 'Working')
+        wait_for('the selected task to be running', lambda: stage(clicked_id)['group'] == 'running')
+        resumed = wait_for('the selected task to list in Running', lambda: (
+            (o := sidebar_order()) and group_of(o, clicked_space) == 'Running' and o))
+        require(clicked_space not in rows_in(resumed, 'Needs you'), f'The running row still needs the user: {resumed}')
+        step('selected row moved when work resumed', order=resumed)
+        capture('6-selected-resumes')
+        status(clicked_session, 'idle', 'Waiting')
+        wait_for('the task to be idle again', lambda: stage(clicked_id)['group'] == 'idle')
+        idle_held = sidebar_order()
+        require(group_of(idle_held, clicked_space) == 'Running', f'The idle selected row lost its new hold: {idle_held}')
+        step('idle selected row holds its new group', order=idle_held)
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
         moved = wait_for('the row to move to Idle once deselected',
                          lambda: (o := sidebar_order()) and group_of(o, clicked_space) == 'Idle' and o)
         step('row moved after selection changed', order=moved)
-        capture('6-after-deselect')
+        capture('7-after-deselect')
 
         evidence['status'] = 'passed'
     finally:
