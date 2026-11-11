@@ -196,6 +196,8 @@ COORDINATOR_MESSAGE_END
   task's agent does that.
 - **Several requests in one message** are one task each.
 - **An answer to a question you passed on** goes to that task.
+- **An answer to your own question or proposal,** such as a yes to an
+  archive or a release: act on it, as the section that asked says.
 - **A question about where the tasks stand,** such as "what waits for me?":
   answer it yourself from the task list and `ledger.md`, in a few lines.
 - **A change to a rule:** see Change the policy.
@@ -234,7 +236,7 @@ the task to fix it, it pushes, and CI fails again: that goes to the user.
 repeat it on the next wake. Say it again only when it changed. This holds also
 for what waits for the user in this conversation, such as an offer to start a
 release or a question you asked: say it once, and do not add it to later
-answers.
+answers. When the user asks what waits for them, list it again.
 
 ## New tasks
 
@@ -449,7 +451,8 @@ history, say so in one line: the rules then come from your questions.
 - Write each task as a link: `[title](toastty://task/<task-id>)`.
 - Be short. Put first what needs the user, with the answer you suggest. Then
   one line for each thing you did. Say nothing about tasks that need nothing.
-- When a wake found nothing for the user, answer only "Nothing needs you."
+- When a wake found nothing for the user and you did nothing that you must
+  report, answer only "Nothing needs you."
 - For a task that needs nothing from the user, do not report its stage or
   that its agent works: Toastty shows both. Do not mention your next check.
 - Do not repeat an agent's report, and do not summarize proof.
