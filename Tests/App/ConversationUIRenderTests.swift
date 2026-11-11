@@ -62,41 +62,57 @@ final class ConversationUIRenderTests: XCTestCase {
         try keep(bitmap, name: "conversation-ui-macos-fixture")
     }
 
-    /// A message keeps its bubble size from sending to sent, so the bubble
-    /// does not grow and shrink back when the message arrives. On the Mac
-    /// the sent row has no caption; on the iPhone it says how it was sent.
+    /// A message keeps its bubble size and place from sending to sent, so
+    /// the bubble does not grow and shrink back, or move, when the message
+    /// arrives. On the Mac the sent row has no caption; on the iPhone it
+    /// says how it was sent. Where messages have a copy button, the sending
+    /// bubble keeps the button's space. Earlier messages fill the view, so
+    /// the transcript stays at its bottom edge, as in a real conversation.
     func testSendingBubbleKeepsTheSizeOfTheSentBubble() throws {
         guard #available(macOS 15.0, *) else {
             throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
         }
         let text = "Merge it."
-        let cases: [(name: String, caption: String?, origin: ConversationMessageOrigin)] = [
-            ("mac", nil, .local),
-            ("iphone", "sent remotely", .remote),
+        let earlier = (1...4).map { index in
+            Self.row(UInt64(index), .assistantMessage(
+                text: "Earlier answer \(index), long enough to take a few lines in the narrow test window.",
+                phase: .final
+            ))
+        }
+        let cases: [(name: String, caption: String?, origin: ConversationMessageOrigin, copyButton: Bool)] = [
+            ("mac", nil, .local, false),
+            ("iphone", "sent remotely", .remote, false),
+            ("mac-copy-button", nil, .local, true),
         ]
-        for (name, caption, origin) in cases {
-            let sending = try bubbleHeight(of: text, named: "sending-bubble-\(name)", in: .init(
-                rows: [],
+        for (name, caption, origin, copyButton) in cases {
+            let options = ToasttyTranscriptOptions(showsMessageCopyButton: copyButton)
+            let sending = try bubbleHeight(of: text, named: "sending-bubble-\(name)", options: options, in: .init(
+                rows: earlier,
                 sendItems: [ToasttySendPresentationItem(
                     clientRequestID: "sending", text: text,
                     content: .optimistic(response: .accepted), sentCaption: caption
                 )],
                 phase: .live, revision: .initial, historyTruncated: false
             ))
-            let sent = try bubbleHeight(of: text, named: "sent-bubble-\(name)", in: .init(
-                rows: [Self.row(1, .userMessage(text: text, origin: origin))],
+            let sent = try bubbleHeight(of: text, named: "sent-bubble-\(name)", options: options, in: .init(
+                rows: earlier + [Self.row(5, .userMessage(text: text, origin: origin))],
                 sendItems: [], phase: .live, revision: .initial, historyTruncated: false
             ))
-            XCTAssertEqual(sending, sent, "\(name): the sending bubble must match the sent bubble's height")
+            XCTAssertEqual(sending.height, sent.height, "\(name): the sending bubble must match the sent bubble's height")
+            XCTAssertEqual(sending.top, sent.top, "\(name): the bubble must not move when the message is sent")
         }
     }
 
-    /// The height in points of the bubble that holds `text`, measured from
-    /// the drawn pixels in a column inside the bubble's leading padding.
+    /// The height in points of the bubble that holds `text`, and its top
+    /// edge, measured from the drawn pixels in a column inside the bubble's
+    /// leading padding.
     @available(macOS 15.0, *)
     private func bubbleHeight(
-        of text: String, named name: String, in state: ToasttyConversationPresentationState
-    ) throws -> CGFloat {
+        of text: String,
+        named name: String,
+        options: ToasttyTranscriptOptions,
+        in state: ToasttyConversationPresentationState
+    ) throws -> (height: CGFloat, top: CGFloat) {
         let size = CGSize(width: 480, height: 220)
         let transcript = ToasttyTranscriptView(
             state: state,
@@ -105,7 +121,8 @@ final class ConversationUIRenderTests: XCTestCase {
             readAcknowledgementEpoch: .working,
             workingIndicator: nil,
             jumpToLiveEdgeRequest: .constant(0),
-            canAcknowledgeRead: false
+            canAcknowledgeRead: false,
+            options: options
         )
         let (hostingView, window) = Self.host(transcript, size: size)
         defer { window.close() }
@@ -134,7 +151,7 @@ final class ConversationUIRenderTests: XCTestCase {
         while isBubble(top - 1) { top -= 1 }
         var bottom = Int(textRect.midY * scale)
         while isBubble(bottom + 1) { bottom += 1 }
-        return CGFloat(bottom - top + 1) / scale
+        return (CGFloat(bottom - top + 1) / scale, CGFloat(top) / scale)
     }
 
     private static func host<Content: View>(_ content: Content, size: CGSize) -> (NSHostingView<some View>, NSWindow) {

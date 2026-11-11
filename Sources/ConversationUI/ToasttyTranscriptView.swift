@@ -40,6 +40,7 @@ public struct ToasttyTranscriptView: View {
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
     @State private var entryScrollPosition: TranscriptEntryScrollPosition
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
+    @State private var messageHover = ToasttyMessageHoverState()
     @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
     #if DEBUG && os(iOS)
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
@@ -430,6 +431,7 @@ public struct ToasttyTranscriptView: View {
             }
             .background(ConversationDesignTokens.background)
             .environment(\.toasttyTranscriptOptions, options)
+            .environment(messageHover)
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
             .onChange(of: toolBatchActivity, initial: true) { _, activity in
@@ -1628,20 +1630,40 @@ private struct ToasttySendScrollItem: Equatable {
     }
 }
 
+/// The size of a message's copy button. A message that is still sending
+/// keeps the same space, so its bubble does not move when it is sent.
+private enum ToasttyMessageCopyButtonMetrics {
+    static let size = CGSize(width: 24, height: 20)
+    static let spacing: CGFloat = 2
+}
+
 /// The user's message bubble. A message that is still sending uses the same
 /// view, so the bubble keeps its size when its transcript row replaces it.
 /// The sending state changes no layout: the bubble is faded, and after a
 /// short wait a spinner shows in the empty space to its left.
-private struct ToasttyUserMessageBubble: View {
+private struct ToasttyUserMessageBubble<Footer: View>: View {
     /// A quick send ends before this, so it shows only the fade.
-    static let sendingIndicatorDelay: Duration = .milliseconds(400)
+    static var sendingIndicatorDelay: Duration { .milliseconds(400) }
 
     let text: String
     let caption: String?
     var isSending = false
+    /// Under the bubble, outside it: the message's copy button, or the
+    /// same space while the message sends.
+    @ViewBuilder let footer: () -> Footer
     @State private var showsSendingIndicator = false
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: ToasttyMessageCopyButtonMetrics.spacing) {
+            bubble
+            footer()
+        }
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var bubble: some View {
         VStack(alignment: .trailing, spacing: 5) {
             ToasttySelectableText(AttributedString(text),
                                   textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
@@ -1678,9 +1700,6 @@ private struct ToasttyUserMessageBubble: View {
             guard Task.isCancelled == false else { return }
             withAnimation(.easeIn(duration: 0.15)) { showsSendingIndicator = true }
         }
-        .padding(.leading, 48)
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .accessibilityElement(children: .contain)
     }
 }
 
@@ -1688,6 +1707,7 @@ private struct ToasttySendTailItemView: View {
     let item: ToasttySendPresentationItem
     let dismiss: () -> Void
     var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
+    @Environment(\.toasttyTranscriptOptions) private var options
 
     @ViewBuilder
     var body: some View {
@@ -1768,7 +1788,16 @@ private struct ToasttySendTailItemView: View {
     }
 
     private var optimisticBubble: some View {
-        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, isSending: true)
+        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, isSending: true) {
+            if options.showsMessageCopyButton {
+                Color.clear
+                    .frame(
+                        width: ToasttyMessageCopyButtonMetrics.size.width,
+                        height: ToasttyMessageCopyButtonMetrics.size.height
+                    )
+                    .accessibilityHidden(true)
+            }
+        }
             .accessibilityLabel("\(item.text), Sending")
             .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
     }
@@ -1842,6 +1871,14 @@ private struct ToasttySendTailItemView: View {
     }
 }
 
+/// The message row under the pointer. A long message is drawn as several
+/// rows, and its copy button, under the last row, shows while the pointer is
+/// over any of them.
+@MainActor @Observable
+private final class ToasttyMessageHoverState {
+    var blockID: ToasttyTranscriptBlockID?
+}
+
 private struct ToasttyTranscriptRowView: View {
     let row: ToasttyTranscriptRow
     var chunk: ToasttyTranscriptMessageChunk?
@@ -1853,6 +1890,9 @@ private struct ToasttyTranscriptRowView: View {
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
     @Environment(\.toasttyTranscriptOptions) private var options
+    @Environment(ToasttyMessageHoverState.self) private var messageHover: ToasttyMessageHoverState?
+    /// Counts copies, so a second copy restarts the copied mark's timer.
+    @State private var messageCopyCount = 0
 
     @ViewBuilder
     var body: some View {
@@ -1933,30 +1973,103 @@ private struct ToasttyTranscriptRowView: View {
 
     @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
-        if isUser {
-            ToasttyUserMessageBubble(text: text, caption: metadata)
-                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
-        } else {
-            VStack(alignment: .leading, spacing: 5) {
-                ToasttyMarkdownText(
-                    text: text,
-                    preparedBlocks: chunk?.blocks,
-                    textColor: isDemoted
-                        ? ConversationDesignTokens.secondaryText
-                        : ConversationDesignTokens.primaryText
-                )
+        // A long message draws as several rows. Only its last row has the
+        // button, and the button copies the whole message.
+        let copiesMessage = options.showsMessageCopyButton && (chunk?.isLast ?? true)
+        let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
 
-                if let metadata {
-                    Text(metadata)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(ConversationDesignTokens.mutedText)
+        if isUser {
+            ToasttyUserMessageBubble(text: text, caption: metadata) {
+                if copiesMessage {
+                    messageCopyButton(text, alignment: .trailing)
+                }
+            }
+            .accessibilityLabel(accessibilityLabel)
+            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(text) }
+            .onHover(perform: messageHoverChanged)
+        } else {
+            VStack(alignment: .leading, spacing: ToasttyMessageCopyButtonMetrics.spacing) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ToasttyMarkdownText(
+                        text: text,
+                        preparedBlocks: chunk?.blocks,
+                        textColor: isDemoted
+                            ? ConversationDesignTokens.secondaryText
+                            : ConversationDesignTokens.primaryText
+                    )
+
+                    if let metadata {
+                        Text(metadata)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(ConversationDesignTokens.mutedText)
+                    }
+                }
+                if copiesMessage {
+                    messageCopyButton(text, alignment: .leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // Keep native text selection and links accessible within each
             // message, including descendants of horizontal table views.
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
+            .accessibilityLabel(accessibilityLabel)
+            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(text) }
+            .onHover(perform: messageHoverChanged)
+        }
+    }
+
+    private func messageHoverChanged(_ isHovering: Bool) {
+        guard options.showsMessageCopyButton, let messageHover else { return }
+        let blockID = ToasttyTranscriptBlockID(rowID: row.id, chunkIndex: chunk?.index ?? 0)
+        if isHovering {
+            messageHover.blockID = blockID
+        } else if messageHover.blockID == blockID {
+            // The pointer may already be over the next row, which set its own ID.
+            messageHover.blockID = nil
+        }
+    }
+
+    private func copyMessage(_ text: String) {
+        ConversationPasteboard.copy(text)
+        messageCopyCount += 1
+    }
+
+    /// A small button under the message. It shows while the pointer is over
+    /// the message, and for a moment after a copy. Its space is always kept,
+    /// so the transcript does not move when it appears.
+    /// `alignment` lines the icon up with the message's edge.
+    private func messageCopyButton(_ text: String, alignment: Alignment) -> some View {
+        let showsCopiedMark = messageCopyCount > 0
+        #if os(macOS)
+        let isVisible = messageHover?.blockID?.rowID == row.id || showsCopiedMark
+        #else
+        let isVisible = true
+        #endif
+        return Button {
+            copyMessage(text)
+        } label: {
+            Image(systemName: showsCopiedMark ? "checkmark" : "doc.on.doc")
+                .font(.caption)
+                .frame(
+                    width: ToasttyMessageCopyButtonMetrics.size.width,
+                    height: ToasttyMessageCopyButtonMetrics.size.height,
+                    alignment: alignment
+                )
+                .contentShape(Rectangle())
+        }
+        .conversationPlainButtonOnMac()
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .help(showsCopiedMark ? "Copied" : "Copy message")
+        .accessibilityLabel(showsCopiedMark ? "Copied" : "Copy message")
+        .accessibilityIdentifier("toastty-mobile-transcript-copy-\(row.id.accessibilitySuffix)")
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .animation(.easeOut(duration: 0.12), value: isVisible)
+        .task(id: messageCopyCount) {
+            guard messageCopyCount > 0 else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            messageCopyCount = 0
         }
     }
 
@@ -2083,6 +2196,17 @@ private struct TranscriptContentWidth: ViewModifier {
 }
 
 private extension View {
+    /// Lets VoiceOver copy a message without finding the button that shows
+    /// only under the pointer.
+    @ViewBuilder
+    func messageCopyAccessibilityAction(_ isEnabled: Bool, copy: @escaping () -> Void) -> some View {
+        if isEnabled {
+            accessibilityAction(named: "Copy message", copy)
+        } else {
+            self
+        }
+    }
+
     func transcriptBannerStyle(color: Color) -> some View {
         self
             .font(.caption.monospaced())

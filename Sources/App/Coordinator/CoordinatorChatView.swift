@@ -29,7 +29,8 @@ struct CoordinatorChatView: View {
     static let transcriptOptions = ToasttyTranscriptOptions(
         maximumContentWidth: maximumContentWidth,
         readOnlyInteractionMessage: "Answer in the terminal",
-        shortenedPreviewMessage: "Preview shortened. The terminal shows the full request."
+        shortenedPreviewMessage: "Preview shortened. The terminal shows the full request.",
+        showsMessageCopyButton: true
     )
 
     var body: some View {
