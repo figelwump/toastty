@@ -604,9 +604,15 @@ enum ToasttySendPresentationAdapter {
     ) -> [ToasttySendPresentationItem] {
         state.records.compactMap { record in
             let content: ToasttySendPresentationItem.Content
+            var sentCaption: String?
             switch record.deliveryState {
             case .pending(let response):
                 content = .optimistic(response: ToasttyPendingSendResponse(response))
+                // The row that replaces this bubble says how the message
+                // arrived. The Mac can queue a message sent at the prompt.
+                let deliveryMode: RemoteMessageDeliveryMode =
+                    if case .queued = response { .queue } else { record.deliveryMode }
+                sentCaption = ToasttyUserMessageCaption.text(origin: .remote, deliveryMode: deliveryMode)
             case .confirmed:
                 return nil
             case .rejected(let reason):
@@ -621,7 +627,8 @@ enum ToasttySendPresentationAdapter {
             return ToasttySendPresentationItem(
                 clientRequestID: record.clientRequestID,
                 text: record.text,
-                content: content
+                content: content,
+                sentCaption: sentCaption
             )
         }
     }

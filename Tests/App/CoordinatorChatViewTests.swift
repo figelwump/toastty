@@ -107,6 +107,115 @@ final class CoordinatorChatViewTests: XCTestCase {
         try Self.writeEvidence(png, name: "coordinator-chat-transcript")
     }
 
+    /// A chip in running text: it moves to the next line as one piece, also
+    /// when its title has a hyphen. A chip wider than the line wraps, and each
+    /// line gets its own outline around that line's part of the chip.
+    func testTaskChipStaysOnOneLineAndOutlinesOnlyItsOwnTextWhenItWraps() throws {
+        let taskID = Self.reviewTaskID
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(taskID, title: "Toastty-coordinator SKILL.md lightweight routing",
+                      stage: .running, pullRequest: 295),
+        ])
+        let markdown = """
+        Whether that event can go, or is useful in other cases, is already a question in \
+        [the routing task](toastty://task/\(taskID.uuidString)). Its agent is busy now, so I will \
+        send it your question when it is idle.
+        """
+        let source = try AttributedString(markdown: markdown)
+        func hosted(width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
+            let view = ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: chips.presenter))
+                .frame(width: width)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .background(Color.black)
+                .environment(\.colorScheme, .dark)
+            let hostingView = NSHostingView(rootView: AnyView(view))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 24, height: 200),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = hostingView
+            hostingView.layoutSubtreeIfNeeded()
+            return (hostingView, window)
+        }
+
+        let (probe, probeWindow) = hosted(width: 600)
+        defer { probeWindow.close() }
+        let storage = try XCTUnwrap(Self.descendants(of: probe, as: ToasttyTranscriptTextView.self).first?.textStorage)
+        let rendered = NSAttributedString(attributedString: storage)
+        var chipRange = NSRange()
+        let chipStart = (rendered.string as NSString).range(of: "Toastty-coordinator").location
+        XCTAssertNotEqual(chipStart, NSNotFound)
+        XCTAssertNotNil(rendered.attribute(.toasttyChip, at: chipStart, longestEffectiveRange: &chipRange,
+                                           in: NSRange(location: 0, length: rendered.length)))
+
+        /// The chip's text on each line, laid out at `width`. A layout
+        /// manager holds its storage weakly, so the caller keeps it.
+        func layout(width: CGFloat, layoutManager: NSLayoutManager)
+            -> (lines: [NSRange], chipWidth: CGFloat, storage: NSTextStorage) {
+            let textStorage = NSTextStorage(attributedString: rendered)
+            let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            textStorage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+            var lines: [NSRange] = []
+            var index = glyphs.location
+            while index < NSMaxRange(glyphs) {
+                var line = NSRange()
+                _ = layoutManager.lineFragmentRect(forGlyphAt: index, effectiveRange: &line)
+                lines.append(NSIntersectionRange(line, glyphs))
+                index = NSMaxRange(line)
+            }
+            let chipWidth = rendered.attributedSubstring(from: chipRange)
+                .boundingRect(with: CGSize(width: 100_000, height: 1_000), options: [.usesLineFragmentOrigin]).width
+            return (lines, chipWidth, textStorage)
+        }
+
+        var hyphenBreakWidth: CGFloat?
+        var sawWrappedChip = false
+        for width in stride(from: CGFloat(160), through: 900, by: 4) {
+            let manager = ToasttyChipLayoutManager()
+            let (lines, chipWidth, storage) = layout(width: width, layoutManager: manager)
+            if chipWidth + 1 < width {
+                XCTAssertEqual(lines.count, 1, "At width \(width) the chip must stay on one line")
+            } else {
+                sawWrappedChip = true
+            }
+            // Each outline covers that line's part of the chip, and nothing
+            // past it.
+            let outlines = manager.chipOutlineRects(forCharacterRange: chipRange)
+            XCTAssertEqual(outlines.count, lines.count, "At width \(width)")
+            for (outline, line) in zip(outlines, lines) {
+                let text = manager.boundingRect(forGlyphRange: line, in: manager.textContainers[0])
+                XCTAssertLessThanOrEqual(outline.maxX, text.maxX + 1, "At width \(width)")
+                XCTAssertGreaterThanOrEqual(outline.minX, text.minX - 1, "At width \(width)")
+            }
+            // Where a plain layout manager breaks the chip after its hyphen.
+            if hyphenBreakWidth == nil, chipWidth + 1 < width,
+               layout(width: width, layoutManager: NSLayoutManager()).lines.count > 1 {
+                hyphenBreakWidth = width
+            }
+            withExtendedLifetime(storage) {}
+        }
+        XCTAssertTrue(sawWrappedChip, "The sweep must include a line narrower than the chip")
+        let breakWidth = try XCTUnwrap(hyphenBreakWidth, "The sweep must include the hyphen break")
+
+        for (name, width) in [("task-chip-at-hyphen-break", breakWidth), ("task-chip-wider-than-line", 220)] {
+            let (hostingView, window) = hosted(width: width)
+            defer { window.close() }
+            let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+            hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try Self.writeEvidence(png, name: name)
+        }
+    }
+
     /// Writes the PNG when the runner sets `TOASTTY_CONVERSATION_EVIDENCE_DIR`
     /// (pass it as `TEST_RUNNER_…` to xcodebuild).
     private static func writeEvidence(_ png: Data, name: String) throws {
