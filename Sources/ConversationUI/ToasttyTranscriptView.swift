@@ -26,6 +26,8 @@ public struct ToasttyTranscriptView: View {
     let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: () -> Void
     let options: ToasttyTranscriptOptions
+    /// Reply on an agent's message. `nil` offers no Reply.
+    let replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)?
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
@@ -64,7 +66,8 @@ public struct ToasttyTranscriptView: View {
         jumpToLiveEdgeRequest: Binding<UInt64>,
         canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping () -> Void = {},
-        options: ToasttyTranscriptOptions = ToasttyTranscriptOptions()
+        options: ToasttyTranscriptOptions = ToasttyTranscriptOptions(),
+        replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)? = nil
     ) {
         self.state = state
         self.isSubmitting = isSubmitting
@@ -80,6 +83,7 @@ public struct ToasttyTranscriptView: View {
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.options = options
+        self.replyToMessage = replyToMessage
         _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
         _followsLiveEdge = State(initialValue:
             readAcknowledgementEpoch?.activity != .ready || state.phase == .loading || state.phase == .resyncing
@@ -432,6 +436,10 @@ public struct ToasttyTranscriptView: View {
             .background(ConversationDesignTokens.background)
             .environment(\.toasttyTranscriptOptions, options)
             .environment(messageHover)
+            .environment(\.toasttyMessageReply, replyToMessage.map(ToasttyMessageReplyAction.init))
+            .environment(\.toasttyRevealRow, ToasttyRevealRowAction { rowID in
+                revealRow(rowID, using: proxy)
+            })
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
             .onChange(of: toolBatchActivity, initial: true) { _, activity in
@@ -876,6 +884,33 @@ public struct ToasttyTranscriptView: View {
             }
         } else {
             scrollWithoutAnimation(to: target, anchor: anchor, using: proxy)
+        }
+    }
+
+    /// Scrolls to the start of a row, for a click on a quote of it. A row in
+    /// a folded turn opens its turn first. The reader then owns the
+    /// position, as after a scroll by hand: the transcript stops following
+    /// the newest message, and Jump to latest shows.
+    private func revealRow(_ rowID: ToasttyTranscriptRowID, using proxy: ScrollViewProxy) {
+        let blockID = ToasttyTranscriptBlockID(rowID: rowID)
+        guard state.blocks.contains(where: { $0.id == blockID }) else { return }
+        followsLiveEdge = false
+        entryScrollPosition.cancelForInteraction()
+        scrollCoordinator.cancelForInteraction()
+        let target = ToasttyConversationScrollTarget.transcript(blockID)
+        if let turn = state.turns.first(where: { $0.workBlockIDs.contains(blockID) }),
+           turnFold.isExpanded(turn.id) == false {
+            turnFold.toggle(turn.id)
+            // The row is laid out on the next pass.
+            DispatchQueue.main.async {
+                withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
+                    proxy.scrollTo(target, anchor: .top)
+                }
+            }
+            return
+        }
+        withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
+            proxy.scrollTo(target, anchor: .top)
         }
     }
 
@@ -1647,6 +1682,8 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
 
     let text: String
     let caption: String?
+    /// The agent's message that this message answers.
+    var quote: ToasttyMessageQuote?
     var isSending = false
     /// Under the bubble, outside it: the message's copy button, or the
     /// same space while the message sends.
@@ -1665,6 +1702,9 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
 
     private var bubble: some View {
         VStack(alignment: .trailing, spacing: 5) {
+            if let quote {
+                ToasttyMessageQuoteStrip(quote: quote)
+            }
             ToasttySelectableText(AttributedString(text),
                                   textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
             if let caption {
@@ -1731,6 +1771,9 @@ private struct ToasttySendTailItemView: View {
                 .font(.caption2.monospaced().weight(.semibold))
                 .foregroundStyle(ConversationDesignTokens.amberText)
                 .textCase(.uppercase)
+            if let quote = item.quote {
+                ToasttyMessageQuoteStrip(quote: quote)
+            }
             Text(item.text)
                 .font(.body)
                 .foregroundStyle(ConversationDesignTokens.secondaryText)
@@ -1788,7 +1831,7 @@ private struct ToasttySendTailItemView: View {
     }
 
     private var optimisticBubble: some View {
-        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, isSending: true) {
+        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, quote: item.quote, isSending: true) {
             if options.showsMessageCopyButton {
                 Color.clear
                     .frame(
@@ -1871,6 +1914,49 @@ private struct ToasttySendTailItemView: View {
     }
 }
 
+/// One line of the agent's message that a user's message answers, at the
+/// top of the user's bubble. A click scrolls to that message when the host
+/// found its row.
+private struct ToasttyMessageQuoteStrip: View {
+    let quote: ToasttyMessageQuote
+    @Environment(\.toasttyRevealRow) private var revealRow
+
+    var body: some View {
+        if let rowID = quote.sourceRowID, let revealRow {
+            Button { revealRow.reveal(rowID) } label: { content }
+                .conversationPlainButtonOnMac()
+                .help("Show the message this replies to")
+                .accessibilityHint("Shows the message this replies to")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.caption2)
+            Text(quote.timeText.map { "\($0) · \(quote.excerpt)" } ?? quote.excerpt)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(ConversationDesignTokens.secondaryText)
+        .padding(.leading, 8)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(ConversationDesignTokens.amber)
+                .frame(width: 2)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Reply to: \(quote.excerpt)")
+        .accessibilityIdentifier("toastty-transcript-reply-quote")
+    }
+}
+
 /// The message row under the pointer. A long message is drawn as several
 /// rows, and its copy button, under the last row, shows while the pointer is
 /// over any of them.
@@ -1891,6 +1977,7 @@ private struct ToasttyTranscriptRowView: View {
     let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
     @Environment(\.toasttyTranscriptOptions) private var options
     @Environment(ToasttyMessageHoverState.self) private var messageHover: ToasttyMessageHoverState?
+    @Environment(\.toasttyMessageReply) private var messageReply
     /// Counts copies, so a second copy restarts the copied mark's timer.
     @State private var messageCopyCount = 0
 
@@ -1927,11 +2014,12 @@ private struct ToasttyTranscriptRowView: View {
     @ViewBuilder
     private var rowContent: some View {
         switch row.content {
-        case .userMessage(let text, let origin, let deliveryMode):
+        case .userMessage(let text, let origin, let deliveryMode, let quote):
             message(
                 text: text,
                 isUser: true,
-                metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode)
+                metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode),
+                quote: quote
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -1972,14 +2060,15 @@ private struct ToasttyTranscriptRowView: View {
     }
 
     @ViewBuilder
-    private func message(text: String, isUser: Bool, metadata: String?) -> some View {
+    private func message(text: String, isUser: Bool, metadata: String?, quote: ToasttyMessageQuote? = nil) -> some View {
         // A long message draws as several rows. Only its last row has the
-        // button, and the button copies the whole message.
+        // buttons, and they act on the whole message.
         let copiesMessage = options.showsMessageCopyButton && (chunk?.isLast ?? true)
+        let repliesToMessage = isUser == false && messageReply != nil && (chunk?.isLast ?? true)
         let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
 
         if isUser {
-            ToasttyUserMessageBubble(text: text, caption: metadata) {
+            ToasttyUserMessageBubble(text: text, caption: metadata, quote: quote) {
                 if copiesMessage {
                     messageCopyButton(text, alignment: .trailing)
                 }
@@ -2004,8 +2093,15 @@ private struct ToasttyTranscriptRowView: View {
                             .foregroundStyle(ConversationDesignTokens.mutedText)
                     }
                 }
-                if copiesMessage {
-                    messageCopyButton(text, alignment: .leading)
+                if copiesMessage || repliesToMessage {
+                    HStack(spacing: 2) {
+                        if copiesMessage {
+                            messageCopyButton(text, alignment: .leading)
+                        }
+                        if repliesToMessage {
+                            messageReplyButton(text)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2014,12 +2110,13 @@ private struct ToasttyTranscriptRowView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(accessibilityLabel)
             .messageCopyAccessibilityAction(copiesMessage) { copyMessage(text) }
+            .messageReplyAccessibilityAction(repliesToMessage) { replyToMessage(text) }
             .onHover(perform: messageHoverChanged)
         }
     }
 
     private func messageHoverChanged(_ isHovering: Bool) {
-        guard options.showsMessageCopyButton, let messageHover else { return }
+        guard options.showsMessageCopyButton || messageReply != nil, let messageHover else { return }
         let blockID = ToasttyTranscriptBlockID(rowID: row.id, chunkIndex: chunk?.index ?? 0)
         if isHovering {
             messageHover.blockID = blockID
@@ -2032,6 +2129,40 @@ private struct ToasttyTranscriptRowView: View {
     private func copyMessage(_ text: String) {
         ConversationPasteboard.copy(text)
         messageCopyCount += 1
+    }
+
+    /// `text` is the whole message: a long message's rows each hold it.
+    private func replyToMessage(_ text: String) {
+        messageReply?.reply(ToasttyMessageReplyRequest(rowID: row.id, text: text, timestamp: row.timestamp))
+    }
+
+    /// Reply, next to Copy under an agent's message. It shows while the
+    /// pointer is over the message, as Copy does.
+    private func messageReplyButton(_ text: String) -> some View {
+        #if os(macOS)
+        let isVisible = messageHover?.blockID?.rowID == row.id
+        #else
+        let isVisible = true
+        #endif
+        return Button {
+            replyToMessage(text)
+        } label: {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.caption)
+                .frame(
+                    width: ToasttyMessageCopyButtonMetrics.size.width,
+                    height: ToasttyMessageCopyButtonMetrics.size.height
+                )
+                .contentShape(Rectangle())
+        }
+        .conversationPlainButtonOnMac()
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .help("Reply to this message")
+        .accessibilityLabel("Reply to message")
+        .accessibilityIdentifier("toastty-mobile-transcript-reply-\(row.id.accessibilitySuffix)")
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .animation(.easeOut(duration: 0.12), value: isVisible)
     }
 
     /// A small button under the message. It shows while the pointer is over
@@ -2196,6 +2327,17 @@ private struct TranscriptContentWidth: ViewModifier {
 }
 
 private extension View {
+    /// Lets VoiceOver reply to a message without finding the button that
+    /// shows only under the pointer.
+    @ViewBuilder
+    func messageReplyAccessibilityAction(_ isEnabled: Bool, reply: @escaping () -> Void) -> some View {
+        if isEnabled {
+            accessibilityAction(named: "Reply to message", reply)
+        } else {
+            self
+        }
+    }
+
     /// Lets VoiceOver copy a message without finding the button that shows
     /// only under the pointer.
     @ViewBuilder

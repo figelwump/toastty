@@ -65,6 +65,9 @@ final class CoordinatorChatModel: ObservableObject {
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
     @Published var draft = ""
+    /// The coordinator's message that the composer's message answers, set
+    /// by Reply on that message. It is kept with the text.
+    @Published private(set) var replyTarget: CoordinatorReplyTarget?
     /// The files attached to the composer's message, kept here with the
     /// text. Their changes are the model's changes.
     let attachmentDraft: DraftAttachments
@@ -418,7 +421,8 @@ final class CoordinatorChatModel: ObservableObject {
                 // size when the row replaces it.
                 sentCaption: pending.steered
                     ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
-                    : nil
+                    : nil,
+                quote: Self.quote(of: pending.text)
             )
         }
         guard let controller else { return items }
@@ -434,7 +438,8 @@ final class CoordinatorChatModel: ObservableObject {
                     attachmentCount: Self.attachmentCount(of: entry.text),
                     isPaused: true,
                     canSteer: turnTakesSteer && entry.canBeSteered
-                ))
+                )),
+                quote: Self.quote(of: entry.text)
             ))
         }
         // A phone's queue is in the conversation. Its messages go first:
@@ -468,10 +473,18 @@ final class CoordinatorChatModel: ObservableObject {
                     isPaused: false,
                     canSteer: turnTakesSteer && entry.canBeSteered,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
-                ))
+                )),
+                quote: Self.quote(of: entry.text)
             ))
         }
         return items
+    }
+
+    /// The quote that a reply's bubble shows, from the text as Toastty
+    /// types it. A waiting message's quote does not open its message.
+    static func quote(of text: String) -> ToasttyMessageQuote? {
+        guard case .reply(let quote, let time, _, _) = CoordinatorMessageHeader.kind(of: text) else { return nil }
+        return ToasttyMessageQuote(text: quote, timeText: time)
     }
 
     /// The files that a waiting message names, as Toastty wrote them.
@@ -649,10 +662,12 @@ final class CoordinatorChatModel: ObservableObject {
         guard canSend, let controller else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let steering = queueing == false && queueSelected == false
+        let reply = replyTarget
         guard attachmentDraft.attachments.isEmpty == false else {
             do {
-                try controller.sendUserText(text, steering: steering)
+                try controller.sendUserText(reply?.message(text: text) ?? text, steering: steering)
                 draft = ""
+                replyTarget = nil
                 didSend()
             } catch {
                 transientNotice = .failure(error.localizedDescription)
@@ -666,7 +681,8 @@ final class CoordinatorChatModel: ObservableObject {
         let message = CoordinatorUserMessage(
             text: text,
             files: attachments.filter(\.isDraftCopy).map(\.url),
-            stagedFiles: attachments.filter { $0.isDraftCopy == false }.map(\.url)
+            stagedFiles: attachments.filter { $0.isDraftCopy == false }.map(\.url),
+            reply: reply
         )
         isSendingFiles = true
         Task { @MainActor [weak self] in
@@ -675,6 +691,7 @@ final class CoordinatorChatModel: ObservableObject {
                 guard let self else { return }
                 isSendingFiles = false
                 draft = ""
+                if replyTarget == reply { replyTarget = nil }
                 attachmentDraft.clear()
                 didSend()
             } catch {
@@ -713,6 +730,24 @@ final class CoordinatorChatModel: ObservableObject {
         }
     }
 
+    /// Reply on one of the coordinator's messages: the composer's message
+    /// answers it, and the composer takes the keyboard. A second Reply
+    /// replaces the first.
+    func reply(to request: ToasttyMessageReplyRequest) {
+        guard isSendingFiles == false else { return }
+        replyTarget = CoordinatorReplyTarget(
+            text: request.text,
+            time: request.timestamp.formatted(date: .omitted, time: .shortened)
+        )
+        requestComposerFocus()
+    }
+
+    /// The composer's message answers no message anymore.
+    func cancelReply() {
+        guard isSendingFiles == false else { return }
+        replyTarget = nil
+    }
+
     func stop() {
         do {
             try controller?.stopTurn()
@@ -743,6 +778,17 @@ final class CoordinatorChatModel: ObservableObject {
             // path instead.
             guard isSendingFiles == false, let controller,
                   let entry = (controller.queuedEntries + controller.pausedEntries).first(where: { $0.id == id }) else { return }
+            // A reply comes back as a reply. The composer answers one
+            // message at most.
+            let reply = CoordinatorMessageHeader.replyParts(of: entry.text)
+            let entryTarget = reply.map { CoordinatorReplyTarget(text: $0.quote, time: $0.time) }
+            if let entryTarget, let replyTarget, entryTarget.text != replyTarget.text {
+                transientNotice = .failure(
+                    "This message is a reply, and the message you are writing replies to another message. "
+                        + "Remove that reply first."
+                )
+                break
+            }
             // Its files must fit next to the composer's: a message has at
             // most 10. Otherwise the message keeps waiting as it is.
             let room = TaskRecord.maximumAttachmentCount - attachmentDraft.attachments.count - attachmentDraft.pendingCount
@@ -754,10 +800,14 @@ final class CoordinatorChatModel: ObservableObject {
                 break
             }
             guard let removed = controller.removeQueuedEntry(id: id) else { return }
-            var text = removed.text
-            if let parts = Self.editParts(of: removed.text, attachments: controller.attachments, room: room) {
+            let body = CoordinatorMessageHeader.replyParts(of: removed.text)?.body ?? removed.text
+            var text = body
+            if let parts = Self.editParts(of: body, attachments: controller.attachments, room: room) {
                 text = parts.text
                 attachmentDraft.restore(parts.files)
+            }
+            if let entryTarget {
+                replyTarget = entryTarget
             }
             draft = draft.isEmpty ? text : (text.isEmpty ? draft : text + "\n" + draft)
             composerFocusRequest += 1

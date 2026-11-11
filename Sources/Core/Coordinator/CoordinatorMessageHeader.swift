@@ -13,6 +13,8 @@ import Foundation
 /// - `[Toastty] From …`: a message that `coordinator send` brought.
 /// - `[Toastty] Quick entry …`: the user's message from the quick entry
 ///   panel, with the choices the user made there.
+/// - `[Toastty] Reply …`: the user's message from the chat that answers
+///   one of the coordinator's messages, with that message quoted.
 public enum CoordinatorMessageHeader {
     /// Who ran `coordinator send`, as far as Toastty can tell.
     public enum Sender: Equatable, Sendable {
@@ -27,6 +29,7 @@ public enum CoordinatorMessageHeader {
 
     public static let senderPrefix = "[Toastty] From "
     public static let quickEntryPrefix = "[Toastty] Quick entry"
+    public static let replyPrefix = "[Toastty] Reply from the user"
 
     /// The longest title a header carries.
     static let maximumTitleLength = 60
@@ -122,6 +125,89 @@ public enum CoordinatorMessageHeader {
         return quickEntryLine(entry) + "\n" + delivered
     }
 
+    // MARK: - Reply
+
+    static let replyQuoteLabel = " | quotes your message"
+
+    /// The first line of a reply. The number of quoted lines says where the
+    /// quote ends, so the user's own text can start with `>` too.
+    public static func replyLine(quoteLineCount: Int, time: String?) -> String {
+        let when = time.map { " of \(word($0))" } ?? ""
+        let lines = quoteLineCount == 1 ? "1 line" : "\(quoteLineCount) lines"
+        return "\(replyPrefix)\(replyQuoteLabel)\(when), \(lines)"
+    }
+
+    /// The text to type for the user's reply to one of the coordinator's
+    /// messages: Toastty's first line, the whole message as a Markdown
+    /// quote, then the user's text and the paths of the attached files.
+    /// `time` is when the coordinator wrote the message, such as "14:05".
+    public static func replyMessage(quote: String, time: String?, text: String, attachmentPaths: [String] = []) -> String {
+        let lines = quoteLines(quote)
+        let quoted = lines.map { $0.isEmpty ? ">" : "> " + $0 }.joined(separator: "\n")
+        let delivered = RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: attachmentPaths)
+        return replyLine(quoteLineCount: lines.count, time: time) + "\n" + quoted + "\n" + delivered
+    }
+
+    /// The quoted message's lines, as a reply quotes them. Control
+    /// characters other than a tab are left out: the text is typed into a
+    /// terminal.
+    static func quoteLines(_ quote: String) -> [String] {
+        var scalars = String.UnicodeScalarView()
+        for scalar in quote.replacingOccurrences(of: "\r\n", with: "\n").unicodeScalars {
+            if scalar == "\n" || scalar == "\t" {
+                scalars.append(scalar)
+            } else if scalar == "\r" {
+                scalars.append("\n")
+            } else if scalar.properties.generalCategory != .control {
+                scalars.append(scalar)
+            }
+        }
+        let cleaned = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// A message as a reply quotes it, to find the message that a reply
+    /// quoted: `replyParts(of:)` gives back exactly this text.
+    public static func quoteText(_ message: String) -> String {
+        quoteLines(message).joined(separator: "\n")
+    }
+
+    /// The parts of a reply as `replyMessage` wrote it: the quoted message,
+    /// its time, and the rest, which is the user's text with the list of
+    /// attached files. `nil` for a message that is not such a reply, also
+    /// when its first line promises more quoted lines than follow.
+    public static func replyParts(of message: String) -> (quote: String, time: String?, body: String)? {
+        let (first, rest) = splitFirstLine(message)
+        guard first.hasPrefix(replyPrefix + replyQuoteLabel) else { return nil }
+        var details = first.dropFirst(replyPrefix.count + replyQuoteLabel.count)
+        // ", 3 lines" or ", 1 line" ends the line.
+        guard let comma = details.range(of: ", ", options: .backwards) else { return nil }
+        let countWords = details[comma.upperBound...].split(separator: " ")
+        guard countWords.count == 2, countWords[1] == "line" || countWords[1] == "lines",
+              let count = Int(countWords[0]), count > 0 else { return nil }
+        details = details[..<comma.lowerBound]
+        var time: String?
+        if details.hasPrefix(" of ") {
+            time = String(details.dropFirst(4))
+        } else if details.isEmpty == false {
+            return nil
+        }
+        let lines = rest.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count >= count else { return nil }
+        var quoted: [Substring] = []
+        for line in lines.prefix(count) {
+            if line == ">" {
+                quoted.append("")
+            } else if line.hasPrefix("> ") {
+                quoted.append(line.dropFirst(2))
+            } else {
+                return nil
+            }
+        }
+        let body = lines.dropFirst(count).joined(separator: "\n")
+        return (quoted.joined(separator: "\n"), time, body)
+    }
+
     // MARK: - Reading a message
 
     /// What the first line of a message says about it.
@@ -134,6 +220,10 @@ public enum CoordinatorMessageHeader {
         /// The user's message from the quick entry panel. `text` is what
         /// the user wrote; `detail` names the choices and the files.
         case quickEntry(text: String, detail: String?)
+        /// The user's reply from the chat. `quote` is the coordinator's
+        /// message that it answers; `text` is what the user wrote, without
+        /// the list of attached files, whose names are in `fileNames`.
+        case reply(quote: String, time: String?, text: String, fileNames: [String])
         case plain
     }
 
@@ -153,17 +243,24 @@ public enum CoordinatorMessageHeader {
             }
             return .quickEntry(text: text, detail: details.isEmpty ? nil : details.joined(separator: " · "))
         }
+        if let reply = replyParts(of: message) {
+            let (text, fileNames) = splitAttachments(reply.body)
+            return .reply(quote: reply.quote, time: reply.time, text: text, fileNames: fileNames)
+        }
         return .plain
     }
 
     /// The message as a chat shows it in the user's bubble: a quick entry
-    /// message without Toastty's first line, and any message without the
-    /// folder of each attached file. A message without either is shown as
-    /// it is.
+    /// message without Toastty's first line, a reply without its first
+    /// line and quote, and any message without the folder of each attached
+    /// file. A message without either is shown as it is.
     public static func displayText(of message: String) -> String {
         switch kind(of: message) {
         case .quickEntry(let text, let detail):
             return [text, detail].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        case .reply(_, _, let text, let fileNames):
+            let files = fileNames.isEmpty ? nil : fileNames.joined(separator: ", ")
+            return [text, files].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
         case .plain:
             let (text, fileNames) = splitAttachments(message)
             guard fileNames.isEmpty == false else { return message }

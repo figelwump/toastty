@@ -1,6 +1,20 @@
 import CoreState
 import Foundation
 
+/// The coordinator's message that the user's message answers.
+struct CoordinatorReplyTarget: Equatable {
+    /// The whole message.
+    var text: String
+    /// When the coordinator wrote it, as the chat shows a time: "14:05".
+    var time: String?
+
+    /// The text to type: Toastty's first line, this message as a quote,
+    /// then the user's text and the paths of the attached files.
+    func message(text userText: String, attachmentPaths: [String] = []) -> String {
+        CoordinatorMessageHeader.replyMessage(quote: text, time: time, text: userText, attachmentPaths: attachmentPaths)
+    }
+}
+
 /// The user's message for the coordinator, from the chat's composer or from
 /// the quick entry panel, with the files attached to it.
 struct CoordinatorUserMessage: Equatable {
@@ -17,6 +31,9 @@ struct CoordinatorUserMessage: Equatable {
     /// that was selected in Toastty when the panel opened. `nil` for a
     /// message from the chat, which has no header line.
     var quickEntry: CoordinatorMessageHeader.QuickEntry?
+    /// The coordinator's message that this one answers, for a reply from
+    /// the chat.
+    var reply: CoordinatorReplyTarget?
 }
 
 extension CoordinatorController {
@@ -51,9 +68,13 @@ extension CoordinatorController {
                 throw CoordinatorError("The coordinator closed. Nothing was sent.")
             }
             let paths = (message.stagedFiles + copies).map { $0.path(percentEncoded: false) }
-            let delivered = message.quickEntry.map { choices in
+            let delivered = if let choices = message.quickEntry {
                 CoordinatorMessageHeader.quickEntryMessage(choices, text: text, attachmentPaths: paths)
-            } ?? RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: paths)
+            } else if let reply = message.reply {
+                reply.message(text: text, attachmentPaths: paths)
+            } else {
+                RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: paths)
+            }
             return try sendUserText(delivered, steering: steering && message.quickEntry == nil, id: id.uuidString)
         } catch {
             // Not taken: the copies have no message. The staged files stay

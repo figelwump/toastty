@@ -45,7 +45,8 @@ struct CoordinatorChatView: View {
                 workingIndicator: model.workingIndicator,
                 jumpToLiveEdgeRequest: $model.jumpToLiveEdgeRequest,
                 canAcknowledgeRead: false,
-                options: Self.transcriptOptions
+                options: Self.transcriptOptions,
+                replyToMessage: { model.reply(to: $0) }
             )
             composerArea
         }
@@ -86,6 +87,8 @@ struct CoordinatorChatView: View {
             CoordinatorComposerView(
                 text: $model.draft,
                 attachments: model.attachmentDraft,
+                reply: model.replyTarget,
+                onCancelReply: { model.cancelReply() },
                 placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcutLabel()),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,

@@ -65,14 +65,42 @@ final class CoordinatorComposerSnapshotTests: XCTestCase {
         try render("composer-drop-highlight-520", draft: draft, text: "", width: 520)
     }
 
+    /// A reply shows above the files: whose message and when, its start on
+    /// two lines, and ✕. It adds its height to the composer at each width.
+    func testAReplyShowsAboveTheFilesAtEachWidth() throws {
+        let draft = DraftAttachments(stagingDirectoryURL: root.appendingPathComponent("staging"))
+        draft.attachImageData(try Self.screenshotData(width: 340, height: 260), named: "Screenshot.png")
+        let empty = DraftAttachments(stagingDirectoryURL: root.appendingPathComponent("empty"))
+        let reply = CoordinatorReplyTarget(
+            text: "I made two tasks. [Fix the unread dot](toastty://task/8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F) waits "
+                + "for your answer: should the dot clear on hover, or only on click?\n\nThe second task starts when "
+                + "the first one merges.",
+            time: "14:05"
+        )
+        let withoutReply = try render("composer-tray-only-520", draft: draft, text: "Only on click.", width: 520).size.height
+        let withReply = try render("composer-reply-tray-520", draft: draft, text: "Only on click.", width: 520, reply: reply)
+            .size.height
+        XCTAssertGreaterThan(withReply, withoutReply + 20, "The reply sits above the tray")
+        for width in [360, 760] {
+            try render("composer-reply-\(width)", draft: empty, text: "Only on click.", width: CGFloat(width), reply: reply)
+        }
+    }
+
     /// Hosts the composer in a window, lets SwiftUI lay it out, and keeps
     /// the image. The window is on screen, far outside every display, so
     /// SwiftUI lays out and draws as it does in the app.
     @discardableResult
-    private func render(_ name: String, draft: DraftAttachments, text: String, width: CGFloat) throws -> NSBitmapImageRep {
+    private func render(
+        _ name: String,
+        draft: DraftAttachments,
+        text: String,
+        width: CGFloat,
+        reply: CoordinatorReplyTarget? = nil
+    ) throws -> NSBitmapImageRep {
         let composer = CoordinatorComposerView(
             text: .constant(text),
             attachments: draft,
+            reply: reply,
             placeholder: "Message the coordinator…  ⌥Space from anywhere",
             canStop: false,
             focusRequestID: 0,

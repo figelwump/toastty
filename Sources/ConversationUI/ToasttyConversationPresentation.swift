@@ -19,7 +19,13 @@ public struct ToasttyTranscriptRowID: Hashable, Sendable {
 
 public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     public enum Content: Equatable, Sendable {
-        case userMessage(text: String, origin: ConversationMessageOrigin, deliveryMode: RemoteMessageDeliveryMode? = nil)
+        /// `quote` is the agent's message that this message answers.
+        case userMessage(
+            text: String,
+            origin: ConversationMessageOrigin,
+            deliveryMode: RemoteMessageDeliveryMode? = nil,
+            quote: ToasttyMessageQuote? = nil
+        )
         /// A message the host typed for the agent. It starts a turn as a
         /// user message does.
         case hostMessage(ToasttyHostMessagePresentation)

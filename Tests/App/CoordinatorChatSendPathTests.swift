@@ -391,6 +391,110 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts.isEmpty)
     }
 
+    // MARK: - Replies
+
+    /// Reply on the coordinator's message: the message bar shows it, the
+    /// typed text quotes it whole after Toastty's line, and the row shows
+    /// the user's text with a quote that opens the message.
+    @MainActor
+    @Test func aReplyQuotesTheWholeMessageAndItsRowOpensIt() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        let answer = "I made two tasks.\n\n- Fix the unread dot\n\nShould the dot clear on hover, or only on click?"
+        try fixture.startTurn(1, userText: "Make the tasks")
+        try fixture.recordAgentMessage(answer)
+        try fixture.endTurn(1)
+        let agentRow = try await fixture.waitFor("the coordinator's message") {
+            fixture.chat.presentation.rows.first { row in
+                if case .assistantMessage(answer, _) = row.content { return true }
+                return false
+            }
+        }
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+
+        fixture.chat.reply(to: ToasttyMessageReplyRequest(rowID: agentRow.id, text: answer, timestamp: agentRow.timestamp))
+        let time = agentRow.timestamp.formatted(date: .omitted, time: .shortened)
+        #expect(fixture.chat.replyTarget == CoordinatorReplyTarget(text: answer, time: time))
+        fixture.chat.draft = "Only on click."
+        fixture.chat.send()
+
+        let typed = CoordinatorMessageHeader.replyMessage(quote: answer, time: time, text: "Only on click.")
+        #expect(fixture.delivered.texts == [typed])
+        // The first line keeps the time on one line: a narrow space before
+        // "AM" becomes a plain one.
+        let lineTime = try #require(CoordinatorMessageHeader.replyParts(of: typed)?.time)
+        #expect(lineTime == time.replacingOccurrences(of: "\u{202F}", with: " "))
+        #expect(typed.hasPrefix("[Toastty] Reply from the user | quotes your message of \(lineTime), 5 lines\n> I made two tasks.\n>\n"))
+        #expect(fixture.chat.draft.isEmpty)
+        #expect(fixture.chat.replyTarget == nil)
+        // Until the conversation shows it, the bubble shows the quote too.
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["Only on click."])
+        #expect(fixture.chat.presentation.sendItems.first?.quote?.text == answer)
+
+        try fixture.startTurn(2, userText: typed)
+        try await fixture.waitUntil("the reply in the conversation") {
+            fixture.chat.presentation.sendItems.isEmpty
+        }
+        #expect(fixture.chat.presentation.rows.last { if case .userMessage = $0.content { true } else { false } }?.content
+            == .userMessage(
+                text: "Only on click.",
+                origin: .local,
+                deliveryMode: nil,
+                quote: ToasttyMessageQuote(text: answer, timeText: lineTime, sourceRowID: agentRow.id)
+            ))
+    }
+
+    /// Edit on a waiting reply takes the text back into the field and the
+    /// quote back into the message bar. The bar holds one reply, so Edit
+    /// waits while it holds another.
+    @MainActor
+    @Test func editTakesAWaitingReplyBackAsAReply() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try fixture.recordAgentMessage("Merge it now?")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let request = ToasttyMessageReplyRequest(
+            rowID: ToasttyTranscriptRowID(projectionRunID: UUID(), projectionGeneration: 1, conversationID: UUID(), sequence: 1),
+            text: "Merge it now?",
+            timestamp: Date()
+        )
+        fixture.chat.reply(to: request)
+        fixture.chat.draft = "> Yes, merge it."
+        fixture.chat.send(queueing: true)
+        let entry = try #require(fixture.controller.queuedEntries.first)
+        #expect(CoordinatorMessageHeader.kind(of: entry.text)
+            == .reply(quote: "Merge it now?", time: fixture.chat.presentation.sendItems.first?.quote?.timeText,
+                      text: "> Yes, merge it.", fileNames: []))
+        // A reply is the user's message from the chat: it may go into the
+        // running turn.
+        #expect(entry.canBeSteered)
+        let queuedItem = fixture.chat.presentation.sendItems.first { $0.isQueued }
+        let queued = try #require(queuedItem)
+        #expect(queued.text == "> Yes, merge it.")
+        #expect(queued.quote?.text == "Merge it now?")
+
+        // The bar replies to another message: Edit waits.
+        fixture.chat.reply(to: ToasttyMessageReplyRequest(rowID: request.rowID, text: "Something else", timestamp: Date()))
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: queued.text))
+        #expect(fixture.controller.queuedEntries.map(\.id) == [entry.id])
+        #expect(fixture.chat.notice != nil)
+
+        fixture.chat.cancelReply()
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: queued.text))
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.chat.draft == "> Yes, merge it.")
+        #expect(fixture.chat.replyTarget?.text == "Merge it now?")
+
+        try fixture.endTurn(1)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+    }
+
     // MARK: - Files
 
     @MainActor
@@ -901,16 +1005,25 @@ final class CoordinatorChatFixture {
 
     // MARK: Transcript
 
-    private static func line(_ payload: String, second: Int) -> Data {
+    private static func line(_ payload: String, second: Int, type: String) -> Data {
         let timestamp = String(format: "2026-08-07T10:%02d:%02d.000Z", second / 60, second % 60)
-        return Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
+        return Data((#"{"timestamp":"\#(timestamp)","type":"\#(type)","payload":\#(payload)}"# + "\n").utf8)
     }
 
     private var second = 5
 
-    private func append(_ payload: String) throws {
+    private func append(_ payload: String, type: String = "event_msg") throws {
         second += 1
-        try conversations.appendToTranscript(Self.line(payload, second: second))
+        try conversations.appendToTranscript(Self.line(payload, second: second, type: type))
+    }
+
+    /// The agent's message in the running turn, as Codex records it.
+    func recordAgentMessage(_ text: String) throws {
+        let escaped = String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
+        try append(
+            #"{"type":"message","role":"assistant","content":[{"type":"output_text","text":\#(escaped)}]}"#,
+            type: "response_item"
+        )
     }
 
     func report(_ kind: SessionStatusKind) {
