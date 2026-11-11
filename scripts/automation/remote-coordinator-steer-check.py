@@ -26,9 +26,10 @@ The check proves from Claude's transcript, the chat's own text, the saved
 queue and the CLI that:
 - at an open prompt the chat offers no Steer or Queue choice, and Return
   sends as before;
-- while a turn runs the chip says Steer, and Return types the message into
-  that turn: Claude takes it as a queued command while its command runs and
-  answers it in the same turn, and nothing waits in Toastty's queue;
+- while a turn runs the chip says Steer, and Return types the message, with
+  an image pasted into the field, into that turn: Claude takes it as a queued
+  command while its command runs, reads the image and answers in the same
+  turn, and nothing waits in Toastty's queue;
 - Queue on the chip, and Command-Return, make a message wait as Queued, and
   the chip goes back to Steer after the send;
 - a quick entry message sent while the turn runs waits as Queued, and its
@@ -66,6 +67,7 @@ def load(name, file):
 
 chat = load('chat_check', 'remote-coordinator-chat-check.py')
 quick = load('quick_entry_check', 'remote-coordinator-quick-entry-check.py')
+attachments_check = load('attachments_check', 'remote-coordinator-attachments-check.py')
 coordinator_check, steer = chat.coordinator_check, chat.steer
 require, wait_for = chat.require, chat.wait_for
 
@@ -285,9 +287,18 @@ def run(check):
         capture('open-prompt-no-chip')
         step('at an open prompt the chat offered no choice and Return sent', version=version)
 
-        # 2. While a turn runs, Return steers it.
-        prompt = start_long_turn(45, 'HOLD-ONE')
-        type_in_composer('Also add the word STEER-ONE at the end of your reply.')
+        # 2. While a turn runs, Return steers it, with an attached image.
+        prompt = start_long_turn(60, 'HOLD-ONE')
+        image = check.root / 'red square.png'
+        attachments_check.solid_png(image, (220, 30, 30))
+        subprocess.run(['osascript', '-e', f'set the clipboard to (read (POSIX file {json.dumps(str(image))}) as «class PNGf»)'],
+                       check=True, capture_output=True, timeout=30)
+        focus_composer()
+        ui.key(quick.KEY_V, 'cmd')
+        wait_for('the pasted image as an attachment',
+                 lambda: 'Pasted image.png' in ui.ax('texts', 'coordinator.chat.attachments', check=False)[1], timeout=20)
+        type_in_composer('Also look at the attached image. At the end of your reply add the word STEER-ONE '
+                         'and the color of the square in capital letters.')
         wait_for('the chip that says Steer', lambda: ui.has_label('Steer selected'), timeout=30)
         capture('chip-says-steer')
         press_send()
@@ -295,6 +306,11 @@ def run(check):
         require(status()['queuedCount'] == 0, f'The steered message waits in the queue: {status()}')
         wait_for_reply('STEER-ONE', timeout=240)
         _, steered = took_in_turn('STEER-ONE', prompt)
+        # Claude can name the color only from the file that the steered
+        # message named. Its record of the steer may hold the pasted text
+        # in a wrapper; the path is kept as evidence.
+        require('RED' in steered['answer'].upper(), f'Claude did not read the attached image: {steered["answer"]!r}')
+        steered['carriesImagePath'] = 'Pasted-image.png' in steered['taken']
         wait_for('the chat to mark the message as steered', lambda: 'steered' in ui.chat(), timeout=60)
         wait_for('the prompt to open again', at_prompt, timeout=120)
         capture('steered-into-the-turn')
