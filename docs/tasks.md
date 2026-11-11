@@ -1230,10 +1230,12 @@ window.
   is in that group, and a row listed in a group its own stage is not in is
   dimmed. Inside a group, tasks keep the Projects order: by project, then in
   the order their task spaces opened, so a row moves only when its stage
-  changes its group. The selected task's family keeps its group until you
-  select another row, so reading a finished turn dims the row instead of
-  moving it from under the pointer; a task that starts to need you moves at
-  once. A parent without a pull request moves to To ship or Done when its
+  changes its group. The selected task's family keeps its group while you
+  read a finished turn, so the row dims instead of moving from under the
+  pointer. Selecting another row releases it; the selected task resuming
+  work moves its family to Running at once unless a relative still needs
+  you. A task that starts to need you also moves at once.
+  A parent without a pull request moves to To ship or Done when its
   children finish, so the whole family leaves Idle. A parent in To ship counts
   in its project's To ship line with its children.
   To ship starts collapsed to one line that names each project and its count.

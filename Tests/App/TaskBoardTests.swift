@@ -1235,6 +1235,20 @@ struct TaskBoardTests {
         #expect(held.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
         #expect(held.needsYou.map(\.isContext) == [true, true, true])
         #expect(held.idle.isEmpty)
+
+        read.stage = .running
+        let resumed = SidebarStatusSections.make([read, parent, alpha], pin: held.pin)
+        #expect(resumed.needsYou.isEmpty)
+        #expect(resumed.running.map(\.item.title) == ["parent", "zulu", "alpha"])
+        #expect(resumed.running.map(\.isContext) == [true, false, true])
+        #expect(resumed.count(.running) == 1)
+
+        var asking = alpha
+        asking.stage = .needsYou(.agentNeedsInput)
+        let needsInput = SidebarStatusSections.make([read, parent, asking], pin: resumed.pin)
+        #expect(needsInput.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
+        #expect(needsInput.count(.needsYou) == 1)
+        #expect(needsInput.running.isEmpty)
     }
 
     @Test func everyTaskListsOnceWhateverItsParents() {
@@ -1257,8 +1271,8 @@ struct TaskBoardTests {
     }
 
     /// Selecting a task reads its turn. Its family keeps the group it had on
-    /// screen until the selection moves, and moves at once only when it
-    /// becomes more urgent. Inside a group, rows keep the sidebar order.
+    /// screen until the selection moves or work resumes, and moves at once
+    /// when it becomes more urgent. Inside a group, rows keep the sidebar order.
     @Test func theSelectedTaskHoldsItsGroupUntilTheSelectionMoves() {
         let first = statusItem("first", stage: .needsYou(.agentFinished))
         let clicked = statusItem("clicked", stage: .needsYou(.agentFinished))
@@ -1312,6 +1326,66 @@ struct TaskBoardTests {
         let switched = SidebarStatusSections.make([answered, read, parent, child], pin: next)
         #expect(switched.needsYou.map(\.item.title) == ["clicked", "parent", "child"])
         #expect(switched.idle.map(\.item.title) == ["first"])
+    }
+
+    @Test(arguments: [true, false])
+    func readingASelectedTaskHoldsItsGroupWhenARelativeRuns(selectedChild: Bool) {
+        let parentID = UUID()
+        var parent = statusItem("parent", taskID: parentID, stage: selectedChild ? .running : .needsYou(.agentFinished))
+        var child = statusItem("child", parent: parentID, stage: selectedChild ? .needsYou(.agentFinished) : .running)
+        let selected = selectedChild ? child.id : parent.id
+        let before = SidebarStatusSections.make([parent, child])
+        let pin = SidebarStatusSections.pin(previous: nil, selected: selected, displayed: before.groups)
+        if selectedChild { child.stage = .idle } else { parent.stage = .idle }
+        let held = SidebarStatusSections.make([parent, child], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["parent", "child"])
+        #expect(held.needsYou.map(\.isContext) == [true, true])
+        #expect(held.count(.needsYou) == 0)
+        #expect(held.running.isEmpty)
+
+        if selectedChild { child.stage = .running } else { parent.stage = .running }
+        let resumed = SidebarStatusSections.make([parent, child], pin: held.pin)
+        #expect(resumed.needsYou.isEmpty)
+        #expect(resumed.running.map(\.item.title) == ["parent", "child"])
+        #expect(resumed.running.map(\.isContext) == [false, false])
+        #expect(resumed.count(.running) == 2)
+    }
+
+    @Test(arguments: [TaskStage.starting, .running])
+    func aSelectedTaskMovesToRunningWhenWorkResumes(stage: TaskStage) {
+        let waiting = statusItem("waiting", stage: .needsYou(.review))
+        let selected = statusItem("selected", stage: .needsYou(.agentFinished))
+        let before = SidebarStatusSections.make([waiting, selected])
+        let pin = SidebarStatusSections.pin(previous: nil, selected: selected.id, displayed: before.groups)
+
+        // Reading the turn keeps the row in place. Resuming work releases it,
+        // both directly from Needs you and after the user has read the turn.
+        var read = selected
+        read.stage = .idle
+        let held = SidebarStatusSections.make([waiting, read], pin: pin)
+        for previous in [before, held] {
+            var resumed = selected
+            resumed.stage = stage
+            let running = SidebarStatusSections.make([waiting, resumed], pin: previous.pin ?? pin)
+            #expect(running.needsYou.map(\.item.title) == ["waiting"])
+            #expect(running.running.map(\.item.title) == ["selected"])
+            #expect(running.running.map(\.isContext) == [false])
+            #expect(running.count(.running) == 1)
+            #expect(running.count(.needsYou) == 1)
+
+            // Repeated refreshes cannot restore the old Needs you hold.
+            let refreshed = SidebarStatusSections.make([waiting, resumed], pin: running.pin)
+            #expect(refreshed == running)
+            resumed.stage = .idle
+            let quiet = SidebarStatusSections.make([waiting, resumed], pin: refreshed.pin)
+            #expect(quiet.running.map(\.isContext) == [true])
+            for attention in [TaskStage.Attention.agentNeedsInput, .agentFinished] {
+                resumed.stage = .needsYou(attention)
+                let asking = SidebarStatusSections.make([waiting, resumed], pin: quiet.pin)
+                #expect(asking.needsYou.map(\.item.title) == ["waiting", "selected"])
+                #expect(asking.running.isEmpty)
+            }
+        }
     }
 
     private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {

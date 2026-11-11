@@ -2321,13 +2321,31 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(root, name: "status-2-clicked-row-holds")
         try attachSidebarRender(root, name: "status-2-clicked-row-holds")
 
+        // Resuming work moves the selected row to Running at normal opacity.
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "Thumbnail filenames", status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(5)
+        )
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "RUNNING", "Thumbnail filenames",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "status-3-selected-row-resumes")
+        try attachSidebarRender(root, name: "status-3-selected-row-resumes")
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "Thumbnail filenames", status: SessionStatus(kind: .idle, summary: "Waiting"),
+            at: now.addingTimeInterval(6)
+        )
+
         // Once the selection moves, the read task lists in Idle.
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: project.id)))
         XCTAssertEqual(try layout(), [
             "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "IDLE", "Thumbnail filenames",
         ])
-        try writeSidebarEvidence(root, name: "status-3-after-selection-moves")
-        try attachSidebarRender(root, name: "status-3-after-selection-moves")
+        try writeSidebarEvidence(root, name: "status-4-after-selection-moves")
+        try attachSidebarRender(root, name: "status-4-after-selection-moves")
     }
 
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {

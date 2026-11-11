@@ -131,10 +131,12 @@ struct SidebarStatusSections: Equatable {
         var familiesByGroup = Dictionary(grouping: families(items), by: \.group)
         // Selecting a task reads its turn, which can move it to a calmer
         // group under the pointer. Its family keeps its group until the
-        // selection moves. Anything more urgent still moves it, and it holds
-        // in that group from then on.
+        // selection moves. The selected task resuming work, or its family
+        // becoming more urgent, moves it at once and holds it there.
         if let pin, let located = locate(pin.subject, in: familiesByGroup) {
-            let group = min(located.group, pin.group)
+            let family = familiesByGroup[located.group]![located.index]
+            let selectedIsRunning = family.members.contains { $0.id == pin.subject && $0.stage.group == .running }
+            let group = selectedIsRunning ? located.group : min(located.group, pin.group)
             if group != located.group {
                 let family = familiesByGroup[located.group]!.remove(at: located.index)
                 let position = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
