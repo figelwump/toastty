@@ -261,6 +261,30 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts == ["What needs me?"])
     }
 
+    @MainActor
+    @Test func aDraftSentInTheTerminalAfterTheStartReportLetsTheWaitingMessageGoOnce() async throws {
+        // The keys before the start report were a draft for the agent, and
+        // the user sends it in the terminal instead of Send Anyway.
+        let fixture = try CoordinatorChatFixture(agentReportsStart: false)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the conversation of the launch") { fixture.chat.summary?.state == .starting }
+        #expect(try fixture.controller.send("What needs me?", byUser: true, id: "first")
+            == .queued(position: 1, hold: .agentStarting))
+        fixture.conversations.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+        fixture.reportAgentStart()
+        try await fixture.waitUntil("the notice about a draft") { fixture.chat.notice == .terminalDraft }
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // The draft's own turn runs and ends: the waiting message is typed
+        // at the next prompt, once.
+        try fixture.runTurn(1, userText: "Typed in the terminal")
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["What needs me?"] }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(fixture.delivered.texts == ["What needs me?"])
+        #expect(fixture.typedThroughStatusGate.isEmpty)
+    }
+
     // MARK: - The user's text in the terminal
 
     @MainActor

@@ -2111,6 +2111,17 @@ struct RemoteAccessServiceSafetyTests {
         }
         #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
 
+        // A key right after the start report, before the service looked at
+        // the session again, gives the same draft.
+        let lateKeyFixture = try RemoteBootstrapFixture()
+        defer { lateKeyFixture.removeRuntimeFiles() }
+        #expect(lateKeyFixture.confirmCurrentLaunchBinding())
+        lateKeyFixture.terminalRuntimeRegistry.handleLocalInput(for: lateKeyFixture.panelID)
+        guard case .localDraft = lateKeyFixture.summary.inputAvailability else {
+            Issue.record("Expected a Mac draft, got \(lateKeyFixture.summary.inputAvailability)")
+            return
+        }
+
         // An agent that works at its start report has no prompt to open,
         // with or without keys.
         let workingFixture = try RemoteBootstrapFixture(statusKind: .working)
