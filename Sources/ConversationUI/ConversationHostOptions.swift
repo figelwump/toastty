@@ -11,15 +11,21 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
     public var readOnlyInteractionMessage: String
     /// Where to read a request that the card shortened.
     public var shortenedPreviewMessage: String
+    /// Whether each user and agent message has a button that copies the
+    /// whole message. On the Mac it shows while the pointer is over the
+    /// message.
+    public var showsMessageCopyButton: Bool
 
     public init(
         maximumContentWidth: CGFloat? = nil,
         readOnlyInteractionMessage: String = "Respond on the desktop",
-        shortenedPreviewMessage: String = "Preview shortened. Check the desktop for the full request."
+        shortenedPreviewMessage: String = "Preview shortened. Check the desktop for the full request.",
+        showsMessageCopyButton: Bool = false
     ) {
         self.maximumContentWidth = maximumContentWidth
         self.readOnlyInteractionMessage = readOnlyInteractionMessage
         self.shortenedPreviewMessage = shortenedPreviewMessage
+        self.showsMessageCopyButton = showsMessageCopyButton
     }
 }
 
