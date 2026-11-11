@@ -452,12 +452,15 @@ run_remote_prepare_mode() {
     || fail "Failed to read the built Toastty app's bundle identifier"
   [[ -n "$app_bundle_id" ]] || fail "Built Toastty app has no bundle identifier"
 
+  # A new runtime home is a first launch, at which Toastty asks whether to
+  # start the coordinator, in a sheet over the window. The session is about
+  # something else, so it starts with the question answered.
   TOASTTY_RUNTIME_HOME="$runtime_home" \
   TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
-  "$app_binary" >"$app_log" 2>&1 &
+  "$app_binary" -toastty.coordinator.startOfferAnswered YES >"$app_log" 2>&1 &
   app_pid=$!
 
   for _ in $(seq 1 300); do

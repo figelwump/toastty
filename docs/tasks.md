@@ -515,16 +515,22 @@ runs in its own workspace, named **Coordinator**, with a terminal in
 [What the coordinator does](#what-the-coordinator-does), and your rules for
 it are in [the policy file](#the-policy-file).
 
-- **Open Coordinator** in the command palette creates the workspace on first
-  use, selects it and starts the agent. Later it selects the workspace, and
-  starts the agent only when none runs there.
+- **At a first launch**, when no coordinator was ever opened, Toastty asks
+  once whether to start it. **Start Coordinator** does what Open Coordinator
+  does. **Not Now** is saved, and Toastty does not ask again. The question
+  shows over the window that has the keyboard, and the rest of the app stays
+  in use. An automation run asks nothing.
+- **Open Coordinator**, in the **Agent** menu and the command palette, creates
+  the workspace on first use, selects it and starts the agent. Later it
+  selects the workspace, and starts the agent only when none runs there.
 - The sidebar pins one **Coordinator** row at the top, above the Tasks row, in
   both the Projects and the Status segment. The row shows the agent's state
   (a spinner while it works, an approval or error badge, a dot for unread
   output) and says **Not running** when no agent runs. It is not a project
   card: it has no number, does not reorder, and its name does not change.
-- **Restart Coordinator**, in the command palette, the row's context menu and
-  the workspace header, starts a fresh agent session in the same workspace. An
+- **Restart Coordinator**, in the **Agent** menu, the command palette, the
+  row's context menu and the workspace header, starts a fresh agent session
+  in the same workspace. The menu offers it while the coordinator is open. An
   agent that still runs is ended: the new session starts in a new terminal,
   and then the old terminal closes. A start that fails leaves the running
   agent alone. A terminal at its shell prompt is used again.
@@ -533,6 +539,22 @@ it are in [the policy file](#the-policy-file).
   resume, the row shows **Not running** until you open or restart it.
 - Closing the workspace removes the coordinator. **Open Coordinator** then
   makes a new one. The files in its folder stay.
+
+Claude Code asks whether you trust a folder the first time it runs there.
+Toastty creates the coordinator's folder and writes every file in it, so
+before it starts Claude Code there it names that one folder as trusted in
+Claude Code's config file (`.claude.json` in your home folder, or in
+`CLAUDE_CONFIG_DIR` when Toastty's environment or the `claude` profile's
+`env NAME=value …` prefix sets it). It follows Claude Code's own rules for
+that file: it holds the file's lock, reads the file again under the lock,
+changes only the folder's entry in the text and replaces the file in one
+step. It trusts no other folder. When it cannot write the entry, for example
+because Claude Code never ran on this Mac or because it cannot tell which
+config file the profile uses, Claude Code asks in its terminal and
+[the chat](#the-coordinators-chat) says so. The same happens when only your
+shell's startup files set `CLAUDE_CONFIG_DIR`: Toastty does not see that
+value, so the entry goes to the config file in your home folder, which that
+Claude Code does not read.
 
 The coordinator is not a task. It has no task record, so `task list`, the
 Tasks view, the Status segment's groups, webhook events and its own digests
@@ -694,10 +716,20 @@ under it. On macOS 14 the panel shows the terminal.
   for a login, a folder-trust or a permission prompt, and to answer a
   question: the chat shows such a prompt but cannot answer it, and it says so
   above the field. The choice is not saved: a relaunch shows the chat.
+- **An agent that has not started.** A login or a folder-trust question comes
+  before the agent reports anything to Toastty. While the agent's process
+  runs and the agent has not reported its session, the chat says that the
+  agent is starting, and a message you send shows as **Queued · waits for the
+  agent to start**. After 8 seconds the chat says that the agent may wait for
+  your answer in the terminal. **Show Terminal** shows the terminal. After
+  your answer there, the chat shows the notice for a draft in the terminal,
+  and **Send Anyway** types the waiting message.
 - **A draft in the terminal.** When you typed in the terminal and did not
   send that text, messages and digests wait, and the chat says why. **Send
   Anyway** tells Toastty that the terminal's prompt is empty: the next
-  message is then typed there.
+  message is then typed there. The same holds after you answered a login or
+  a folder-trust question in the terminal before the agent started: Toastty
+  cannot tell those keys from a draft, so choose **Send Anyway**.
 - **Digests.** A message that Toastty typed (see below) shows as one muted
   line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
 - **Messages from agents.** A message that `coordinator send` brought shows
@@ -1227,7 +1259,8 @@ shows `Option+Shift+M` when it acts on the selected task space.
 does, even when nothing waits to ship. It is hidden while a release of that project is under way.
 
 **Open Coordinator** and, once its workspace is open, **Restart Coordinator**
-are described in [The coordinator](#the-coordinator).
+are described in [The coordinator](#the-coordinator). The **Agent** menu has
+both.
 
 ### Context menus
 

@@ -1398,6 +1398,15 @@ struct ToasttyApp: App {
             directoryURL: runtimePaths.coordinatorDirectoryURL,
             queueFileURL: runtimePaths.coordinatorQueueFileURL,
             configLoader: { try TasksConfigFile.load() },
+            // The agent's terminal inherits this process's environment.
+            trustFolder: { [weak agentCatalogStore] profileID, directory in
+                await ClaudeFolderTrust.trustCoordinatorFolder(
+                    directory,
+                    profileID: profileID,
+                    profileArgv: agentCatalogStore?.catalog.profile(id: profileID)?.argv ?? [],
+                    environment: processEnvironment
+                )
+            },
             // The call `task send` uses: programmatic input, which closes a
             // prompt the iPhone holds open but is not the user's typing.
             deliverText: { [weak terminalRuntimeRegistry] text, panelID in
@@ -1418,6 +1427,16 @@ struct ToasttyApp: App {
         }
         // While a coordinator exists, quick entry sends to it.
         quickEntryController.coordinatorController = taskCoordinator.coordinatorController
+        // A run without saved preferences, such as an automation run, asks
+        // nothing.
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            coordinatorController.startOffer = CoordinatorStartOffer(
+                controller: coordinatorController,
+                store: store,
+                defaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+                coordinatorDirectoryURL: runtimePaths.coordinatorDirectoryURL
+            )
+        }
         let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,

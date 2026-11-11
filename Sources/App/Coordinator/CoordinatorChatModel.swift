@@ -35,11 +35,18 @@ final class CoordinatorChatModel: ObservableObject {
         /// No agent runs in the coordinator's terminal.
         case agentNotRunning(reason: String?)
         case agentStarting
+        /// The agent's process has run for `startGrace` and the agent has
+        /// not reported its session. It most likely waits for an answer
+        /// that only its terminal can take: a login or a folder-trust
+        /// question comes before the agent reports anything.
+        case startWaitsInTerminal
         /// The agent asked a question or for a permission. The chat cannot
         /// answer it.
         case awaitingAnswerInTerminal
         /// Text typed in the terminal may be in the agent's prompt. Messages
-        /// and Toastty's digests wait for it.
+        /// and Toastty's digests wait for it. Keys that answered a question
+        /// of the agent's start, before the agent reported its session, look
+        /// the same to Toastty.
         case terminalDraft
         /// A message was typed but the conversation never showed it.
         case deliveryNotConfirmed
@@ -86,6 +93,13 @@ final class CoordinatorChatModel: ObservableObject {
     private var settleTask: Task<Void, Never>?
     private var settleDeadline: Date?
 
+    /// How long the agent's process may run without a report of its session
+    /// before the chat says that it may wait in the terminal. Claude Code
+    /// reports within a few seconds of its start.
+    static let startGrace: TimeInterval = 8
+    /// Shows the notice again once `startGrace` is over for this session.
+    private var startGraceWake: (sessionID: String, task: Task<Void, Never>)?
+
     /// How long no event must arrive before the chat reads the newest page.
     static let settleInterval: TimeInterval = 0.15
     /// The chat reads what there is after this time, also while events
@@ -123,6 +137,7 @@ final class CoordinatorChatModel: ObservableObject {
     deinit {
         observer?.cancel()
         settleTask?.cancel()
+        startGraceWake?.task.cancel()
     }
 
     // MARK: - Lifetime
@@ -453,11 +468,18 @@ final class CoordinatorChatModel: ObservableObject {
         if status.session?.status?.kind == .needsApproval {
             return .awaitingAnswerInTerminal
         }
+        // The agent's process runs, but the agent has not reported its
+        // session. Toastty then has no conversation of its to read, or only
+        // the one Toastty made when it launched the agent, which stays in
+        // `starting` until the agent's first report. A login or a
+        // folder-trust prompt in the terminal looks like this. An agent
+        // that Toastty does not follow reports nothing, so its state says
+        // nothing about its start.
         guard let summary else {
-            // The agent's process runs, but Toastty has no conversation of
-            // its to read: it has not reported its session. A login or a
-            // folder-trust prompt in the terminal looks like this.
-            return .agentStarting
+            return startNotice(for: status.session)
+        }
+        if summary.state == .starting, ProviderTranscriptSupport.isManagedProvider(summary.provider) {
+            return startNotice(for: status.session)
         }
         switch summary.inputAvailability {
         case .pendingInteraction:
@@ -467,6 +489,29 @@ final class CoordinatorChatModel: ObservableObject {
         default:
             return controller.hasInterruptedEntry ? .typingInterrupted : nil
         }
+    }
+
+    /// What the chat says while the agent's process runs and the agent has
+    /// not reported its session: that it starts, and after `startGrace`
+    /// that it may wait in the terminal.
+    private func startNotice(for session: SessionRecord?) -> Notice {
+        guard let session else { return .agentStarting }
+        let remaining = session.startedAt.addingTimeInterval(Self.startGrace).timeIntervalSince(now())
+        guard remaining > 0 else { return .startWaitsInTerminal }
+        // Nothing changes when the time is over, so the model says that
+        // the notice changed.
+        if startGraceWake?.sessionID != session.sessionID {
+            startGraceWake?.task.cancel()
+            startGraceWake = (session.sessionID, Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(remaining))
+                } catch {
+                    return
+                }
+                self?.objectWillChange.send()
+            })
+        }
+        return .agentStarting
     }
 
     // MARK: - Messages that were typed

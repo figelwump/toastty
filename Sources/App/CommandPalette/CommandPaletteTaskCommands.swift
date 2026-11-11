@@ -315,20 +315,7 @@ final class CommandPaletteTaskActions {
             let windowID = store.commandSelection(preferredWindowID: originWindowID)?.windowID
             let restarts = command == .restartCoordinator
             afterPaletteCloses { [presentFailure] in
-                Task { @MainActor in
-                    do {
-                        if restarts {
-                            try await controller.restart(windowID: windowID)
-                        } else {
-                            try await controller.open(windowID: windowID)
-                        }
-                    } catch {
-                        presentFailure(
-                            restarts ? "Unable to Restart the Coordinator" : "Unable to Start the Coordinator",
-                            error.localizedDescription
-                        )
-                    }
-                }
+                controller.perform(restarts ? .restart : .open, windowID: windowID, presentFailure: presentFailure)
             }
             return true
 

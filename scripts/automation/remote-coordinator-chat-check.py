@@ -150,17 +150,17 @@ def broker_request(directory, arguments):
     return result['code'], result['output']
 
 
-def run_in_gui_session(arguments):
-    """Reruns the check from Terminal in the GUI session, and serves its
-    clicks and keys from this process, which Accessibility trusts."""
+def run_in_gui_session(arguments, name=NAME, script=__file__):
+    """Reruns the check `script` from Terminal in the GUI session, and serves
+    its clicks and keys from this process, which Accessibility trusts."""
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    broker = artifacts / f'{NAME}-ui'
+    broker = artifacts / f'{name}-ui'
     shutil.rmtree(broker, ignore_errors=True)
     broker.mkdir()
     binary = broker / 'ax-drive'
     compile_ax_drive(binary)
-    done, output = artifacts / f'{NAME}-gui.exit', artifacts / f'{NAME}-gui.log'
+    done, output = artifacts / f'{name}-gui.exit', artifacts / f'{name}-gui.log'
     done.unlink(missing_ok=True)
     command = ' '.join([
         'cd', shlex.quote(os.getcwd()), '&&',
@@ -168,12 +168,18 @@ def run_in_gui_session(arguments):
         f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
         f'TOASTTY_AX_BROKER={shlex.quote(str(broker))}',
         *(f'{key}={shlex.quote(os.environ[key])}' for key in ('TOASTTY_EVIDENCE_CAPTURE',) if key in os.environ),
-        'python3', shlex.quote(str(Path(__file__).resolve())), *map(shlex.quote, arguments),
+        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
         '>', shlex.quote(str(output)), '2>&1;',
         'echo $? >', shlex.quote(str(done)), '; exit',
     ])
-    script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
+    # Terminal types the command into a new shell. A terminal keeps at most
+    # 1024 characters for a shell that does not read yet, and drops the rest
+    # with the Return key, so the shell then waits for good. The long command
+    # goes into a file, and Terminal types a short one.
+    launcher = artifacts / f'{name}-gui.command'
+    launcher.write_text(command.removesuffix('; exit') + '\n')
+    do_script = f'tell application "Terminal" to do script {json.dumps(f"/bin/zsh {shlex.quote(str(launcher))}; exit")}'
+    subprocess.run(['osascript', '-e', do_script], check=True, capture_output=True, timeout=30)
     deadline = time.time() + 2400
     while not done.exists():
         require(time.time() < deadline, 'The GUI-session check did not finish')
@@ -194,12 +200,15 @@ def run_in_gui_session(arguments):
 
 
 class ChatInstance(Instance):
-    """The check's app, with Remote Access on a loopback port when asked."""
+    """The check's app, with Remote Access on a loopback port when asked.
+    With `asks_start_offer`, a first launch asks whether to start the
+    coordinator, as it does for a user."""
 
-    def __init__(self, binary, environment, socket_path, runtime_home, log_path, gateway_port=None):
+    def __init__(self, binary, environment, socket_path, runtime_home, log_path, gateway_port=None,
+                 asks_start_offer=False):
         self.socket_path, self.runtime_home = socket_path, runtime_home
         self.log = open(log_path, 'a')
-        arguments = [str(binary)]
+        arguments = [str(binary), *(() if asks_start_offer else coordinator_check.base.START_OFFER_ANSWERED)]
         if gateway_port:
             arguments += ['-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(gateway_port)]
         self.process = subprocess.Popen(arguments, env=environment, stdout=self.log, stderr=subprocess.STDOUT)

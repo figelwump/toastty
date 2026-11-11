@@ -16,8 +16,17 @@
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
-//   key <return|shift-return|escape|cmd-period>
+//   key <return|shift-return|escape|up|down|cmd-period|cmd-shift-p>
+//   sheet-texts                   Print the text of the sheet on a window. Exit code 2: no sheet shows.
+//   window-frame                  Print the frame of the app's first window as "x y width height".
+//   window-set-frame <x> <y> <width> <height>
+//                                 Move and size the app's first window, and print its frame.
+//   menu <menu> <item>            Open the menu in the menu bar and choose the item.
+//   menu-enabled <menu> <item>    Open the menu, print "enabled" or "disabled" for the item, and close the menu.
+//   menu-open <menu>              Open the menu and leave it open. `key escape` closes it.
 // `identifier` is an accessibility identifier. Exit code 2: not found.
+// Exit code 4: a system prompt, such as a permission question, covers the
+// place to click. No click is made: that prompt is the user's to answer.
 import AppKit
 import ApplicationServices
 import Foundation
@@ -88,7 +97,29 @@ func texts(_ element: AXUIElement, depth: Int = 0) -> [String] {
     return result
 }
 
+/// The processes that show the system's own prompts: a permission question
+/// or a crash report.
+let systemPromptOwners: Set<String> = ["UserNotificationCenter", "CoreServicesUIAgent", "SecurityAgent"]
+
+/// Stops when a system prompt covers the point. A click there would answer
+/// that prompt, which is the user's to answer, and would not reach the app.
+func requireNoSystemPrompt(at point: CGPoint) {
+    // Front to back: the app's own window in front of a prompt is fine.
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    for window in windows {
+        guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point) else { continue }
+        if (window[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid { return }
+        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+        if systemPromptOwners.contains(owner) {
+            print("COVERED \(Int(point.x)),\(Int(point.y)) is under a system prompt of \(owner)")
+            exit(4)
+        }
+    }
+}
+
 func click(at point: CGPoint) {
+    requireNoSystemPrompt(at: point)
     let source = CGEventSource(stateID: .hidSystemState)
     for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
@@ -99,11 +130,27 @@ func click(at point: CGPoint) {
 
 func press(keyCode: CGKeyCode, flags: CGEventFlags = []) {
     let source = CGEventSource(stateID: .hidSystemState)
-    for keyDown in [true, false] {
-        let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown)
+    func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
+        let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
         event?.flags = flags
         event?.post(tap: .cghidEventTap)
         usleep(40_000)
+    }
+    // The modifier keys go down before the key and up after it, as on a
+    // keyboard. With the flags alone, the keys typed next would still
+    // carry the modifiers.
+    let modifierKeys: [(flag: CGEventFlags, key: CGKeyCode)] = [
+        (.maskCommand, 55), (.maskShift, 56), (.maskAlternate, 58), (.maskControl, 59),
+    ].filter { flags.contains($0.flag) }
+    var held: CGEventFlags = []
+    for modifier in modifierKeys {
+        held.insert(modifier.flag)
+        post(modifier.key, down: true, flags: held)
+    }
+    for keyDown in [true, false] { post(keyCode, down: keyDown, flags: flags) }
+    for modifier in modifierKeys.reversed() {
+        held.remove(modifier.flag)
+        post(modifier.key, down: false, flags: held)
     }
 }
 
@@ -131,7 +178,74 @@ func activate() {
     usleep(400_000)
 }
 
+/// The item of a menu in the menu bar, once the menu is open.
+func menuItem(in barItem: AXUIElement, titled title: String) -> AXUIElement? {
+    for menu in children(barItem) {
+        if let item = children(menu).first(where: { attribute($0, kAXTitleAttribute) as? String == title }) {
+            return item
+        }
+    }
+    return nil
+}
+
 switch command {
+case "sheet-texts":
+    guard let sheet = find(app, where: { attribute($0, kAXRoleAttribute) as? String == (kAXSheetRole as String) }) else {
+        print("NO SHEET")
+        exit(2)
+    }
+    print(texts(sheet).joined(separator: "\n"))
+case "window-frame":
+    guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first, let rect = frame(window) else {
+        print("NO WINDOW")
+        exit(2)
+    }
+    print("\(Int(rect.minX)) \(Int(rect.minY)) \(Int(rect.width)) \(Int(rect.height))")
+case "window-set-frame":
+    let numbers = arguments.dropFirst(3).compactMap(Double.init)
+    guard numbers.count == 4, let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first else {
+        print("NO WINDOW, or not four numbers")
+        exit(2)
+    }
+    var origin = CGPoint(x: numbers[0], y: numbers[1])
+    var size = CGSize(width: numbers[2], height: numbers[3])
+    // The position again after the size: a window can move when it grows.
+    for attributeName in [kAXPositionAttribute, kAXSizeAttribute, kAXPositionAttribute] {
+        let value = attributeName == kAXSizeAttribute ? AXValueCreate(.cgSize, &size) : AXValueCreate(.cgPoint, &origin)
+        if let value { AXUIElementSetAttributeValue(window, attributeName as CFString, value) }
+        usleep(150_000)
+    }
+    guard let rect = frame(window) else { exit(2) }
+    print("\(Int(rect.minX)) \(Int(rect.minY)) \(Int(rect.width)) \(Int(rect.height))")
+case "menu", "menu-enabled", "menu-open":
+    let itemTitle = arguments.count > 4 ? arguments[4] : ""
+    activate()
+    let barItem = waitFor("menu \(argument)") {
+        guard let bar = attribute(app, kAXMenuBarAttribute) else { return nil }
+        return children(bar as! AXUIElement).first { attribute($0, kAXTitleAttribute) as? String == argument }
+    }
+    // Open the menu as a person does, so its items are as the user sees them.
+    AXUIElementPerformAction(barItem, kAXPressAction as CFString)
+    usleep(400_000)
+    if command == "menu-open" {
+        print("opened \(argument)")
+        break
+    }
+    let item = waitFor("\(itemTitle) in the menu \(argument)") { menuItem(in: barItem, titled: itemTitle) }
+    let enabled = (attribute(item, kAXEnabledAttribute) as? Bool) ?? false
+    if command == "menu-enabled" {
+        print(enabled ? "enabled" : "disabled")
+        // An open menu takes the keys and clicks that follow.
+        press(keyCode: 53)
+        break
+    }
+    guard enabled else {
+        press(keyCode: 53)
+        print("DISABLED \(itemTitle)")
+        exit(3)
+    }
+    AXUIElementPerformAction(item, kAXPressAction as CFString)
+    print("chose \(argument) > \(itemTitle)")
 case "status":
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     let locked = (session?["CGSSessionScreenIsLocked"] as? Bool) ?? false
@@ -231,7 +345,10 @@ case "key":
     case "return": press(keyCode: 36)
     case "shift-return": press(keyCode: 36, flags: .maskShift)
     case "escape": press(keyCode: 53)
+    case "up": press(keyCode: 126)
+    case "down": press(keyCode: 125)
     case "cmd-period": press(keyCode: 47, flags: .maskCommand)
+    case "cmd-shift-p": press(keyCode: 35, flags: [.maskCommand, .maskShift])
     default:
         print("unknown key \(argument)")
         exit(64)

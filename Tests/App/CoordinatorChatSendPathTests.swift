@@ -176,6 +176,115 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts == [Self.digest])
     }
 
+    // MARK: - An agent that waits in its terminal
+
+    @MainActor
+    @Test func anAgentThatHasNotReportedItsStartShowsThatItMayWaitInTheTerminal() async throws {
+        // Toastty launched the agent, and the agent asks a question that
+        // comes before its first report, such as Claude Code's folder-trust
+        // or login question. Toastty has the conversation it made at the
+        // launch, and nothing from the agent.
+        let fixture = try CoordinatorChatFixture(agentReportsStart: false)
+        defer { fixture.tearDown() }
+        let session = try #require(fixture.controller.session)
+        // Two seconds of the time the agent has to report are left.
+        let grace = CoordinatorChatModel.startGrace
+        fixture.clock.secondsAhead = session.startedAt.addingTimeInterval(grace - 2).timeIntervalSinceNow
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the conversation of the launch") { fixture.chat.summary?.state == .starting }
+        #expect(fixture.controller.status?.agentState == .running)
+
+        // The user's message waits, and the chat says what for.
+        fixture.chat.draft = "What needs me?"
+        fixture.chat.send()
+        #expect(fixture.delivered.texts.isEmpty)
+        #expect(fixture.controller.status?.hold == .agentStarting)
+        let waiting = try #require(fixture.chat.presentation.sendItems.last)
+        guard case .queued(let queued) = waiting.content else {
+            Issue.record("The message does not show as waiting")
+            return
+        }
+        #expect(queued.waitingCaption == "Queued 1 \u{00B7} waits for the agent to start")
+        #expect(fixture.chat.notice == .agentStarting)
+
+        // The time is over and nothing else changed: the model says that
+        // the notice did, and the notice names the terminal.
+        var changes = 0
+        let observer = fixture.chat.objectWillChange.sink { changes += 1 }
+        defer { observer.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+        let changesBefore = changes
+        #expect(fixture.chat.notice == .agentStarting)
+        try await fixture.waitUntil("the notice that names the terminal") { changes > changesBefore }
+        #expect(fixture.chat.notice == .startWaitsInTerminal)
+        if #available(macOS 15.0, *) {
+            #expect(CoordinatorChatView.text(for: .startWaitsInTerminal).contains("answer in the terminal"))
+        }
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // The user answered in the terminal and the agent reports its
+        // start: the notice goes, and the message is typed.
+        fixture.reportAgentStart()
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["What needs me?"] }
+        try await fixture.waitUntil("the notice to go") { fixture.chat.notice == nil }
+    }
+
+    @MainActor
+    @Test func anAnswerInTheTerminalBeforeTheStartReportLeavesTheMessageForSendAnyway() async throws {
+        // The agent asked a question of its start in the terminal. The
+        // user's message waits in the chat.
+        let fixture = try CoordinatorChatFixture(agentReportsStart: false)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the conversation of the launch") { fixture.chat.summary?.state == .starting }
+        fixture.chat.draft = "What needs me?"
+        fixture.chat.send()
+        #expect(fixture.controller.status?.hold == .agentStarting)
+        #expect(fixture.chat.notice == .startWaitsInTerminal)
+
+        // The user answers it there with keys, and the agent reports its
+        // start. Toastty cannot tell those keys from a draft in the agent's
+        // prompt: the notice about the start goes, and the one about a
+        // draft in the terminal shows. Nothing is typed.
+        fixture.conversations.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+        fixture.reportAgentStart()
+        try await fixture.waitUntil("the notice about a draft") { fixture.chat.notice == .terminalDraft }
+        #expect(fixture.controller.status?.hold == .userDraft)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // "Send Anyway": the waiting message is typed, once.
+        fixture.chat.sendPastTerminalDraft()
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["What needs me?"] }
+        try await fixture.waitUntil("the notice to go") { fixture.chat.notice == nil }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts == ["What needs me?"])
+    }
+
+    @MainActor
+    @Test func aDraftSentInTheTerminalAfterTheStartReportLetsTheWaitingMessageGoOnce() async throws {
+        // The keys before the start report were a draft for the agent, and
+        // the user sends it in the terminal instead of Send Anyway.
+        let fixture = try CoordinatorChatFixture(agentReportsStart: false)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the conversation of the launch") { fixture.chat.summary?.state == .starting }
+        #expect(try fixture.controller.send("What needs me?", byUser: true, id: "first")
+            == .queued(position: 1, hold: .agentStarting))
+        fixture.conversations.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+        fixture.reportAgentStart()
+        try await fixture.waitUntil("the notice about a draft") { fixture.chat.notice == .terminalDraft }
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // The draft's own turn runs and ends: the waiting message is typed
+        // at the next prompt, once.
+        try fixture.runTurn(1, userText: "Typed in the terminal")
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["What needs me?"] }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(fixture.delivered.texts == ["What needs me?"])
+        #expect(fixture.typedThroughStatusGate.isEmpty)
+    }
+
     // MARK: - The user's text in the terminal
 
     @MainActor
@@ -551,7 +660,19 @@ final class CoordinatorChatFixture {
     /// The coordinator's folder, which holds the attached files.
     var coordinatorDirectory: URL { Self.coordinatorDirectory(conversations) }
 
-    init(pairsNativeDevice: Bool = false, savesQueue: Bool = false) throws {
+    /// The chat's clock, as seconds ahead of the real time.
+    let clock = Clock()
+
+    @MainActor
+    final class Clock {
+        var secondsAhead: TimeInterval = 0
+        var now: Date { Date().addingTimeInterval(secondsAhead) }
+    }
+
+    /// Without `agentReportsStart`, Toastty launched the agent and the
+    /// agent has reported nothing yet, as while it asks a question that
+    /// comes before its first report. `reportAgentStart` reports then.
+    init(pairsNativeDevice: Bool = false, savesQueue: Bool = false, agentReportsStart: Bool = true) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
             inCoordinatorWorkspace: true
@@ -564,11 +685,15 @@ final class CoordinatorChatFixture {
         queueFileURL = savesQueue
             ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-queue.json")
             : nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL)
+        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
-        // The agent reported its session, as its start hook does.
-        #expect(conversations.confirmCurrentLaunchBinding())
+        if agentReportsStart { reportAgentStart() }
         #expect(conversations.store.state.coordinator?.panelID == conversations.panelID)
+    }
+
+    /// The agent reported its session, as its start hook does.
+    func reportAgentStart() {
+        #expect(conversations.confirmCurrentLaunchBinding())
     }
 
     private static func coordinatorDirectory(_ conversations: LocalConversationFixture) -> URL {
@@ -578,7 +703,8 @@ final class CoordinatorChatFixture {
     private static func makeController(
         _ conversations: LocalConversationFixture,
         gate: StatusGateTyping,
-        queueFileURL: URL?
+        queueFileURL: URL?,
+        clock: Clock
     ) -> (CoordinatorController, CoordinatorChatModel) {
         let controller = CoordinatorController(
             store: conversations.store,
@@ -596,7 +722,7 @@ final class CoordinatorChatFixture {
             }
         )
         controller.conversationAccess = conversations.service
-        let chat = CoordinatorChatModel(controller: controller, access: conversations.service)
+        let chat = CoordinatorChatModel(controller: controller, access: conversations.service, now: { clock.now })
         controller.chat = chat
         return (controller, chat)
     }
@@ -607,7 +733,7 @@ final class CoordinatorChatFixture {
     func relaunch() {
         chat.hide()
         typedObserver = nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL)
+        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
     }
 

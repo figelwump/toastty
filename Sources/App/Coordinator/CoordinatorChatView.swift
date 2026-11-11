@@ -104,9 +104,9 @@ struct CoordinatorChatView: View {
             switch notice {
             case .agentNotRunning:
                 noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
-                    restartCoordinator()
+                    controller.perform(.restart)
                 }
-            case .agentStarting, .awaitingAnswerInTerminal:
+            case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal:
                 showTerminalButton
             case .terminalDraft:
                 showTerminalButton
@@ -164,26 +164,18 @@ struct CoordinatorChatView: View {
             reason ?? "The coordinator's agent is not running. A message you send waits for it."
         case .agentStarting:
             "The agent is starting. If this takes long, it may wait for you in the terminal."
+        case .startWaitsInTerminal:
+            "The coordinator's agent has not started yet. It may wait for your answer in the terminal, for example to a login or a folder-trust question."
         case .awaitingAnswerInTerminal:
             "The coordinator waits for your answer in the terminal."
         case .terminalDraft:
-"You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there."
+"You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there. If you only answered a question there, choose Send Anyway."
         case .deliveryNotConfirmed:
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:
             "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation, then choose Send next or Remove on the paused message."
         case .failure(let message):
             message
-        }
-    }
-
-    private func restartCoordinator() {
-        Task { @MainActor in
-            do {
-                try await controller.restart()
-            } catch {
-                TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
-            }
         }
     }
 

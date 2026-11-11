@@ -958,12 +958,15 @@ run_remote_custom_mode() {
     -derivedDataPath "$derived_path" \
     build >/dev/null
 
+  # A new runtime home is a first launch, at which Toastty asks whether to
+  # start the coordinator, in a sheet over the window. A validation command
+  # that is about the question starts its own app.
   TOASTTY_RUNTIME_HOME="$runtime_home" \
   TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
-  "$app_binary" >"$artifacts_dir/app.log" 2>&1 &
+  "$app_binary" -toastty.coordinator.startOfferAnswered YES >"$artifacts_dir/app.log" 2>&1 &
   app_pid=$!
   # Keep the display awake for the app's lifetime; see test.sh for why
   # AppKit animations wedge the process when the display is asleep.

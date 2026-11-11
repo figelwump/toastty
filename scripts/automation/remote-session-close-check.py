@@ -110,7 +110,9 @@ def main():
     evidence = dict(status='failed', gatewayPort=port)
     log = open(artifacts / 'remote-session-close-app.log', 'w')
     app = subprocess.Popen(
-        [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
+        [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port),
+         # This run is not about the question at a first launch.
+         '-toastty.coordinator.startOfferAnswered', 'YES'],
         env=environment, stdout=log, stderr=subprocess.STDOUT)
     try:
         run(app, start_check.Gateway(port), start_check.AppSocket(socket_path), runtime_home, fake_bin, evidence)

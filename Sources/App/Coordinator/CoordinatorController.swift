@@ -130,6 +130,9 @@ final class CoordinatorController: ObservableObject {
     /// Where the user's waiting messages are saved, or `nil` to save none.
     private let queueFileURL: URL?
     private let configLoader: () throws -> TasksConfig
+    /// Tells the agent of the given profile that the coordinator's folder
+    /// is trusted, before that agent starts there. See `ClaudeFolderTrust`.
+    private let trustFolder: @MainActor (_ profileID: String, _ directory: String) async -> Void
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
     private let terminalReadinessTimeout: Duration
@@ -184,6 +187,9 @@ final class CoordinatorController: ObservableObject {
     /// What the coordinator's chat shows. Set once the app has the
     /// conversation access the chat reads through.
     var chat: CoordinatorChatModel?
+
+    /// The question whether to start the coordinator, in a run that asks it.
+    var startOffer: CoordinatorStartOffer?
 
     /// The coordinator's panel shows its terminal in place of the chat.
     var showsTerminal: Bool {
@@ -263,6 +269,7 @@ final class CoordinatorController: ObservableObject {
         folder: CoordinatorFolder? = nil,
         queueFileURL: URL? = nil,
         configLoader: @escaping () throws -> TasksConfig,
+        trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
         terminalReadinessTimeout: Duration = .seconds(10),
@@ -275,6 +282,7 @@ final class CoordinatorController: ObservableObject {
         self.attachments = CoordinatorAttachments(coordinatorDirectoryURL: directoryURL)
         self.queueFileURL = queueFileURL
         self.configLoader = configLoader
+        self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
         self.terminalReadinessTimeout = terminalReadinessTimeout
@@ -458,6 +466,38 @@ final class CoordinatorController: ObservableObject {
         )
     }
 
+    /// What a person asks of the coordinator from a menu, the command
+    /// palette, the chat or the question at launch.
+    enum UserCommand: Equatable {
+        case open
+        case restart
+
+        var failureTitle: String {
+            switch self {
+            case .open: "Unable to Start the Coordinator"
+            case .restart: "Unable to Restart the Coordinator"
+            }
+        }
+    }
+
+    /// Runs a person's command, and shows why when it did not work.
+    func perform(
+        _ command: UserCommand,
+        windowID: UUID? = nil,
+        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure
+    ) {
+        Task { @MainActor in
+            do {
+                switch command {
+                case .open: try await open(windowID: windowID)
+                case .restart: try await restart(windowID: windowID)
+                }
+            } catch {
+                presentFailure(command.failureTitle, error.localizedDescription)
+            }
+        }
+    }
+
     private func createWorkspaceIfNeeded(windowID requestedWindowID: UUID?) throws -> Bool {
         guard store.state.coordinator == nil else { return false }
         guard let windowID = requestedWindowID ?? store.state.selectedWindowID ?? store.state.windows.first?.id,
@@ -532,6 +572,9 @@ final class CoordinatorController: ObservableObject {
         }
         let directory = try preparedDirectory()
         await prepareRepository()
+        // Toastty made this folder and wrote every file in it, so the agent
+        // need not ask the user whether to trust it.
+        await trustFolder(config.agent, directory)
         let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
         let result: AgentLaunchResult
         do {
@@ -913,7 +956,10 @@ final class CoordinatorController: ObservableObject {
         case .pendingInteraction:
             return .held(.busy, recheckAt: nil)
         case .unavailable(let reason):
-            return .held(Self.hold(for: reason), recheckAt: nil)
+            // Toastty made this conversation when it launched the agent.
+            // Until the agent reports its session, the prompt is closed
+            // because the agent is not up, not because of its state.
+            return .held(summary.state == .starting ? .agentStarting : Self.hold(for: reason), recheckAt: nil)
         }
         guard noteTypingStarts(entry) else {
             return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))

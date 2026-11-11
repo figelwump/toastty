@@ -181,6 +181,15 @@ struct AppWindowSceneView: View {
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
         openGettingStartedPanelIfNeeded()
+        offerCoordinatorStartIfNeeded()
+    }
+
+    /// Asks once whether to start the coordinator. After this notification,
+    /// because the question is a sheet, which takes the keyboard itself.
+    private func offerCoordinatorStartIfNeeded() {
+        guard let offer = taskCoordinator?.coordinatorController?.startOffer, offer.shouldOffer else { return }
+        let windowID = windowID
+        Task { @MainActor in offer.offerIfNeeded(windowID: windowID) }
     }
 
     private func openGettingStartedPanelIfNeeded() {

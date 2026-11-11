@@ -383,6 +383,11 @@ A custom terminal binding also keeps draft protection. Ctrl+C does not release
 an existing lock: an agent dialog can consume the key without clearing the
 composer. After you clear the draft, use Release on the phone.
 
+A session whose terminal got keys before the agent reported its start also
+opens as a Mac draft. Those keys answered a question of the agent's start,
+such as a login or a folder-trust question, or they wait in the agent's
+prompt, and the Mac cannot tell which. Use Release when the prompt is empty.
+
 Every Mac keystroke in a draft advances its draft epoch, and the Mac publishes
 the current epoch to phones about twice a second while someone types. A
 release names the epoch the phone saw, so a release decided before newer Mac

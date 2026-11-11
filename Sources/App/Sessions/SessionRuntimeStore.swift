@@ -605,6 +605,23 @@ final class SessionRuntimeStore: ObservableObject {
     func isNativeSessionBindingInputClean(
         _ confirmation: ManagedNativeSessionBindingConfirmation
     ) -> Bool {
+        isCurrentNativeSessionBinding(confirmation)
+            && nativeBindingSessionIDsWithLocalInput.contains(confirmation.managedSessionID) == false
+    }
+
+    /// The confirmation is the active session's own, and the one thing
+    /// against it is that keys reached the session's terminal: they answered
+    /// a question of the agent's start, or they wait in its prompt.
+    func nativeSessionBindingHasOnlyLocalInputAgainstIt(
+        _ confirmation: ManagedNativeSessionBindingConfirmation
+    ) -> Bool {
+        isCurrentNativeSessionBinding(confirmation)
+            && nativeBindingSessionIDsWithLocalInput.contains(confirmation.managedSessionID)
+    }
+
+    private func isCurrentNativeSessionBinding(
+        _ confirmation: ManagedNativeSessionBindingConfirmation
+    ) -> Bool {
         guard ProviderTranscriptSupport.isManagedProvider(confirmation.agent),
               nativeBindingConfirmationBySessionID[confirmation.managedSessionID] == confirmation,
               nativeBindingIDBySessionID[confirmation.managedSessionID] == confirmation.bindingID,
@@ -615,9 +632,7 @@ final class SessionRuntimeStore: ObservableObject {
               activeSession.panelID == confirmation.panelID else {
             return false
         }
-        return nativeBindingSessionIDsWithLocalInput.contains(
-            confirmation.managedSessionID
-        ) == false
+        return true
     }
 
     @discardableResult
