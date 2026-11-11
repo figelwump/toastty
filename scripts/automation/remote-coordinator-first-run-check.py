@@ -17,16 +17,18 @@ Claude's config file that:
 - start: a first launch asks once whether to start the coordinator; Start
   Coordinator opens it; Claude reaches its first prompt with no folder-trust
   question and answers the first message; Claude's config file names the
-  coordinator's folder as trusted, keeps every entry it had, and has what two
-  other Claude sessions wrote while the app started; after the app is killed
-  and relaunched, the coordinator is restored and nothing is asked;
+  coordinator's folder as trusted, keeps every entry it had, and has every
+  write of three other Claude Code processes that saved to it while the app
+  started; after the app is killed and relaunched, the coordinator is
+  restored and nothing is asked;
 - not-now: Not Now starts nothing; a relaunch does not ask again; Open
   Coordinator in the command palette and in the Agent menu each open it, and
   Restart Coordinator is offered only while it is open;
 - notice: with a folder that Claude does not trust, the chat says that the
   agent may wait in the terminal and offers Show Terminal; after the answer in
-  the terminal, the waiting message is typed and answered. The app cannot tell
-  this profile's config file, so it writes no trust for it.
+  the terminal, the chat says that the user typed there and offers Send
+  Anyway, and one click types the waiting message, which Claude answers. The
+  app cannot tell this profile's config file, so it writes no trust for it.
 
 '--expect-notice no' checks the notice scenario against a build from before
 the notice: the message waits and the chat says nothing about the terminal.
@@ -36,9 +38,10 @@ and removes them at the end, under Claude Code's own lock. A copy of the file
 from before the run stays beside it until the run ends; only key names,
 counts and checksums go into the evidence.
 
-Evidence goes to remote-coordinator-first-run-check.json, the app logs,
-Claude's transcripts and, when the build can capture its window, PNG frames
-under remote-coordinator-first-run-check-frames in the artifacts directory.
+Evidence goes to remote-coordinator-first-run-check.json, the app logs and
+Claude's transcripts in the artifacts directory. Under '--gui-session' the
+check also keeps still pictures of the window's part of the screen, under
+remote-coordinator-first-run-check-frames.
 """
 
 import argparse
@@ -48,6 +51,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -70,6 +74,8 @@ coordinator_check, steer = chat.coordinator_check, chat.steer
 require, wait_for = chat.require, chat.wait_for
 
 QUESTION = 'Start the coordinator?'
+# How many times each Claude Code process beside the app saves.
+SIDE_WRITES = 12
 START, NOT_NOW = 'Start Coordinator', 'Not Now'
 TRUST_QUESTION = 'trust this folder'
 CLAUDE_CONFIG = Path.home() / '.claude.json'
@@ -100,18 +106,29 @@ def read_config():
     return json.loads(CLAUDE_CONFIG.read_text())
 
 
-def remove_projects(folders):
-    """Removes this run's project entries, and leaves the rest of the file alone."""
-    with claude_config_lock():
-        config = read_config()
-        projects = config.get('projects', {})
-        removed = [folder for folder in folders if projects.pop(folder, None) is not None]
-        if removed:
-            temporary = CLAUDE_CONFIG.with_name(CLAUDE_CONFIG.name + '.toastty-check')
-            temporary.write_text(json.dumps(config, indent=2, ensure_ascii=False))
-            shutil.copymode(CLAUDE_CONFIG, temporary)
-            os.replace(temporary, CLAUDE_CONFIG)
-    return removed
+def remove_projects(folders, quiet=4, timeout=60):
+    """Removes this run's project entries, and leaves the rest of the file
+    alone. A Claude session that the run ended saves once more as it exits,
+    so the entries are removed until they stay away for `quiet` seconds."""
+    removed, quiet_since, deadline = set(), None, time.time() + timeout
+    while True:
+        with claude_config_lock():
+            config = read_config()
+            projects = config.get('projects', {})
+            gone = [folder for folder in folders if projects.pop(folder, None) is not None]
+            if gone:
+                temporary = CLAUDE_CONFIG.with_name(CLAUDE_CONFIG.name + '.toastty-check')
+                temporary.write_text(json.dumps(config, indent=2, ensure_ascii=False))
+                shutil.copymode(CLAUDE_CONFIG, temporary)
+                os.replace(temporary, CLAUDE_CONFIG)
+        removed.update(gone)
+        if gone:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = time.time()
+        elif time.time() - quiet_since >= quiet or time.time() > deadline:
+            return sorted(removed)
+        time.sleep(1)
 
 
 def summary(config):
@@ -152,8 +169,7 @@ class Run:
         self.runtime_home, self.user_home = check.home(name, argv)
         (self.user_home / '.toastty/tasks.toml').write_text('[coordinator]\nagent = "claude"\n')
         subprocess.run(['git', 'init', '-q', str(self.user_home)], check=True)
-        self.environment = check.environment(name, self.runtime_home, self.user_home, real_home=True,
-                                             TOASTTY_EVIDENCE_DIR=str(check.frames))
+        self.environment = check.environment(name, self.runtime_home, self.user_home, real_home=True)
         self.run_cli, self.cli = check.cli_runner(self.environment)
         self.directory = self.runtime_home / 'coordinator'
         self.project = steer.claude_project_directory(self.directory)
@@ -172,6 +188,20 @@ class Run:
         _, trust = self.ui.run('status')
         require('trusted=true' in trust and 'locked=false' in trust,
                 f'The UI driver cannot act: {trust}. Unlock the screen, or run with --gui-session over SSH')
+        if self.check.window_frame:
+            placed = self.ui.run('window-set-frame', *self.check.window_frame)[1].split()
+            require(placed == self.check.window_frame, f'The window is at {placed}, not at {self.check.window_frame}')
+
+    def show_terminal_for_a_picture(self, step):
+        """Switches the panel to the terminal, keeps a picture and its text, and switches back."""
+        self.ui.run('click', 'coordinator.panel.mode-toggle')
+        wait_for('the terminal in place of the chat', lambda: not self.ui.exists('coordinator.chat'), timeout=30)
+        time.sleep(1)
+        self.capture(step)
+        text = self.screen()
+        self.ui.run('click', 'coordinator.panel.mode-toggle')
+        wait_for('the chat again', lambda: self.ui.exists('coordinator.chat'), timeout=30)
+        return text
 
     def relaunch(self):
         # The answer and the layout are saved a moment after the change.
@@ -246,13 +276,29 @@ class Run:
                 f'Claude asked whether to trust the coordinator\'s folder: {(seen or [self.screen()])[0][-600:]}')
         return current
 
-    def capture(self, step):
+    def window_rect(self):
+        """The part of the window that is on the screen, as "x,y,width,height", or None."""
+        code, output = self.ui.run('window-frame', check=False)
+        if code != 0 or len(output.split()) != 4:
+            return None
+        x, y, width, height = map(int, output.split())
+        left, top = max(x, 0), max(y, 0)
+        return f'{left},{top},{x + width - left},{y + height - top}'
+
+    def capture(self, step, whole_screen=False):
+        """Keeps a still picture of the window's part of the screen, as it
+        is. In a session that may not record the screen, the picture shows
+        no windows. Never a recording: one from Terminal makes macOS show a
+        consent prompt that stays until a person answers it."""
         self.check.frame_count += 1
         label = f'{self.check.frame_count:02d}-{self.name}-{step}'
-        response = self.instance.request('automation.capture_screenshot', dict(step=label))
-        self.check.evidence['captures'].append(dict(step=label, ok=response.get('ok'),
-                                                    path=(response.get('result') or {}).get('path'),
-                                                    error=None if response.get('ok') else response.get('error')))
+        path = self.check.frames / f'{label}.png'
+        rect = None if whole_screen else self.window_rect()
+        done = subprocess.run(['screencapture', '-x', *(['-R', rect] if rect else []), str(path)],
+                              capture_output=True, text=True, timeout=30)
+        self.check.evidence['captures'].append(dict(step=label, at=time.time(), rect=rect, path=str(path),
+                                                    ok=done.returncode == 0 and path.is_file(),
+                                                    error=(done.stdout + done.stderr).strip() or None))
 
     def finish(self):
         try:
@@ -307,33 +353,38 @@ def start(check, claude, host_environment):
         require(run.question() == question, 'The question changed when the window got the keyboard again')
         step('the first launch asked whether to start the coordinator', question=question)
 
-        # Two other Claude sessions run while the app writes the trust: each
-        # saves what it did under its own folder of Claude's config file.
+        # Other Claude Code processes write the same config file while the
+        # app writes the trust and Claude starts: each adds servers, one
+        # after the other, under its own folder (`claude mcp add --scope
+        # local` saves in projects[<folder>].mcpServers).
         sides = []
-        for index in (1, 2):
+        for index in (1, 2, 3):
             folder = Path(tempfile.mkdtemp(prefix=f'side-{index}-', dir=check.root)).resolve()
             check.own_folders.append(str(folder))
-            marker = f'SIDE-{index}'
-            process = subprocess.Popen(
-                [claude, '--setting-sources=', '--tools', 'Bash', '--strict-mcp-config', '-p',
-                 f'Reply with exactly this one word and nothing else: {marker}'],
-                cwd=folder, env=host_environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            sides.append(dict(folder=folder, marker=marker, process=process))
+            names = [f'side-{index}-{write}' for write in range(1, SIDE_WRITES + 1)]
+            script = ' && '.join(f'{shlex.quote(claude)} mcp add --scope local {name} -- /bin/echo {name}' for name in names)
+            process = subprocess.Popen(['/bin/sh', '-c', script], cwd=folder, env=host_environment,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            sides.append(dict(folder=folder, names=names, process=process, startedAt=time.time()))
 
         # 2. Start Coordinator opens it, and Claude asks nothing about the folder.
         run.ui.run('click-label', START)
         wait_for('the question to go', lambda: not run.question(), timeout=30)
         opened = wait_for('the coordinator', lambda: (s := run.status())['exists'] and s, timeout=60)
         wait_for('the chat', lambda: run.ui.exists('coordinator.chat') and run.ui.exists('coordinator.chat.composer'), timeout=60)
-        wait_for('the trust for the coordinator\'s folder', lambda: trusted(run.directory), timeout=60)
+        run.capture('opened')
+        wait_for('the trust for the coordinator\'s folder', lambda: trusted(run.directory), timeout=60, interval=0.1)
+        trust_seen_at = time.time()
         prompt = run.wait_for_first_prompt_without_trust_question()
         if run.ui.has_label('Dismiss'):
             run.ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
         require(not run.ui.exists('coordinator.chat.notice'), f'The chat shows a notice: {run.ui.texts()[-400:]}')
         run.capture('started')
+        terminal = run.show_terminal_for_a_picture('terminal-at-first-prompt')
+        require(TRUST_QUESTION not in terminal, f'Claude asked about the folder: {terminal[-400:]}')
         step('Start opened the coordinator and Claude asked nothing about the folder', opened=opened, prompt=prompt,
-             terminal=run.screen()[-500:])
+             terminal=terminal[-700:])
 
         # 3. The first message is answered.
         run.ui.send('Reply with exactly this one word and nothing else: FIRST-ONE')
@@ -341,18 +392,20 @@ def start(check, claude, host_environment):
         run.capture('first-message')
         step('the first message was answered', chat=run.ui.texts()[-400:])
 
-        # 4. The other sessions kept their writes, and the trust is still there.
+        # 4. The other processes kept every write, and the trust is still there.
         for side in sides:
             output, _ = side['process'].communicate(timeout=240)
-            require(side['process'].returncode == 0 and side['marker'] in output,
-                    f'The session beside the app failed: {output[-400:]}')
+            side['endedAt'] = time.time()
+            require(side['process'].returncode == 0, f'A Claude Code process beside the app failed: {output[-400:]}')
         config = read_config()
-        saved = {str(side['folder']): sorted(config.get('projects', {}).get(str(side['folder']), {})) for side in sides}
-        for folder, fields in saved.items():
-            require('lastSessionId' in fields or 'lastCost' in fields,
-                    f'Claude\'s config file lost what the session in {folder} saved: {fields}')
-        require(trusted(run.directory), 'The trust for the coordinator\'s folder is gone after the other sessions saved')
-        step('two other Claude sessions kept what they saved', saved=saved)
+        saved = {}
+        for side in sides:
+            servers = config.get('projects', {}).get(str(side['folder']), {}).get('mcpServers', {})
+            require(sorted(servers) == sorted(side['names']),
+                    f'Claude\'s config file lost writes of the process in {side["folder"]}: {sorted(servers)}')
+            saved[str(side['folder'])] = dict(servers=len(servers), startedAt=side['startedAt'], endedAt=side['endedAt'])
+        require(trusted(run.directory), 'The trust for the coordinator\'s folder is gone after the other processes saved')
+        step('the Claude Code processes beside the app kept every write', saved=saved, trustWrittenBy=trust_seen_at)
 
         # 5. A relaunch restores the coordinator and asks nothing.
         before = run.status()
@@ -381,6 +434,9 @@ def not_now(check, claude, _host_environment):
         require(not run.status()['exists'] and not run.directory.exists(), f'Not Now started something: {run.status()}')
         items = {title: run.menu_item(title) for title in ('Open Coordinator', 'Restart Coordinator')}
         require(items == {'Open Coordinator': 'enabled', 'Restart Coordinator': 'disabled'}, f'The Agent menu: {items}')
+        run.ui.run('menu-open', 'Agent')
+        run.capture('agent-menu', whole_screen=True)
+        run.ui.run('key', 'escape')
         run.capture('not-now')
         step('Not Now started nothing', menu=items)
 
@@ -417,17 +473,17 @@ def not_now(check, claude, _host_environment):
         from_menu = wait_for('the coordinator from the menu', lambda: (s := run.status())['exists'] and s, timeout=60)
         require(from_menu['workspaceID'] != from_palette['workspaceID'], 'The menu did not open a new coordinator')
         wait_for('the chat', lambda: run.ui.exists('coordinator.chat'), timeout=60)
-        run.wait_for_first_prompt_without_trust_question()
+        running = run.wait_for_first_prompt_without_trust_question()
         run.capture('opened-from-menu')
-        step('Open Coordinator in the Agent menu opened it', opened=from_menu)
+        step('Open Coordinator in the Agent menu opened it', opened=from_menu, running=running)
 
         # 5. Restart Coordinator in the Agent menu.
         run.ui.run('menu', 'Agent', 'Restart Coordinator')
         restarted = wait_for('a new agent session',
-                             lambda: (s := run.status()).get('sessionID') not in (None, from_menu.get('sessionID')) and s,
+                             lambda: (s := run.status()).get('sessionID') not in (None, running['sessionID']) and s,
                              timeout=120)
         run.wait_for_first_prompt_without_trust_question()
-        step('Restart Coordinator in the Agent menu started a new session', restarted=restarted)
+        step('Restart Coordinator in the Agent menu started a new session', before=running['sessionID'], restarted=restarted)
 
 
 def notice(check, claude, _host_environment, expect_notice=True):
@@ -466,12 +522,16 @@ def notice(check, claude, _host_environment, expect_notice=True):
                 run.capture(f'no-notice-{frame}')
                 time.sleep(2)
             require(TRUST_QUESTION in run.screen() and run.status()['queuedCount'] == 1, 'Claude went on by itself')
+            chat_text = run.ui.texts()[-500:]
+            terminal = run.show_terminal_for_a_picture('terminal-trust-question')
+            require(TRUST_QUESTION in terminal, f'The terminal does not show Claude\'s question: {terminal[-400:]}')
             step('the message waited and the chat said nothing about the terminal', waiting=waiting,
-                 chat=run.ui.texts()[-500:], terminal=run.screen()[-500:])
+                 chat=chat_text, terminal=terminal[-700:])
             return
 
         require(waiting.get('hold') == 'agentStarting', f'The message does not wait for the agent\'s start: {waiting}')
-        require('waits for the agent to start' in run.ui.texts(), f'The chat does not say what the message waits for: {run.ui.texts()[-400:]}')
+        require('waits for the agent to start' in run.ui.texts().lower(),
+                f'The chat does not say what the message waits for: {run.ui.texts()[-400:]}')
         wait_for('the notice', lambda: run.ui.exists('coordinator.chat.notice'), timeout=30)
         first = run.ui.texts('coordinator.chat.notice')
         # After a few seconds the notice names the terminal.
@@ -494,20 +554,49 @@ def notice(check, claude, _host_environment, expect_notice=True):
         time.sleep(1)
         run.capture('terminal')
         require(TRUST_QUESTION in run.screen(), f'The terminal does not show Claude\'s question: {run.screen()[-400:]}')
-        # The terminal has the keyboard; a real Return takes the first
-        # choice, "Yes, I trust this folder".
+        # The terminal has the keyboard. Real keys choose "Yes, I trust this
+        # folder": which choice Claude selects first differs by version.
         run.instance.request('app_control.run_action', dict(id='workspace.focus-panel', args=dict(panelID=run.status()['panelID'])))
         time.sleep(0.5)
         run.ui.run('activate')
+        choices = [line.strip() for line in run.screen().splitlines() if 'trust this folder' in line or 'No, exit' in line]
+        selected = next((index for index, line in enumerate(choices) if line.startswith('\u276f')), None)
+        yes = next((index for index, line in enumerate(choices) if TRUST_QUESTION in line), None)
+        require(selected is not None and yes is not None, f'The check cannot read Claude\'s choices: {choices}')
+        for _ in range(abs(yes - selected)):
+            run.ui.run('key', 'down' if yes > selected else 'up')
+            time.sleep(0.3)
+        run.capture('terminal-yes-selected')
         run.ui.run('key', 'return')
         wait_for('Claude to go on', lambda: TRUST_QUESTION not in run.screen(), timeout=60)
+        started = wait_for('Claude at its first prompt', run.at_prompt, timeout=120)
+        run.capture('terminal-claude-started')
         run.ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the chat again', lambda: run.ui.exists('coordinator.chat'), timeout=30)
+
+        # The agent reported its start. Toastty cannot tell the keys that
+        # answered the question from a draft in Claude's prompt, so nothing
+        # is typed: the chat says so and offers Send Anyway.
+        wait_for('the notice about the keys in the terminal',
+                 lambda: 'Send Anyway' in run.ui.texts('coordinator.chat.notice'), timeout=30)
+        draft_notice = run.ui.texts('coordinator.chat.notice')
+        require('answered a question' in draft_notice and 'has not started' not in draft_notice,
+                f'The notice after the answer: {draft_notice}')
+        time.sleep(3)
+        held = run.status()
+        require(held['queuedCount'] == 1 and held.get('hold') == 'userDraft' and not run.replied('NOTICE-ONE'),
+                f'The message did not wait for the user\'s release: {held}')
+        run.capture('send-anyway-notice')
+        step('after the answer in the terminal the chat offered Send Anyway', started=started, held=held,
+             notice=draft_notice)
+
+        # One click types the waiting message, and Claude answers it.
+        run.ui.run('click', 'coordinator.chat.notice.send-anyway')
         run.wait_for_reply('NOTICE-ONE')
         wait_for('the queue to empty', lambda: run.status()['queuedCount'] == 0, timeout=60)
         wait_for('the notice to go', lambda: not run.ui.exists('coordinator.chat.notice'), timeout=60)
         run.capture('answered')
-        step('after the answer in the terminal the message was typed and answered', chat=run.ui.texts()[-400:])
+        step('Send Anyway typed the waiting message and Claude answered it', chat=run.ui.texts()[-400:])
 
 
 # MARK: - The check
@@ -522,20 +611,23 @@ class Check(coordinator_check.Check):
         self.frames = self.artifacts / f'{NAME}-frames'
         shutil.rmtree(self.frames, ignore_errors=True)
         self.frames.mkdir(parents=True)
+        self.claude = self.window_frame = None
 
 
 def run(check, scenarios, expect_notice):
     host_environment = {key: value for key, value in os.environ.items()
                         if not key.startswith('TOASTTY_')
                         and key not in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT')}
-    claude = shutil.which('claude') or str(Path.home() / '.local/bin/claude')
+    # A Claude CLI beside the host's own must not update the host's.
+    host_environment['DISABLE_AUTOUPDATER'] = '1'
+    claude = check.claude or shutil.which('claude') or str(Path.home() / '.local/bin/claude')
     require(Path(claude).is_file(), 'Claude CLI is not installed; install and authenticate it on the remote host')
     version = subprocess.check_output([claude, '--version'], text=True, timeout=30, env=host_environment).strip()
     auth = subprocess.run([claude, '--safe-mode', '--setting-sources', '', 'auth', 'status', '--json'],
                           capture_output=True, text=True, timeout=30, env=host_environment)
     require(auth.returncode == 0 and json.loads(auth.stdout).get('loggedIn'),
             'Claude CLI needs an interactive login on the remote host; add --gui-session over SSH')
-    check.evidence.update(cliVersion=version, scenarios=list(scenarios), expectNotice=expect_notice)
+    check.evidence.update(cliVersion=version, cliPath=claude, scenarios=list(scenarios), expectNotice=expect_notice)
 
     # The file as it was, kept beside it for the run. It holds the account's
     # details, so it does not go to the artifacts.
@@ -581,12 +673,22 @@ def main():
                         help='run only this scenario; repeat for more (default: all)')
     parser.add_argument('--expect-notice', choices=('yes', 'no'), default='yes',
                         help="'no' checks the notice scenario against a build from before the notice")
+    parser.add_argument('--claude', help='the Claude CLI to run as the coordinator (default: `claude` on the PATH)')
+    parser.add_argument('--window-frame', metavar='X,Y,WIDTH,HEIGHT',
+                        help='where to put the app\'s window, to keep it clear of something else on the screen; '
+                             'write a frame that starts with a minus sign as --window-frame=-100,40,980,1000')
     options = parser.parse_args()
     scenarios = options.scenario or list(SCENARIOS)
     if options.gui_session:
         arguments = [argument for name in scenarios for argument in ('--scenario', name)]
-        chat.run_in_gui_session([*arguments, '--expect-notice', options.expect_notice], name=NAME, script=__file__)
+        arguments += ['--expect-notice', options.expect_notice]
+        # One word each: a frame can start with a minus sign.
+        for flag, value in (('--claude', options.claude), ('--window-frame', options.window_frame)):
+            arguments += [f'{flag}={value}'] if value else []
+        chat.run_in_gui_session(arguments, name=NAME, script=__file__)
     check = Check()
+    check.claude = options.claude
+    check.window_frame = options.window_frame.split(',') if options.window_frame else None
     try:
         run(check, scenarios, options.expect_notice == 'yes')
         check.evidence['status'] = 'passed'

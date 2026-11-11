@@ -385,18 +385,21 @@ coordinator chat check, with `ax-drive`'s `sheet-texts`, `menu` and
 
 - `start`: a first launch asks once; **Start Coordinator** opens the
   coordinator; Claude reaches its first prompt with no folder-trust question
-  and answers the first message; two other Claude sessions that run at the
-  same time keep what they saved in `~/.claude.json`; a relaunch restores the
-  coordinator and asks nothing.
+  and answers the first message; three other Claude Code processes that save
+  to `~/.claude.json` at the same time (`claude mcp add --scope local`) keep
+  every write; a relaunch restores the coordinator and asks nothing.
 - `not-now`: **Not Now** starts nothing and a relaunch does not ask again;
   **Open Coordinator** in the command palette and in the Agent menu opens it;
   **Restart Coordinator** is offered only while it is open.
 - `notice`: the `claude` profile starts with `env -u …`, so the app cannot
   tell its config file and writes no trust. Claude asks about the folder, the
-  chat says that the agent may wait in the terminal, **Show Terminal** shows
-  the question, and after a real Return there the waiting message is typed
-  and answered. `--expect-notice no` runs this scenario against a build from
-  before the notice and expects the chat to say nothing.
+  chat says that the agent may wait in the terminal, and **Show Terminal**
+  shows the question. Real keys there choose "Yes, I trust this folder".
+  Back in the chat, the notice for a draft in the terminal shows, and **Send
+  Anyway** types the waiting message, which Claude answers.
+  `--expect-notice no` runs this scenario against a build from before the
+  notice: it expects the chat to say nothing, and keeps a picture of the
+  terminal with Claude's question.
 
 Every other live check starts its app with
 `-toastty.coordinator.startOfferAnswered YES`
@@ -405,8 +408,17 @@ runtime home is a first launch and the question is a sheet over the window.
 Pass it in a new check that is not about the question.
 
 It writes `remote-coordinator-first-run-check.json`, the app logs and Claude's
-transcripts under the run's artifacts directory, and PNG frames when the
-build can capture its window outside automation mode.
+transcripts under the run's artifacts directory. Under `--gui-session` it also
+keeps still pictures of the window's part of the screen (`screencapture -x`,
+which Terminal in the GUI session may run). It makes no screen recording:
+`screencapture -v` from Terminal makes macOS show a consent prompt that stays
+on the screen until a person answers it. `--window-frame` puts the app's
+window where nothing else on the screen covers it, and `--claude` runs another
+Claude CLI than the one on the `PATH`.
+
+`ax-drive` makes no click at a place that a system prompt covers, such as a
+permission question or a crash report, and exits with code 4: that prompt is
+the user's to answer.
 
 ### Coordinator skill
 
