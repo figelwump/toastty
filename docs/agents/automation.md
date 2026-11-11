@@ -405,7 +405,9 @@ Every other live check starts its app with
 `-toastty.coordinator.startOfferAnswered YES`
 (`START_OFFER_ANSWERED` in `remote-task-create-check.py`), because a new
 runtime home is a first launch and the question is a sheet over the window.
-Pass it in a new check that is not about the question.
+`scripts/remote/validate.sh`, `scripts/remote/computer-use-run.sh` and
+`smoke-cli-live-control.sh` start their own app the same way. Pass it in a
+new check that is not about the question.
 
 It writes `remote-coordinator-first-run-check.json`, the app logs and Claude's
 transcripts under the run's artifacts directory. Under `--gui-session` it also
