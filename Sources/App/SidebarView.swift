@@ -3808,6 +3808,7 @@ struct SidebarView: View {
                 stage: boardItem?.stage
             ),
             stage: boardItem?.stage,
+            isTask: workspace.taskID != nil,
             projectTag: projectTag,
             linkedParentID: taskCoordinator?.records.linkedParentTaskSpaceID(of: workspace, in: store.state),
             isLinkedChild: isLinkedChild,
