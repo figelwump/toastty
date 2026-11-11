@@ -3314,7 +3314,7 @@ final class SidebarViewTests: XCTestCase {
 
         for (width, annotation, showsPill, showsAnnotation) in [
             (ToastyTheme.sidebarWidth, "PR #58", true, true),
-            (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
+            (ToastyTheme.sidebarWidth, "ENG-1234-fix-auth", true, false),
             (CGFloat(220), "PR #58", true, false),
             (CGFloat(WindowState.minSidebarWidth), "PR #58", false, false),
         ] {
