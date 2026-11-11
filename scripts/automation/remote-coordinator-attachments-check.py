@@ -23,9 +23,13 @@ The check proves from Claude's transcript and the chat's own text that:
   coordinator's attachments folder, and Claude reads every file;
 - the chat shows the text and the file names, not the paths.
 
-Evidence goes to remote-coordinator-attachments-check.json, the app log,
-Claude's transcripts, and full-screen stills under
-remote-coordinator-attachments-check-frames in the artifacts directory.
+Evidence goes to remote-coordinator-attachments-check.json, the app log and
+Claude's transcripts in the artifacts directory. With --stills, full-screen
+stills also go under remote-coordinator-attachments-check-frames. They are
+off by default: `screencapture` from Terminal is a screen capture that macOS
+can answer with a consent prompt ("Terminal is requesting to bypass the
+system private window picker..."), which then stays on the shared Mac's
+screen until its owner answers it.
 """
 
 import argparse
@@ -120,7 +124,7 @@ class DragSource:
             self.process.kill()
 
 
-def run(check):
+def run(check, stills=False):
     host_environment = {key: value for key, value in os.environ.items()
                         if not key.startswith('TOASTTY_')
                         and key not in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT')}
@@ -150,7 +154,8 @@ def run(check):
 
     frames = check.artifacts / f'{NAME}-frames'
     shutil.rmtree(frames, ignore_errors=True)
-    frames.mkdir()
+    if stills:
+        frames.mkdir()
     helper = check.root / 'drag-source'
     subprocess.run(['swiftc', '-O', str(HERE / 'drag-source.swift'), '-o', str(helper)], check=True, timeout=300)
 
@@ -198,6 +203,8 @@ def run(check):
 
     def still(name):
         """The whole screen as the user sees it, with the window's frame."""
+        if not stills:
+            return
         path = frames / f'{len(check.evidence["stills"]) + 1:02d}-{name}.png'
         completed = subprocess.run(['screencapture', '-x', '-t', 'png', str(path)], capture_output=True, text=True, timeout=30)
         code, window = ui.run('window-frame', check=False)
@@ -420,12 +427,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--gui-session', action='store_true',
                         help='rerun through Terminal in the GUI session, where the Claude login is readable')
+    parser.add_argument('--stills', action='store_true',
+                        help='also capture the screen with screencapture; macOS may ask for consent on screen')
     options = parser.parse_args()
     if options.gui_session:
-        chat_check.run_in_gui_session([], name=NAME, script=__file__)
+        chat_check.run_in_gui_session(['--stills'] if options.stills else [], name=NAME, script=__file__)
     check = Check()
     try:
-        run(check)
+        run(check, stills=options.stills)
         check.evidence['status'] = 'passed'
     except Exception as error:  # noqa: BLE001 - always keep the evidence
         check.evidence['failure'] = repr(error)
