@@ -3,9 +3,9 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// Wakes for the coordinator: task changes that may need it and the timer
-/// it sets, from the event service with a fake clock to the text typed at
-/// the coordinator's prompt.
+/// Wakes for the coordinator: task changes that may need it, task alerts,
+/// and the timer it sets, from the event service with a fake clock to the
+/// text typed at the coordinator's prompt.
 /// The coordinator is the real controller over the real store, session
 /// store and agent launcher, with a fake terminal.
 @MainActor
@@ -19,6 +19,14 @@ struct CoordinatorWakeTests {
     private final class States {
         var value: [UUID: TaskWebhookTaskState]
         init(_ value: [UUID: TaskWebhookTaskState]) { self.value = value }
+    }
+
+    /// What the service reads about each task's alerts; a test changes it
+    /// between passes.
+    private final class Facts {
+        var value: [UUID: TaskAlertFacts]
+        init(_ value: [UUID: TaskAlertFacts]) { self.value = value }
+        func read(_ taskIDs: Set<UUID>) -> [UUID: TaskAlertFacts] { value.filter { taskIDs.contains($0.key) } }
     }
 
     private final class Clock {
@@ -98,6 +106,17 @@ struct CoordinatorWakeTests {
 
     private func savedOutbox(_ files: Files) throws -> [String: Any] {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: files.outbox)) as? [String: Any])
+    }
+
+    /// Saved JSON as the build before alerts wrote it: no alerts anywhere,
+    /// and no `stageWakes` on a waiting change.
+    private func asEarlierBuildWroteIt(_ value: Any) -> Any {
+        if let object = value as? [String: Any] {
+            return object.filter { ["alerts", "newAlerts", "stageWakes"].contains($0.key) == false }
+                .mapValues(asEarlierBuildWroteIt)
+        }
+        if let array = value as? [Any] { return array.map(asEarlierBuildWroteIt) }
+        return value
     }
 
     // MARK: - Task changes
@@ -484,15 +503,14 @@ struct CoordinatorWakeTests {
         second.stop()
 
         // The same file as the earlier build wrote it: changes have no
-        // `wakes`, and the last wake was two hours ago with no time set.
-        // The change counts as waking, as it did then; the hour passed
+        // `stageWakes`, and the last wake was two hours ago with no time
+        // set. The change counts as waking, as it did then; the hour passed
         // wakes nothing.
         var saved = try savedOutbox(files)
+        let changes = try #require((saved["coordinator"] as? [String: Any])?["changes"] as? [[String: Any]])
+        #expect(changes.first?["stageWakes"] as? Bool == false)
+        saved = try #require(asEarlierBuildWroteIt(saved) as? [String: Any])
         var coordinator = try #require(saved["coordinator"] as? [String: Any])
-        var changes = try #require(coordinator["changes"] as? [[String: Any]])
-        #expect(changes.first?["wakes"] as? Bool == false)
-        for index in changes.indices { changes[index]["wakes"] = nil }
-        coordinator["changes"] = changes
         coordinator["requestedWakeAt"] = nil
         saved["coordinator"] = coordinator
         try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys]).write(to: files.outbox)
@@ -550,6 +568,186 @@ struct CoordinatorWakeTests {
             line(task, "Wake design", "idle", at: clock.now),
             "- Scheduled check: the time you set, \(dueAt.formatted(.iso8601)), has come."
         ))
+    }
+
+    // MARK: - Alerts
+
+    @Test func aBusyAgentThatStaysSilentWakesTheCoordinatorOnceByTheClockAlone() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let current = States([task: state("running")])
+        let facts = Facts([task: TaskAlertFacts(agentBusy: true, lastOutputAt: clock.now, checks: .none)])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock, settleInterval: 3) { current.value }
+        service.taskAlertFacts = { facts.read($0) }
+        service.pass()
+
+        // Only the clock moves. Just under the limit, nothing.
+        clock.advance(TaskAlert.limit - 1)
+        service.pass()
+        #expect(fixture.typedTexts.isEmpty)
+        // At the limit the alert starts, and counts after 3 seconds.
+        clock.advance(1)
+        service.pass()
+        #expect(fixture.typedTexts.isEmpty)
+        clock.advance(3)
+        service.pass()
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "running", at: clock.now) + "; busy, no output for 30 minutes")])
+
+        // One wake: an hour more of silence types nothing.
+        try await runTurn(fixture)
+        for _ in 0..<4 {
+            clock.advance(900)
+            service.pass()
+        }
+        #expect(fixture.typedTexts.count == 1)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
+
+        // The agent writes: the alert clears, which wakes nothing.
+        facts.value[task]?.lastOutputAt = clock.now
+        service.pass()
+        clock.advance(3)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        // Silent again for the limit: one more wake.
+        clock.advance(TaskAlert.limit)
+        service.pass()
+        clock.advance(3)
+        service.pass()
+        #expect(fixture.typedTexts.count == 2)
+        #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "running", at: clock.now) + "; busy, no output for 30 minutes"))
+    }
+
+    @Test func failingAndSlowChecksEachWakeTheCoordinatorOnceAndFireNoWebhookEvent() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let transport = RecordingTransport()
+        let current = States([task: state("needsYou", "review")])
+        let facts = Facts([task: TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .passing)])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock, transport: transport) { current.value }
+        service.taskAlertFacts = { facts.read($0) }
+        // A webhook that takes every event.
+        var settings = TaskWebhookService.Settings()
+        settings.url = "https://hooks.example.com/w"
+        settings.events = TaskWebhookEventType.allCases
+        let webhook = try service.add(name: "bot", settings: settings, secret: "s3cret-key-0123456789", requester: .init())
+        try service.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        service.pass()
+
+        // The checks fail.
+        clock.advance(60)
+        facts.value[task]?.checks = .failing
+        service.pass()
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "needsYou (review)", at: clock.now) + "; pull request checks failing")])
+        try await runTurn(fixture)
+        clock.advance(600)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+
+        // A push: the checks run again, which clears the alert and wakes
+        // nothing. After 30 minutes on the same commit they are slow.
+        let pushedAt = clock.now
+        facts.value[task]?.checks = .pending(since: pushedAt)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+        clock.advance(TaskAlert.limit - 60)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+        clock.advance(60)
+        service.pass()
+        #expect(fixture.typedTexts.count == 2)
+        #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "needsYou (review)", at: clock.now) + "; pull request checks pending for 30 minutes"))
+        try await runTurn(fixture)
+
+        // They fail in the end: a new alert, so one more wake.
+        clock.advance(600)
+        facts.value[task]?.checks = .failing
+        service.pass()
+        #expect(fixture.typedTexts.count == 3)
+        #expect(fixture.typedTexts[2].hasSuffix("; pull request checks failing\n\(CoordinatorWakeState.digestFooter)"))
+
+        // None of it was a webhook event.
+        await fixture.settle()
+        #expect(service.entries.isEmpty)
+        #expect(transport.types.isEmpty)
+    }
+
+    @Test func aToldAlertIsNotToldAgainAfterARelaunchAndAnEarlierBuildsFileWakesOnlyForARealOne() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let files = Files()
+        let current = States([task: state("needsYou", "review"), other: state("running", title: "Other task")])
+        let facts = Facts([
+            task: TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .passing),
+            other: TaskAlertFacts(agentBusy: true, lastOutputAt: clock.now, checks: .none),
+        ])
+        try await fixture.openAtPrompt()
+        let first = makeService(fixture, files: files, clock: clock) { current.value }
+        first.taskAlertFacts = { facts.read($0) }
+        first.pass()
+        clock.advance(60)
+        facts.value[task]?.checks = .failing
+        first.pass()
+        #expect(fixture.typedTexts.count == 1)
+        try await runTurn(fixture)
+        first.stop()
+
+        // A relaunch. GitHub has not answered yet, so the checks are
+        // unknown: the alert the coordinator was told about stays, and the
+        // answer, when it comes, tells nothing new.
+        clock.advance(300)
+        facts.value[task]?.checks = .unknown
+        let second = makeService(fixture, files: files, clock: clock) { current.value }
+        second.taskAlertFacts = { facts.read($0) }
+        second.pass()
+        clock.advance(120)
+        facts.value[task]?.checks = .failing
+        second.pass()
+        #expect(fixture.typedTexts.count == 1)
+        #expect(second.coordinatorWakeStatus?.pendingTaskCount == 0)
+        second.stop()
+
+        // The file as the build before alerts wrote it. The other task's
+        // agent is busy and wrote 8 minutes ago: nothing. The failing checks
+        // that build never told: told once.
+        let saved = try #require(asEarlierBuildWroteIt(try savedOutbox(files)) as? [String: Any])
+        try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys]).write(to: files.outbox)
+        let third = makeService(fixture, files: files, clock: clock) { current.value }
+        third.taskAlertFacts = { facts.read($0) }
+        third.pass()
+        #expect(fixture.typedTexts.count == 2)
+        #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "needsYou (review)", at: clock.now) + "; pull request checks failing"))
+        try await runTurn(fixture)
+        // The busy agent reaches the limit later: then it wakes.
+        clock.advance(TaskAlert.limit - 480 - 1)
+        third.pass()
+        #expect(fixture.typedTexts.count == 2)
+        clock.advance(1)
+        third.pass()
+        #expect(fixture.typedTexts.count == 3)
+        #expect(fixture.typedTexts[2] == digest(line(other, "Other task", "running", at: clock.now) + "; busy, no output for 30 minutes"))
+    }
+
+    @Test func aFinishedTaskHasNoAlerts() async throws {
+        // An archived task whose pull request stays open with failing
+        // checks, and a done task whose agent still runs: nothing.
+        let fixture = try Fixture()
+        let clock = Clock()
+        let current = States([task: state("archived"), other: state("done", title: "Other task")])
+        let facts = Facts([
+            task: TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .failing),
+            other: TaskAlertFacts(agentBusy: true, lastOutputAt: clock.now.addingTimeInterval(-2 * TaskAlert.limit), checks: .none),
+        ])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock) { current.value }
+        service.pass()
+        clock.advance(60)
+        service.taskAlertFacts = { facts.read($0) }
+        service.pass()
+        #expect(fixture.typedTexts.isEmpty)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
     }
 
     // MARK: - No coordinator

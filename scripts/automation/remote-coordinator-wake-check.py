@@ -30,11 +30,17 @@ that:
 - `coordinator wake --in` sets the timer, `coordinator status` shows it,
   `--clear` removes it, and the timer wake arrives at its time as a digest
   with the scheduled-check line;
+- a busy task agent whose transcript last changed 31 minutes ago wakes the
+  coordinator once, by the clock alone, with the silent alert in its line;
+  the agent writing clears the alert and wakes nothing; silence again wakes
+  it again. The check moves the transcript's modification time back, so the
+  real 30-minute limit applies and no setting is changed;
 - after the app is killed with a digest waiting and a timer set, and stays
   down until the timer's time passed, the relaunched app types the waiting
   change once and the scheduled check once; a second relaunch, with the
-  saved last wake moved two hours back and no time set, types neither and
-  no scheduled check of its own.
+  saved last wake moved two hours back, no time set and the file stripped
+  of alerts as the build before them wrote it, types neither and no
+  scheduled check of its own.
 
 With '--provider claude', the coordinator is the real CLI. The check sets the
 timer and proves from Claude's transcript that the typed digest started a
@@ -71,7 +77,10 @@ require, wait_for, Instance = coordinator_check.require, coordinator_check.wait_
 
 HEADER = '[Toastty] Wake: this message is from Toastty, not from the user.'
 FOOTER = 'Read `toastty task list` for details.'
-TASK_LINE = re.compile(r'^- \[(?P<title>.*)\]\(toastty://task/(?P<id>[0-9A-F-]{36})\): (?P<stage>.*) at (?P<at>\S+)$')
+TASK_LINE = re.compile(r'^- \[(?P<title>.*)\]\(toastty://task/(?P<id>[0-9A-F-]{36})\): (?P<stage>.*?) '
+                       r'at (?P<at>\d{4}-\d\d-\d\dT[\d:.]+Z)(?P<alerts>(?:; .+)?)$')
+SILENT = 'busy, no output for 30 minutes'
+
 REQUESTED_CHECK = re.compile(r'^- Scheduled check: the time you set, (?P<at>\S+), has come\.$')
 # Toastty counts a stage that an agent's status decides after 3 seconds.
 SETTLE = 3
@@ -182,7 +191,8 @@ def parse_digest(text):
         task, check = TASK_LINE.match(line), REQUESTED_CHECK.match(line)
         if task:
             require(task['id'] not in tasks, f'A digest names a task twice: {text!r}')
-            tasks[task['id']] = dict(title=task['title'], stage=task['stage'], at=task['at'])
+            tasks[task['id']] = dict(title=task['title'], stage=task['stage'], at=task['at'],
+                                     alerts=task['alerts'].split('; ')[1:])
         elif check:
             requested_check = check['at']
         else:
@@ -245,7 +255,8 @@ def run_fake(check):
         return [t['taskID'] for t in cli('task', 'list')['tasks'] if t['stage']['group'] not in ('done', 'archived')]
 
     def saved_changes():
-        return [(change['taskID'], change['group'], change.get('wakes'))
+        """Each waiting change: its task, its group, and whether it wakes."""
+        return [(change['taskID'], change['group'], change.get('stageWakes') or bool(change.get('newAlerts')))
                 for change in read_outbox(runtime_home)['coordinator']['changes']]
 
     def create(title):
@@ -427,7 +438,60 @@ def run_fake(check):
         quiet(seen + 1, 6, 'after the timer fired once')
         step('the timer fired at its time', timer=timer, digest=scheduled['text'], after=after_timer)
 
-        # 6. Kill with a digest waiting and a timer set; stay down past the
+        # 6. A busy agent that writes nothing for 30 minutes wakes the
+        # coordinator once, by the clock alone. The fake agent writes its
+        # transcript only when it starts, so moving that file's
+        # modification time back is the agent's silence.
+        wait_for('the coordinator at its prompt', at_prompt)
+        native_a = next(event['native'] for event in events()
+                        if event['event'] == 'started' and event['session'] == session_a)
+        transcript = records / f'{native_a}.jsonl'
+        hold(session_a)
+        cli('task', 'send', task_a, 'think for a long time')
+        wait_for_stage(task_a, 'running')
+        wait_for('Toastty to read the transcript', lambda: task(task_a)['agentState'].get('lastOutputAt'))
+        wait_for('the running change to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
+        seen = len(digests())
+        quiet(seen, SETTLE + 3, 'for a busy agent that wrote recently')
+
+        def go_silent():
+            moved_to = time.time() - 31 * 60
+            os.utime(transcript, (moved_to, moved_to))
+            return wait_for('the silence to show', lambda: (t := task(task_a))['agentState'].get('lastOutputAt')
+                            and time.time() - parse_time(t['agentState']['lastOutputAt']) > 30 * 60 and t)
+
+        silent_task = go_silent()
+        silent_at = time.time()
+        (silent,) = new_digests(seen, timeout=30)
+        require(list(silent['tasks']) == [task_a] and silent['tasks'][task_a]['stage'] == 'running'
+                and silent['tasks'][task_a]['alerts'] == [SILENT] and not silent['other'] and silent['requestedCheck'] is None,
+                f'Unexpected digest for a silent agent: {silent}')
+        require(silent['receivedAt'] - silent_at < SETTLE + 8, f'The silent alert came late: {silent_at} {silent}')
+        wait_for('the coordinator at its prompt', at_prompt)
+        quiet(seen + 1, SETTLE + 6, 'while the agent stayed silent')
+
+        # The agent writes: the alert clears and wakes nothing.
+        os.utime(transcript, None)
+        wait_for('the cleared alert to wait', lambda: saved_changes() == [(task_a, 'running', False)])
+        quiet(seen + 1, SETTLE + 3, 'when the silent agent wrote')
+        cleared_status = status()
+        # Silent again: one more wake.
+        go_silent()
+        (again,) = new_digests(seen + 1, timeout=30)
+        require(list(again['tasks']) == [task_a] and again['tasks'][task_a]['alerts'] == [SILENT],
+                f'Unexpected digest for the second silence: {again}')
+        wait_for('the coordinator at its prompt', at_prompt)
+        quiet(seen + 2, SETTLE + 3, 'after the second silence was told')
+        # The turn ends: a stage change, and no alert.
+        hold(session_a, on=False)
+        wait_for_stage(task_a, 'needsYou', 'agentFinished')
+        (ended,) = new_digests(seen + 2)
+        require(ended['tasks'][task_a]['stage'] == 'needsYou (agentFinished)' and ended['tasks'][task_a]['alerts'] == [],
+                f'Unexpected digest for the end of the silent turn: {ended}')
+        step('a silent busy agent woke the coordinator once per silence', task=silent_task['agentState'],
+             digests=[silent['text'], again['text'], ended['text']], afterWriting=cleared_status)
+
+        # 7. Kill with a digest waiting and a timer set; stay down past the
         # timer's time; relaunch.
         wait_for('the coordinator at its prompt', at_prompt)
         coordinator_session = status()['sessionID']
@@ -476,7 +540,8 @@ def run_fake(check):
 
         # A second relaunch repeats nothing. Its saved last wake is moved two
         # hours back, with no time set and a task open: a default timer
-        # would fire at once.
+        # would fire at once. The file is also stripped of alerts, as the
+        # build before them wrote it: it must still load.
         wait_for('the coordinator at its prompt', at_prompt)
         native = next(event['native'] for event in events()
                       if event['event'] == 'started' and event['session'] == resumed['sessionID'])
@@ -489,6 +554,14 @@ def run_fake(check):
         require(outbox['coordinator'].get('requestedWakeAt') is None, f'A time is still set: {outbox["coordinator"]}')
         two_hours_ago = datetime.fromtimestamp(time.time() - 7200, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         outbox['coordinator']['lastWakeAt'] = two_hours_ago
+
+        def as_earlier_build(value):
+            if isinstance(value, dict):
+                return {key: as_earlier_build(item) for key, item in value.items()
+                        if key not in ('alerts', 'newAlerts', 'stageWakes')}
+            return [as_earlier_build(item) for item in value] if isinstance(value, list) else value
+
+        outbox = as_earlier_build(outbox)
         outbox_path.write_text(json.dumps(outbox, indent=2, sort_keys=True))
         instance = Instance(check.binary, environment, socket_path, runtime_home, app_log)
         instance.wait_until_ready()

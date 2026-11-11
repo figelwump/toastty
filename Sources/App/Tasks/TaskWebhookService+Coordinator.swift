@@ -14,6 +14,12 @@ import Foundation
 /// A change that wakes nothing on its own, a task that only starts
 /// running, waits without starting a digest.
 ///
+/// The pass also reads each open task's alerts (`TaskAlert`) with its own
+/// clock, so an alert that only time raises, such as an agent that has
+/// been silent for 30 minutes, starts within about a second. Alerts are
+/// part of the detector's key, so they settle, are saved and survive a
+/// relaunch as a stage does. No webhook event reads them.
+///
 /// The coordinator's timer is part of the same state. It runs only for a
 /// time the coordinator set. A timer that came due adds one line to the
 /// digest, or is a digest of its own.
@@ -74,6 +80,20 @@ extension TaskWebhookService {
             detector.reset()
         }
         ToasttyLog.info("Task changes now wake the coordinator", category: .tasks)
+    }
+
+    /// Sets the alerts of every open task in `states`. While Toastty cannot
+    /// read the checks, as before GitHub's first answer after a launch, the
+    /// check alerts the detector last counted stay, so a relaunch does not
+    /// tell them again.
+    func addAlerts(to states: inout [UUID: TaskWebhookTaskState], at: Date) {
+        let open = Set(states.compactMap { id, state in
+            state.key.group == "\(TaskStage.Group.done)" || state.key.group == "\(TaskStage.Group.archived)" ? nil : id
+        })
+        guard open.isEmpty == false else { return }
+        for (id, facts) in taskAlertFacts(open) where open.contains(id) {
+            states[id]?.key.alerts = facts.alerts(now: at, previous: detector.baseline?[id]?.key.alerts ?? [])
+        }
     }
 
     /// Types the digest when one waits and the coordinator's prompt is

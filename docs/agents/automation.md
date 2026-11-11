@@ -260,12 +260,17 @@ for a task that only starts running (also at the open prompt), one digest
 for the task's next stage, one digest after a held turn for several
 changes that lists a task that only started running, nothing for a stage
 that returns in under 3 seconds, and the timer set, cleared and fired with
-`coordinator wake`. It then kills the app with a digest waiting and a timer
-set, keeps it down until the timer's time passed, and checks that the
-relaunched app types the waiting change once and the scheduled check once.
-Before a second relaunch it moves the saved last wake two hours back, and
-checks that the relaunch repeats neither and types no scheduled check of
-its own.
+`coordinator wake`. It holds a task's turn open and moves the modification
+time of that agent's transcript 31 minutes back: the real 30-minute limit
+applies, and one digest with the silent alert arrives within seconds. The
+agent writing clears the alert, which wakes nothing, and a second silence
+wakes the coordinator again. It then kills the app with a digest waiting and
+a timer set, keeps it down until the timer's time passed, and checks that
+the relaunched app types the waiting change once and the scheduled check
+once. Before a second relaunch it moves the saved last wake two hours back
+and strips the alerts from the saved file, as the build before alerts wrote
+it, and checks that the relaunch repeats neither and types no scheduled
+check of its own.
 
 The `--provider claude` run uses the real, authenticated Claude CLI and
 subscription usage, with the same narrow profile and folder trust handling as

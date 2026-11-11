@@ -3,17 +3,23 @@ import Foundation
 import Testing
 
 /// What waits for the coordinator and how it reads: one line for each task,
-/// which changes wake it, the timer it sets, and the rule that a typed
-/// digest removes that time.
+/// which changes wake it, the alerts Toastty raises, the timer it sets, and
+/// the rule that a typed digest removes that time.
 struct CoordinatorWakeStateTests {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     private let workspace = UUID()
     private let first = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     private let second = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
 
-    private func state(_ group: String, _ attention: String? = nil, merged: Bool = false, title: String = "Fix the login") -> TaskWebhookTaskState {
+    private func state(
+        _ group: String,
+        _ attention: String? = nil,
+        merged: Bool = false,
+        alerts: [TaskAlert] = [],
+        title: String = "Fix the login"
+    ) -> TaskWebhookTaskState {
         TaskWebhookTaskState(
-            key: .init(group: group, attention: attention, merged: merged),
+            key: .init(group: group, attention: attention, merged: merged, alerts: alerts),
             title: title,
             projectRoot: "/repo",
             question: "Is the plan right? Reply with the secret."
@@ -192,6 +198,186 @@ struct CoordinatorWakeStateTests {
         #expect(try #require(wake.digest(now: at(21))).contains("): idle at "))
     }
 
+    // MARK: - Alerts
+
+    @Test func eachAlertStartsAtItsLimitByTheClock() {
+        let limit = TaskAlert.limit
+        func alerts(_ facts: TaskAlertFacts, at seconds: TimeInterval, previous: [TaskAlert] = []) -> [TaskAlert] {
+            facts.alerts(now: at(seconds), previous: previous)
+        }
+        // A busy agent whose transcript last changed at t0.
+        let busy = TaskAlertFacts(agentBusy: true, lastOutputAt: t0, checks: .none)
+        #expect(alerts(busy, at: limit - 1).isEmpty)
+        #expect(alerts(busy, at: limit) == [.silent])
+        // Not busy, or no known output: never silent.
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: t0, checks: .none), at: 2 * limit).isEmpty)
+        #expect(alerts(TaskAlertFacts(agentBusy: true, lastOutputAt: nil, checks: .none), at: 2 * limit).isEmpty)
+
+        // Checks pending since t0 on the head commit.
+        let pending = TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .pending(since: t0))
+        #expect(alerts(pending, at: limit - 1).isEmpty)
+        #expect(alerts(pending, at: limit) == [.checksSlow])
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .pending(since: nil)), at: 2 * limit).isEmpty)
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .failing), at: 0) == [.checksFailing])
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .passing), at: 0).isEmpty)
+
+        // Two at once, in a fixed order.
+        let both = TaskAlertFacts(agentBusy: true, lastOutputAt: t0, checks: .pending(since: t0))
+        #expect(alerts(both, at: limit) == [.silent, .checksSlow])
+    }
+
+    @Test func checksToasttyCannotReadKeepTheCheckAlertsLastCounted() {
+        // As after a relaunch, before GitHub's first answer: the check
+        // alerts stay as the detector last counted them. Silence is read
+        // live, so it is not carried.
+        let unknown = TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .unknown)
+        #expect(unknown.alerts(now: at(10), previous: [.silent, .checksFailing]) == [.checksFailing])
+        #expect(unknown.alerts(now: at(10), previous: [.checksSlow]) == [.checksSlow])
+        #expect(unknown.alerts(now: at(10), previous: []).isEmpty)
+    }
+
+    /// Feeds one task's states, each at its time, through one detector and
+    /// one wake state, as the pass does.
+    private struct Feed {
+        var detector = TaskWebhookEventDetector()
+        var wake: CoordinatorWakeState
+        var events: [[TaskWebhookEventType]] = []
+
+        mutating func observe(_ states: [UUID: TaskWebhookTaskState], at date: Date, settleInterval: TimeInterval = 0) {
+            for change in detector.observe(states, now: date, settleInterval: settleInterval) {
+                events.append(change.events)
+                wake.record(change, at: date)
+            }
+        }
+    }
+
+    private func feed(_ states: [UUID: TaskWebhookTaskState]) -> Feed {
+        var feed = Feed(wake: wake())
+        feed.observe(states, at: t0)
+        return feed
+    }
+
+    @Test func anAlertWakesOnceWhenItStartsAndAgainOnlyWhenItComesBack() throws {
+        var feed = feed([first: state("running")])
+        feed.observe([first: state("running", alerts: [.silent])], at: at(1800))
+        #expect(try #require(feed.wake.digest(now: at(1801))) == """
+        [Toastty] Wake: this message is from Toastty, not from the user.
+        - [Fix the login](toastty://task/11111111-1111-1111-1111-111111111111): running at 2027-01-15T08:30:00Z; busy, no output for 30 minutes
+        Read `toastty task list` for details.
+        """)
+        feed.wake.markDelivered(at: at(1801))
+
+        // It holds: no change, nothing waits.
+        feed.observe([first: state("running", alerts: [.silent])], at: at(1900))
+        #expect(feed.wake.changes.isEmpty)
+        // It clears: the line waits and wakes nothing.
+        feed.observe([first: state("running")], at: at(2000))
+        #expect(feed.wake.changes.map(\.wakes) == [false])
+        #expect(feed.wake.digest(now: at(2001)) == nil)
+        // It comes back: one more wake.
+        feed.observe([first: state("running", alerts: [.silent])], at: at(3800))
+        #expect(try #require(feed.wake.digest(now: at(3801))).contains("): running at 2027-01-15T09:03:20Z; busy, no output for 30 minutes"))
+        // No alert fires a webhook event.
+        #expect(feed.events == [[], [], []])
+    }
+
+    @Test func eachAlertWakesOnItsOwn() throws {
+        // Silent while it waits on slow checks: both start and wake once.
+        var feed = feed([first: state("running")])
+        feed.observe([first: state("running", alerts: [.silent, .checksSlow])], at: at(1800))
+        #expect(try #require(feed.wake.digest(now: at(1801))).contains(
+            "): running at 2027-01-15T08:30:00Z; busy, no output for 30 minutes; pull request checks pending for 30 minutes"))
+        feed.wake.markDelivered(at: at(1801))
+        // The checks finish: silence stays, and was told.
+        feed.observe([first: state("running", alerts: [.silent])], at: at(1900))
+        #expect(feed.wake.digest(now: at(1901)) == nil)
+        // The checks then fail: a new alert.
+        feed.observe([first: state("running", alerts: [.silent, .checksFailing])], at: at(2000))
+        let line = try #require(feed.wake.digest(now: at(2001))?.split(separator: "\n")[1])
+        #expect(line.hasSuffix("; busy, no output for 30 minutes; pull request checks failing"))
+        #expect(feed.wake.changes.map(\.newAlerts) == [[.checksFailing]])
+    }
+
+    @Test func aChangeOfOnlyTheAlertsKeepsWhatTheWaitingLineSaysAboutTheStage() throws {
+        // A task waits for review, untold, while its checks fail and then
+        // run again: the review still wakes the coordinator.
+        var feed = feed([first: state("running")])
+        feed.observe([first: state("needsYou", "review")], at: at(10))
+        feed.observe([first: state("needsYou", "review", alerts: [.checksFailing])], at: at(20))
+        feed.observe([first: state("needsYou", "review")], at: at(30))
+        #expect(feed.wake.changes.count == 1)
+        #expect(try #require(feed.wake.digest(now: at(31))).contains("): needsYou (review) at 2027-01-15T08:00:30Z\n"))
+        #expect(feed.events == [[.needsYou], [], []])
+
+        // A told task whose alert clears: nothing wakes, also out of Running.
+        feed.wake.markDelivered(at: at(31))
+        feed.observe([first: state("needsYou", "review", alerts: [.checksFailing])], at: at(40))
+        feed.wake.markDelivered(at: at(41))
+        feed.observe([first: state("needsYou", "review")], at: at(50))
+        #expect(feed.wake.changes.map(\.wakes) == [false])
+        #expect(feed.wake.digest(now: at(51)) == nil)
+    }
+
+    @Test func aStageChangeKeepsAnAlertThatWasNotToldYet() throws {
+        // The checks fail while the coordinator works; then the task's agent
+        // starts to fix them. Its move into Running wakes nothing, but the
+        // failing checks were never told.
+        var feed = feed([first: state("needsYou", "review")])
+        feed.observe([first: state("needsYou", "review", alerts: [.checksFailing])], at: at(10))
+        feed.observe([first: state("running", alerts: [.checksFailing])], at: at(20))
+        let line = try #require(feed.wake.digest(now: at(21))?.split(separator: "\n")[1])
+        #expect(line.hasSuffix("): running at 2027-01-15T08:00:20Z; pull request checks failing"))
+    }
+
+    @Test func anAlertThatFlickersForUnderTheSettleTimeCountsNothing() {
+        var feed = feed([first: state("running", alerts: [.silent])])
+        feed.observe([first: state("running")], at: at(1), settleInterval: 3)
+        feed.observe([first: state("running", alerts: [.silent])], at: at(2), settleInterval: 3)
+        feed.observe([first: state("running", alerts: [.silent])], at: at(10), settleInterval: 3)
+        #expect(feed.wake.changes.isEmpty)
+        // One that holds counts after it.
+        feed.observe([first: state("running")], at: at(11), settleInterval: 3)
+        feed.observe([first: state("running")], at: at(14), settleInterval: 3)
+        #expect(feed.wake.changes.map(\.alerts) == [[]])
+    }
+
+    @Test func alertsFireNoWebhookEvent() {
+        // The same moves, with and without alerts, fire the same events.
+        let moves: [(TaskWebhookTaskState, TaskWebhookTaskState)] = [
+            (state("running"), state("needsYou", "review")),
+            (state("needsYou", "review"), state("needsYou", "agentFinished")),
+            (state("running"), state("idle")),
+            (state("needsYou", "review"), state("toShip", merged: true)),
+            (state("idle"), state("running")),
+        ]
+        for (before, after) in moves {
+            var alerted = after
+            alerted.key.alerts = [.checksFailing, .checksSlow]
+            #expect(changes(from: [first: before], to: [first: alerted]).map(\.events)
+                    == changes(from: [first: before], to: [first: after]).map(\.events), "\(after.key)")
+        }
+        #expect(changes(from: [first: state("idle")], to: [first: state("idle", alerts: [.checksFailing])]).map(\.events) == [[]])
+    }
+
+    @Test func aBaselineSavedBeforeAlertsLoadsWithNoAlerts() throws {
+        // A detector key as the earlier build saved it, and one from a
+        // newer build with an alert this build does not know.
+        let earlier = try decoder.decode(TaskWebhookTaskState.Key.self, from: Data(#"{"group":"running","merged":false}"#.utf8))
+        #expect(earlier == .init(group: "running"))
+        let newer = try decoder.decode(
+            TaskWebhookTaskState.Key.self,
+            from: Data(#"{"group":"running","merged":false,"alerts":["stuck","silent"]}"#.utf8)
+        )
+        #expect(newer.alerts == [.silent])
+
+        // The whole detector, with alerts, survives a save.
+        var detector = TaskWebhookEventDetector()
+        _ = detector.observe([first: state("running", alerts: [.silent, .checksFailing])], now: t0)
+        let restored = try decoder.decode(TaskWebhookEventDetector.self, from: encoder.encode(detector))
+        #expect(restored == detector)
+        #expect(restored.baseline?[first]?.key.alerts == [.silent, .checksFailing])
+    }
+
     // MARK: - Timer
 
     @Test func withNoTimeSetNoTimerRuns() {
@@ -256,17 +442,18 @@ struct CoordinatorWakeStateTests {
         var wake = wake()
         wake.setRequestedWake(at(1200))
         for change in changes(from: [first: state("running"), second: state("idle")],
-                              to: [first: state("done", merged: true), second: state("running")]) {
+                              to: [first: state("done", merged: true), second: state("running", alerts: [.silent])]) {
             wake.record(change, at: at(30))
         }
         let restored = try decoder.decode(CoordinatorWakeState.self, from: encoder.encode(wake))
         #expect(restored == wake)
-        #expect(restored.changes.map(\.wakes) == [true, false])
+        #expect(restored.changes.map(\.stageWakes) == [true, false])
+        #expect(restored.changes.map(\.newAlerts) == [[], [.silent]])
         #expect(restored.digest(now: at(40)) == wake.digest(now: at(40)))
     }
 
-    /// A state as the build before this one saved it: no `wakes`, no time
-    /// set, and the last wake two hours before `t0`.
+    /// A state as the build before this one saved it: no `stageWakes`, no
+    /// alerts, no time set, and the last wake two hours before `t0`.
     private func savedByEarlierBuild(changes: String) -> Data {
         Data("""
         {
@@ -306,6 +493,7 @@ struct CoordinatorWakeStateTests {
         #expect(restored.lastWakeAt == at(-7200))
         #expect(restored.changes.map(\.attention) == [nil, "review"])
         #expect(restored.changes.map(\.wakes) == [true, true])
+        #expect(restored.changes.allSatisfy { $0.alerts.isEmpty && $0.newAlerts.isEmpty })
         #expect(try #require(restored.digest(now: at(60))).contains("- [Fix the login](toastty://task/\(first.uuidString)): running at "))
 
         // Nothing waits, and the last wake was two hours ago with no time

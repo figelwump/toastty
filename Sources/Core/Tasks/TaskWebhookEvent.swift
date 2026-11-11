@@ -12,11 +12,21 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
         /// Why the task needs the user, inside needsYou.
         public var attention: String?
         public var merged: Bool
+        /// The task's alerts for the coordinator, in `TaskAlert.allCases`
+        /// order. No webhook event reads them: `events(from:to:)` looks at
+        /// the stage only, and the payload does not carry them.
+        public var alerts: [TaskAlert]
 
-        public init(group: String, attention: String? = nil, merged: Bool = false) {
+        public init(group: String, attention: String? = nil, merged: Bool = false, alerts: [TaskAlert] = []) {
             self.group = group
             self.attention = attention
             self.merged = merged
+            self.alerts = alerts
+        }
+
+        /// The same stage, whatever the alerts.
+        func hasSameStage(as other: Key) -> Bool {
+            group == other.group && attention == other.attention && merged == other.merged
         }
 
         /// A stage the record decides, not the live agent: it cannot
@@ -53,6 +63,19 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
     }
 }
 
+extension TaskWebhookTaskState.Key {
+    /// A key saved before Toastty had alerts has none. An alert this build
+    /// does not know, saved by a newer one, is left out, so the saved
+    /// baseline still loads.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        group = try container.decode(String.self, forKey: .group)
+        attention = try container.decodeIfPresent(String.self, forKey: .attention)
+        merged = try container.decode(Bool.self, forKey: .merged)
+        alerts = try container.decodeIfPresent([String].self, forKey: .alerts)?.compactMap(TaskAlert.init(rawValue:)) ?? []
+    }
+}
+
 /// Turns task states, sampled about once a second, into webhook events.
 ///
 /// A stage the live agent decides (needs you, running, idle) must hold for
@@ -66,12 +89,15 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
 public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
     public static let defaultSettleInterval: TimeInterval = 3
 
-    /// A change of a task's stage that counted. `events` is empty for a
-    /// change that fires no webhook event, such as To ship to Done.
+    /// A change of a task's stage or alerts that counted. `events` is
+    /// empty for a change that fires no webhook event, such as To ship to
+    /// Done, or a change of only the alerts.
     public struct Change: Equatable, Sendable {
         public var taskID: UUID
         public var events: [TaskWebhookEventType]
         public var state: TaskWebhookTaskState
+        /// The key that counted before; `nil` for a new task.
+        public var previous: TaskWebhookTaskState.Key?
     }
 
     private struct Candidate: Codable, Equatable, Sendable {
@@ -113,7 +139,7 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
             guard let previous = settled[id] else {
                 // A new task: what it is now counts as a change from nothing.
                 settled[id] = state
-                changes.append(Change(taskID: id, events: Self.events(from: nil, to: state.key), state: state))
+                changes.append(Change(taskID: id, events: Self.events(from: nil, to: state.key), state: state, previous: nil))
                 continue
             }
             if previous.key == state.key {
@@ -134,19 +160,25 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
                 candidates[id] = nil
             }
             settled[id] = state
-            changes.append(Change(taskID: id, events: Self.events(from: previous.key, to: state.key), state: state))
+            changes.append(Change(
+                taskID: id,
+                events: Self.events(from: previous.key, to: state.key),
+                state: state,
+                previous: previous.key
+            ))
         }
         for (id, previous) in settled where current[id] == nil {
             settled[id] = nil
             candidates[id] = nil
-            changes.append(Change(taskID: id, events: [.deleted], state: previous))
+            changes.append(Change(taskID: id, events: [.deleted], state: previous, previous: previous.key))
         }
         baseline = settled
         return changes
     }
 
     /// The events a move from `previous` to `current` fires. `previous` is
-    /// `nil` for a task that did not exist.
+    /// `nil` for a task that did not exist. Only the stage counts: a change
+    /// of only the alerts fires none.
     static func events(from previous: TaskWebhookTaskState.Key?, to current: TaskWebhookTaskState.Key) -> [TaskWebhookEventType] {
         var events: [TaskWebhookEventType] = []
         if current.merged, previous?.merged != true {

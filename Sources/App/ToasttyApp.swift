@@ -1092,6 +1092,9 @@ struct ToasttyApp: App {
         taskWebhooks.taskStates = { [weak taskBoard] in
             TaskWebhookService.taskStates(taskBoard?.items() ?? [])
         }
+        taskWebhooks.taskAlertFacts = { [weak taskCoordinator] taskIDs in
+            taskCoordinator?.alertFacts(for: taskIDs) ?? [:]
+        }
         taskCoordinator.webhooks = taskWebhooks
         self.taskWebhooks = taskWebhooks
         taskWebhooks.start()
