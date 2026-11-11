@@ -263,6 +263,18 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertFalse(SidebarSubspacePresentation.showsSpawnerTag(
             locallySpawned, parentWorkspaceID: parentID, groupShowsSpawnerTags: false
         ))
+        // A task's row never shows the tag: the coordinator, in its own
+        // workspace, made every task in this group.
+        var externalTask = externallySpawned
+        externalTask.isTask = true
+        XCTAssertFalse(SidebarSubspacePresentation.showsSpawnerTag(
+            externalTask, parentWorkspaceID: parentID, groupShowsSpawnerTags: true
+        ))
+        // Task rows do not count as a second spawner, so a group of one
+        // plain subspace and tasks from another session shows no tags.
+        var coordinatorTask = rows[2]
+        coordinatorTask.isTask = true
+        XCTAssertFalse(SidebarSubspacePresentation.showsSpawnerTags([rows[0], rows[1], coordinatorTask]))
         XCTAssertEqual(
             SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: "a").map(\.title),
             ["one", "two"]

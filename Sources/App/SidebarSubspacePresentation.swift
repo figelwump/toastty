@@ -60,6 +60,9 @@ enum SidebarSubspacePresentation {
         let status: RowStatus
         /// The task's stage, when the task system is on.
         var stage: TaskStage? = nil
+        /// True when the row is a task's space. Its ↖ spawner tag is hidden:
+        /// the task list already shows which task started it.
+        var isTask = false
         /// The project the row belongs to, shown where rows from several
         /// projects share a list.
         var projectTag: String? = nil
@@ -320,15 +323,19 @@ enum SidebarSubspacePresentation {
         rows.contains { $0.status.needsAttention }
     }
 
-    /// Spawner tags only help when the group mixes more than one spawner.
+    /// Spawner tags only help when the group mixes more than one spawner
+    /// among the rows that can show a tag.
     static func showsSpawnerTags(_ rows: [Row]) -> Bool {
-        Set(rows.map { $0.spawningSessionID ?? "" }).count > 1
+        Set(rows.filter { $0.isTask == false }.map { $0.spawningSessionID ?? "" }).count > 1
     }
 
     /// A spawner in another workspace has no ⑂ chip in this card, so its rows
-    /// carry the tag even when the group has only one spawner.
+    /// carry the tag even when the group has only one spawner. A task's row
+    /// has no tag: every task an agent made would name the same session, and
+    /// a task that another task started already draws under that task.
     static func showsSpawnerTag(_ row: Row, parentWorkspaceID: UUID, groupShowsSpawnerTags: Bool) -> Bool {
-        groupShowsSpawnerTags || row.spawnerWorkspaceID.map { $0 != parentWorkspaceID } == true
+        guard row.isTask == false else { return false }
+        return groupShowsSpawnerTags || row.spawnerWorkspaceID.map { $0 != parentWorkspaceID } == true
     }
 
     static func spawnerTagLabel(_ name: String) -> String {

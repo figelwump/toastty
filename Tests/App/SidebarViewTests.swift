@@ -4104,6 +4104,20 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+        try writeSidebarEvidence(rootView, name: "spawner-tag-1-plain-subspace")
+
+        // A task's space drops the tag: every task the coordinator makes
+        // would name the same session.
+        XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: ids.workingID, taskID: UUID())))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertNil(semanticTextField(in: rootView, prefix: "Go to Merge ready PRs"))
+        let taskTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.workingID]?.title)
+        XCTAssertTrue(
+            renderedTextValues(in: rootView).contains { $0.contains(taskTitle) },
+            "The task's row should still render"
+        )
+        try writeSidebarEvidence(rootView, name: "spawner-tag-2-task-space")
     }
 
     /// The orchestrator's row gets the ⑂ chip rather than a ↗ sub-agent row,
