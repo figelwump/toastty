@@ -136,7 +136,9 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         link.tap()
         let targetLine = documentTargetLine(in: app)
         XCTAssertTrue(targetLine.waitForExistence(timeout: 10))
-        XCTAssertTrue(targetLine.isHittable)
+        // The reveal scrolls the line into view a frame or two after its text appears.
+        let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: targetLine)
+        wait(for: [revealed], timeout: 5)
         attach(app, name: "conversation-file-line-12")
         XCTAssertTrue(app.buttons["toastty-preview-close"].exists)
         app.buttons["toastty-preview-close"].tap()
