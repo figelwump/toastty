@@ -169,22 +169,24 @@ COORDINATOR_MESSAGE_END
    act. Most tasks need nothing.
 3. Write what you did in `ledger.md`.
 4. Tell the user what needs them and what you did; see Talk to the user.
-5. **Set your next check before the turn ends,** in every turn that a digest
-   started: `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>`. Every
-   digest removes the time you set. The check is a fallback: Toastty wakes
-   you at each stage change of a task anyway, and the check catches what
-   changes no stage, such as a permission prompt that reaches its age, slow
-   CI, or a busy agent that goes silent. Set it also when you tell the user
-   nothing, and never mention it to the user. Take the shortest time that
-   applies:
+5. **Set or clear your next check before the turn ends,** in every turn
+   that a digest started. Every digest removes the time you set. Toastty
+   wakes you at a stage change of a task that may need you, but not for a
+   task that only starts running, and it has no timer of its own. The check
+   catches what changes no stage, such as a permission prompt that reaches
+   its age, slow CI, or a busy agent that goes silent. Set it only for a
+   deadline in this table, with
+   `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>`, and take the
+   shortest time that applies. With no such deadline, run
+   `"$TOASTTY_CLI_PATH" coordinator wake --clear`. Do this also when you
+   tell the user nothing, and never mention it to the user.
 
-   | State of the tasks | Next check |
+   | Deadline | Next check |
    | --- | --- |
    | A wait is younger than its limit, such as a permission prompt or the 15 minutes after the user typed | when the limit is reached, at least `1m` |
    | Checks run on a pull request | `20m` |
    | You sent a task an instruction | `30m` |
-   | Open tasks, and none of the above | `2h` |
-   | No open task | `coordinator wake --clear` |
+   | An agent is `busy`, and its `silentMinutes` is under 30 | when `silentMinutes` reaches 30, at least `1m` |
 
 **The user started the turn:** route what the user wrote.
 

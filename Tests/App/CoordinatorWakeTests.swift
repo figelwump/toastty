@@ -3,8 +3,9 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// Wakes for the coordinator: task changes and its timer, from the event
-/// service with a fake clock to the text typed at the coordinator's prompt.
+/// Wakes for the coordinator: task changes that may need it and the timer
+/// it sets, from the event service with a fake clock to the text typed at
+/// the coordinator's prompt.
 /// The coordinator is the real controller over the real store, session
 /// store and agent launcher, with a fake terminal.
 @MainActor
@@ -206,15 +207,25 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts.isEmpty)
         #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
 
-        // A stage that holds counts once the three seconds passed.
+        // A stage that holds counts once the three seconds passed. Running
+        // counts, but wakes nothing on its own.
         current.value[task] = state("running")
+        service.pass()
+        clock.advance(2.5)
+        service.pass()
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
+        clock.advance(1)
+        service.pass()
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        #expect(fixture.typedTexts.isEmpty)
+        current.value[task] = state("idle")
         service.pass()
         clock.advance(2.5)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
         clock.advance(1)
         service.pass()
-        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "running", at: clock.now))])
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "idle", at: clock.now))])
     }
 
     @Test func theUsersDraftAndWaitingMessagesGoBeforeTheDigest() async throws {
@@ -344,29 +355,29 @@ struct CoordinatorWakeTests {
         try await fixture.openAtPrompt()
         let first = makeService(fixture, files: files, clock: clock) { current.value }
         first.pass()
-        // No time set and no open task: no timer.
-        #expect(first.coordinatorWakeStatus?.nextWake == nil)
+        // No time set: no timer.
+        #expect(first.coordinatorWakeStatus?.nextWakeAt == nil)
 
         let set = try first.setCoordinatorWake(.after(1200))
-        #expect(set.nextWake == .init(at: clock.now.addingTimeInterval(1200), isRequested: true))
+        #expect(set.nextWakeAt == clock.now.addingTimeInterval(1200))
         #expect(first.coordinatorWakeStatus == set)
         // A new time replaces it, and clearing removes it.
         let moved = clock.now.addingTimeInterval(7200)
-        #expect(try first.setCoordinatorWake(.at(moved)).nextWake == .init(at: moved, isRequested: true))
-        #expect(try first.setCoordinatorWake(.clear).nextWake == nil)
+        #expect(try first.setCoordinatorWake(.at(moved)).nextWakeAt == moved)
+        #expect(try first.setCoordinatorWake(.clear).nextWakeAt == nil)
         for refused in [TaskWebhookService.CoordinatorWakeRequest.after(59), .at(clock.now.addingTimeInterval(-10)), .after(0)] {
             #expect(throws: CoordinatorError("The next check must be at least 1 minute from now.")) {
                 try first.setCoordinatorWake(refused)
             }
         }
-        #expect(first.coordinatorWakeStatus?.nextWake == nil)
+        #expect(first.coordinatorWakeStatus?.nextWakeAt == nil)
 
         let dueAt = clock.now.addingTimeInterval(1200)
         try first.setCoordinatorWake(.after(1200))
         first.stop()
         clock.advance(600)
         let second = makeService(fixture, files: files, clock: clock) { current.value }
-        #expect(second.coordinatorWakeStatus?.nextWake == .init(at: dueAt, isRequested: true))
+        #expect(second.coordinatorWakeStatus?.nextWakeAt == dueAt)
 
         // It fires at its time, as a digest with one line.
         clock.advance(599)
@@ -377,8 +388,8 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts == [digest(
             "- Scheduled check: the time you set, \(dueAt.formatted(.iso8601)), has come."
         )])
-        // Once: the wake removed the time, and no task is open.
-        #expect(second.coordinatorWakeStatus?.nextWake == nil)
+        // Once: the wake removed the time.
+        #expect(second.coordinatorWakeStatus?.nextWakeAt == nil)
         try await runTurn(fixture)
         clock.advance(86_400)
         second.pass()
@@ -411,43 +422,96 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts.count == 1)
     }
 
-    @Test func withNoTimeSetTheCoordinatorWakesHourlyOnlyWhileATaskIsOpen() async throws {
+    @Test func withNoTimeSetNothingWakesTheCoordinatorAndARunningTaskWaitsForTheNextDigest() async throws {
         let fixture = try Fixture()
         let clock = Clock()
-        let current = States([task: state("idle")])
+        let current = States([task: state("idle"), other: state("idle", title: "Other task")])
         try await fixture.openAtPrompt()
         let service = makeService(fixture, clock: clock) { current.value }
-        let startedAt = clock.now
         service.pass()
-        #expect(service.coordinatorWakeStatus?.nextWake == .init(at: startedAt.addingTimeInterval(3600), isRequested: false))
-
-        clock.advance(3599)
+        // Two open tasks and no time set: no timer, for days.
+        #expect(service.coordinatorWakeStatus?.nextWakeAt == nil)
+        clock.advance(3 * 86_400)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
-        clock.advance(1)
-        service.pass()
-        let defaultCheck = digest("- Scheduled check: 1 hour has passed since the last wake, and you set no time.")
-        #expect(fixture.typedTexts == [defaultCheck])
-        // The next one is an hour after this wake.
-        #expect(service.coordinatorWakeStatus?.nextWake == .init(at: clock.now.addingTimeInterval(3600), isRequested: false))
-        try await runTurn(fixture)
-        clock.advance(3600)
-        service.pass()
-        #expect(fixture.typedTexts == [defaultCheck, defaultCheck])
-        try await runTurn(fixture)
 
-        // The last open task finishes. That change wakes the coordinator;
-        // after it there is no timer.
+        // A task starts running: it waits, at the open prompt, for hours.
+        current.value[task] = state("running")
+        service.pass()
+        let startedRunningAt = clock.now
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        clock.advance(5 * 3600)
+        service.pass()
+        #expect(fixture.typedTexts.isEmpty)
+
+        // Another task's change that may need the coordinator: one digest
+        // with both.
         clock.advance(60)
-        current.value[task] = state("done")
+        current.value[other] = state("needsYou", "review", title: "Other task")
         service.pass()
-        #expect(fixture.typedTexts.count == 3)
-        #expect(fixture.typedTexts[2] == digest(line(task, "Wake design", "done", at: clock.now)))
+        #expect(fixture.typedTexts == [digest(
+            line(task, "Wake design", "running", at: startedRunningAt),
+            line(other, "Other task", "needsYou (review)", at: clock.now)
+        )])
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
+        #expect(service.coordinatorWakeStatus?.nextWakeAt == nil)
         try await runTurn(fixture)
-        #expect(service.coordinatorWakeStatus?.nextWake == nil)
-        clock.advance(10 * 3600)
+        clock.advance(3 * 86_400)
         service.pass()
-        #expect(fixture.typedTexts.count == 3)
+        #expect(fixture.typedTexts.count == 1)
+    }
+
+    @Test func aRunningChangeStaysQuietAcrossARelaunchAndOneSavedByTheEarlierBuildIsTypedOnce() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let files = Files()
+        let current = States([task: state("idle")])
+        try await fixture.openAtPrompt()
+        let first = makeService(fixture, files: files, clock: clock) { current.value }
+        first.pass()
+        current.value[task] = state("running")
+        first.pass()
+        #expect(waitsWithNoTimer(first, count: 1))
+        first.stop()
+
+        // This build's file: the change still wakes nothing.
+        clock.advance(2 * 3600)
+        let second = makeService(fixture, files: files, clock: clock) { current.value }
+        await fixture.settle()
+        second.pass()
+        #expect(fixture.typedTexts.isEmpty)
+        #expect(waitsWithNoTimer(second, count: 1))
+        second.stop()
+
+        // The same file as the earlier build wrote it: changes have no
+        // `wakes`, and the last wake was two hours ago with no time set.
+        // The change counts as waking, as it did then; the hour passed
+        // wakes nothing.
+        var saved = try savedOutbox(files)
+        var coordinator = try #require(saved["coordinator"] as? [String: Any])
+        var changes = try #require(coordinator["changes"] as? [[String: Any]])
+        #expect(changes.first?["wakes"] as? Bool == false)
+        for index in changes.indices { changes[index]["wakes"] = nil }
+        coordinator["changes"] = changes
+        coordinator["requestedWakeAt"] = nil
+        saved["coordinator"] = coordinator
+        try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys]).write(to: files.outbox)
+
+        let third = makeService(fixture, files: files, clock: clock) { current.value }
+        #expect(third.coordinatorWakeStatus?.nextWakeAt == nil)
+        third.pass()
+        #expect(fixture.typedTexts.count == 1)
+        #expect(fixture.typedTexts[0].contains("): running at "))
+        try await runTurn(fixture)
+        clock.advance(2 * 3600)
+        third.pass()
+        #expect(fixture.typedTexts.count == 1)
+        // The detector's baseline came through: no change is told again.
+        #expect(third.coordinatorWakeStatus?.pendingTaskCount == 0)
+    }
+
+    private func waitsWithNoTimer(_ service: TaskWebhookService, count: Int) -> Bool {
+        service.coordinatorWakeStatus?.pendingTaskCount == count && service.coordinatorWakeStatus?.nextWakeAt == nil
     }
 
     @Test func anyTypedWakeRemovesTheTimeTheCoordinatorSetAndADueTimerJoinsTheDigest() async throws {
@@ -460,13 +524,13 @@ struct CoordinatorWakeTests {
         try service.setCoordinatorWake(.after(1200))
 
         // A task change is typed five minutes later: the time is gone, and
-        // the default counts from this wake.
+        // no timer runs.
         clock.advance(300)
         current.value[task] = state("needsYou", "review")
         service.pass()
         #expect(fixture.typedTexts.count == 1)
         #expect(fixture.typedTexts[0].contains("Scheduled check") == false)
-        #expect(service.coordinatorWakeStatus?.nextWake == .init(at: clock.now.addingTimeInterval(3600), isRequested: false))
+        #expect(service.coordinatorWakeStatus?.nextWakeAt == nil)
 
         // In the turn that the wake started, the coordinator sets its next
         // check. It comes due while the coordinator works on something else,
@@ -575,13 +639,19 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts[0].contains("needsYou (review)"))
         try await runTurn(fixture)
 
-        // The webhook gets its default events; the coordinator also gets
-        // running and idle.
+        // The webhook gets its default events. The coordinator gets every
+        // change, also Idle, which has no default event; a task that only
+        // starts running waits for the next digest.
         clock.advance(10)
         current.value[task] = state("running")
         service.pass()
+        #expect(fixture.typedTexts.count == 1)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        clock.advance(10)
+        current.value[task] = state("idle")
+        service.pass()
         #expect(fixture.typedTexts.count == 2)
-        #expect(fixture.typedTexts[1].contains("): running at "))
+        #expect(fixture.typedTexts[1].contains("): idle at "))
         try await runTurn(fixture)
         clock.advance(10)
         current.value[task] = state("done", merged: true)
@@ -590,6 +660,7 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts[2].contains("): done, merged at "))
         await fixture.waitUntil("the webhook gets its events") { Set(transport.types).isSuperset(of: ["task.merged", "task.done"]) }
         #expect(transport.types.contains("task.running") == false)
+        #expect(transport.types.contains("task.idle") == false)
 
         // Closing the coordinator leaves the webhook's passes running.
         let workspaceID = try #require(fixture.store.state.coordinatorWorkspaceID)
@@ -666,11 +737,10 @@ struct CoordinatorWakeTests {
         try await fixture.openAtPrompt()
         let startedAt = clock.now
         service.pass()
-        // No time set, one open task: the default, an hour after the start.
+        // No time set, one open task: no timer.
         #expect(try executor.runQuery(id: "coordinator.get", args: [:])["wake"] == .object([
             "pendingTaskCount": .int(0),
-            "nextWakeAt": iso(startedAt.addingTimeInterval(3600)),
-            "nextWakeSource": .string("default"),
+            "nextWakeAt": .null,
             "lastWakeAt": iso(startedAt),
         ]))
 
@@ -678,7 +748,6 @@ struct CoordinatorWakeTests {
         #expect(try wake(["inSeconds": .int(1200)]) == .object([
             "pendingTaskCount": .int(0),
             "nextWakeAt": iso(clock.now.addingTimeInterval(1200)),
-            "nextWakeSource": .string("coordinator"),
             "lastWakeAt": iso(startedAt),
         ]))
         // `action run coordinator.wake inSeconds=600` sends text.
@@ -692,13 +761,11 @@ struct CoordinatorWakeTests {
             return
         }
         #expect(atTime["nextWakeAt"] == .string("2027-01-15T12:00:00Z"))
-        #expect(atTime["nextWakeSource"] == .string("coordinator"))
         guard case .object(let cleared)? = try wake(["clear": .bool(true)]) else {
             Issue.record("no wake in the answer")
             return
         }
-        #expect(cleared["nextWakeSource"] == .string("default"))
-        #expect(cleared["nextWakeAt"] == iso(startedAt.addingTimeInterval(3600)))
+        #expect(cleared["nextWakeAt"] == .null)
 
         refused("exactly one", [:])
         refused("exactly one", ["clear": .bool(false)])
@@ -710,7 +777,7 @@ struct CoordinatorWakeTests {
         refused("at least 1 minute", ["inSeconds": .int(30)])
         refused("at least 1 minute", ["at": .string("2020-01-01T00:00:00Z")])
         // A refused request changes nothing.
-        #expect(service.coordinatorWakeStatus?.nextWake?.isRequested == false)
+        #expect(service.coordinatorWakeStatus?.nextWakeAt == nil)
 
         // A change that waits shows in the status.
         try fixture.setStatus(.working)
@@ -765,26 +832,26 @@ struct CoordinatorWakeTests {
             guard case .string(let attention)? = stage["attention"] else { return group }
             return "\(group) (\(attention))"
         }
+        // A new task that starts running waits for the next digest.
         clock.advance(5)
         service.pass()
-        #expect(fixture.typedTexts.count == 1)
-        // The digest uses the words task list reports.
-        #expect(fixture.typedTexts[0] == digest(line(created.id, "Fix the unread dot", try listedStage(), at: clock.now)))
-        try await runTurn(fixture)
+        #expect(try listedStage() == "running")
+        #expect(fixture.typedTexts.isEmpty)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
 
         // The task's agent runs a turn and ends it.
         let taskSession = try #require(fixture.tasks.record(created.id)?.operation.agentLaunch?.sessionID)
         fixture.sessions.updateStatus(sessionID: taskSession, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
         clock.advance(5)
         service.pass()
-        try await runTurn(fixture)
-        let typedBefore = fixture.typedTexts.count
+        #expect(fixture.typedTexts.isEmpty)
         fixture.sessions.updateStatus(sessionID: taskSession, status: SessionStatus(kind: .idle, summary: "Done"), at: Date())
         clock.advance(5)
         service.pass()
-        #expect(fixture.typedTexts.count == typedBefore + 1)
+        #expect(fixture.typedTexts.count == 1)
         let stage = try listedStage()
         #expect(stage != "running")
+        // The digest uses the words task list reports.
         #expect(fixture.typedTexts.last == digest(line(created.id, "Fix the unread dot", stage, at: clock.now)))
     }
 }

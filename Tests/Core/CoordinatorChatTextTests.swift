@@ -96,10 +96,8 @@ struct CoordinatorChatTextTests {
         ], now: t0, settleInterval: 0) {
             wake.record(change, at: t0)
         }
-        let digest = try #require(wake.digest(
-            now: t0.addingTimeInterval(CoordinatorWakeState.defaultInterval + 1),
-            hasOpenTasks: true
-        ))
+        wake.setRequestedWake(t0.addingTimeInterval(3600))
+        let digest = try #require(wake.digest(now: t0.addingTimeInterval(3601)))
         #expect(digest.contains("toastty://task/\(taskID.uuidString)"))
         #expect(CoordinatorDigestFold.updateCount(inMessage: digest) == 3)
         #expect(CoordinatorDigestFold.summary(updateCount: 3, time: "14:05") == "Toastty · 3 updates · 14:05")
@@ -114,7 +112,7 @@ struct CoordinatorChatTextTests {
         // A digest with the timer line only.
         let timerOnly = [
             CoordinatorWakeState.digestHeader,
-            "- Scheduled check: 1 hour has passed since the last wake, and you set no time.",
+            "- Scheduled check: the time you set, 2026-11-09T18:20:00Z, has come.",
             CoordinatorWakeState.digestFooter,
         ].joined(separator: "\n")
         #expect(CoordinatorDigestFold.updateCount(inMessage: timerOnly) == 1)

@@ -237,7 +237,7 @@ final class TaskWebhookService: ObservableObject {
             saveOutbox()
         }
         deliverDue(at: at)
-        wakeCoordinator(at: at, states: states)
+        wakeCoordinator(at: at)
     }
 
     private func enqueue(type: TaskWebhookEventType, taskID: UUID, state: TaskWebhookTaskState, webhook: TaskWebhook, at: Date) {

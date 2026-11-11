@@ -3,18 +3,18 @@ import Foundation
 /// What waits for the coordinator's next open prompt: the task changes it
 /// has not been told about, and its timer.
 ///
-/// Toastty wakes the coordinator for two reasons: a task's stage changed,
-/// or its timer came due. Both go into one digest, which Toastty types when
-/// the coordinator's prompt is open. This state is saved in the same file
-/// as the event detector's baseline, so one write records a change as seen
-/// and as waiting, and a quit loses nothing.
+/// Toastty wakes the coordinator for two reasons: a task's stage changed in
+/// a way that may need it, or the time it set for its next check came. Both
+/// go into one digest, which Toastty types when the coordinator's prompt is
+/// open. A task that only starts running wakes nothing: its line waits and
+/// goes into the next digest that something else starts. With no time set,
+/// no timer runs. This state is saved in the same file as the event
+/// detector's baseline, so one write records a change as seen and as
+/// waiting, and a quit loses nothing.
 ///
 /// Toastty has no rule about a task that is stuck. A digest only says which
 /// tasks changed; the coordinator reads `task list` and decides.
 public struct CoordinatorWakeState: Codable, Equatable, Sendable {
-    /// How long after the last wake Toastty wakes the coordinator again
-    /// when it set no time and a task is open.
-    public static let defaultInterval: TimeInterval = 3600
     /// The soonest time the coordinator can ask for, so a timer cannot
     /// become a loop of turns.
     public static let minimumDelay: TimeInterval = 60
@@ -32,18 +32,10 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         public var deleted: Bool
         /// When Toastty counted the change.
         public var at: Date
-    }
-
-    /// The coordinator's next check.
-    public struct NextWake: Equatable, Sendable {
-        public var at: Date
-        /// The coordinator set this time. `false` for the default.
-        public var isRequested: Bool
-
-        public init(at: Date, isRequested: Bool) {
-            self.at = at
-            self.isRequested = isRequested
-        }
+        /// Whether this change wakes the coordinator. `false` for a task
+        /// that only starts running: its line waits for a digest that
+        /// something else starts.
+        public var wakes: Bool
     }
 
     /// The coordinator's workspace these wakes are for. A coordinator
@@ -51,7 +43,8 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     public let workspaceID: UUID
     /// The changes that wait, oldest first, one for each task.
     public private(set) var changes: [TaskChange] = []
-    /// The next check the coordinator asked for.
+    /// The next check the coordinator asked for. The timer runs only for
+    /// this time.
     public private(set) var requestedWakeAt: Date?
     /// When Toastty last typed a digest. Before the first one, when it
     /// started to follow tasks for this coordinator.
@@ -73,16 +66,26 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// webhook event. Nothing leaves the Mac, so none needs approval.
     public mutating func record(_ change: TaskWebhookEventDetector.Change, at: Date) {
         guard isFollowing else { return }
+        let key = change.state.key
+        let deleted = change.events.contains(.deleted)
         changes.removeAll { $0.taskID == change.taskID }
         changes.append(TaskChange(
             taskID: change.taskID,
             title: change.state.title,
-            group: change.state.key.group,
-            attention: change.state.key.attention,
-            merged: change.state.key.merged,
-            deleted: change.events.contains(.deleted),
-            at: at
+            group: key.group,
+            attention: key.attention,
+            merged: key.merged,
+            deleted: deleted,
+            at: at,
+            wakes: Self.wakes(group: key.group, attention: key.attention, merged: key.merged, deleted: deleted)
         ))
+    }
+
+    /// Whether a change into this stage wakes the coordinator. A task that
+    /// only starts running, with no attention, not merged and not deleted,
+    /// needs nothing from it. Every other change may.
+    private static func wakes(group: String, attention: String?, merged: Bool, deleted: Bool) -> Bool {
+        group != "\(TaskStage.Group.running)" || attention != nil || merged || deleted
     }
 
     /// Ends the first look at the tasks: changes from here on are told.
@@ -90,36 +93,20 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         isFollowing = true
     }
 
-    /// Sets the coordinator's next check, or with `nil` removes it, so the
-    /// default applies again.
+    /// Sets the coordinator's next check, or with `nil` removes it: then no
+    /// timer runs.
     public mutating func setRequestedWake(_ date: Date?) {
         requestedWakeAt = date
     }
 
-    /// The digest was typed. Its changes are told, and the timer starts
-    /// again: a time the coordinator set before this wake is gone, whether
-    /// it had come or not. The coordinator sets its next check in the turn
-    /// this wake starts; until it does, the default applies.
+    /// The digest was typed. Its changes are told, and a time the
+    /// coordinator set before this wake is gone, whether it had come or
+    /// not. The coordinator sets or clears its next check in the turn this
+    /// wake starts; until it sets one, no timer runs.
     public mutating func markDelivered(at: Date) {
         changes = []
         requestedWakeAt = nil
         lastWakeAt = at
-    }
-
-    /// When the timer wakes the coordinator: at the time it set, or else
-    /// `defaultInterval` after the last wake while a task is open. With no
-    /// time set and no open task there is no timer.
-    public func nextWake(hasOpenTasks: Bool) -> NextWake? {
-        if let requestedWakeAt {
-            return NextWake(at: requestedWakeAt, isRequested: true)
-        }
-        guard hasOpenTasks else { return nil }
-        return NextWake(at: lastWakeAt.addingTimeInterval(Self.defaultInterval), isRequested: false)
-    }
-
-    /// Whether a task in this stage group is open: its work is not over.
-    public static func isOpen(group: String) -> Bool {
-        group != "done" && group != "archived"
     }
 
     // MARK: - Digest
@@ -130,21 +117,21 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     public static let digestHeader = "\(digestPrefix): this message is from Toastty, not from the user."
     public static let digestFooter = "Read `toastty task list` for details."
 
-    /// The message to type now, or `nil` when no change waits and the timer
-    /// has not come due. It names tasks and stages only: never an agent's
-    /// reply, a prompt, a question or an attachment.
-    public func digest(now: Date, hasOpenTasks: Bool) -> String? {
-        let dueTimer = nextWake(hasOpenTasks: hasOpenTasks).flatMap { $0.at <= now ? $0 : nil }
-        guard changes.isEmpty == false || dueTimer != nil else { return nil }
+    /// The message to type now, or `nil` when no change that wakes the
+    /// coordinator waits and the time it set has not come. A digest lists
+    /// every change that waits, also the ones that wake nothing on their
+    /// own. It names tasks and stages only: never an agent's reply, a
+    /// prompt, a question or an attachment.
+    public func digest(now: Date) -> String? {
+        let dueTimer = requestedWakeAt.flatMap { $0 <= now ? $0 : nil }
+        guard changes.contains(where: \.wakes) || dueTimer != nil else { return nil }
         var lines = [Self.digestHeader]
         lines += changes.prefix(Self.maximumListedTasks).map(Self.line)
         if changes.count > Self.maximumListedTasks {
             lines.append("- \(changes.count - Self.maximumListedTasks) more tasks changed.")
         }
         if let dueTimer {
-            lines.append(dueTimer.isRequested
-                ? "- Scheduled check: the time you set, \(Self.timestamp(dueTimer.at)), has come."
-                : "- Scheduled check: 1 hour has passed since the last wake, and you set no time.")
+            lines.append("- Scheduled check: the time you set, \(Self.timestamp(dueTimer)), has come.")
         }
         lines.append(Self.digestFooter)
         return lines.joined(separator: "\n")
@@ -187,5 +174,21 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 
     static func timestamp(_ date: Date) -> String {
         date.formatted(.iso8601)
+    }
+}
+
+extension CoordinatorWakeState.TaskChange {
+    /// A change saved before Toastty marked the changes that wake nothing
+    /// has no `wakes`. It counts as waking, as every change did then.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        taskID = try container.decode(UUID.self, forKey: .taskID)
+        title = try container.decode(String.self, forKey: .title)
+        group = try container.decode(String.self, forKey: .group)
+        attention = try container.decodeIfPresent(String.self, forKey: .attention)
+        merged = try container.decode(Bool.self, forKey: .merged)
+        deleted = try container.decode(Bool.self, forKey: .deleted)
+        at = try container.decode(Date.self, forKey: .at)
+        wakes = try container.decodeIfPresent(Bool.self, forKey: .wakes) ?? true
     }
 }

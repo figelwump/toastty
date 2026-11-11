@@ -255,13 +255,17 @@ each message it reads, reports each turn with the `UserPromptSubmit` and
 `Stop` hook events, and holds a turn open while its hold file exists.
 Through the built CLI the check creates tasks and moves them through stages,
 and reads the digests the coordinator's agent received: nothing for changes
-made before the coordinator existed, one digest for one stage change, one
-digest after a held turn for several changes, nothing for a stage that
-returns in under 3 seconds, and the timer set, cleared and fired with
+made before the coordinator existed, no timer while no time is set, nothing
+for a task that only starts running (also at the open prompt), one digest
+for the task's next stage, one digest after a held turn for several
+changes that lists a task that only started running, nothing for a stage
+that returns in under 3 seconds, and the timer set, cleared and fired with
 `coordinator wake`. It then kills the app with a digest waiting and a timer
 set, keeps it down until the timer's time passed, and checks that the
-relaunched app types the waiting change once and the scheduled check once,
-and that a second relaunch repeats neither.
+relaunched app types the waiting change once and the scheduled check once.
+Before a second relaunch it moves the saved last wake two hours back, and
+checks that the relaunch repeats neither and types no scheduled check of
+its own.
 
 The `--provider claude` run uses the real, authenticated Claude CLI and
 subscription usage, with the same narrow profile and folder trust handling as
