@@ -164,7 +164,8 @@ struct ToasttySelectableText: NSViewRepresentable {
         var measuredSizes: [CGFloat: CGSize] = [:]
         var openURL: OpenURLAction?
         let sizingTextStorage = NSTextStorage(string: "")
-        let sizingLayoutManager = NSLayoutManager()
+        // The same line breaks as the drawn text view.
+        let sizingLayoutManager = ToasttyChipLayoutManager()
         let sizingTextContainer = NSTextContainer(
             size: CGSize(width: 1, height: CGFloat.greatestFiniteMagnitude)
         )
@@ -215,12 +216,23 @@ extension NSAttributedString.Key {
     static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
 }
 
-/// Draws a rounded outline behind each run of chip text. The text itself,
-/// its colors and its link are ordinary attributes.
-final class ToasttyChipLayoutManager: NSLayoutManager {
+/// Draws a rounded outline behind each run of chip text, and keeps a chip on
+/// one line where the line allows it. The text itself, its colors and its
+/// link are ordinary attributes.
+final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
+    override init() {
+        super.init()
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        delegate = self
+    }
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
-        guard let textStorage, let container = textContainers.first else { return }
+        guard let textStorage else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
             guard value != nil else { return }
@@ -229,12 +241,7 @@ final class ToasttyChipLayoutManager: NSLayoutManager {
             _ = textStorage.attribute(.toasttyChip, at: range.location,
                                       longestEffectiveRange: &chipRange,
                                       in: NSRange(location: 0, length: textStorage.length))
-            let glyphs = glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
-            enumerateEnclosingRects(
-                forGlyphRange: glyphs,
-                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-                in: container
-            ) { rect, _ in
+            for rect in chipOutlineRects(forCharacterRange: chipRange) {
                 let outline = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.5, dy: 1.5)
                 let path = NSBezierPath(roundedRect: outline, xRadius: outline.height / 2, yRadius: outline.height / 2)
                 NSColor.white.withAlphaComponent(0.08).setFill()
@@ -244,6 +251,42 @@ final class ToasttyChipLayoutManager: NSLayoutManager {
                 path.stroke()
             }
         }
+    }
+
+    /// One rect for each line the chip is on, around that line's part of the
+    /// chip. Enclosing rects of the whole range would run to the container's
+    /// edge on every line but the last.
+    func chipOutlineRects(forCharacterRange chipRange: NSRange) -> [NSRect] {
+        guard let container = textContainers.first else { return [] }
+        let glyphs = glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+        var rects: [NSRect] = []
+        var lineStart = glyphs.location
+        while lineStart < NSMaxRange(glyphs) {
+            var lineGlyphs = NSRange()
+            _ = lineFragmentRect(forGlyphAt: lineStart, effectiveRange: &lineGlyphs)
+            guard lineGlyphs.length > 0 else { break }
+            let piece = NSIntersectionRange(glyphs, lineGlyphs)
+            enumerateEnclosingRects(
+                forGlyphRange: piece,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: container
+            ) { rect, _ in
+                rects.append(rect)
+            }
+            lineStart = NSMaxRange(lineGlyphs)
+        }
+        return rects
+    }
+
+    /// No line break inside a chip, such as after a hyphen in its title. A
+    /// chip wider than the line still wraps, because TextKit then breaks by
+    /// character.
+    func layoutManager(_ layoutManager: NSLayoutManager,
+                       shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
+        guard charIndex > 0, let textStorage = layoutManager.textStorage,
+              charIndex < textStorage.length else { return true }
+        return textStorage.attribute(.toasttyChip, at: charIndex, effectiveRange: nil) == nil
+            || textStorage.attribute(.toasttyChip, at: charIndex - 1, effectiveRange: nil) == nil
     }
 }
 #endif
