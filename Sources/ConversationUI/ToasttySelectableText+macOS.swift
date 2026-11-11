@@ -2,6 +2,28 @@
 import AppKit
 import SwiftUI
 
+/// One paragraph of a run of Markdown text that shares a single text view.
+/// A drag selects across every paragraph in the view.
+struct ToasttySelectableParagraph: Equatable {
+    enum Decoration: Equatable {
+        case none
+        /// A list item: its marker sits in a column before the text, and
+        /// wrapped lines align with the text.
+        case listMarker(String, depth: Int)
+        /// A block quote: a bar before the text.
+        case quote
+    }
+
+    var text: AttributedString
+    var textStyle: NSFont.TextStyle = .body
+    var weight: NSFont.Weight?
+    var textColor: Color = ConversationDesignTokens.primaryText
+    /// The gap above the paragraph, as between blocks in their own views.
+    /// The first paragraph's is ignored.
+    var spacingBefore: CGFloat = 0
+    var decoration: Decoration = .none
+}
+
 /// The AppKit counterpart of the UIKit text view: `NSTextView` supplies range
 /// selection for the same attributed runs, and the transcript owns scrolling.
 @MainActor
@@ -9,25 +31,30 @@ struct ToasttySelectableText: NSViewRepresentable {
     @Environment(\.legibilityWeight) private var legibilityWeight
     @Environment(\.openURL) private var openURL
 
-    let text: AttributedString
-    var textStyle: NSFont.TextStyle = .body
-    var weight: NSFont.Weight?
+    let paragraphs: [ToasttySelectableParagraph]
     var monospaced = false
-    var textColor: Color = ConversationDesignTokens.primaryText
     var lineSpacing: CGFloat = 6
     var alignment: NSTextAlignment = .natural
+    /// Several Markdown blocks in one view: a line break inside a block
+    /// must not start a new paragraph, which would take the block's spacing
+    /// and the first-line position of its list marker.
+    private var keepsLineBreaksInsideParagraphs = false
 
     init(_ text: AttributedString, textStyle: NSFont.TextStyle = .body,
          weight: NSFont.Weight? = nil, monospaced: Bool = false,
          textColor: Color = ConversationDesignTokens.primaryText,
          lineSpacing: CGFloat = 6, alignment: NSTextAlignment = .natural) {
-        self.text = text
-        self.textStyle = textStyle
-        self.weight = weight
+        self.paragraphs = [ToasttySelectableParagraph(
+            text: text, textStyle: textStyle, weight: weight, textColor: textColor
+        )]
         self.monospaced = monospaced
-        self.textColor = textColor
         self.lineSpacing = lineSpacing
         self.alignment = alignment
+    }
+
+    init(paragraphs: [ToasttySelectableParagraph]) {
+        self.paragraphs = paragraphs
+        self.keepsLineBreaksInsideParagraphs = true
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -36,7 +63,7 @@ struct ToasttySelectableText: NSViewRepresentable {
         // TextKit 1, so the separate sizing stack below measures the same
         // layout that the view draws.
         let view = ToasttyTranscriptTextView(usingTextLayoutManager: false)
-        // Draws the outline of a chip behind its text.
+        // Draws the outline of a chip behind its text, and a quote's bar.
         view.textContainer?.replaceLayoutManager(ToasttyChipLayoutManager())
         view.isEditable = false
         view.isSelectable = true
@@ -75,8 +102,20 @@ struct ToasttySelectableText: NSViewRepresentable {
             )))
             view.selectedRanges = selection
         } else {
+            // One view holds several paragraphs. A change later in the text,
+            // such as a chip's color or a link that finished streaming, keeps
+            // a selection in the unchanged text before it.
+            let unchanged = Self.commonPrefixLength(previous.string, rendered.string)
+            let kept = view.selectedRanges.filter {
+                let range = $0.rangeValue
+                return range.length > 0 && NSMaxRange(range) <= unchanged
+            }
             view.textStorage?.setAttributedString(rendered)
-            view.setSelectedRange(NSRange(location: 0, length: 0))
+            if kept.isEmpty {
+                view.setSelectedRange(NSRange(location: 0, length: 0))
+            } else {
+                view.selectedRanges = kept
+            }
         }
         view.invalidateIntrinsicContentSize()
     }
@@ -92,11 +131,14 @@ struct ToasttySelectableText: NSViewRepresentable {
             // natural-alignment copy keeps centered and trailing text from
             // reporting the whole probe width.
             let sizingText = NSMutableAttributedString(attributedString: context.coordinator.renderedText)
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = lineSpacing
-            paragraph.alignment = .natural
-            sizingText.addAttribute(.paragraphStyle, value: paragraph,
-                                    range: NSRange(location: 0, length: sizingText.length))
+            sizingText.enumerateAttribute(
+                .paragraphStyle, in: NSRange(location: 0, length: sizingText.length)
+            ) { value, range, _ in
+                guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+                else { return }
+                style.alignment = .natural
+                sizingText.addAttribute(.paragraphStyle, value: style, range: range)
+            }
             // Leave one point for TextKit's fractional glyph layout, so short
             // bubbles do not wrap their last character at the measured edge.
             ideal = ceil(sizingText.boundingRect(
@@ -124,16 +166,55 @@ struct ToasttySelectableText: NSViewRepresentable {
     }
 
     private func attributedText() -> NSAttributedString {
-        let boldText = legibilityWeight == .bold
-        let preferred = NSFont.preferredFont(forTextStyle: textStyle)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = lineSpacing
-        paragraph.alignment = alignment
         let result = NSMutableAttributedString(string: "")
+        var previous: (paragraph: ToasttySelectableParagraph, attributes: [NSAttributedString.Key: Any])?
+        for paragraph in paragraphs {
+            let style = paragraphStyle(for: paragraph, isFirst: previous == nil)
+            if let previous {
+                // The break belongs to the paragraph before it. A copy keeps a
+                // blank line between blocks, except between list items.
+                var attributes = previous.attributes
+                attributes[.toasttyCopyText] = Self.isListItem(previous.paragraph)
+                    && Self.isListItem(paragraph) ? "\n" : "\n\n"
+                result.append(NSAttributedString(string: "\n", attributes: attributes))
+            }
+            if case .listMarker(let label, let depth) = paragraph.decoration {
+                let markerAttributes: [NSAttributedString.Key: Any] = [
+                    .font: Self.markerFont,
+                    .foregroundColor: NSColor(ConversationDesignTokens.secondaryText),
+                    .paragraphStyle: style,
+                ]
+                // Tab stops place the marker; a copy gets plain indentation.
+                var leading = markerAttributes
+                leading[.toasttyCopyText] = String(repeating: "  ", count: max(0, depth - 1))
+                result.append(NSAttributedString(string: "\t", attributes: leading))
+                result.append(NSAttributedString(string: label, attributes: markerAttributes))
+                var separator = markerAttributes
+                separator[.toasttyCopyText] = label.isEmpty ? "" : " "
+                result.append(NSAttributedString(string: "\t", attributes: separator))
+            }
+            let start = result.length
+            let attributes = appendRuns(of: paragraph, style: style, to: result)
+            if case .quote = paragraph.decoration, result.length > start {
+                result.addAttribute(.toasttyQuote, value: true,
+                                    range: NSRange(location: start, length: result.length - start))
+            }
+            previous = (paragraph, attributes)
+        }
+        return result
+    }
+
+    /// Appends the paragraph's runs and returns the attributes of its last run.
+    private func appendRuns(of paragraph: ToasttySelectableParagraph, style: NSParagraphStyle,
+                            to result: NSMutableAttributedString) -> [NSAttributedString.Key: Any] {
+        let boldText = legibilityWeight == .bold
+        let preferred = NSFont.preferredFont(forTextStyle: paragraph.textStyle)
+        let text = paragraph.text
+        var last: [NSAttributedString.Key: Any] = [.font: preferred, .paragraphStyle: style]
         for run in text.runs {
             let intent = run.inlinePresentationIntent ?? []
             let code = monospaced || intent.contains(.code)
-            var runWeight = intent.contains(.stronglyEmphasized) ? NSFont.Weight.bold : weight
+            var runWeight = intent.contains(.stronglyEmphasized) ? NSFont.Weight.bold : paragraph.weight
             if boldText, let explicitWeight = runWeight {
                 runWeight = explicitWeight.rawValue >= NSFont.Weight.bold.rawValue ? .heavy : .bold
             }
@@ -145,17 +226,83 @@ struct ToasttySelectableText: NSViewRepresentable {
             }
             var attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: NSColor(run.foregroundColor ?? (run.link == nil ? textColor : ConversationDesignTokens.amberText)),
-                .paragraphStyle: paragraph,
+                .foregroundColor: NSColor(run.foregroundColor ?? (run.link == nil ? paragraph.textColor : ConversationDesignTokens.amberText)),
+                .paragraphStyle: style,
             ]
             if let color = run.backgroundColor { attributes[.backgroundColor] = NSColor(color) }
             if let link = run.link { attributes[.link] = link }
             if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = true }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            result.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
+            var characters = String(text[run.range].characters)
+            if keepsLineBreaksInsideParagraphs {
+                characters = characters.replacingOccurrences(of: "\n", with: Self.lineSeparator)
+            }
+            result.append(NSAttributedString(string: characters, attributes: attributes))
+            last = attributes
         }
-        return result
+        last[.link] = nil
+        last[.toasttyChip] = nil
+        last[.backgroundColor] = nil
+        return last
     }
+
+    private func paragraphStyle(for paragraph: ToasttySelectableParagraph,
+                                isFirst: Bool) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.alignment = alignment
+        // TextKit adds the line spacing below a paragraph's last line, except
+        // at the end of the text, where a block in its own view ends.
+        style.paragraphSpacingBefore = isFirst ? 0 : max(0, paragraph.spacingBefore - lineSpacing)
+        switch paragraph.decoration {
+        case .none:
+            break
+        case .listMarker(let label, let depth):
+            // The SwiftUI list row: a marker column at least 16 points wide
+            // with the marker at its trailing edge, 8 points, then the text.
+            let indent = CGFloat(max(0, depth - 1)) * 16
+            let labelWidth = ceil((label as NSString).size(withAttributes: [.font: Self.markerFont]).width)
+            let markerEdge = indent + max(16, labelWidth)
+            let textStart = markerEdge + 8
+            style.firstLineHeadIndent = indent
+            style.headIndent = textStart
+            style.tabStops = [
+                NSTextTab(textAlignment: .right, location: markerEdge),
+                NSTextTab(textAlignment: .left, location: textStart),
+            ]
+        case .quote:
+            style.firstLineHeadIndent = Self.quoteTextIndent
+            style.headIndent = Self.quoteTextIndent
+        }
+        return style
+    }
+
+    /// The length, in UTF-16 units, of the text that two strings share at
+    /// their start.
+    private static func commonPrefixLength(_ first: String, _ second: String) -> Int {
+        let first = first as NSString, second = second as NSString
+        let limit = min(first.length, second.length)
+        var length = 0
+        while length < limit, first.character(at: length) == second.character(at: length) {
+            length += 1
+        }
+        return length
+    }
+
+    private static func isListItem(_ paragraph: ToasttySelectableParagraph) -> Bool {
+        if case .listMarker = paragraph.decoration { return true }
+        return false
+    }
+
+    private static var markerFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize, weight: .regular)
+    }
+
+    /// A 3-point bar, then 10 points of space.
+    static let quoteBarWidth: CGFloat = 3
+    static let quoteTextIndent: CGFloat = 13
+    /// Breaks a line without starting a paragraph.
+    static let lineSeparator = "\u{2028}"
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -199,26 +346,49 @@ public final class ToasttyTranscriptTextView: NSTextView {
     }
 
     override public func copy(_ sender: Any?) {
+        _ = writeSelection(to: .general, types: [.string])
+    }
+
+    /// Copy and dragging the selection into another app both write plain
+    /// text. Transcript colors belong to Toastty. Pasting elsewhere must not
+    /// carry its dark-theme rich text or inline-code backgrounds.
+    override public func writeSelection(to pboard: NSPasteboard,
+                                        types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let copied = copiedText() else { return false }
+        pboard.clearContents()
+        return pboard.setString(copied, forType: .string)
+    }
+
+    /// The selection as plain text. List markers and the breaks between
+    /// blocks have their own copy text. A chip keeps its words together with
+    /// no-break spaces, and a line break inside a block is a line separator;
+    /// a copy gets ordinary spaces and line breaks.
+    func copiedText() -> String? {
         let range = selectedRange()
-        guard range.length > 0 else { return }
-        // Transcript colors belong to Toastty. Pasting elsewhere must not carry
-        // its dark-theme rich text or inline-code backgrounds.
-        NSPasteboard.general.clearContents()
-        // A chip keeps its words together with no-break spaces. A copy
-        // gets ordinary spaces.
-        let copied = (string as NSString).substring(with: range).replacingOccurrences(of: "\u{00A0}", with: " ")
-        NSPasteboard.general.setString(copied, forType: .string)
+        guard range.length > 0, let textStorage else { return nil }
+        var copied = ""
+        let text = string as NSString
+        textStorage.enumerateAttribute(.toasttyCopyText, in: range) { value, subrange, _ in
+            copied += (value as? String) ?? text.substring(with: subrange)
+        }
+        return copied
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: ToasttySelectableText.lineSeparator, with: "\n")
     }
 }
 
 extension NSAttributedString.Key {
     /// Marks the characters of a chip. See `ConversationChipAttribute`.
     static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
+    /// The characters of a block quote, which draw a bar before them.
+    static let toasttyQuote = NSAttributedString.Key("toastty.conversationQuote")
+    /// Replaces the characters in a copy, such as a list marker's tab stops.
+    static let toasttyCopyText = NSAttributedString.Key("toastty.conversationCopyText")
 }
 
 /// Draws a rounded outline behind each run of chip text, and keeps a chip on
-/// one line where the line allows it. The text itself, its colors and its
-/// link are ordinary attributes.
+/// one line where the line allows it. Also draws the bar before a block
+/// quote. The text itself, its colors and its link are ordinary attributes.
 final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     override init() {
         super.init()
@@ -234,6 +404,7 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let textStorage else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        drawQuoteBars(in: characters, textStorage: textStorage, at: origin)
         textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
             guard value != nil else { return }
             // The whole chip, also when only a part of it is drawn now.
@@ -287,6 +458,35 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
               charIndex < textStorage.length else { return true }
         return textStorage.attribute(.toasttyChip, at: charIndex, effectiveRange: nil) == nil
             || textStorage.attribute(.toasttyChip, at: charIndex - 1, effectiveRange: nil) == nil
+    }
+
+    /// The bar runs from the quote's first line to its last, like the bar
+    /// beside a quote in its own view.
+    private func drawQuoteBars(in characters: NSRange, textStorage: NSTextStorage, at origin: NSPoint) {
+        let whole = NSRange(location: 0, length: textStorage.length)
+        textStorage.enumerateAttribute(.toasttyQuote, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            var quoteRange = NSRange()
+            _ = textStorage.attribute(.toasttyQuote, at: range.location,
+                                      longestEffectiveRange: &quoteRange, in: whole)
+            let glyphs = glyphRange(forCharacterRange: quoteRange, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return }
+            let first = lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            let last = lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
+            // The space below the last line belongs to the gap before the
+            // next block. At the end of the text there is none.
+            var bottom = last.maxY
+            if NSMaxRange(quoteRange) < textStorage.length,
+               let style = textStorage.attribute(.paragraphStyle, at: NSMaxRange(quoteRange) - 1,
+                                                 effectiveRange: nil) as? NSParagraphStyle {
+                bottom -= style.lineSpacing
+            }
+            let bar = NSRect(x: origin.x, y: origin.y + first.minY,
+                             width: ToasttySelectableText.quoteBarWidth,
+                             height: bottom - first.minY)
+            NSColor(ConversationDesignTokens.border).setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 1, yRadius: 1).fill()
+        }
     }
 }
 #endif

@@ -10,14 +10,67 @@ struct ToasttyMarkdownText: View {
         // Matches the transcript stack spacing so the seams between chunks of
         // a split message are indistinguishable from in-message block gaps.
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(preparedBlocks.map(Self.styledBlocks) ?? Self.blocks(text)) { block in
+            let blocks = preparedBlocks.map(Self.styledBlocks) ?? Self.blocks(text)
+            #if canImport(AppKit) && !canImport(UIKit)
+            ForEach(ToasttyMarkdownSegment.segments(blocks)) { segment in
+                segmentView(segment)
+            }
+            #else
+            ForEach(blocks) { block in
                 blockView(block)
             }
+            #endif
         }
         .foregroundStyle(textColor)
         .lineSpacing(6)
         .fixedSize(horizontal: false, vertical: true)
     }
+
+    #if canImport(AppKit) && !canImport(UIKit)
+    /// A drag on the Mac selects within one text view. Consecutive text
+    /// blocks share one view, so a drag can select across paragraphs, headings,
+    /// list items and quotes. Code blocks and tables keep their own views.
+    @ViewBuilder
+    private func segmentView(_ segment: ToasttyMarkdownSegment) -> some View {
+        switch segment {
+        case .text(let blocks):
+            ToasttySelectableText(paragraphs: blocks.map(paragraph))
+                // A heading after a code block or table keeps its own gap.
+                .padding(.top, blocks.first.map(Self.isHeading) == true && blocks.first?.id != 0 ? 2 : 0)
+        case .other(let block):
+            blockView(block)
+        }
+    }
+
+    /// The paragraph that matches the block's own view in `blockView`.
+    private func paragraph(_ block: ToasttyMarkdownBlock) -> ToasttySelectableParagraph {
+        let content = presented(block.content)
+        switch block.style {
+        case .heading(let level):
+            return ToasttySelectableParagraph(
+                text: content, textStyle: level <= 2 ? .headline : .subheadline,
+                weight: .semibold, textColor: textColor, spacingBefore: 14
+            )
+        case .list(let marker, let depth):
+            return ToasttySelectableParagraph(
+                text: content, textColor: textColor, spacingBefore: 12,
+                decoration: .listMarker(block.isContinuation ? "" : marker.label, depth: depth)
+            )
+        case .blockQuote:
+            return ToasttySelectableParagraph(
+                text: content, textColor: ConversationDesignTokens.secondaryText,
+                spacingBefore: 12, decoration: .quote
+            )
+        case .paragraph, .code, .table:
+            return ToasttySelectableParagraph(text: content, textColor: textColor, spacingBefore: 12)
+        }
+    }
+
+    private static func isHeading(_ block: ToasttyMarkdownBlock) -> Bool {
+        if case .heading = block.style { return true }
+        return false
+    }
+    #endif
 
     @ViewBuilder
     private func blockView(_ block: ToasttyMarkdownBlock) -> some View {
@@ -166,4 +219,36 @@ struct ToasttyMarkdownText: View {
         return url.host?.isEmpty == false
     }
 
+}
+
+/// A run of text blocks that share one text view, or a block with its own view.
+enum ToasttyMarkdownSegment: Identifiable, Equatable {
+    case text([ToasttyMarkdownBlock])
+    case other(ToasttyMarkdownBlock)
+
+    /// The first block's ID, so a run that grows while a reply streams keeps
+    /// its text view and selection.
+    var id: Int {
+        switch self {
+        case .text(let blocks): blocks.first?.id ?? -1
+        case .other(let block): block.id
+        }
+    }
+
+    static func segments(_ blocks: [ToasttyMarkdownBlock]) -> [ToasttyMarkdownSegment] {
+        var segments: [ToasttyMarkdownSegment] = []
+        var run: [ToasttyMarkdownBlock] = []
+        for block in blocks {
+            switch block.style {
+            case .paragraph, .heading, .list, .blockQuote:
+                run.append(block)
+            case .code, .table:
+                if !run.isEmpty { segments.append(.text(run)) }
+                run = []
+                segments.append(.other(block))
+            }
+        }
+        if !run.isEmpty { segments.append(.text(run)) }
+        return segments
+    }
 }

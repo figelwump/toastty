@@ -173,6 +173,84 @@ final class ConversationUIRenderTests: XCTestCase {
         try Self.writeEvidence(png, name: name)
     }
 
+    /// A response's paragraphs, list items and quote share one text view, so
+    /// one drag selects across them and Copy gives plain text. The code block
+    /// keeps its own view.
+    func testDragSelectsAcrossTheTextBlocksOfOneResponse() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let transcript = ToasttyTranscriptView(
+            state: Self.fixtureState,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .working,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false
+        )
+        let (hostingView, window) = Self.host(transcript, size: Self.transcriptSize)
+        defer { window.close() }
+
+        let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+        let response = try XCTUnwrap(textViews.first { $0.string.contains("both Tuist graphs") })
+        for fragment in ["Plan", "Move the transcript", "Add an AppKit text view", "The composer stays"] {
+            XCTAssertTrue(response.string.contains(fragment), "\(fragment) is not in the response's text view")
+        }
+        XCTAssertFalse(response.string.contains("tuist generate"), "The code block keeps its own view")
+
+        // Press inside the first paragraph and release after the quote's last
+        // word: AppKit's own drag tracking reads the queued events.
+        let start = try Self.windowPoint(of: "renderer moves", in: response, edge: .leading)
+        let end = try Self.windowPoint(of: "iPhone app.", in: response, edge: .trailing)
+        func mouse(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+        let middle = NSPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+        NSApp.postEvent(try mouse(.leftMouseDragged, at: middle), atStart: false)
+        NSApp.postEvent(try mouse(.leftMouseDragged, at: end), atStart: false)
+        NSApp.postEvent(try mouse(.leftMouseUp, at: end), atStart: false)
+        // The press goes to the text view itself: making the window key
+        // would activate the test host and take focus from the user's app.
+        XCTAssertTrue(window.contentView?.hitTest(start) === response, "The press must land on the response")
+        response.mouseDown(with: try mouse(.leftMouseDown, at: start))
+
+        // Copy's own path, on a private pasteboard so the test leaves the
+        // user's clipboard alone.
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("toastty-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(response.writeSelection(to: pasteboard, types: [.string]))
+        XCTAssertEqual(pasteboard.string(forType: .string), """
+        renderer moves into a module that both Tuist graphs build, so the iPhone app and the Mac \
+        draw a conversation with the same views. See the automation notes and ios/Project.swift.
+
+        1. Move the transcript, turn, and tool views.
+        2. Add an AppKit text view for selectable text.
+
+        The composer stays in the iPhone app.
+        """)
+
+        try keep(try Self.snapshot(hostingView), name: "conversation-ui-macos-drag-selection")
+    }
+
+    private enum TextEdge { case leading, trailing }
+
+    /// A point in window coordinates at one edge of the first match of `fragment`.
+    private static func windowPoint(of fragment: String, in textView: NSTextView, edge: TextEdge) throws -> NSPoint {
+        let range = (textView.string as NSString).range(of: fragment)
+        XCTAssertNotEqual(range.location, NSNotFound, "No \"\(fragment)\" in the text view")
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let edgeGlyph = edge == .leading ? glyphs.location : NSMaxRange(glyphs) - 1
+        var rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: edgeGlyph, length: 1), in: container)
+        rect = rect.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+        let x = edge == .leading ? rect.minX + 1 : rect.maxX + 1
+        return textView.convert(NSPoint(x: x, y: rect.midY), to: nil)
+    }
+
     /// Writes the PNG when the runner sets `TOASTTY_CONVERSATION_EVIDENCE_DIR`
     /// (pass it as `TEST_RUNNER_…` to xcodebuild).
     private static func writeEvidence(_ png: Data, name: String) throws {
