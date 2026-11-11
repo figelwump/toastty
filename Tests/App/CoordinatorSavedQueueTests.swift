@@ -210,8 +210,8 @@ struct CoordinatorSavedQueueTests {
         defer { try? FileManager.default.removeItem(at: sourceFolder) }
         let source = sourceFolder.appendingPathComponent("shot.png")
         try Data("png".utf8).write(to: source)
-        let message = QuickEntryCoordinatorMessage(text: "With a file", files: [source])
-        #expect(try await fixture.controller.sendQuickEntry(message).isQueued)
+        let message = CoordinatorUserMessage(text: "With a file", files: [source], quickEntry: .init())
+        #expect(try await fixture.controller.sendUserMessage(message).isQueued)
         fixture.chat.draft = "From the chat"
         fixture.chat.send()
         let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(message.id.uuidString)")
@@ -246,8 +246,9 @@ struct CoordinatorSavedQueueTests {
     }
 
     /// Edit in the chat puts a quick entry message back into the field as
-    /// it would be typed. Sent again it has a new ID, and its files are
-    /// still in the folder of the message it was.
+    /// it would be typed, with its files as attachments. Sent again it has
+    /// a new ID, and its files are still in the folder of the message it
+    /// was.
     @MainActor
     @Test func anEditedMessageKeepsItsFilesUntilItIsTypedOrRemoved() async throws {
         let fixture = try CoordinatorChatFixture(savesQueue: true)
@@ -260,19 +261,44 @@ struct CoordinatorSavedQueueTests {
         defer { try? FileManager.default.removeItem(at: sourceFolder) }
         let source = sourceFolder.appendingPathComponent("shot.png")
         try Data("png".utf8).write(to: source)
-        let message = QuickEntryCoordinatorMessage(text: "With a file", files: [source])
-        #expect(try await fixture.controller.sendQuickEntry(message).isQueued)
+        let message = CoordinatorUserMessage(text: "With a file", files: [source], quickEntry: .init())
+        #expect(try await fixture.controller.sendUserMessage(message).isQueued)
         let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(message.id.uuidString)")
+        // The waiting row shows the text, the file's name and its count.
+        let row = try #require(fixture.chat.presentation.sendItems.first)
+        #expect(row.text == "With a file\n\nshot.png")
+        guard case .queued(let queued) = row.content else {
+            Issue.record("The message waits")
+            return
+        }
+        #expect(queued.attachmentCount == 1)
 
-        // Edit, change a word, send again from the chat's field.
+        // Edit: the text with Toastty's first line, and the file as an
+        // attachment that stays in its folder.
         fixture.chat.perform(.edit(clientRequestID: message.id.uuidString, text: ""))
-        #expect(fixture.chat.draft.hasPrefix("[Toastty] Quick entry from the user"))
+        #expect(fixture.chat.draft == "[Toastty] Quick entry from the user\nWith a file")
+        #expect(fixture.chat.attachmentDraft.attachments.map(\.url.path)
+            == [folder.appendingPathComponent("shot.png").path])
+        #expect(fixture.chat.attachmentDraft.attachments.map(\.isDraftCopy) == [false])
         #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("shot.png").path))
+        #expect(CoordinatorQueueSnapshot.load(from: try #require(fixture.queueFileURL)) == nil)
+        // Change a word, send again from the chat's field.
         fixture.chat.draft = fixture.chat.draft.replacingOccurrences(of: "With a file", with: "With one file")
         fixture.chat.send()
-        let resent = try #require(fixture.controller.queuedEntries.first)
+        let resent = try await fixture.waitFor("the message waits again") { fixture.controller.queuedEntries.first }
         #expect(resent.id != message.id.uuidString)
-        #expect(resent.text.contains(folder.appendingPathComponent("shot.png").path))
+        #expect(resent.text == """
+        [Toastty] Quick entry from the user
+        With one file
+
+        Read the following files attached to this message on this Mac:
+        `\(folder.appendingPathComponent("shot.png").path)`
+        """)
+        // The saved queue holds the text with the paths, as before.
+        #expect(CoordinatorQueueSnapshot.load(from: try #require(fixture.queueFileURL))?.queued.map(\.text) == [resent.text])
+        #expect(fixture.chat.draft.isEmpty)
+        #expect(fixture.chat.attachmentDraft.attachments.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("shot.png").path))
 
         // It waits longer than Toastty keeps the files of typed messages.
         // A relaunch keeps the folder: a waiting message names it.

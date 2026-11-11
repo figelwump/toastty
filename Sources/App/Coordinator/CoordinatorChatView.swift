@@ -48,6 +48,12 @@ struct CoordinatorChatView: View {
             )
             composerArea
         }
+        // Files and images dropped anywhere on the chat are attached to the
+        // composer's message. The terminal under the chat takes none.
+        .background {
+            AttachmentDropArea(dropTarget: model.attachmentDropTarget)
+                .accessibilityHidden(true)
+        }
         .background(ConversationDesignTokens.background)
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.openURL, OpenURLAction { url in open(url, chips: chips) })
@@ -78,11 +84,15 @@ struct CoordinatorChatView: View {
             }
             CoordinatorComposerView(
                 text: $model.draft,
+                attachments: model.attachmentDraft,
                 placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcutLabel()),
                 canStop: model.canStop,
+                isEditable: model.isSendingFiles == false,
                 focusRequestID: model.composerFocusRequest,
                 onSend: { model.send() },
                 onStop: { model.stop() },
+                onChooseFiles: { model.chooseFiles() },
+                dropTarget: model.attachmentDropTarget,
                 onTextView: { model.composerTextView = $0 }
             )
         }

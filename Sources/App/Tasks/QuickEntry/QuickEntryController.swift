@@ -237,7 +237,7 @@ final class QuickEntryController: ObservableObject {
         }
         self.model = model
 
-        let dropTarget = QuickEntryDropTarget(model: model)
+        let dropTarget = AttachmentDropTarget(attachments: model.attachmentDraft)
         let panel = QuickEntryPanel()
         panel.onSubmit = { [weak model] in model?.submit() }
         panel.onCreateTask = { [weak model] in model?.createTask() }
@@ -358,7 +358,7 @@ final class QuickEntryController: ObservableObject {
             selectedProject: hintWorkspaceID.flatMap(project),
             send: { [weak controller] message in
                 guard let controller else { throw CoordinatorError("Toastty is quitting.") }
-                return try await controller.sendQuickEntry(message)
+                return try await controller.sendUserMessage(message)
             }
         )
     }
@@ -417,11 +417,7 @@ final class QuickEntryController: ObservableObject {
     private func chooseFiles() {
         guard let panel, let model else { return }
         closePicker(refocusText: false)
-        let openPanel = NSOpenPanel()
-        openPanel.allowsMultipleSelection = true
-        openPanel.canChooseDirectories = false
-        openPanel.canChooseFiles = true
-        openPanel.prompt = "Attach"
+        let openPanel = DraftAttachments.makeOpenPanel()
         // Above the floating quick entry panel. A modal panel needs Toastty
         // to be the active app; focus goes back when the quick entry closes.
         openPanel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
