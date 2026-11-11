@@ -341,6 +341,54 @@ struct CoordinatorWakeStateTests {
         #expect(feed.wake.changes.map(\.alerts) == [[]])
     }
 
+    @Test func alertsNeitherDelayNorHideAStagesWebhookEvent() {
+        // A task starts running, its checks fail while Running settles, and
+        // it goes Idle: the same events at the same times as without alerts.
+        func timeline(alerts: Bool) -> [(TimeInterval, [TaskWebhookEventType])] {
+            var detector = TaskWebhookEventDetector()
+            _ = detector.observe([first: state("idle")], now: t0)
+            let failing: [TaskAlert] = alerts ? [.checksFailing] : []
+            var events: [(TimeInterval, [TaskWebhookEventType])] = []
+            for second in 1...12 {
+                let current = second < 3 ? state("running") : second < 6 ? state("running", alerts: failing) : state("idle", alerts: failing)
+                for change in detector.observe([first: current], now: at(TimeInterval(second)), settleInterval: 3)
+                where change.events.isEmpty == false {
+                    events.append((TimeInterval(second), change.events))
+                }
+            }
+            return events
+        }
+        let without = timeline(alerts: false)
+        #expect(without.map(\.0) == [4, 9])
+        #expect(without.map(\.1) == [[.running], [.idle]])
+        let with = timeline(alerts: true)
+        #expect(with.map(\.0) == without.map(\.0))
+        #expect(with.map(\.1) == without.map(\.1))
+    }
+
+    @Test func anAlertSettlesAlsoWhereTheRecordDecidesTheStage() {
+        // A merged task waits in To ship while its agent works. A silence
+        // seen for one pass counts nothing; one that holds counts after
+        // 3 seconds. A stage that the record decides still counts at once.
+        var feed = feed([first: state("toShip", merged: true)])
+        feed.observe([first: state("toShip", merged: true, alerts: [.silent])], at: at(1), settleInterval: 3)
+        feed.observe([first: state("toShip", merged: true)], at: at(2), settleInterval: 3)
+        #expect(feed.wake.changes.isEmpty)
+        feed.observe([first: state("toShip", merged: true, alerts: [.silent])], at: at(10), settleInterval: 3)
+        #expect(feed.wake.changes.isEmpty)
+        feed.observe([first: state("toShip", merged: true, alerts: [.silent])], at: at(13), settleInterval: 3)
+        #expect(feed.wake.changes.map(\.newAlerts) == [[.silent]])
+        // Done counts at once; the alert that comes with it waits its time.
+        feed.wake.markDelivered(at: at(14))
+        feed.observe([first: state("done", merged: true, alerts: [.silent, .checksFailing])], at: at(20), settleInterval: 3)
+        #expect(feed.wake.changes.map(\.group) == ["done"])
+        #expect(feed.wake.changes.map(\.alerts) == [[.silent]])
+        feed.observe([first: state("done", merged: true, alerts: [.silent, .checksFailing])], at: at(23), settleInterval: 3)
+        #expect(feed.wake.changes.map(\.alerts) == [[.silent, .checksFailing]])
+        // To ship to Done fires no webhook event, and neither do alerts.
+        #expect(feed.events == [[], [], []])
+    }
+
     @Test func alertsFireNoWebhookEvent() {
         // The same moves, with and without alerts, fire the same events.
         let moves: [(TaskWebhookTaskState, TaskWebhookTaskState)] = [
@@ -445,9 +493,12 @@ struct CoordinatorWakeStateTests {
                               to: [first: state("done", merged: true), second: state("running", alerts: [.silent])]) {
             wake.record(change, at: at(30))
         }
-        let restored = try decoder.decode(CoordinatorWakeState.self, from: encoder.encode(wake))
+        let saved = try encoder.encode(wake)
+        let restored = try decoder.decode(CoordinatorWakeState.self, from: saved)
         #expect(restored == wake)
         #expect(restored.changes.map(\.stageWakes) == [true, false])
+        // The stage part keeps the key the build before alerts saved.
+        #expect(String(decoding: saved, as: UTF8.self).contains(#""wakes" : false"#))
         #expect(restored.changes.map(\.newAlerts) == [[], [.silent]])
         #expect(restored.digest(now: at(40)) == wake.digest(now: at(40)))
     }
@@ -495,6 +546,22 @@ struct CoordinatorWakeStateTests {
         #expect(restored.changes.map(\.wakes) == [true, true])
         #expect(restored.changes.allSatisfy { $0.alerts.isEmpty && $0.newAlerts.isEmpty })
         #expect(try #require(restored.digest(now: at(60))).contains("- [Fix the login](toastty://task/\(first.uuidString)): running at "))
+
+        // The build before alerts saved a running line as quiet: it stays
+        // quiet.
+        let quiet = try decoder.decode(CoordinatorWakeState.self, from: savedByEarlierBuild(changes: """
+            {
+              "at" : "2027-01-15T08:00:30Z",
+              "deleted" : false,
+              "group" : "running",
+              "merged" : false,
+              "taskID" : "11111111-1111-1111-1111-111111111111",
+              "title" : "Fix the login",
+              "wakes" : false
+            }
+            """))
+        #expect(quiet.changes.map(\.wakes) == [false])
+        #expect(quiet.digest(now: at(60)) == nil)
 
         // Nothing waits, and the last wake was two hours ago with no time
         // set: the earlier build's default would fire. Now nothing does.

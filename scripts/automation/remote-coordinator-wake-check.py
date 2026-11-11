@@ -256,7 +256,7 @@ def run_fake(check):
 
     def saved_changes():
         """Each waiting change: its task, its group, and whether it wakes."""
-        return [(change['taskID'], change['group'], change.get('stageWakes') or bool(change.get('newAlerts')))
+        return [(change['taskID'], change['group'], change.get('wakes') or bool(change.get('newAlerts')))
                 for change in read_outbox(runtime_home)['coordinator']['changes']]
 
     def create(title):
@@ -558,7 +558,7 @@ def run_fake(check):
         def as_earlier_build(value):
             if isinstance(value, dict):
                 return {key: as_earlier_build(item) for key, item in value.items()
-                        if key not in ('alerts', 'newAlerts', 'stageWakes')}
+                        if key not in ('alerts', 'newAlerts', 'alertsSince')}
             return [as_earlier_build(item) for item in value] if isinstance(value, list) else value
 
         outbox = as_earlier_build(outbox)

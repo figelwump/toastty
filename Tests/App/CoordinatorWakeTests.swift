@@ -108,11 +108,11 @@ struct CoordinatorWakeTests {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: files.outbox)) as? [String: Any])
     }
 
-    /// Saved JSON as the build before alerts wrote it: no alerts anywhere,
-    /// and no `stageWakes` on a waiting change.
+    /// Saved JSON as the build before quiet changes wrote it: no alerts
+    /// anywhere, and no `wakes` on a waiting change.
     private func asEarlierBuildWroteIt(_ value: Any) -> Any {
         if let object = value as? [String: Any] {
-            return object.filter { ["alerts", "newAlerts", "stageWakes"].contains($0.key) == false }
+            return object.filter { ["alerts", "newAlerts", "alertsSince", "wakes"].contains($0.key) == false }
                 .mapValues(asEarlierBuildWroteIt)
         }
         if let array = value as? [Any] { return array.map(asEarlierBuildWroteIt) }
@@ -503,12 +503,12 @@ struct CoordinatorWakeTests {
         second.stop()
 
         // The same file as the earlier build wrote it: changes have no
-        // `stageWakes`, and the last wake was two hours ago with no time
-        // set. The change counts as waking, as it did then; the hour passed
+        // `wakes`, and the last wake was two hours ago with no time set.
+        // The change counts as waking, as it did then; the hour passed
         // wakes nothing.
         var saved = try savedOutbox(files)
         let changes = try #require((saved["coordinator"] as? [String: Any])?["changes"] as? [[String: Any]])
-        #expect(changes.first?["stageWakes"] as? Bool == false)
+        #expect(changes.first?["wakes"] as? Bool == false)
         saved = try #require(asEarlierBuildWroteIt(saved) as? [String: Any])
         var coordinator = try #require(saved["coordinator"] as? [String: Any])
         coordinator["requestedWakeAt"] = nil
@@ -709,9 +709,9 @@ struct CoordinatorWakeTests {
         #expect(second.coordinatorWakeStatus?.pendingTaskCount == 0)
         second.stop()
 
-        // The file as the build before alerts wrote it. The other task's
-        // agent is busy and wrote 8 minutes ago: nothing. The failing checks
-        // that build never told: told once.
+        // The file stripped of alerts, as a build before them wrote it. The
+        // other task's agent is busy and wrote 8 minutes ago: nothing. The
+        // failing checks that build never told: told once.
         let saved = try #require(asEarlierBuildWroteIt(try savedOutbox(files)) as? [String: Any])
         try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys]).write(to: files.outbox)
         let third = makeService(fixture, files: files, clock: clock) { current.value }

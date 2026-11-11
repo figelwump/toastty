@@ -83,6 +83,11 @@ extension TaskWebhookTaskState.Key {
 /// boundary sends nothing. Stages the record decides (done, to ship,
 /// archived), a merge, and a deletion count at once.
 ///
+/// The alerts settle on a clock of their own and always wait the settle
+/// interval. A change of the alerts while a stage settles does not restart
+/// the stage's time, so the alerts never delay or hide a stage's event.
+/// A change that counts carries the stage and the alerts that have settled.
+///
 /// The baseline is saved, so after a relaunch a task that already waited
 /// sends nothing new, and a change made while Toastty was quit, such as a
 /// merge on GitHub, still fires once.
@@ -100,9 +105,14 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
         public var previous: TaskWebhookTaskState.Key?
     }
 
+    /// The newest key seen that differs from the settled one.
     private struct Candidate: Codable, Equatable, Sendable {
         var key: TaskWebhookTaskState.Key
+        /// Since when its stage has held.
         var since: Date
+        /// Since when its alerts have held. `nil` in a candidate saved
+        /// before alerts, which had none: then `since`.
+        var alertsSince: Date?
     }
 
     /// The last state that counted for each task. `nil` until the first
@@ -148,22 +158,28 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
                 settled[id] = state
                 continue
             }
-            let mergeChanged = previous.key.merged != state.key.merged
-            if state.key.isSettledByRecord || mergeChanged {
-                candidates[id] = nil
-            } else if let candidate = candidates[id], candidate.key == state.key {
-                guard now.timeIntervalSince(candidate.since) >= settleInterval else { continue }
-                candidates[id] = nil
-            } else {
-                candidates[id] = Candidate(key: state.key, since: now)
-                guard settleInterval <= 0 else { continue }
-                candidates[id] = nil
+            let seen = candidates[id]
+            let stageSince = seen.flatMap { $0.key.hasSameStage(as: state.key) ? $0.since : nil } ?? now
+            let alertsSince = seen.flatMap { $0.key.alerts == state.key.alerts ? $0.alertsSince ?? $0.since : nil } ?? now
+            candidates[id] = Candidate(key: state.key, since: stageSince, alertsSince: alertsSince)
+            let stageCounts = previous.key.hasSameStage(as: state.key) == false
+                && (state.key.isSettledByRecord || previous.key.merged != state.key.merged
+                    || now.timeIntervalSince(stageSince) >= settleInterval)
+            let alertsCount = previous.key.alerts != state.key.alerts && now.timeIntervalSince(alertsSince) >= settleInterval
+            guard stageCounts || alertsCount else { continue }
+            var counted = state
+            if stageCounts == false {
+                counted.key = .init(group: previous.key.group, attention: previous.key.attention,
+                                    merged: previous.key.merged, alerts: state.key.alerts)
+            } else if alertsCount == false {
+                counted.key.alerts = previous.key.alerts
             }
-            settled[id] = state
+            if counted.key == state.key { candidates[id] = nil }
+            settled[id] = counted
             changes.append(Change(
                 taskID: id,
-                events: Self.events(from: previous.key, to: state.key),
-                state: state,
+                events: Self.events(from: previous.key, to: counted.key),
+                state: counted,
                 previous: previous.key
             ))
         }

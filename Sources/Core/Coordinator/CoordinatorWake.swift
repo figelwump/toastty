@@ -36,7 +36,8 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         public var at: Date
         /// Whether the task's stage change wakes the coordinator. `false`
         /// for a task that only starts running: its line waits for a digest
-        /// that something else starts.
+        /// that something else starts. Saved as `wakes`, the key the build
+        /// before alerts used for the same fact.
         public var stageWakes: Bool
         /// The task's alerts now.
         public var alerts: [TaskAlert]
@@ -46,6 +47,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 
         /// Whether this line wakes the coordinator.
         public var wakes: Bool { stageWakes || newAlerts.isEmpty == false }
+
+        enum CodingKeys: String, CodingKey {
+            case taskID, title, group, attention, merged, deleted, at, alerts, newAlerts
+            case stageWakes = "wakes"
+        }
     }
 
     /// The coordinator's workspace these wakes are for. A coordinator
@@ -208,7 +214,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 
 extension CoordinatorWakeState.TaskChange {
     /// A change saved before Toastty marked the changes that wake nothing
-    /// has no `stageWakes`. It counts as waking, as every change did then.
+    /// has no `wakes`. It counts as waking, as every change did then.
     /// A change saved before Toastty had alerts has none. An alert this
     /// build does not know is left out.
     public init(from decoder: any Decoder) throws {
