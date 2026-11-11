@@ -169,7 +169,7 @@ struct CoordinatorChatView: View {
         case .awaitingAnswerInTerminal:
             "The coordinator waits for your answer in the terminal."
         case .terminalDraft:
-"You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there."
+"You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there. If you only answered a question there, choose Send Anyway."
         case .deliveryNotConfirmed:
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:

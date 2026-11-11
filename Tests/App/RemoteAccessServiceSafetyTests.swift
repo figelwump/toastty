@@ -2090,15 +2090,34 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
     }
 
+    /// Keys that reached the terminal before the agent's start report
+    /// answered a question of that start, or they wait in the agent's
+    /// prompt. The prompt then opens as a Mac draft: no send can use it
+    /// before a release.
     @MainActor
-    @Test func localInputBeforeCurrentLaunchConfirmationPreventsPromptBootstrap() throws {
+    @Test func localInputBeforeCurrentLaunchConfirmationOpensThePromptAsAMacDraft() throws {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }
 
         fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        // Before the start report there is no prompt at all.
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
         #expect(fixture.confirmCurrentLaunchBinding())
 
-        #expect(fixture.summary.inputAvailability ==
+        guard case .localDraft = fixture.summary.inputAvailability else {
+            Issue.record("Expected a Mac draft, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+
+        // An agent that works at its start report has no prompt to open,
+        // with or without keys.
+        let workingFixture = try RemoteBootstrapFixture(statusKind: .working)
+        defer { workingFixture.removeRuntimeFiles() }
+        workingFixture.terminalRuntimeRegistry.handleLocalInput(for: workingFixture.panelID)
+        #expect(workingFixture.confirmCurrentLaunchBinding())
+        #expect(workingFixture.summary.inputAvailability ==
             .unavailable(reason: .unknownProviderState))
     }
 
@@ -2139,6 +2158,84 @@ struct RemoteAccessServiceSafetyTests {
 
         #expect(panelLabelTitle != "Build system explanation")
         #expect(fixture.summary.title == "Build system explanation")
+    }
+
+    /// The user answered a question of the agent's start in the terminal,
+    /// such as a folder-trust question, before the agent reported its
+    /// session. The prompt opens as a Mac draft. A send is refused, a release
+    /// that names an older draft epoch is refused, the current release opens
+    /// the prompt for one send, and a key after a release locks it again.
+    @MainActor
+    @Test(arguments: [AgentKind.claude, .codex])
+    func aDraftFromKeysBeforeTheStartReportIsReleasedForOneSend(agent: AgentKind) throws {
+        let fixture = try RemoteBootstrapFixture(agent: agent)
+        defer { fixture.removeRuntimeFiles() }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let device = RemoteDeviceRecord(name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func release(_ epoch: RemoteInputEpoch) -> RemoteConversationLocalDraftReleaseResult {
+            fixture.service.performLocalDraftRelease(
+                RemoteConversationLocalDraftReleaseRequest(conversationID: fixture.conversationID, expectedDraftEpoch: epoch),
+                device: device
+            )
+        }
+        func send(_ id: String, _ text: String, at epoch: RemoteInputEpoch) -> RemoteMessageSendResult {
+            fixture.service.performRemoteSend(RemoteMessageSendRequest(
+                conversationID: fixture.conversationID,
+                clientRequestID: id,
+                expectedInputEpoch: epoch,
+                text: text
+            ), device: device)
+        }
+        func draft() throws -> RemoteInputEpoch {
+            guard case .localDraft(let epoch) = fixture.summary.inputAvailability else {
+                Issue.record("Expected a Mac draft, got \(fixture.summary.inputAvailability)")
+                throw LocalConversationFixtureError.timedOut
+            }
+            return epoch
+        }
+
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let seen = try draft()
+        // Nothing is typed into a draft.
+        #expect(send("into-the-draft", "Too early", at: seen).isAccepted == false)
+        #expect(delivered.isEmpty)
+
+        // Another key: a release that names the draft seen before it is refused.
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        let current = try draft()
+        #expect(current != seen)
+        #expect(release(seen) == .rejected(reason: .draftChanged))
+        #expect(delivered.isEmpty)
+
+        // The current release opens the prompt. A second one has no draft.
+        #expect(release(current) == .released)
+        guard case .openPrompt(let prompt) = fixture.summary.inputAvailability else {
+            Issue.record("Expected the released prompt, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(release(current) == .rejected(reason: .noLocalDraft))
+
+        // A key after the release locks the prompt again, under a new epoch.
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        let again = try draft()
+        #expect(again != current)
+        #expect(send("into-the-new-draft", "Still too early", at: prompt).isAccepted == false)
+        #expect(delivered.isEmpty)
+        #expect(release(current) == .rejected(reason: .draftChanged))
+        #expect(release(again) == .released)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: prompt))
+
+        // The released prompt takes one send.
+        #expect(send("after-release", "Carry on", at: prompt) == .accepted(epoch: prompt))
+        #expect(delivered == ["Carry on"])
+        #expect(send("second", "And more", at: prompt).isAccepted == false)
+        #expect(delivered == ["Carry on"])
     }
 
     /// The user typed on the Mac, cleared it, and released the lock from the

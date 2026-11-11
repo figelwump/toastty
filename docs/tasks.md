@@ -551,7 +551,10 @@ changes only the folder's entry in the text and replaces the file in one
 step. It trusts no other folder. When it cannot write the entry, for example
 because Claude Code never ran on this Mac or because it cannot tell which
 config file the profile uses, Claude Code asks in its terminal and
-[the chat](#the-coordinators-chat) says so.
+[the chat](#the-coordinators-chat) says so. The same happens when only your
+shell's startup files set `CLAUDE_CONFIG_DIR`: Toastty does not see that
+value, so the entry goes to the config file in your home folder, which that
+Claude Code does not read.
 
 The coordinator is not a task. It has no task record, so `task list`, the
 Tasks view, the Status segment's groups, webhook events and its own digests
@@ -718,11 +721,15 @@ under it. On macOS 14 the panel shows the terminal.
   runs and the agent has not reported its session, the chat says that the
   agent is starting, and a message you send shows as **Queued · waits for the
   agent to start**. After 8 seconds the chat says that the agent may wait for
-  your answer in the terminal. **Show Terminal** shows the terminal.
+  your answer in the terminal. **Show Terminal** shows the terminal. After
+  your answer there, the chat shows the notice for a draft in the terminal,
+  and **Send Anyway** types the waiting message.
 - **A draft in the terminal.** When you typed in the terminal and did not
   send that text, messages and digests wait, and the chat says why. **Send
   Anyway** tells Toastty that the terminal's prompt is empty: the next
-  message is then typed there.
+  message is then typed there. The same holds after you answered a login or
+  a folder-trust question in the terminal before the agent started: Toastty
+  cannot tell those keys from a draft, so choose **Send Anyway**.
 - **Digests.** A message that Toastty typed (see below) shows as one muted
   line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
 - **Messages from agents.** A message that `coordinator send` brought shows

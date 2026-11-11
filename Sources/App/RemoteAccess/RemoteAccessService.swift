@@ -2492,12 +2492,21 @@ final class RemoteAccessService: ObservableObject {
                 }
             }
 
+            // Keys that reached the terminal before the agent's start report
+            // answered a question of that start, such as a login or a
+            // folder-trust question, or they wait in the agent's prompt.
+            // Toastty cannot tell which. So the first prompt then opens as
+            // the user's draft: nothing is typed into it until the user
+            // releases it, and the session does not stay "starting" until
+            // a turn runs in the terminal.
+            let opensAsLocalDraft = candidate.nativeBindingConfirmation
+                .map(sessionRuntimeStore.nativeSessionBindingHasOnlyLocalInputAgainstIt) ?? false
             if candidate.provider != .cursor,
                let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
                candidate.registryState == .ready,
                confirmation.managedSessionID == activeSessionID,
-               sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
+               opensAsLocalDraft || sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
                 let emitted = projectionStore.bootstrapConfirmedOpenPrompt(
                     for: candidate.conversationID,
                     at: confirmation.confirmedAt
@@ -2514,6 +2523,17 @@ final class RemoteAccessService: ObservableObject {
                     // Publish coordinator authority before clients receive the
                     // status event that exposes this prompt epoch.
                     syncCoordinatorAvailability(for: candidate.conversationID)
+                    if opensAsLocalDraft {
+                        // In the same step as the open prompt, so that no
+                        // send can use it first.
+                        let previous = coordinator.availability(for: candidate.conversationID)
+                        coordinator.noteLocalInput(for: candidate.conversationID)
+                        logCoordinatorAvailabilityTransition(
+                            for: candidate.conversationID,
+                            source: "local_input_before_start_report",
+                            previous: previous
+                        )
+                    }
                     broadcastEvents(emitted, for: candidate.conversationID)
                     listChanged = true
                 }

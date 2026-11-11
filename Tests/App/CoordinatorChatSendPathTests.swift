@@ -229,6 +229,38 @@ struct CoordinatorChatSendPathTests {
         try await fixture.waitUntil("the notice to go") { fixture.chat.notice == nil }
     }
 
+    @MainActor
+    @Test func anAnswerInTheTerminalBeforeTheStartReportLeavesTheMessageForSendAnyway() async throws {
+        // The agent asked a question of its start in the terminal. The
+        // user's message waits in the chat.
+        let fixture = try CoordinatorChatFixture(agentReportsStart: false)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the conversation of the launch") { fixture.chat.summary?.state == .starting }
+        fixture.chat.draft = "What needs me?"
+        fixture.chat.send()
+        #expect(fixture.controller.status?.hold == .agentStarting)
+        #expect(fixture.chat.notice == .startWaitsInTerminal)
+
+        // The user answers it there with keys, and the agent reports its
+        // start. Toastty cannot tell those keys from a draft in the agent's
+        // prompt: the notice about the start goes, and the one about a
+        // draft in the terminal shows. Nothing is typed.
+        fixture.conversations.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+        fixture.reportAgentStart()
+        try await fixture.waitUntil("the notice about a draft") { fixture.chat.notice == .terminalDraft }
+        #expect(fixture.controller.status?.hold == .userDraft)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // "Send Anyway": the waiting message is typed, once.
+        fixture.chat.sendPastTerminalDraft()
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["What needs me?"] }
+        try await fixture.waitUntil("the notice to go") { fixture.chat.notice == nil }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts == ["What needs me?"])
+    }
+
     // MARK: - The user's text in the terminal
 
     @MainActor

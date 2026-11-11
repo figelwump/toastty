@@ -44,7 +44,9 @@ final class CoordinatorChatModel: ObservableObject {
         /// answer it.
         case awaitingAnswerInTerminal
         /// Text typed in the terminal may be in the agent's prompt. Messages
-        /// and Toastty's digests wait for it.
+        /// and Toastty's digests wait for it. Keys that answered a question
+        /// of the agent's start, before the agent reported its session, look
+        /// the same to Toastty.
         case terminalDraft
         /// A message was typed but the conversation never showed it.
         case deliveryNotConfirmed
