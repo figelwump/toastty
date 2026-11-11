@@ -40,9 +40,12 @@ struct SidebarTasksHeader: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                         .frame(width: 14)
+                    // In a narrow sidebar the name shortens, as a
+                    // workspace title does, and the count stays whole.
                     Text("Tasks")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(ToastyTheme.primaryText)
+                        .lineLimit(1)
                     if needsYouCount > 0 {
                         Text("\(needsYouCount)")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -50,6 +53,7 @@ struct SidebarTasksHeader: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(ToastyTheme.sessionNeedsApprovalText, in: Capsule())
+                            .fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
@@ -72,6 +76,7 @@ struct SidebarTasksHeader: View {
                 if showsShortcutBadge, let newTaskShortcutLabel {
                     // The ＋'s tooltip already names the shortcut.
                     SidebarShortcutBadge(label: newTaskShortcutLabel)
+                        .fixedSize()
                         .accessibilityHidden(true)
                 }
                 Button(action: newTask) {
