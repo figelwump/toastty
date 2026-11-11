@@ -172,7 +172,13 @@ def run_in_gui_session(arguments, name=NAME, script=__file__):
         '>', shlex.quote(str(output)), '2>&1;',
         'echo $? >', shlex.quote(str(done)), '; exit',
     ])
-    do_script = f'tell application "Terminal" to do script {json.dumps(command)}'
+    # Terminal types the command into a new shell. A terminal keeps at most
+    # 1024 characters for a shell that does not read yet, and drops the rest
+    # with the Return key, so the shell then waits for good. The long command
+    # goes into a file, and Terminal types a short one.
+    launcher = artifacts / f'{name}-gui.command'
+    launcher.write_text(command.removesuffix('; exit') + '\n')
+    do_script = f'tell application "Terminal" to do script {json.dumps(f"/bin/zsh {shlex.quote(str(launcher))}; exit")}'
     subprocess.run(['osascript', '-e', do_script], check=True, capture_output=True, timeout=30)
     deadline = time.time() + 2400
     while not done.exists():

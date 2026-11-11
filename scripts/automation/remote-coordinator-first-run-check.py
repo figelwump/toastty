@@ -176,7 +176,6 @@ class Run:
         check.own_folders.append(str(self.directory))
         self.app_log = check.artifacts / f'{NAME}-{name}-app.log'
         self.instance = self.ui = None
-        self.launch()
 
     def launch(self):
         self.instance = chat.ChatInstance(self.check.binary, self.environment, self.environment['TOASTTY_SOCKET_PATH'],
@@ -302,7 +301,8 @@ class Run:
 
     def finish(self):
         try:
-            self.instance.kill()
+            if self.instance:
+                self.instance.kill()
         except Exception:  # noqa: BLE001 - the evidence matters more
             pass
         self.check.copy_instance_log(self.runtime_home, self.name)
@@ -319,6 +319,8 @@ class Run:
 def scenario(check, name, claude, **options):
     run = Run(check, name, claude, **options)
     try:
+        # Inside the `try`: a launch that fails must not leave its app.
+        run.launch()
         yield run
     except Exception:
         try:
