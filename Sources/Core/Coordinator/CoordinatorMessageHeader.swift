@@ -132,9 +132,15 @@ public enum CoordinatorMessageHeader {
     /// The first line of a reply. The number of quoted lines says where the
     /// quote ends, so the user's own text can start with `>` too.
     public static func replyLine(quoteLineCount: Int, time: String?) -> String {
-        let when = time.map { " of \(word($0))" } ?? ""
+        let when = time.map { " of \(replyTime($0))" } ?? ""
         let lines = quoteLineCount == 1 ? "1 line" : "\(quoteLineCount) lines"
         return "\(replyPrefix)\(replyQuoteLabel)\(when), \(lines)"
+    }
+
+    /// A time as a reply's first line writes it, and as `replyParts(of:)`
+    /// gives it back: on one line, with no control character.
+    public static func replyTime(_ time: String) -> String {
+        word(time)
     }
 
     /// The text to type for the user's reply to one of the coordinator's

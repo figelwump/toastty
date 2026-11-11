@@ -735,11 +735,33 @@ final class CoordinatorChatModel: ObservableObject {
     /// replaces the first.
     func reply(to request: ToasttyMessageReplyRequest) {
         guard isSendingFiles == false else { return }
+        // The field holds another sender's message, taken back with Edit.
+        // As a reply it would read as the user's.
+        guard Self.hasOtherHeader(draft) == false else {
+            transientNotice = .failure(Self.otherHeaderReplyRefusal)
+            return
+        }
         replyTarget = CoordinatorReplyTarget(
             text: request.text,
-            time: request.timestamp.formatted(date: .omitted, time: .shortened)
+            // As the reply's first line writes it, so a waiting reply that
+            // comes back with Edit is the same reply.
+            time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
         )
         requestComposerFocus()
+    }
+
+    static let otherHeaderReplyRefusal =
+        "The message you are writing starts with Toastty's line for another sender, so it cannot be a reply. "
+            + "Send or clear it first."
+
+    /// The text starts with Toastty's line for a digest, another sender or
+    /// the quick entry panel. A reply puts its own line first, which would
+    /// change whose message it is.
+    static func hasOtherHeader(_ text: String) -> Bool {
+        switch CoordinatorMessageHeader.kind(of: text) {
+        case .digest, .fromSender, .quickEntry: true
+        case .reply, .plain: false
+        }
     }
 
     /// The composer's message answers no message anymore.
@@ -782,10 +804,17 @@ final class CoordinatorChatModel: ObservableObject {
             // message at most.
             let reply = CoordinatorMessageHeader.replyParts(of: entry.text)
             let entryTarget = reply.map { CoordinatorReplyTarget(text: $0.quote, time: $0.time) }
-            if let entryTarget, let replyTarget, entryTarget.text != replyTarget.text {
+            if let entryTarget, let replyTarget, entryTarget != replyTarget {
                 transientNotice = .failure(
                     "This message is a reply, and the message you are writing replies to another message. "
                         + "Remove that reply first."
+                )
+                break
+            }
+            if replyTarget != nil, Self.hasOtherHeader(entry.text) {
+                transientNotice = .failure(
+                    "This message starts with Toastty's line for another sender, and the message you are writing "
+                        + "is a reply. Remove the reply first."
                 )
                 break
             }

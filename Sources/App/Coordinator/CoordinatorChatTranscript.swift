@@ -14,6 +14,12 @@ import RemoteProtocol
 // TODO: Share the event-to-row mapping with the iPhone's
 // `ToasttyConversationPresentationAdapter` once the iPhone can take it.
 enum CoordinatorChatTranscript {
+    /// An agent message as a reply names it.
+    struct QuotedMessage: Hashable {
+        let text: String
+        let time: String
+    }
+
     static func rows(
         from events: [ConversationEvent],
         projectionRunID: RemoteProjectionRunID,
@@ -24,8 +30,9 @@ enum CoordinatorChatTranscript {
         let resolutions = interactionResolutions(in: events)
         var toolNames: [String: String] = [:]
         // The newest row of each agent message so far, by its text as a
-        // reply quotes it: a reply's quote opens the message it answers.
-        var assistantRowIDs: [String: ToasttyTranscriptRowID] = [:]
+        // reply quotes it and by its time as the reply's line writes it: a
+        // reply's quote opens the message it answers.
+        var assistantRowIDs: [QuotedMessage: ToasttyTranscriptRowID] = [:]
         return events.compactMap { event -> ToasttyTranscriptRow? in
             let rowID = ToasttyTranscriptRowID(
                 projectionRunID: projectionRunID.rawValue,
@@ -44,7 +51,10 @@ enum CoordinatorChatTranscript {
                     quotedRowID: { assistantRowIDs[$0] }
                 )
             case .assistantMessage(let payload):
-                assistantRowIDs[CoordinatorMessageHeader.quoteText(payload.text)] = rowID
+                assistantRowIDs[QuotedMessage(
+                    text: CoordinatorMessageHeader.quoteText(payload.text),
+                    time: CoordinatorMessageHeader.replyTime(timeText(event.timestamp))
+                )] = rowID
                 content = .assistantMessage(text: payload.text, phase: payload.phase)
             case .toolStarted(let payload):
                 toolNames[payload.callID] = payload.toolName
@@ -89,7 +99,7 @@ enum CoordinatorChatTranscript {
         at timestamp: Date,
         isSentFromThisMac: (String) -> Bool,
         timeText: (Date) -> String,
-        quotedRowID: (String) -> ToasttyTranscriptRowID?
+        quotedRowID: (QuotedMessage) -> ToasttyTranscriptRowID?
     ) -> ToasttyTranscriptRow.Content {
         // Toastty's first line says whose message it is. The line is the
         // only thing read here: text after it cannot change the answer.
@@ -110,7 +120,8 @@ enum CoordinatorChatTranscript {
             ))
         case .reply(let quoted, let time, _, _):
             text = CoordinatorMessageHeader.displayText(of: payload.text)
-            quote = ToasttyMessageQuote(text: quoted, timeText: time, sourceRowID: quotedRowID(quoted))
+            let source = time.flatMap { quotedRowID(QuotedMessage(text: quoted, time: $0)) }
+            quote = ToasttyMessageQuote(text: quoted, timeText: time, sourceRowID: source)
         case .quickEntry, .plain:
             text = CoordinatorMessageHeader.displayText(of: payload.text)
         }

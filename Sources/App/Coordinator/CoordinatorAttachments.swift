@@ -65,11 +65,14 @@ struct CoordinatorAttachments: Sendable {
     }
 
     /// Removes the copies of one message: its own folder, and each folder
-    /// that its text names. A message that the user took back into the
-    /// chat's field and sent again has a new ID, and its files are still
-    /// under the ID it had. A message with no copies removes nothing.
+    /// that its list of attached files names. A message that the user took
+    /// back into the chat's field and sent again has a new ID, and its files
+    /// are still under the ID it had. Only that list counts: a path in the
+    /// text, such as one in a reply's quote of the coordinator's message,
+    /// belongs to another message. A message with no copies removes nothing.
     func discard(messageID: String, text: String = "") {
-        for id in messageIDs(namedIn: text).union([messageID]) where UUID(uuidString: id) != nil {
+        let attached = CoordinatorMessageHeader.attachedFiles(in: text)?.paths.joined(separator: "\n") ?? ""
+        for id in messageIDs(namedIn: attached).union([messageID]) where UUID(uuidString: id) != nil {
             try? FileManager.default.removeItem(at: folderURL(messageID: id))
         }
     }

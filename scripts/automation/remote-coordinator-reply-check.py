@@ -33,6 +33,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import time
@@ -57,8 +58,26 @@ steer = chat_check.steer
 require, wait_for = coordinator_check.require, coordinator_check.wait_for
 
 
+def other_runs(own_pids=()):
+    """The other checks and the other runs' Toastty instances on this Mac.
+    This check's own processes, the wrapper's and the GUI session's, name
+    this script."""
+    listing = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
+    own_bundle = os.environ.get('TOASTTY_APP_BUNDLE', '')
+    found = []
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(' ')
+        if not pid.isdigit() or int(pid) in own_pids or NAME in command or (own_bundle and own_bundle in command):
+            continue
+        other_check = re.search(r'remote-[a-z0-9-]+-check\.py', command)
+        other_app = '/toastty-remote-gui/' in command and 'Toastty.app/Contents/MacOS/Toastty' in command
+        if other_check or other_app:
+            found.append(line.strip()[:200])
+    return found
+
+
 def require_mini_to_itself(own_pids=()):
-    found = [line for line in attachments_check.other_runs(own_pids) if NAME not in line]
+    found = other_runs(own_pids)
     require(not found, 'Another check runs on this Mac; stopping so the two do not meet: ' + ' | '.join(found))
 
 

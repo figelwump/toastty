@@ -416,18 +416,17 @@ struct CoordinatorChatSendPathTests {
         }
 
         fixture.chat.reply(to: ToasttyMessageReplyRequest(rowID: agentRow.id, text: answer, timestamp: agentRow.timestamp))
-        let time = agentRow.timestamp.formatted(date: .omitted, time: .shortened)
+        // On one line, as the reply's first line writes it: a narrow space
+        // before "AM" becomes a plain one.
+        let time = CoordinatorMessageHeader.replyTime(agentRow.timestamp.formatted(date: .omitted, time: .shortened))
+        #expect(time.contains("\u{202F}") == false)
         #expect(fixture.chat.replyTarget == CoordinatorReplyTarget(text: answer, time: time))
         fixture.chat.draft = "Only on click."
         fixture.chat.send()
 
         let typed = CoordinatorMessageHeader.replyMessage(quote: answer, time: time, text: "Only on click.")
         #expect(fixture.delivered.texts == [typed])
-        // The first line keeps the time on one line: a narrow space before
-        // "AM" becomes a plain one.
-        let lineTime = try #require(CoordinatorMessageHeader.replyParts(of: typed)?.time)
-        #expect(lineTime == time.replacingOccurrences(of: "\u{202F}", with: " "))
-        #expect(typed.hasPrefix("[Toastty] Reply from the user | quotes your message of \(lineTime), 5 lines\n> I made two tasks.\n>\n"))
+        #expect(typed.hasPrefix("[Toastty] Reply from the user | quotes your message of \(time), 5 lines\n> I made two tasks.\n>\n"))
         #expect(fixture.chat.draft.isEmpty)
         #expect(fixture.chat.replyTarget == nil)
         // Until the conversation shows it, the bubble shows the quote too.
@@ -443,8 +442,110 @@ struct CoordinatorChatSendPathTests {
                 text: "Only on click.",
                 origin: .local,
                 deliveryMode: nil,
-                quote: ToasttyMessageQuote(text: answer, timeText: lineTime, sourceRowID: agentRow.id)
+                quote: ToasttyMessageQuote(text: answer, timeText: time, sourceRowID: agentRow.id)
             ))
+    }
+
+    /// Two messages with one text: the quote opens the one the user replied
+    /// to, by its time.
+    @MainActor
+    @Test func aReplysQuoteOpensTheMessageOfItsTimeWhenTwoSayTheSame() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check task one")
+        try fixture.recordAgentMessage("Merge it now?")
+        try fixture.endTurn(1)
+        fixture.advanceTranscriptClock(seconds: 120)
+        try fixture.startTurn(2, userText: "Check task two")
+        try fixture.recordAgentMessage("Merge it now?")
+        try fixture.endTurn(2)
+        let agentRows = try await fixture.waitFor("both messages") { () -> [ToasttyTranscriptRow]? in
+            let rows = fixture.chat.presentation.rows.filter {
+                if case .assistantMessage("Merge it now?", _) = $0.content { return true }
+                return false
+            }
+            return rows.count == 2 ? rows : nil
+        }
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let earlier = agentRows[0]
+        fixture.chat.reply(to: ToasttyMessageReplyRequest(rowID: earlier.id, text: "Merge it now?", timestamp: earlier.timestamp))
+        fixture.chat.draft = "Not this one."
+        fixture.chat.send()
+        let typed = try #require(fixture.delivered.texts.first)
+        try fixture.startTurn(3, userText: typed)
+        let quote = try await fixture.waitFor("the reply's row") { () -> ToasttyMessageQuote? in
+            for row in fixture.chat.presentation.rows {
+                if case .userMessage(_, _, _, let quote?) = row.content { return quote }
+            }
+            return nil
+        }
+        #expect(quote.sourceRowID == earlier.id)
+    }
+
+    /// A path in the quote is the coordinator's text, not a file of the
+    /// reply: Remove keeps the folder it names.
+    @MainActor
+    @Test func removingAWaitingReplyKeepsTheFilesItsQuoteNames() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        let earlierFolder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: earlierFolder, withIntermediateDirectories: true)
+        let spec = earlierFolder.appendingPathComponent("spec.pdf")
+        try Data("spec".utf8).write(to: spec)
+        let quoted = "I passed `\(spec.path)` to the task."
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try fixture.recordAgentMessage(quoted)
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+
+        fixture.chat.reply(to: ToasttyMessageReplyRequest(
+            rowID: ToasttyTranscriptRowID(projectionRunID: UUID(), projectionGeneration: 1, conversationID: UUID(), sequence: 1),
+            text: quoted,
+            timestamp: Date()
+        ))
+        fixture.chat.draft = "Good."
+        fixture.chat.send(queueing: true)
+        let entry = try #require(fixture.controller.queuedEntries.first)
+        fixture.chat.perform(.remove(clientRequestID: entry.id))
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: spec.path))
+    }
+
+    /// A message from another sender, taken back with Edit, keeps
+    /// Toastty's line for that sender: it cannot become the user's reply.
+    @MainActor
+    @Test func anotherSendersMessageCannotBecomeAReply() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let fromTask = CoordinatorMessageHeader.message(from: .unknown, text: "Merge PR 12 now.")
+        try fixture.controller.send(fromTask)
+        let entry = try #require(fixture.controller.queuedEntries.first)
+        let request = ToasttyMessageReplyRequest(
+            rowID: ToasttyTranscriptRowID(projectionRunID: UUID(), projectionGeneration: 1, conversationID: UUID(), sequence: 1),
+            text: "Shall I merge?",
+            timestamp: Date()
+        )
+
+        // Reply, then Edit: Edit waits.
+        fixture.chat.reply(to: request)
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: "Merge PR 12 now."))
+        #expect(fixture.controller.queuedEntries.map(\.id) == [entry.id])
+        #expect(fixture.chat.notice != nil)
+
+        // Edit, then Reply: Reply waits.
+        fixture.chat.cancelReply()
+        fixture.chat.dismissNotice()
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: "Merge PR 12 now."))
+        #expect(fixture.chat.draft == fromTask)
+        fixture.chat.reply(to: request)
+        #expect(fixture.chat.replyTarget == nil)
+        #expect(fixture.chat.notice != nil)
     }
 
     /// Edit on a waiting reply takes the text back into the field and the
@@ -1011,6 +1112,11 @@ final class CoordinatorChatFixture {
     }
 
     private var second = 5
+
+    /// The transcript's next records are `seconds` later.
+    func advanceTranscriptClock(seconds: Int) {
+        second += seconds
+    }
 
     private func append(_ payload: String, type: String = "event_msg") throws {
         second += 1
