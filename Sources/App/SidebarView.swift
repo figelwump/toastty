@@ -674,7 +674,6 @@ struct SidebarView: View {
     /// chip, so the chip does not squeeze the name to a bare ellipsis.
     private static let sessionRowTitleReservedWidth: CGFloat = 60
     private static let sessionParentTagMaximumWidth: CGFloat = 90
-    private static let subspaceRowArrowWidth: CGFloat = 10
     private static let linkedChildIndent: CGFloat = 14
 
     /// A small tag on a task row's second line: its project, or how many of
@@ -4308,8 +4307,6 @@ struct SidebarView: View {
                     }
                 }
             }
-            // Room for the arrow overlay.
-            .padding(.trailing, Self.subspaceRowArrowWidth + Self.sessionStatusRailGap)
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
@@ -4327,17 +4324,6 @@ struct SidebarView: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
-        }
-        // Only a subspace row leaves the current workspace, so only it
-        // carries the arrow.
-        .overlay(alignment: .trailing) {
-            Image(systemName: "arrow.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(isHovered ? ToastyTheme.sidebarSessionPathText : ToastyTheme.sidebarSubspaceQuietMark)
-                .frame(width: Self.subspaceRowArrowWidth)
-                .padding(.trailing, 8)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
         .background(background, in: RoundedRectangle(cornerRadius: 5))
         .overlay {
