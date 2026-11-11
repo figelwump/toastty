@@ -1955,7 +1955,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: 5) == .completed
     }
 
-    func testWorkingTurnQueuesByDefaultStopsAndOffersSteer() {
+    func testWorkingTurnSteersByDefaultStopsAndOffersQueue() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "queue-steer"]
         )
@@ -1986,27 +1986,25 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "Unexpected elapsed time: \(String(describing: working.value))"
         )
 
-        // Typing expands the card: attach, then the Queue chip next to Send.
-        // Send replaces Stop while the field is open.
+        // Typing expands the card: attach, then the mode chip next to Send.
+        // Send replaces Stop while the field is open. Steer is the default
+        // while the agent works.
         input.tap()
-        input.typeText("Also add a UI test")
+        input.typeText("Use 300 ms, not 400")
         let mode = app.buttons["toastty-mobile-composer-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(mode.label, "Queue selected")
+        XCTAssertEqual(mode.label, "Steer selected")
         XCTAssertTrue(send.waitForExistence(timeout: 5))
-        XCTAssertEqual(send.label, "Queue message")
+        XCTAssertEqual(send.label, "Steer message")
         XCTAssertFalse(stop.exists)
         XCTAssertLessThan(mode.frame.maxX, send.frame.minX)
         XCTAssertLessThan(send.frame.minX - mode.frame.maxX, 16)
         attachScreenshot(named: "fixture-queue-steer-expanded", of: app)
 
         send.tap()
-        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-1"]
-        XCTAssertTrue(queued.waitForExistence(timeout: 5))
-        XCTAssertTrue(queued.label.contains("Also add a UI test"))
-        XCTAssertTrue(queued.label.contains("Queued"))
-        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
-        // Queueing never locks the composer the way a prompt send does, but
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        // Steering never locks the composer the way a prompt send does, but
         // the send still ends the edit: the keyboard leaves and the card
         // folds back to the one-line field.
         XCTAssertTrue(input.isEnabled)
@@ -2016,28 +2014,36 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         assertComposerCollapsed(input: input, stop: stop)
         attachScreenshot(named: "fixture-queue-steer-collapsed-after-send", of: app)
 
-        // The chip offers Steer; choosing it changes what Send does and the
-        // choice resets to Queue after the send.
+        // The chip offers Queue; choosing it changes what Send does, and the
+        // choice returns to Steer after the send.
+        let queueChoice = app.buttons["toastty-mobile-composer-mode-queue"]
+        func chooseQueue() {
+            mode.tap()
+            XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
+            queueChoice.tap()
+            XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+            XCTAssertEqual(send.label, "Queue message")
+        }
         input.tap()
-        input.typeText("Use 300 ms, not 400")
-        mode.tap()
-        let steerChoice = app.buttons["toastty-mobile-composer-mode-steer"]
-        XCTAssertTrue(steerChoice.waitForExistence(timeout: 5))
-        steerChoice.tap()
-        XCTAssertEqual(mode.label, "Steer selected")
-        XCTAssertEqual(send.label, "Steer message")
+        input.typeText("Also add a UI test")
+        chooseQueue()
+        attachScreenshot(named: "fixture-queue-steer-queue-selected", of: app)
         send.tap()
-        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-2"]
-        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-2"]
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(queued.label.contains("Also add a UI test"))
+        XCTAssertTrue(queued.label.contains("Queued"))
+        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
         input.tap()
         input.typeText("x")
-        XCTAssertEqual(mode.label, "Queue selected")
-        app.buttons["toastty-mobile-queued-remove-fixture-queued-1"].tap()
+        XCTAssertTrue(waitForLabel("Steer selected", of: mode))
+        app.buttons["toastty-mobile-queued-remove-fixture-queued-2"].tap()
         XCTAssertFalse(queued.waitForExistence(timeout: 2))
 
         // Edit puts the queued text back into the field.
         app.keys["delete"].tap()
         input.typeText("Then run the suite")
+        chooseQueue()
         send.tap()
         let second = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-3"]
         XCTAssertTrue(second.waitForExistence(timeout: 5))
@@ -2046,6 +2052,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Then run the suite")
         // Edit opens the keyboard again so the text can change right away.
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        chooseQueue()
         send.tap()
         let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
         XCTAssertTrue(third.waitForExistence(timeout: 5))

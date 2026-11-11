@@ -10,8 +10,11 @@ struct ToasttyConversationScreen: View {
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
-    /// Steer is a per-send choice that falls back to queue after each send.
-    @State private var steerSelected = false
+    /// Queue is a per-draft choice for one running turn: Steer is the
+    /// default while the agent works. The choice clears when the draft is
+    /// sent (the draft empties) and does not apply to a later turn. A failed
+    /// send or a brief connection check keeps it.
+    @State private var queueSelection: QueueSelection?
     /// The draft epoch shown when Release was tapped; confirming releases
     /// exactly that draft.
     @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
@@ -455,8 +458,8 @@ struct ToasttyConversationScreen: View {
                 }
             }
             .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
-            .onChange(of: isWorking) { _, nowWorking in
-                if !nowWorking { steerSelected = false }
+            .onChange(of: draft.isEmpty && attachments.isEmpty) { _, isEmpty in
+                if isEmpty { queueSelection = nil }
             }
 
             if presentation.canReleaseLocalDraft {
@@ -651,44 +654,53 @@ struct ToasttyConversationScreen: View {
                 stopButton
             } else {
                 if case .working(let canSteer) = presentation.gate.sendMode {
-                    deliveryModeChip(canSteer: canSteer)
+                    deliveryModeChip(presentation, canSteer: canSteer)
                 }
                 sendButton(presentation, isWorking: isWorking)
             }
         }
     }
 
-    /// The mode Send will use: Steer only while selected and still allowed.
-    /// If Mac typing closes steer mid-draft, the chip, the label, and the
-    /// send itself all fall back to Queue together.
+    /// The mode Send will use while the agent works: Steer unless the user
+    /// picked Queue or the host does not allow steer right now.
     private func effectiveDeliveryMode(_ presentation: ToasttyComposerPresentation) -> RemoteMessageDeliveryMode {
-        steerSelected && presentation.gate.sendMode == .working(canSteer: true) ? .steer : .queue
+        guard let sendMode = presentation.gate.sendMode, sendMode != .prompt else { return .queue }
+        return sendMode.deliveryMode(queueSelected: queueSelected(presentation))
     }
 
-    /// Queue is the default; the chip takes the accent only in Steer, so
-    /// color always marks the non-default choice.
-    private func deliveryModeChip(canSteer: Bool) -> some View {
-        let isSteer = steerSelected && canSteer
+    private struct QueueSelection: Equatable {
+        let turnEpoch: RemoteInputEpoch?
+    }
+
+    private func queueSelected(_ presentation: ToasttyComposerPresentation) -> Bool {
+        queueSelection == QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+    }
+
+    /// Steer is the default; the chip takes the accent only in Queue, so
+    /// color always marks the non-default choice. When steer is not allowed
+    /// the chip shows Queue with the accent, so the fallback is visible.
+    private func deliveryModeChip(_ presentation: ToasttyComposerPresentation, canSteer: Bool) -> some View {
+        let isSteer = effectiveDeliveryMode(presentation) == .steer
         return Menu {
             Button {
-                steerSelected = false
-            } label: {
-                Label("Queue", systemImage: "text.append")
-                Text("Sends after this turn")
-            }
-            .accessibilityIdentifier("toastty-mobile-composer-mode-queue")
-            Button {
-                steerSelected = true
+                queueSelection = nil
             } label: {
                 Label("Steer", systemImage: "arrow.triangle.merge")
                 Text("Adds to the running turn")
             }
             .disabled(!canSteer)
             .accessibilityIdentifier("toastty-mobile-composer-mode-steer")
+            Button {
+                queueSelection = QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+            } label: {
+                Label("Queue", systemImage: "text.append")
+                Text("Sends after this turn")
+            }
+            .accessibilityIdentifier("toastty-mobile-composer-mode-queue")
         } label: {
             HStack(spacing: 4) {
-                if isSteer {
-                    Image(systemName: "arrow.triangle.merge")
+                if !isSteer {
+                    Image(systemName: "text.append")
                         .imageScale(.small)
                 }
                 Text(isSteer ? "Steer" : "Queue")
@@ -696,11 +708,11 @@ struct ToasttyConversationScreen: View {
                     .imageScale(.small)
             }
             .font(.caption.weight(.medium))
-            .foregroundStyle(isSteer ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText)
+            .foregroundStyle(isSteer ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.amberText)
             .padding(.horizontal, 10)
             .frame(height: 30)
             .background(
-                isSteer ? ToasttyDesignTokens.amber.opacity(0.14) : ToasttyDesignTokens.chipSurface,
+                isSteer ? ToasttyDesignTokens.chipSurface : ToasttyDesignTokens.amber.opacity(0.14),
                 in: Capsule()
             )
         }
@@ -786,7 +798,6 @@ struct ToasttyConversationScreen: View {
     private func sendDraft(_ presentation: ToasttyComposerPresentation, isWorking: Bool) {
         let mode: RemoteMessageDeliveryMode? = isWorking ? effectiveDeliveryMode(presentation) : nil
         if submitDraft(mode) {
-            steerSelected = false
             // A send ends the edit: the keyboard leaves and, once the draft
             // clears, the field folds back to one line. Queue and steer keep
             // the gate open, so nothing else drops focus for them.
