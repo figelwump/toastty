@@ -79,6 +79,8 @@ recursive worktree deletion. Collection and directory cleanup failures add
 
 For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` copies local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree. Keep the local worktree bootstrapped before invoking that path.
 
+Other runs link the remote source checkout's shared GhosttyKit. To check a new Ghostty build before it is installed there, install it in the local worktree (replace that worktree's `Dependencies/GhosttyKit*` links first) and pass `--sync-ghostty-artifacts`. The wrapper then copies the local artifacts and sidecars into the run's own remote worktree, so other runs keep using the shared artifacts.
+
 When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
 
 ### Detached Browser Status

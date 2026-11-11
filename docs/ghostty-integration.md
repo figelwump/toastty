@@ -16,7 +16,14 @@ Ghostty, so the canonical source for Toastty builds is the
 branch of the Toastty maintainer's Ghostty fork. The branch contains upstream
 Ghostty plus these downstream changes:
 
-- the `ghostty_surface_is_at_prompt` embedder API used for prompt state
+- the `ghostty_surface_is_at_prompt` embedder API used for prompt state.
+  It answers from the shell's OSC 133 state at the cursor (prompt or input),
+  not from Ghostty's per-row prompt mark. A program that erases rows with
+  `CSI 2 K` keeps that mark on them: Claude Code redraws over the shell's
+  prompt and Toastty's launch line after a resize, and with the row mark the
+  running agent read as a shell prompt, so Toastty stopped its session as
+  `idle_at_prompt`. The fork has Zig tests for this, and Toastty's
+  `GhosttyPromptStateRedrawTests` checks it against the installed artifact.
 - an opt-in OSC 7501 bridge. Toastty enables `supports_program_status`;
   Ghostty validates reports, replies to support queries, and passes owned
   report data and ordered lifecycle events to the host. Other embedders
@@ -42,12 +49,19 @@ record the exact Ghostty commit because the branch name is not a stable pin.
 
 ## Recommended Ghostty build
 
-This checkout requires the OSC 7501 bridge and clipboard API from Ghostty fork commit
-[`056ffe2a80aab09c478946406dc7ec1b489d4ac3`](https://github.com/figelwump/ghostty/commit/056ffe2a80aab09c478946406dc7ec1b489d4ac3),
+This checkout requires the OSC 7501 bridge, the clipboard API, and the
+at-prompt answer from the shell's OSC 133 state, from Ghostty fork commit
+[`8bc4f5354d334b2f3d743261faf87cdb4637155c`](https://github.com/figelwump/ghostty/commit/8bc4f5354d334b2f3d743261faf87cdb4637155c),
 which is based on upstream `c770410dbb57909ff4f6921a6497688a957f85db` and preserves
 the downstream changes above. Use Zig **0.16.0** for this revision. The embedded
 clipboard API now passes MIME requests and explicit byte lengths. Rebuild older
 local artifacts before compiling this Toastty checkout.
+
+Artifacts built from `056ffe2a8` or older still compile with this checkout,
+because the C API did not change. But their `ghostty_surface_is_at_prompt`
+answers from the row prompt mark, so after a terminal resize Toastty can read a
+running Claude Code session as idle at a shell prompt and stop it as
+`idle_at_prompt`. `GhosttyPromptStateRedrawTests` fails with such an artifact.
 
 This revision also contains upstream fix `ffaaf5d7a9951886d72f2c0dd8ba7380c1aea92c`
 (ghostty-org/ghostty#14691). Artifacts built from older revisions on this base,
@@ -66,7 +80,7 @@ Clone the maintained branch as a sibling of the Toastty checkout:
 git clone --branch toastty-downstream \
   https://github.com/figelwump/ghostty.git \
   ../ghostty
-git -C ../ghostty checkout 056ffe2a80aab09c478946406dc7ec1b489d4ac3
+git -C ../ghostty checkout 8bc4f5354d334b2f3d743261faf87cdb4637155c
 ```
 
 Then, from that Ghostty checkout:
