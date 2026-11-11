@@ -81,6 +81,9 @@ final class CoordinatorChatModel: ObservableObject {
     @Published private(set) var composerFocusRequest = 0
     /// A notice that an action left, until the next action or a dismiss.
     @Published private var transientNotice: Notice?
+    /// Multiplies the size of all text in the chat. Saved, so that it
+    /// survives a relaunch. See `changeTextScale`.
+    @Published private(set) var textScale: Double
 
     /// The composer's text view, so that keyboard focus meant for the
     /// terminal under the chat can go to it.
@@ -91,6 +94,9 @@ final class CoordinatorChatModel: ObservableObject {
     private weak var controller: CoordinatorController?
     private let access: any LocalConversationAccess
     private let now: () -> Date
+    /// Where the text size is saved, or `nil` for a run that saves no
+    /// preferences, such as an automation run.
+    private let defaults: UserDefaults?
     private var subscription: (any LocalConversationSubscription)?
     private var observer: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
@@ -129,13 +135,17 @@ final class CoordinatorChatModel: ObservableObject {
     init(
         controller: CoordinatorController,
         access: any LocalConversationAccess,
+        defaults: UserDefaults? = nil,
         now: @escaping () -> Date = Date.init,
         attachmentStagingURL: URL = FileManager.default.temporaryDirectory
             .appending(path: "toastty-coordinator-composer/\(UUID().uuidString)", directoryHint: .isDirectory)
     ) {
         self.controller = controller
         self.access = access
+        self.defaults = defaults
         self.now = now
+        textScale = (defaults?.object(forKey: Self.textScaleDefaultsKey) as? Double)
+            .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
         self.attachmentDraft = attachmentDraft
         attachmentDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
@@ -797,6 +807,54 @@ final class CoordinatorChatModel: ObservableObject {
         let files = paths.map { URL(filePath: $0) }
         guard files.allSatisfy(attachments.isStagedCopy) else { return nil }
         return (rest, files)
+    }
+
+    // MARK: - Text size
+
+    static let textScaleDefaultsKey = "toastty.coordinator.chatTextScale"
+    static let defaultTextScale: Double = 1
+    static let minimumTextScale: Double = 0.8
+    static let maximumTextScale: Double = 2
+    static let textScaleStep: Double = 0.1
+
+    /// Increases, decreases or resets the chat's text size. The menu items
+    /// and Command-plus, Command-minus and Command-zero call it while the
+    /// chat covers the coordinator's terminal.
+    func changeTextScale(_ change: TextScaleChange) {
+        let next = Self.textScale(after: change, from: textScale)
+        guard next != textScale else { return }
+        textScale = next
+        if next == Self.defaultTextScale {
+            defaults?.removeObject(forKey: Self.textScaleDefaultsKey)
+        } else {
+            defaults?.set(next, forKey: Self.textScaleDefaultsKey)
+        }
+    }
+
+    enum TextScaleChange: Equatable {
+        case increase
+        case decrease
+        case reset
+    }
+
+    /// The scale after one change, kept in range and on whole steps.
+    static func textScale(after change: TextScaleChange, from scale: Double) -> Double {
+        switch change {
+        case .reset:
+            return defaultTextScale
+        case .increase:
+            return normalizedTextScale(scale + textScaleStep)
+        case .decrease:
+            return normalizedTextScale(scale - textScaleStep)
+        }
+    }
+
+    static func normalizedTextScale(_ scale: Double) -> Double {
+        guard scale.isFinite else { return defaultTextScale }
+        let stepped = (scale / textScaleStep).rounded() * textScaleStep
+        let clamped = min(max(stepped, minimumTextScale), maximumTextScale)
+        // One decimal, so that ten steps up and ten down end at 1 exactly.
+        return (clamped * 10).rounded() / 10
     }
 
     // MARK: - The keyboard

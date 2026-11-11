@@ -8,6 +8,7 @@ import AppKit
 struct ToasttyMarkdownTableView: View {
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.conversationLinkPresenter) private var linkPresenter
+    @Environment(\.conversationTextScale) private var textScale
 
     let table: ToasttyMarkdownTable
     @ScaledMetric(relativeTo: .body) private var minimumColumnWidth: CGFloat = 144
@@ -25,7 +26,7 @@ struct ToasttyMarkdownTableView: View {
                                 .frame(maxWidth: .infinity, alignment: table.columns[column].alignment)
                                 .padding(10)
                                 .containerRelativeFrame(.horizontal) { width, _ in
-                                    max(minimumColumnWidth, width / CGFloat(table.columns.count))
+                                    max(minimumColumnWidth * textScale, width / CGFloat(table.columns.count))
                                 }
                                 .accessibilityAddTraits(row.isHeader ? .isHeader : [])
                         }

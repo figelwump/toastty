@@ -33,25 +33,8 @@ final class CoordinatorChatViewTests: XCTestCase {
             options: CoordinatorChatView.transcriptOptions
         )
         .environment(\.conversationLinkPresenter, chips.presenter)
-        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
-        .environment(\.colorScheme, .dark)
-
-        let hostingView = NSHostingView(rootView: transcript)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: Self.windowSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = hostingView
+        let (hostingView, window) = Self.host(transcript)
         defer { window.close() }
-        let deadline = Date().addingTimeInterval(0.8)
-        while Date() < deadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        hostingView.layoutSubtreeIfNeeded()
 
         let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
         // Each paragraph of the answer is a text view of its own.
@@ -97,14 +80,91 @@ final class CoordinatorChatViewTests: XCTestCase {
             XCTAssertLessThanOrEqual(view.frame.width, CoordinatorChatView.maximumContentWidth)
         }
 
+        try attachImage(of: hostingView, name: "coordinator-chat-transcript")
+    }
+
+    /// Command-plus in the chat sets the text scale. Every text of the
+    /// transcript on screen then draws larger, and the column keeps its
+    /// width.
+    func testTranscriptTextFollowsTheChatTextScale() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        func transcript(scale: CGFloat) -> some View {
+            ToasttyTranscriptView(
+                state: Self.state,
+                isSubmitting: false,
+                readAcknowledgementEpoch: .working,
+                jumpToLiveEdgeRequest: .constant(0),
+                canAcknowledgeRead: false,
+                options: CoordinatorChatView.transcriptOptions
+            )
+            .environment(\.conversationLinkPresenter, CoordinatorTaskChips(items: []).presenter)
+            .environment(\.conversationTextScale, scale)
+        }
+        func bodyFontSize(in hostingView: NSView, scale: CGFloat) throws -> CGFloat {
+            let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+            for view in textViews {
+                XCTAssertLessThanOrEqual(view.frame.width, CoordinatorChatView.maximumContentWidth)
+            }
+            try attachImage(of: hostingView, name: "coordinator-chat-transcript-\(Int((scale * 100).rounded()))")
+            let view = try XCTUnwrap(textViews.first { $0.string.contains("is ready") })
+            let font = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            return font.pointSize
+        }
+        let base = NSFont.preferredFont(forTextStyle: .body).pointSize
+        let (hostingView, window) = Self.host(transcript(scale: 1))
+        defer { window.close() }
+        XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1), base)
+
+        // The same views on screen take the new size.
+        hostingView.rootView = Self.hosted(transcript(scale: 1.5))
+        Self.settle(hostingView)
+        XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1.5), base * 1.5, accuracy: 0.01)
+    }
+
+    /// The view in a dark window of the test's size, after its layout settled.
+    private static func host(_ view: some View) -> (NSHostingView<AnyView>, NSWindow) {
+        let hostingView = NSHostingView(rootView: hosted(view))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: windowSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        settle(hostingView)
+        return (hostingView, window)
+    }
+
+    private static func hosted(_ view: some View) -> AnyView {
+        AnyView(
+            view
+                .frame(width: windowSize.width, height: windowSize.height)
+                .environment(\.colorScheme, .dark)
+        )
+    }
+
+    private static func settle(_ hostingView: NSView) {
+        let deadline = Date().addingTimeInterval(0.8)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    /// Keeps a picture of the view on the test result for visual review.
+    private func attachImage(of hostingView: NSView, name: String) throws {
         let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
-        attachment.name = "coordinator-chat-transcript"
+        attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        try Self.writeEvidence(png, name: "coordinator-chat-transcript")
+        try Self.writeEvidence(png, name: name)
     }
 
     /// A chip in running text: it moves to the next line as one piece, also

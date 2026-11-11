@@ -80,11 +80,11 @@ struct ToasttyTurnWorkStrip: View {
                     ToasttySpinner(size: 9)
                 } else {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .conversationFont(size: 9, weight: .semibold)
                 }
                 Text(summary)
             }
-            .font(.caption2.monospaced())
+            .conversationFont(.caption2, monospaced: true)
             .foregroundStyle(ConversationDesignTokens.mutedText)
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
@@ -185,7 +185,7 @@ struct ToasttyTranscriptWorkingRow: View {
             Text(["working", elapsed].compactMap { $0 }.joined(separator: " · "))
                 .monospacedDigit()
         }
-        .font(.caption2.monospaced())
+        .conversationFont(.caption2, monospaced: true)
         .foregroundStyle(ConversationDesignTokens.mutedText)
         .padding(.vertical, 6)
         .accessibilityElement(children: .ignore)

@@ -263,7 +263,7 @@ public struct ToasttyTranscriptView: View {
                             scrollCoordinator.requestJump()
                         } label: {
                             Label("Jump to latest", systemImage: "arrow.down")
-                                .font(.caption.weight(.semibold))
+                                .conversationFont(.caption, weight: .semibold)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9)
                                 .background(ConversationDesignTokens.amber, in: Capsule())
@@ -712,7 +712,7 @@ public struct ToasttyTranscriptView: View {
                 loadOlder()
             } label: {
                 Label("Load earlier activity", systemImage: "arrow.up")
-                    .font(.caption.weight(.semibold))
+                    .conversationFont(.caption, weight: .semibold)
                     .foregroundStyle(ConversationDesignTokens.amberText)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
@@ -1669,7 +1669,7 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
                                   textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
             if let caption {
                 Text(caption)
-                    .font(.caption2.monospaced())
+                    .conversationFont(.caption2, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
         }
@@ -1728,16 +1728,16 @@ private struct ToasttySendTailItemView: View {
             Text(queued.isPaused
                 ? "Paused · queued \(queued.position)"
                 : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
-                .font(.caption2.monospaced().weight(.semibold))
+                .conversationFont(.caption2, weight: .semibold, monospaced: true)
                 .foregroundStyle(ConversationDesignTokens.amberText)
                 .textCase(.uppercase)
             Text(item.text)
-                .font(.body)
+                .conversationFont(.body)
                 .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if queued.attachmentCount > 0 {
                 Text(queued.attachmentCount == 1 ? "+1 file" : "+\(queued.attachmentCount) files")
-                    .font(.caption2.monospaced())
+                    .conversationFont(.caption2, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
             if queued.canChange || queued.canSteer {
@@ -1781,7 +1781,7 @@ private struct ToasttySendTailItemView: View {
     private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .conversationPlainButtonOnMac()
-            .font(.caption.weight(.semibold))
+            .conversationFont(.caption, weight: .semibold)
             .foregroundStyle(ConversationDesignTokens.mutedText)
             .frame(minHeight: 32)
             .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
@@ -1812,18 +1812,18 @@ private struct ToasttySendTailItemView: View {
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(receipt.title)
-                        .font(.subheadline.weight(.semibold))
+                        .conversationFont(.subheadline, weight: .semibold)
                         .foregroundStyle(ConversationDesignTokens.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(receipt.detail)
-                        .font(.caption)
+                        .conversationFont(.caption)
                         .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
+                        .conversationFont(.caption, weight: .bold)
                         .frame(width: 44, height: 44)
                 }
                 .conversationPlainButtonOnMac()
@@ -1838,7 +1838,7 @@ private struct ToasttySendTailItemView: View {
                 ConversationPasteboard.copy(item.text)
             } label: {
                 Label("Copy attempted message", systemImage: "doc.on.doc")
-                    .font(.caption.weight(.semibold))
+                    .conversationFont(.caption, weight: .semibold)
                     .frame(minHeight: 44)
             }
             .conversationPlainButtonOnMac()
@@ -1847,7 +1847,7 @@ private struct ToasttySendTailItemView: View {
             .accessibilityIdentifier("toastty-mobile-send-receipt-copy-\(item.clientRequestID)")
 
             Text(item.text)
-                .font(.caption.monospaced())
+                .conversationFont(.caption, monospaced: true)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2000,7 +2000,7 @@ private struct ToasttyTranscriptRowView: View {
 
                     if let metadata {
                         Text(metadata)
-                            .font(.caption2.monospaced())
+                            .conversationFont(.caption2, monospaced: true)
                             .foregroundStyle(ConversationDesignTokens.mutedText)
                     }
                 }
@@ -2049,7 +2049,7 @@ private struct ToasttyTranscriptRowView: View {
             copyMessage(text)
         } label: {
             Image(systemName: showsCopiedMark ? "checkmark" : "doc.on.doc")
-                .font(.caption)
+                .conversationFont(.caption)
                 .frame(
                     width: ToasttyMessageCopyButtonMetrics.size.width,
                     height: ToasttyMessageCopyButtonMetrics.size.height,
@@ -2081,9 +2081,9 @@ private struct ToasttyTranscriptRowView: View {
                 HStack(spacing: 6) {
                     Text(message.summary)
                     Image(systemName: subagentIsExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2.weight(.semibold))
+                        .conversationFont(.caption2, weight: .semibold)
                 }
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)
@@ -2111,7 +2111,7 @@ private struct ToasttyTranscriptRowView: View {
 
     private func marker(icon: String, text: String) -> some View {
         Label(text, systemImage: icon)
-            .font(.caption2.monospaced())
+            .conversationFont(.caption2, monospaced: true)
             .foregroundStyle(ConversationDesignTokens.mutedText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
@@ -2134,7 +2134,7 @@ private struct ToasttyTranscriptRowView: View {
                     Spacer(minLength: 4)
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                 }
-                .font(.caption.monospaced())
+                .conversationFont(.caption, monospaced: true)
                 .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .contentShape(Rectangle())
             }
@@ -2144,7 +2144,7 @@ private struct ToasttyTranscriptRowView: View {
 
             if isExpanded, let detail, detail.isEmpty == false {
                 Text(detail)
-                    .font(.caption)
+                    .conversationFont(.caption)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
                     .textSelection(.enabled)
             }
@@ -2209,7 +2209,7 @@ private extension View {
 
     func transcriptBannerStyle(color: Color) -> some View {
         self
-            .font(.caption.monospaced())
+            .conversationFont(.caption, monospaced: true)
             .foregroundStyle(color)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

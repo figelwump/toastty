@@ -9,6 +9,7 @@ import UIKit
 struct ToasttySelectableText: UIViewRepresentable {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.legibilityWeight) private var legibilityWeight
+    @Environment(\.conversationTextScale) private var textScale
     @Environment(\.openURL) private var openURL
 
     let text: AttributedString
@@ -62,6 +63,7 @@ struct ToasttySelectableText: UIViewRepresentable {
             text: text, textStyle: textStyle, weight: weight, monospaced: monospaced,
             textColor: textColor, lineSpacing: lineSpacing, alignment: alignment,
             contentSizeCategory: UIContentSizeCategory(dynamicTypeSize),
+            textScale: textScale,
             boldText: legibilityWeight == .bold
         )
         guard context.coordinator.input != input else { return }
@@ -126,6 +128,7 @@ struct ToasttySelectableText: UIViewRepresentable {
         let lineSpacing: CGFloat
         let alignment: NSTextAlignment
         let contentSizeCategory: UIContentSizeCategory
+        let textScale: CGFloat
         let boldText: Bool
 
         func attributedText() -> NSAttributedString {
@@ -133,7 +136,8 @@ struct ToasttySelectableText: UIViewRepresentable {
                 UITraitCollection(preferredContentSizeCategory: contentSizeCategory),
                 UITraitCollection(legibilityWeight: boldText ? .bold : .regular),
             ])
-            let preferred = UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traits)
+            let style = UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traits)
+            let preferred = textScale == 1 ? style : style.withSize(style.pointSize * textScale)
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = lineSpacing
             paragraph.alignment = alignment

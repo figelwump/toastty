@@ -517,8 +517,12 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// `coordinatorChatCovers` says whether the coordinator's chat covers a
+    /// terminal panel. Text size commands then change the chat's text, not
+    /// the hidden terminal's font.
     func focusedScaleCommandTarget(
-        preferredWindowID: UUID?
+        preferredWindowID: UUID?,
+        coordinatorChatCovers: (UUID) -> Bool = { _ in false }
     ) -> FocusedScaleCommandTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
@@ -527,6 +531,9 @@ final class AppStore: ObservableObject {
 
         switch focusedPanel.panelState {
         case .terminal:
+            if coordinatorChatCovers(focusedPanel.panelID) {
+                return .coordinatorChat(windowID: selection.windowID)
+            }
             return .terminal(windowID: selection.windowID)
         case .web(let webState):
             switch webState.definition {

@@ -227,7 +227,10 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
-        store.focusedScaleCommandTarget(preferredWindowID: preferredCommandWindowID)
+        store.focusedScaleCommandTarget(
+            preferredWindowID: preferredCommandWindowID,
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true }
+        )
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
@@ -1227,6 +1230,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.increase)
         }
     }
 
@@ -1238,6 +1243,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.decrease)
         }
     }
 
@@ -1249,6 +1256,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.resetWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.reset)
         }
     }
 }
