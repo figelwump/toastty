@@ -19,11 +19,12 @@ final class CoordinatorStartOffer {
     }
 
     /// Shows the question over a window and calls `answer` with the user's
-    /// choice. Returns a way to take the question down without an answer,
-    /// or `nil` when the question could not show.
+    /// choice, or with `nil` when the question went away without one.
+    /// Returns a way to take the question down, or `nil` when the question
+    /// could not show.
     typealias Presenter = @MainActor (
         _ windowID: UUID,
-        _ answer: @escaping @MainActor (Answer) -> Void
+        _ answer: @escaping @MainActor (Answer?) -> Void
     ) -> (@MainActor () -> Void)?
 
     /// Set once the user answered.
@@ -95,9 +96,12 @@ final class CoordinatorStartOffer {
         ToasttyLog.info("Asked whether to start the coordinator", category: .tasks)
     }
 
-    private func answered(_ answer: Answer, windowID: UUID) {
+    private func answered(_ answer: Answer?, windowID: UUID) {
         // Before the open below, which would take the question down.
         stopShowing()
+        // Without an answer the question is still open: a window that gets
+        // the keyboard later asks it again.
+        guard let answer else { return }
         defaults?.set(true, forKey: Self.answeredKey)
         ToasttyLog.info("The user answered whether to start the coordinator", category: .tasks, metadata: [
             "answer": answer == .start ? "start" : "not_now",
@@ -128,7 +132,7 @@ final class CoordinatorStartOffer {
     /// the question waits.
     static func presentSheet(
         windowID: UUID,
-        answer: @escaping @MainActor (Answer) -> Void
+        answer: @escaping @MainActor (Answer?) -> Void
     ) -> (@MainActor () -> Void)? {
         guard let window = AgentLaunchUI.window(for: windowID), window.attachedSheet == nil else { return nil }
         let alert = NSAlert()
@@ -143,8 +147,8 @@ final class CoordinatorStartOffer {
                 switch response {
                 case .alertFirstButtonReturn: answer(.start)
                 case .alertSecondButtonReturn: answer(.notNow)
-                // Taken down without an answer.
-                default: break
+                // Taken down, or its window closed.
+                default: answer(nil)
                 }
             }
         }

@@ -70,8 +70,10 @@ struct ClaudeFolderTrust: Sendable {
         fileManager: FileManager = .default
     ) -> URL? {
         guard let assignments = environmentAssignments(inArgv: profileArgv) else { return nil }
-        let configDirectory = (assignments["CLAUDE_CONFIG_DIR"] ?? environment["CLAUDE_CONFIG_DIR"])
-            .flatMap { $0.isEmpty ? nil : $0 }
+        // What the profile sets wins over what the terminal inherits, for
+        // the config folder and for the home folder.
+        let environment = environment.merging(assignments) { _, profileValue in profileValue }
+        let configDirectory = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
         let file: URL
         let legacyFile: URL
         if let configDirectory {
@@ -145,24 +147,49 @@ struct ClaudeFolderTrust: Sendable {
             break
         }
         let lockPath = configFileURL.path + Self.lockSuffix
-        guard await acquireLock(at: lockPath) else {
+        guard let lock = await acquireLock(at: lockPath) else {
             return .skipped("another process holds the lock of \(configFileURL.path)")
         }
-        defer { rmdir(lockPath) }
-        return writeUnderLock(key: key, lockedAt: Date())
+        // A process that stood still for 10 seconds, as across a sleep of
+        // the Mac, loses its lock: Claude Code removes it and makes its own
+        // directory at the same path. That one is not this write's to use
+        // or to remove.
+        let holdsLock = { Self.lockDirectory(at: lockPath) == lock }
+        defer {
+            if holdsLock() { rmdir(lockPath) }
+        }
+        return writeUnderLock(key: key, lockedAt: Date(), holdsLock: holdsLock)
     }
 
-    private func acquireLock(at path: String) async -> Bool {
+    /// The lock directory that this write made, told from a later one at
+    /// the same path.
+    private struct LockDirectory: Equatable {
+        var inode: ino_t
+        var createdSeconds: Int
+        var createdNanoseconds: Int
+    }
+
+    private static func lockDirectory(at path: String) -> LockDirectory? {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        return LockDirectory(
+            inode: info.st_ino,
+            createdSeconds: info.st_birthtimespec.tv_sec,
+            createdNanoseconds: info.st_birthtimespec.tv_nsec
+        )
+    }
+
+    private func acquireLock(at path: String) async -> LockDirectory? {
         var waits = lockWaits[...]
         while true {
-            if mkdir(path, 0o777) == 0 { return true }
+            if mkdir(path, 0o777) == 0 { return Self.lockDirectory(at: path) }
             // Only a lock that someone holds is worth a wait. A lock that
             // was left behind is Claude Code's to remove.
-            guard errno == EEXIST, let wait = waits.popFirst() else { return false }
+            guard errno == EEXIST, let wait = waits.popFirst() else { return nil }
             do {
                 try await Task.sleep(for: wait * Double.random(in: 1 ... 1.5))
             } catch {
-                return false
+                return nil
             }
         }
     }
@@ -234,7 +261,7 @@ struct ClaudeFolderTrust: Sendable {
         return .success(ReadFile(path: path, data: data, identity: Identity(after), permissions: after.st_mode & 0o7777))
     }
 
-    private func writeUnderLock(key: String, lockedAt: Date) -> Outcome {
+    private func writeUnderLock(key: String, lockedAt: Date, holdsLock: () -> Bool) -> Outcome {
         var lastReason = "the config file kept changing"
         for _ in 0 ..< Self.maximumAttempts {
             let file: ReadFile
@@ -262,7 +289,7 @@ struct ClaudeFolderTrust: Sendable {
                 lastReason = "\(file.path) changed during the write"
                 continue
             }
-            guard Date().timeIntervalSince(lockedAt) < Self.maximumHold else {
+            guard Date().timeIntervalSince(lockedAt) < Self.maximumHold, holdsLock() else {
                 unlink(temporaryPath)
                 return .skipped("the write took too long to keep the lock")
             }

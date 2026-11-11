@@ -15,24 +15,35 @@ struct CoordinatorStartOfferTests {
         private(set) var takenDownCount = 0
         /// The window cannot show a sheet now.
         var cannotShow = false
-        private var answer: (@MainActor (CoordinatorStartOffer.Answer) -> Void)?
+        private var answer: (@MainActor (CoordinatorStartOffer.Answer?) -> Void)?
 
         var isUp: Bool { answer != nil }
 
         func present(
             windowID: UUID,
-            answer: @escaping @MainActor (CoordinatorStartOffer.Answer) -> Void
+            answer: @escaping @MainActor (CoordinatorStartOffer.Answer?) -> Void
         ) -> (@MainActor () -> Void)? {
             guard cannotShow == false else { return nil }
             shownOverWindowIDs.append(windowID)
             self.answer = answer
             return { [weak self] in
                 self?.takenDownCount += 1
-                self?.answer = nil
+                self?.end(with: nil)
             }
         }
 
         func choose(_ choice: CoordinatorStartOffer.Answer) {
+            end(with: choice)
+        }
+
+        /// The sheet went away with no button pressed, as when its window
+        /// closes.
+        func closeWithoutAnAnswer() {
+            end(with: nil)
+        }
+
+        /// A sheet reports its end once, as AppKit does.
+        private func end(with choice: CoordinatorStartOffer.Answer?) {
             let answer = answer
             self.answer = nil
             answer?(choice)
@@ -212,6 +223,25 @@ struct CoordinatorStartOfferTests {
         launch.sheet.cannotShow = false
         try launch.windowBecameKey()
         #expect(launch.sheet.shownOverWindowIDs.count == 1)
+    }
+
+    @Test func aQuestionThatWentAwayWithoutAnAnswerIsAskedAgain() throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.closeWithoutAnAnswer()
+        #expect(launch.offer.isShowing == false)
+        #expect(launch.offer.shouldOffer)
+        #expect(fixture.controller.status == nil)
+        // Another window gets the keyboard, in this launch or the next.
+        try launch.windowBecameKey()
+        #expect(launch.sheet.shownOverWindowIDs.count == 2)
+        launch.sheet.closeWithoutAnAnswer()
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.count == 1)
     }
 
     @Test func aStartThatFailsSaysWhyAndIsNotAskedAgain() async throws {

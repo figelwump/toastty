@@ -180,6 +180,14 @@ struct ClaudeFolderTrustTests {
             profileArgv: ["/usr/bin/env", "FOO=1", "CLAUDE_CONFIG_DIR=/profile/claude", "claude", "--verbose"],
             environment: ["HOME": home.path, "CLAUDE_CONFIG_DIR": "/data/claude"]
         )?.path == "/profile/claude/.claude.json")
+        // A home folder that the profile sets is this Claude Code's.
+        #expect(ClaudeFolderTrust.configFileURL(
+            profileArgv: ["env", "HOME=/alternate/home", "claude"], environment: environment
+        )?.path == "/alternate/home/.claude.json")
+        #expect(ClaudeFolderTrust.configFileURL(
+            profileArgv: ["env", "HOME=/alternate/home", "claude"],
+            environment: ["HOME": home.path, "CLAUDE_CONFIG_DIR": "/data/claude"]
+        )?.path == "/data/claude/.claude.json")
         // An argument of the agent is not a variable of the profile.
         #expect(ClaudeFolderTrust.configFileURL(
             profileArgv: ["env", "FOO=1", "claude", "CLAUDE_CONFIG_DIR=/not/this"], environment: environment
@@ -368,6 +376,28 @@ struct ClaudeFolderTrustTests {
         try await release.value
         #expect(try home.trustedFolders().contains(home.folderKey))
         #expect(FileManager.default.fileExists(atPath: home.lock.path) == false)
+    }
+
+    @Test func aLockThatClaudeCodeTookOverIsNotUsedAndNotRemoved() async throws {
+        let home = try Home()
+        defer { home.remove() }
+        // The write stood still for more than 10 seconds, as across a sleep
+        // of the Mac. A Claude Code session removed the lock as left behind
+        // and holds its own at the same path, for its own write.
+        let lockPath = home.lock.path
+        var trust = home.trust
+        trust.beforeReplace = {
+            rmdir(lockPath)
+            mkdir(lockPath, 0o777)
+        }
+        guard case .skipped = await trust.trust(folder: home.folder) else {
+            Issue.record("A write without the lock")
+            return
+        }
+        #expect(try home.text() == Home.config)
+        // The session's lock is still there, and no new file is left.
+        #expect(FileManager.default.fileExists(atPath: lockPath))
+        #expect(try home.names() == [".claude.json", ".claude.json.lock", "runtime-home"])
     }
 
     /// One write as Claude Code makes it: the lock directory, a fresh read
