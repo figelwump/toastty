@@ -648,6 +648,9 @@ def run(check, scenarios, expect_notice):
         try:
             during = compare(before, summary(read_config()), check.own_folders)
             removed = remove_projects(check.own_folders)
+            # As it exits, a session also writes its transcript once more.
+            for folder in check.own_folders:
+                shutil.rmtree(steer.claude_project_directory(folder), ignore_errors=True)
             after = compare(before, summary(read_config()), check.own_folders)
             check.evidence['claudeConfig'] = dict(path=str(CLAUDE_CONFIG), entriesBefore=len(before['projects']),
                                                   ownFolders=check.own_folders, removedAtTheEnd=removed,
