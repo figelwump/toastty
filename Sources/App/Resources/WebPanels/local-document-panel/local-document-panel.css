@@ -857,10 +857,27 @@ body {
   list-style: none;
 }
 
-.markdown-prose .task-list-item input {
-  margin: 0 0.45em 0 -1.4em;
-  vertical-align: -0.1em;
-  accent-color: var(--accent);
+/* WebKit draws disabled checkboxes too faintly to read, so task boxes use
+   their own drawing. */
+.markdown-prose .task-list-item input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 0.9em;
+  height: 0.9em;
+  margin: 0 0.5em 0 -1.4em;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 75%, transparent);
+  border-radius: 0.22em;
+  background: transparent;
+  vertical-align: -0.08em;
+  opacity: 1;
+}
+
+.markdown-prose .task-list-item input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background:
+    var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.6 2.6L12 5.6' fill='none' stroke='%23fff8f1' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
 }
 
 .markdown-prose a {
@@ -909,6 +926,7 @@ body {
 .markdown-prose pre {
   overflow-x: auto;
   padding: 14px 18px;
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--pre-bg);
   color: var(--pre-text);
