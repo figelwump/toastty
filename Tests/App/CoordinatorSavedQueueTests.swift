@@ -265,7 +265,7 @@ struct CoordinatorSavedQueueTests {
         #expect(try await fixture.controller.sendUserMessage(message).isQueued)
         let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(message.id.uuidString)")
         // The waiting row shows the text, the file's name and its count.
-        let row = try #require(fixture.chat.presentation.sendItems.first)
+        let row = try await fixture.waitFor("the waiting row") { fixture.chat.presentation.sendItems.first }
         #expect(row.text == "With a file\n\nshot.png")
         guard case .queued(let queued) = row.content else {
             Issue.record("The message waits")
