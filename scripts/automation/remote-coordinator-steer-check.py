@@ -268,14 +268,19 @@ def run(check):
         require('trusted=true' in trust and 'locked=false' in trust,
                 f'The UI driver cannot act: {trust}. Unlock the screen, or run with --gui-session over SSH')
 
+        # A system prompt stays on the right of the mini's screen. The
+        # window keeps clear of it, partly off the left edge. It moves before
+        # the coordinator starts: in two runs that moved it while Claude Code
+        # started, Toastty stopped the new session as idle at its prompt.
+        ui.ax('activate')
+        check.evidence['windowFrame'] = ui.ax('window-set-frame', *WINDOW_FRAME)[1]
+        time.sleep(1)
+
         # 1. At an open prompt there is no choice, and Return sends.
         opened = cli('coordinator', 'open')
         require(opened['startedAgent'] and opened['agentState'] == 'running', f'Open did not start Claude: {opened}')
         ui.activate()
         wait_for('the chat', lambda: ui.exists('coordinator.chat') and ui.exists(COMPOSER), timeout=60)
-        # A system prompt stays on the right of the mini's screen. The
-        # window keeps clear of it, partly off the left edge.
-        check.evidence['windowFrame'] = ui.ax('window-set-frame', *WINDOW_FRAME)[1]
         wait_for('Claude at its first prompt', at_prompt, timeout=180)
         ui.dismiss_notice()
         require(not ui.exists(CHIP), 'The chat offers Steer or Queue while no turn runs')
