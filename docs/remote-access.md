@@ -340,7 +340,8 @@ transcript, not under the field.
   remove the message on the Mac and act only when the Mac confirms it was still
   waiting. A queued message with attachments keeps them on the Mac; editing it
   restores only the text, and it does not offer Steer now.
-- The chip returns to Steer after each send and when the turn ends.
+- The chip returns to Steer after a send empties the field and when a new turn
+  starts. A send that fails keeps the user's choice with the draft.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
   A stop names that turn, so a late tap cannot stop a later one. After a stop
   the queue pauses until the user taps **Send next** on a queued message,

@@ -499,6 +499,8 @@ extension ToasttyComposerPresentationTests {
         // user's explicit choice.
         XCTAssertEqual(steerablePresentation.gate.sendMode?.deliveryMode(queueSelected: false), .steer)
         XCTAssertEqual(steerablePresentation.gate.sendMode?.deliveryMode(queueSelected: true), .queue)
+        // A Queue choice belongs to the running turn; a closed gate names none.
+        XCTAssertEqual(steerablePresentation.runningTurnEpoch, turnEpoch)
 
         let localDraftOnMac = ConversationComposerAuthority(
             stamp: workingStamp(), inputAvailability: .unavailable(reason: .known(.working)),
@@ -515,6 +517,7 @@ extension ToasttyComposerPresentationTests {
             inputAvailability: .unavailable(reason: .known(.working)), gateFailure: .inputUnavailable
         )
         XCTAssertEqual(presentation(legacy).gate, .disabled(.prompt(.working)))
+        XCTAssertNil(presentation(legacy).runningTurnEpoch)
         XCTAssertFalse(presentation(legacy).canInterrupt)
     }
 

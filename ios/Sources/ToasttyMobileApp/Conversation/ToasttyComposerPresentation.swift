@@ -150,6 +150,9 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     /// prompt closed and this device may release it.
     let releasableLocalDraftEpoch: RemoteInputEpoch?
     let localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal?
+    /// The host's epoch for the running turn while Send queues or steers into
+    /// it. A Queue choice belongs to this turn: a new turn has a new epoch.
+    let runningTurnEpoch: RemoteInputEpoch?
 
     var canReleaseLocalDraft: Bool { releasableLocalDraftEpoch != nil }
 
@@ -160,7 +163,8 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         canInterrupt: Bool = false,
         suppressesConnectionNotice: Bool = false,
         releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
-        localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
+        localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil,
+        runningTurnEpoch: RemoteInputEpoch? = nil
     ) {
         self.agentDisplayName = agentDisplayName
         self.gate = gate
@@ -171,6 +175,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         let releasable = gate == .disabled(.localDraft) ? releasableLocalDraftEpoch : nil
         self.releasableLocalDraftEpoch = releasable
         self.localDraftReleaseRefusal = releasable == nil ? nil : localDraftReleaseRefusal
+        self.runningTurnEpoch = gate.isWorking ? runningTurnEpoch : nil
     }
 
     static func make(
@@ -187,7 +192,8 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             canInterrupt: authority.canInterrupt,
             suppressesConnectionNotice: suppressesConnectionNotice,
             releasableLocalDraftEpoch: releasableLocalDraftEpoch,
-            localDraftReleaseRefusal: localDraftReleaseRefusal
+            localDraftReleaseRefusal: localDraftReleaseRefusal,
+            runningTurnEpoch: authority.inputControl?.turnEpoch
         )
     }
 
