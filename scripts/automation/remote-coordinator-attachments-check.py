@@ -202,6 +202,15 @@ def run(check):
         check.evidence['stills'].append(dict(name=path.name, ok=completed.returncode == 0 and path.is_file(),
                                              window=window if code == 0 else None, error=completed.stderr.strip()))
 
+    def terminal_text():
+        """What the coordinator's terminal shows under the chat."""
+        try:
+            panel = status().get('panelID')
+            response = instance.request('app_control.run_query', dict(id='terminal.visible-text', args=dict(panelID=panel)))
+            return ((response.get('result') or {}).get('text') or '')[-1500:]
+        except Exception as error:  # noqa: BLE001 - evidence only
+            return f'(could not read the terminal: {error!r})'
+
     def chips():
         return ui.texts('coordinator.chat.attachments') if ui.exists('coordinator.chat.attachments') else ''
 
@@ -211,6 +220,10 @@ def run(check):
     def middle(identifier):
         x, y, width, height = (int(value) for value in ui.run('frame', identifier)[1].split())
         return x + width // 2, y + height // 2
+
+    def in_attachments(path):
+        """A copy in a message's folder of the coordinator. /tmp is a link."""
+        return Path(path).resolve().parent.parent == attachments_folder
 
     def drag(source, point):
         ui.run('drag', *map(str, source.point), *map(str, point))
@@ -229,6 +242,10 @@ def run(check):
         require('trusted=true' in trust and 'locked=false' in trust,
                 f'The UI driver cannot act: {trust}. Unlock the screen, or run with --gui-session over SSH')
 
+        # Room on the left of the window for the drag source. The window is
+        # sized before the coordinator starts: a resize while Claude Code
+        # runs can end Toastty's session for it (see the last step).
+        ui.run('window-set-frame', '240', '60', '1100', '820', check=False)
         opened = cli('coordinator', 'open')
         require(opened['startedAgent'] and opened['agentState'] == 'running', f'Open did not start Claude: {opened}')
         ui.run('activate')
@@ -236,13 +253,12 @@ def run(check):
         wait_for('Claude at its first prompt', at_prompt, timeout=180)
         # The agent stays up. A shell prompt in its terminal would end the
         # session, and the check would test a message that waits.
-        time.sleep(5)
-        require(at_prompt(), f'The coordinator\'s agent did not stay at its prompt: {status()}')
+        time.sleep(15)
+        check.evidence['terminalAtStart'] = terminal_text()
+        require(at_prompt(), f'The coordinator\'s agent did not stay at its prompt: {status()} {terminal_text()!r}')
         if ui.has_label('Dismiss'):
             ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
-        # Room on the left of the window for the drag source.
-        ui.run('window-set-frame', '240', '60', '1100', '820', check=False)
         ui.run('activate')
         time.sleep(1)
         still('chat-open')
@@ -263,7 +279,7 @@ def run(check):
         first = user_message('What color is the square')
         require(first is not None, 'Claude did not get the message')
         paths = [line.strip('` ') for line in first.splitlines() if line.startswith('`')]
-        require(len(paths) == 1 and paths[0].startswith(str(attachments_folder) + '/') and paths[0].endswith('red-square.png'),
+        require(len(paths) == 1 and in_attachments(paths[0]) and paths[0].endswith('red-square.png'),
                 f'The message does not name the copy in a code span: {first!r}')
         require(Path(paths[0]).is_file(), f'The copy is not there: {paths[0]}')
         answer = reply('COLOR-')
@@ -289,7 +305,9 @@ def run(check):
         promise = DragSource(helper, 'promise', green, check.root)
         sources.append(promise)
         x, y, width, height = (int(value) for value in ui.run('frame', 'coordinator.chat')[1].split())
-        drag(promise, (x + width // 2, y + height // 3))
+        # Left in the conversation, away from the middle of the screen,
+        # where a system prompt may wait for the Mac's owner.
+        drag(promise, (x + 70, y + height // 2))
         wait_for('the promised file as an attachment', lambda: 'Screenshot green.png' in chips(), timeout=30)
         require('wrote promise' in promise.log, f'The drop did not take the promise: {promise.log!r}')
         require_no_path_in_field('After the drop on the conversation')
@@ -297,10 +315,23 @@ def run(check):
         still('promise-dropped-on-conversation')
 
         subprocess.run([str(helper), 'copy-png', str(blue)], check=True, timeout=30)
+        pasteboard = subprocess.run([str(helper), 'pasteboard-types', '-'], capture_output=True, text=True, timeout=30)
+        check.evidence['pasteboardBeforePaste'] = pasteboard.stdout.strip()
+        ui.run('activate')
         ui.run('focus', 'coordinator.chat.composer')
-        time.sleep(0.3)
+        time.sleep(0.5)
         ui.run('key', 'cmd-v')
-        wait_for('the pasted image as an attachment', lambda: 'Pasted image.png' in chips(), timeout=20)
+        try:
+            wait_for('the pasted image as an attachment', lambda: 'Pasted image.png' in chips(), timeout=15)
+            check.evidence['pastedWith'] = 'Cmd-V'
+        except AssertionError:
+            # Find out where Cmd-V went: the menu item, then Edit > Paste.
+            check.evidence['pasteMenuItem'] = ui.run('menu-enabled', 'Edit', 'Paste', check=False)[1]
+            check.evidence['composerAfterCmdV'] = composer_text()
+            ui.run('focus', 'coordinator.chat.composer')
+            ui.run('menu', 'Edit', 'Paste', check=False)
+            wait_for('the pasted image as an attachment', lambda: 'Pasted image.png' in chips(), timeout=15)
+            check.evidence['pastedWith'] = 'Edit > Paste (Cmd-V attached nothing)'
         require_no_path_in_field('After the paste')
 
         ui.run('click', 'coordinator.chat.attach')
@@ -328,7 +359,7 @@ def run(check):
         wait_for('Claude to read the files and answer', lambda: reply('ATTACH-OK'), timeout=300)
         second = user_message('Read every file attached')
         paths = [line.strip('` ') for line in second.splitlines() if line.startswith('`')]
-        require(len(paths) == 3 and all(path.startswith(str(attachments_folder) + '/') for path in paths)
+        require(len(paths) == 3 and all(in_attachments(path) for path in paths)
                 and [Path(path).name for path in paths] == ['Screenshot-green.png', 'Pasted-image.png', 'secret-note.txt'],
                 f'The message does not name the three copies: {second!r}')
         answer = reply('ATTACH-OK')
@@ -343,8 +374,19 @@ def run(check):
         require(INTRODUCTION not in texts, f'The chat shows the list of paths: {texts[-800:]}')
         still('three-files-sent-and-answered')
         step('the files went with the message, and Claude read each', message=second, answer=answer)
+
+        # Not about attachments: whether resizing the window while Claude
+        # Code runs ends Toastty's session for it. Recorded, not required.
+        before = status().get('agentState')
+        ui.run('window-set-frame', '200', '60', '1140', '820', check=False)
+        time.sleep(8)
+        after = status().get('agentState')
+        check.evidence['resizeWhileRunning'] = dict(before=before, after=after, terminal=terminal_text()[-500:])
+        step('recorded what a window resize does to the running session', before=before, after=after)
     except Exception:
         try:
+            check.evidence['statusAtFailure'] = status()
+            check.evidence['terminalAtFailure'] = terminal_text()
             still('failure')
         except Exception:  # noqa: BLE001 - the first error matters
             pass

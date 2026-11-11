@@ -6,6 +6,7 @@
 //                                            a screenshot's thumbnail does.
 //   drag-source copy-png <path>              Put the PNG on the general
 //                                            pasteboard as image data, and exit.
+//   drag-source pasteboard-types -           Print the general pasteboard's types, and exit.
 //
 // With `file` or `promise`, it shows an orange square at the top left of the
 // main screen and writes the square's middle to `ready-file` as "x y", in
@@ -22,6 +23,11 @@ guard arguments.count >= 3 else {
 }
 let mode = arguments[1]
 let fileURL = URL(fileURLWithPath: arguments[2])
+
+if mode == "pasteboard-types" {
+    print((NSPasteboard.general.types ?? []).map(\.rawValue).joined(separator: " "))
+    exit(0)
+}
 
 if mode == "copy-png" {
     guard let data = try? Data(contentsOf: fileURL) else { exit(66) }

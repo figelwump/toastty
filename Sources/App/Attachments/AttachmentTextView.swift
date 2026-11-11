@@ -8,7 +8,11 @@ import SwiftUI
 class AttachmentTextView: NSTextView {
     /// Returns true when it took the pasteboard as attachments.
     var onPasteAttachments: (NSPasteboard) -> Bool = { _ in false }
+    /// Whether `onPasteAttachments` would take the pasteboard.
+    var canPasteAttachments: (NSPasteboard) -> Bool = { _ in false }
     weak var dropTarget: AttachmentDropTarget?
+    /// The pasteboard that Paste reads. A test gives its own.
+    var pasteboard: NSPasteboard = .general
 
     /// A field that does not take drops of text still takes files.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -20,10 +24,20 @@ class AttachmentTextView: NSTextView {
     // narrow readablePasteboardTypes to get plain text: pasteAsPlainText(_:)
     // then inserts nothing.
     override func paste(_ sender: Any?) {
-        if onPasteAttachments(.general) {
+        if onPasteAttachments(pasteboard) {
             return
         }
         pasteAsPlainText(sender)
+    }
+
+    // A plain-text field enables Paste, in the menu and for Command-V, only
+    // for text it can read. With a copied image alone, Paste would stay off
+    // and the image would not attach.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, canPasteAttachments(pasteboard) {
+            return true
+        }
+        return super.validateUserInterfaceItem(item)
     }
 
     // Files and images dropped on the text attach, as they do anywhere else

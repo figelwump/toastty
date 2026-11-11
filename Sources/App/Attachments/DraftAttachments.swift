@@ -289,6 +289,16 @@ final class DraftAttachments: ObservableObject {
         return attachImage(from: pasteboard)
     }
 
+    /// Whether `pasteAttachments(from:)` would take the pasteboard. Menu
+    /// validation asks this often, so it reads no file and no image.
+    func canPasteAttachments(from pasteboard: NSPasteboard) -> Bool {
+        guard canEdit else { return false }
+        if pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
+            return true
+        }
+        return pasteboard.availableType(from: [.string]) == nil && pasteboard.availableType(from: [.png, .tiff]) != nil
+    }
+
     /// Handles a drop: files, promised files and images are attached, and a
     /// web link goes to `onLink`. Returns false when nothing was used.
     func handleDrop(from pasteboard: NSPasteboard) -> Bool {

@@ -60,6 +60,7 @@ struct CoordinatorComposerView: View {
                     focusRequestID: focusRequestID,
                     onSubmit: { if canSend { onSend() } },
                     onPasteAttachments: { attachments.pasteAttachments(from: $0) },
+                    canPasteAttachments: { attachments.canPasteAttachments(from: $0) },
                     dropTarget: dropTarget,
                     onTextView: onTextView
                 )
@@ -195,6 +196,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
+    let canPasteAttachments: (NSPasteboard) -> Bool
     let dropTarget: AttachmentDropTarget
     let onTextView: (NSTextView?) -> Void
 
@@ -296,6 +298,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         }
         textView.onSubmit = onSubmit
         textView.onPasteAttachments = onPasteAttachments
+        textView.canPasteAttachments = canPasteAttachments
         textView.dropTarget = dropTarget
     }
 

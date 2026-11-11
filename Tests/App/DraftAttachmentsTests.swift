@@ -153,6 +153,49 @@ struct DraftAttachmentsTests {
         }
     }
 
+    // MARK: - Paste
+
+    /// A plain-text field enables Paste only for text it can read. A copied
+    /// image or file alone must still enable Paste, in the Edit menu and for
+    /// Command-V, and attach; text pastes as text.
+    @Test func pasteIsOnForACopiedImageOrFileAndAttachesIt() async throws {
+        defer { cleanUp() }
+        let draft = DraftAttachments(stagingDirectoryURL: root.appendingPathComponent("staging"))
+        let field = CoordinatorComposerTextView()
+        field.onPasteAttachments = { draft.pasteAttachments(from: $0) }
+        field.canPasteAttachments = { draft.canPasteAttachments(from: $0) }
+        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+
+        let image = QuickEntryTests.pasteboard()
+        image.setData(try QuickEntryTests.pngData(), forType: .png)
+        field.pasteboard = image
+        #expect(field.validateMenuItem(paste))
+        field.paste(nil)
+        #expect(draft.attachments.map(\.displayName) == ["Pasted image.png"])
+        #expect(field.string.isEmpty)
+
+        let copiedFile = QuickEntryTests.pasteboard()
+        copiedFile.writeObjects([try file("notes.txt") as NSURL])
+        copiedFile.setString("notes.txt", forType: .string)
+        #expect(draft.canPasteAttachments(from: copiedFile), "Finder also copies the name as text")
+
+        // An image copied from a browser comes with text: that pastes as
+        // text, so the attachments do not decide Paste.
+        let withText = QuickEntryTests.pasteboard()
+        withText.setString("alt text", forType: .string)
+        withText.setData(try QuickEntryTests.pngData(), forType: .png)
+        #expect(draft.canPasteAttachments(from: withText) == false)
+        let link = QuickEntryTests.pasteboard()
+        link.declareTypes([.URL, .string], owner: nil)
+        link.setString("file:///tmp/shot.png", forType: .string)
+        link.setString("file:///tmp/shot.png", forType: .URL)
+        #expect(draft.canPasteAttachments(from: link) == false, "A copied file: link pastes as text")
+
+        // A draft that is being sent takes nothing.
+        draft.isEditable = { false }
+        #expect(draft.canPasteAttachments(from: image) == false)
+    }
+
     // MARK: - Photos
 
     @Test func aPhotoInAFormatClaudeCannotReadBecomesAJPEG() throws {
