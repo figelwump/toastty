@@ -653,7 +653,8 @@ you when it is not sure, and creates the task.
 - **Nothing is lost.** Toastty saves your message in
   `~/.toastty/coordinator-queue.json` until the coordinator's prompt takes
   it: while the coordinator works, starts or restarts, while no agent runs,
-  and across an app quit. The toast says **Sent to the coordinator**, or why
+  and across an app quit. A quick entry message never goes into a running
+  turn; it waits for the turn's end. The toast says **Sent to the coordinator**, or why
   the message waits. The panel's header says so before you send, when the
   coordinator is not running or starting. Messages from the chat's field are
   saved in the same way.
@@ -666,7 +667,7 @@ you when it is not sure, and creates the task.
   text goes to the terminal. If Toastty quits in that moment, the message is
   not typed again after the relaunch: it shows as **Paused**, and the chat
   asks you to check the conversation and to choose **Send next** or
-  **Remove**. While Toastty cannot write `coordinator-queue.json`, it does
+  **Remove**. The same holds for a message that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
   not type a message that the file lists as waiting, because a relaunch
   could then type it a second time: the message waits, the chat says that
   Toastty could not save it, and Toastty tries again every 5 seconds.
@@ -701,12 +702,34 @@ as a chat, with the same message views as Toastty Mobile. The terminal runs
 under it. On macOS 14 the panel shows the terminal.
 
 - **Send.** Type in the field under the conversation and press Return.
-  Shift-Return starts a new line. While the coordinator works, the message
-  waits in the chat as **Queued** and is typed when the turn ends. **Edit**
-  puts a waiting message back in the field, and **Remove** drops it. A
-  waiting message is saved, so it is still there after a relaunch. The
-  field's hint names the quick entry shortcut, which sends to the coordinator
-  from any app.
+  Shift-Return or Option-Return starts a new line. At an open prompt the
+  message is typed there. The field's hint names the quick entry shortcut,
+  which sends to the coordinator from any app.
+- **Steer or queue while the coordinator works.** While a turn runs, Return
+  types your message into that turn, so the coordinator reads it before the
+  turn ends: this is **Steer**, the default. The chip beside the send button
+  says **Steer**. Choose **Queue** on the chip, or press Command-Return, and
+  the message waits in the chat as **Queued** and is typed when the turn
+  ends. The chip shows **Queue** in the accent color, so a message that will
+  not go into the running turn is easy to see. After a send the chip goes
+  back to Steer, and a choice of Queue ends with its turn. When the turn
+  cannot take a steer, the chip, the button and the send fall back to Queue
+  together: the agent is not Claude Code or Codex, it asks a question or for
+  a permission, you typed in its terminal during the turn, or its terminal
+  is not ready. After the terminal refused a steer's text, the rest of that
+  turn queues too. A message with files steers like any other: its files go
+  in as their paths. Claude Code reads a steered message when its current
+  step ends, for example when a command it runs finishes.
+- **Waiting messages.** **Edit** puts a waiting message back in the field,
+  **Remove** drops it, and **Steer now** types a waiting message that you
+  wrote in the chat into the running turn, where it then shows as
+  **steered**. A waiting message is saved, so it is still there after a
+  relaunch.
+- **Only what you write in the chat steers.** A message from quick entry
+  always waits for the turn's end, also while a turn runs, and its row
+  offers no Steer now. **Edit** puts it back in the field with Toastty's
+  first line, and sent from there it still waits. Toastty's digests and
+  messages from `coordinator send` always wait too.
 - **Attach files.** The **+** button next to the field attaches files
   (**Files…**) or photos from the Photos library (**Photos…**). You can also
   drop files or images on the field or anywhere on the chat, and paste a

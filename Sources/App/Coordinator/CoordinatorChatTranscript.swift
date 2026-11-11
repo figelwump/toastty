@@ -100,9 +100,9 @@ enum CoordinatorChatTranscript {
         }
         // The conversation records every message that Toastty typed as
         // sent from another device. For a message from this Mac that is
-        // not so, and the chat says nothing about how it was sent.
+        // not so, and the chat says only that it steered a running turn.
         if let clientRequestID = payload.clientRequestID, isSentFromThisMac(clientRequestID) {
-            return .userMessage(text: text, origin: .local, deliveryMode: nil)
+            return .userMessage(text: text, origin: .local, deliveryMode: payload.deliveryMode == .steer ? .steer : nil)
         }
         return .userMessage(text: text, origin: payload.origin, deliveryMode: payload.deliveryMode)
     }

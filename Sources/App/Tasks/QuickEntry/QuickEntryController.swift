@@ -324,7 +324,8 @@ final class QuickEntryController: ObservableObject {
     /// message, or why the message waits.
     static func toastMessage(for result: CoordinatorController.SendResult) -> String {
         switch result {
-        case .sent, .sentUnconfirmed:
+        // Quick entry never steers: its message waits for an open prompt.
+        case .sent, .sentUnconfirmed, .steered, .steeredUnconfirmed:
             "Sent to the coordinator"
         case .queued(_, let hold), .held(let hold):
             switch hold {

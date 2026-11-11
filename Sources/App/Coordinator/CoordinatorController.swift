@@ -100,10 +100,19 @@ final class CoordinatorController: ObservableObject {
         /// Not typed and not kept: the caller asked for no queue, and still
         /// has the text.
         case held(CoordinatorSendHold)
+        /// Typed into the agent's running turn: the user's message steered
+        /// it. Only `sendUserText` and `steerQueuedEntry` steer.
+        case steered
+        /// Typed into the running turn, but the terminal did not confirm
+        /// the Return key. It is not typed again.
+        case steeredUnconfirmed
 
         /// The text went into the terminal.
         var wasTyped: Bool {
-            self == .sent || self == .sentUnconfirmed
+            switch self {
+            case .sent, .sentUnconfirmed, .steered, .steeredUnconfirmed: true
+            case .queued, .held: false
+            }
         }
     }
 
@@ -120,6 +129,9 @@ final class CoordinatorController: ObservableObject {
     @Published private var failedStart: FailedStart?
     @Published private(set) var queuedCount = 0
     @Published private(set) var hold: CoordinatorSendHold?
+    /// The turn whose host refused a steer, for example because the
+    /// terminal did not take the text. Messages wait for the rest of it.
+    @Published private var turnThatRefusedASteer: RemoteInputEpoch?
 
     private let store: AppStore
     private let sessionRuntimeStore: SessionRuntimeStore
@@ -165,6 +177,16 @@ final class CoordinatorController: ObservableObject {
         /// have it already. It waits with the paused entries until the
         /// user sends it again or removes it.
         var typingWasInterrupted = false
+
+        /// "Steer now" may type it into a running turn: a message that the
+        /// user wrote in the chat. A quick entry message always waits for
+        /// an open prompt, as messages from `coordinator send` and Toastty's
+        /// digests do. The first line that Toastty writes on a quick entry
+        /// message says which it is, also after a relaunch.
+        var canBeSteered: Bool {
+            guard byUser, case .plain = CoordinatorMessageHeader.kind(of: text) else { return false }
+            return true
+        }
     }
 
     /// A message that reached the coordinator's terminal.
@@ -173,6 +195,8 @@ final class CoordinatorController: ObservableObject {
         let text: String
         /// The agent's conversation will show the message under `id`.
         let echoesInConversation: Bool
+        /// It went into a running turn.
+        var steered = false
     }
 
     /// Entries that wait for an open prompt, in the order they are typed.
@@ -685,10 +709,14 @@ final class CoordinatorController: ObservableObject {
     ///
     /// This is the one way into the coordinator for the chat's composer,
     /// quick entry, `coordinator send` and Toastty's own digests, so their
-    /// text cannot interleave. Pass `byUser: true` only when a person sent
-    /// the message: it is then saved until it is typed, and waits across
-    /// an app quit. `id` names the message for its sender; the
-    /// conversation's echo of a typed message carries it.
+    /// text cannot interleave. It never types into a running turn: only the
+    /// chat's composer steers, through `sendUserText`, and "Steer now"
+    /// on a waiting message, through `steerQueuedEntry`.
+    ///
+    /// Pass `byUser: true` only when a person sent the message: it is then
+    /// saved until it is typed, and waits across an app quit. `id` names
+    /// the message for its sender; the conversation's echo of a typed
+    /// message carries it.
     ///
     /// With `queueWhenHeld` off, text that cannot be typed now is not kept:
     /// the answer is `held`, and the caller sends its text again later. A
@@ -731,6 +759,136 @@ final class CoordinatorController: ObservableObject {
             return .sentUnconfirmed
         default:
             return .queued(position: queuedEntries.count, hold: hold ?? .awaitingTurn)
+        }
+    }
+
+    // MARK: - Steer
+
+    /// Whether a message of the user's would go into the coordinator's
+    /// running turn now: a turn runs in an agent that takes a steer (Claude
+    /// Code or Codex), no question or permission waits for an answer, no
+    /// text typed in the terminal touched the turn, the terminal takes
+    /// input, no steer was refused in this turn, and no restart is under
+    /// way.
+    var canSteer: Bool {
+        steerTarget(at: now()) != nil
+    }
+
+    /// The running turn a steer goes into.
+    private struct SteerTarget {
+        let subscription: any LocalConversationSubscription
+        let session: SessionRecord
+        let conversationID: RemoteConversationID
+        let turnEpoch: RemoteInputEpoch
+    }
+
+    private func steerTarget(at moment: Date) -> SteerTarget? {
+        // During a restart the running agent is about to end.
+        guard isStarting == false,
+              let session,
+              session.status?.kind != .needsApproval,
+              ProviderTranscriptSupport.isManagedProvider(session.agent),
+              // The host checks the same before it types.
+              promptState(session.panelID) != .unavailable,
+              promptState(session.panelID) != .exited,
+              let subscription = syncConversationSubscription(),
+              let summary = subscription.snapshot(at: moment)?.summary,
+              let control = summary.inputControl,
+              // The host's own answer: a turn runs, the agent takes a
+              // steer, and no local input touched the turn.
+              control.canSteer,
+              let turnEpoch = control.turnEpoch,
+              turnEpoch != turnThatRefusedASteer else { return nil }
+        if case .pendingInteraction = summary.inputAvailability { return nil }
+        return SteerTarget(
+            subscription: subscription,
+            session: session,
+            conversationID: summary.conversationID,
+            turnEpoch: turnEpoch
+        )
+    }
+
+    /// Sends the user's text from the chat's composer. With `steering`,
+    /// the message goes into the coordinator's running turn when that turn
+    /// can take it (`canSteer`), in front of anything that waits. Otherwise,
+    /// and when the turn refuses the steer, it goes as `send(byUser: true)`
+    /// sends it: typed at an open prompt, or queued and saved.
+    @discardableResult
+    func sendUserText(
+        _ text: String,
+        steering: Bool,
+        id: String = UUID().uuidString
+    ) throws -> SendResult {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if steering, text.isEmpty == false {
+            switch steer(QueuedEntry(id: id, text: text, byUser: true)) {
+            case .delivered?: return .steered
+            case .uncertain?: return .steeredUnconfirmed
+            case .unavailable?, nil: break
+            }
+        }
+        return try send(text, byUser: true, id: id)
+    }
+
+    /// Types a waiting message of the user's into the running turn, for
+    /// "Steer now" on its row. The message then leaves the queue and the
+    /// saved file. When the turn cannot take it, it waits as before and
+    /// this throws.
+    func steerQueuedEntry(id: String) throws {
+        guard let entry = (queuedEntries + pausedEntries).first(where: { $0.id == id }) else {
+            throw CoordinatorError("The message was typed or removed already.")
+        }
+        guard entry.canBeSteered else {
+            throw CoordinatorError("Only a message you wrote in the chat can go into the coordinator's turn. This one waits for the turn's end.")
+        }
+        guard steer(entry) != nil else {
+            throw CoordinatorError("The coordinator's turn did not take the message. It still waits.")
+        }
+        queuedEntries.removeAll { $0.id == id }
+        pausedEntries.removeAll { $0.id == id }
+        typingEntryID = nil
+        // Saves the queue without the message.
+        drain()
+    }
+
+    /// Types the entry into the running turn through the conversation's
+    /// steer path, under the turn the conversation shows now. A person
+    /// asked for it now, so it is the user's input. Returns the delivery,
+    /// or `nil` when nothing was typed.
+    private func steer(_ entry: QueuedEntry) -> TerminalInputDeliveryResult? {
+        // Also a quick entry message that Edit put back into the chat's
+        // field keeps Toastty's first line, and waits.
+        guard entry.canBeSteered else { return nil }
+        let moment = now()
+        guard let target = steerTarget(at: moment) else { return nil }
+        // A saved entry: the file says that it is being typed, so a crash
+        // in this moment cannot type it twice.
+        guard noteTypingStarts(entry) else { return nil }
+        let result = target.subscription.send(RemoteMessageSendRequest(
+            conversationID: target.conversationID,
+            clientRequestID: entry.id,
+            expectedInputEpoch: target.turnEpoch,
+            text: entry.text,
+            deliveryMode: .steer
+        ), byUser: true)
+        switch result {
+        case .accepted, .duplicate:
+            noteTyped(entry, session: target.session, result: .delivered, throughConversation: true, steered: true)
+            return .delivered
+        case .uncertain:
+            noteTyped(entry, session: target.session, result: .uncertain, throughConversation: true, steered: true)
+            return .uncertain
+        case .queued, .rejected:
+            // The turn ended or changed between the snapshot and the send,
+            // or the terminal did not take the text. The controls say Queue
+            // for the rest of this turn, as the send does.
+            noteTypingDidNotHappen()
+            turnThatRefusedASteer = target.turnEpoch
+            ToasttyLog.info("The coordinator's turn did not take a steer", category: .tasks, metadata: [
+                "session_id": target.session.sessionID,
+                "result": String(describing: result),
+            ])
+            return nil
         }
     }
 
@@ -1019,7 +1177,8 @@ final class CoordinatorController: ObservableObject {
         _ entry: QueuedEntry,
         session: SessionRecord,
         result: TerminalInputDeliveryResult,
-        throughConversation: Bool
+        throughConversation: Bool,
+        steered: Bool = false
     ) {
         typedMessageIDs.append(entry.id)
         if typedMessageIDs.count > Self.rememberedTypedMessages {
@@ -1029,10 +1188,13 @@ final class CoordinatorController: ObservableObject {
             "session_id": session.sessionID,
             "submit_confirmed": result == .delivered ? "true" : "false",
             "path": throughConversation ? "conversation" : "status_gate",
+            "mode": steered ? "steer" : "prompt",
             "by_user": entry.byUser ? "true" : "false",
             "queue_depth": String(max(0, queuedEntries.count - 1)),
         ])
-        typedEntries.send(TypedEntry(id: entry.id, text: entry.text, echoesInConversation: throughConversation))
+        typedEntries.send(TypedEntry(
+            id: entry.id, text: entry.text, echoesInConversation: throughConversation, steered: steered
+        ))
     }
 
     private func dropQueueOfAClosedCoordinator() {
@@ -1075,11 +1237,15 @@ final class CoordinatorController: ObservableObject {
         // Toastty quit after it started to type this entry and before it
         // saved that the entry was typed. Whether the coordinator has it is
         // not known, so it is not typed again without the user.
-        if let typingEntryID = snapshot.typingEntryID,
-           let index = queued.firstIndex(where: { $0.id == typingEntryID }) {
-            var interrupted = queued.remove(at: index)
-            interrupted.typingWasInterrupted = true
-            paused.insert(interrupted, at: 0)
+        if let typingEntryID = snapshot.typingEntryID {
+            if let index = queued.firstIndex(where: { $0.id == typingEntryID }) {
+                var interrupted = queued.remove(at: index)
+                interrupted.typingWasInterrupted = true
+                paused.insert(interrupted, at: 0)
+            } else if let index = paused.firstIndex(where: { $0.id == typingEntryID }) {
+                // A paused entry that "Steer now" was typing.
+                paused[index].typingWasInterrupted = true
+            }
         }
         queueWorkspaceID = workspaceID
         queuedEntries = queued
@@ -1141,13 +1307,16 @@ final class CoordinatorController: ObservableObject {
     /// the terminal. Returns `false` when the entry must not be typed now:
     /// the file lists it as waiting and could not be changed, so a
     /// relaunch would type it again. An entry that the file never held can
-    /// be typed, since no relaunch knows of it.
+    /// be typed, since no relaunch knows of it. The entry is the first
+    /// queued one, or for a steer any waiting one.
     private func noteTypingStarts(_ entry: QueuedEntry) -> Bool {
-        guard entry.byUser, queueFileURL != nil, queuedEntries.first?.id == entry.id else { return true }
+        guard entry.byUser, queueFileURL != nil,
+              (queuedEntries + pausedEntries).contains(where: { $0.id == entry.id }) else { return true }
         typingEntryID = entry.id
         if saveQueue() { return true }
         typingEntryID = nil
-        return savedQueue?.queued.contains { $0.id == entry.id } != true
+        let savedIDs = (savedQueue?.queued ?? []) + (savedQueue?.paused ?? [])
+        return savedIDs.contains { $0.id == entry.id } == false
     }
 
     /// The terminal did not take the text: the entry waits as before.

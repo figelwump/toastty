@@ -21,9 +21,12 @@ struct CoordinatorUserMessage: Equatable {
 
 extension CoordinatorController {
     /// Sends the user's message. Toastty copies the attached files into the
-    /// coordinator's folder first, and the message names the copies. The
-    /// message then waits, saved, until the coordinator's prompt takes it.
-    func sendUserMessage(_ message: CoordinatorUserMessage) async throws -> SendResult {
+    /// coordinator's folder first, and the message names the copies. With
+    /// `steering`, a message from the chat goes into the coordinator's
+    /// running turn when that turn can take it, as `sendUserText` sends it.
+    /// Otherwise the message waits, saved, until the coordinator's prompt
+    /// takes it. A quick entry message never goes into a running turn.
+    func sendUserMessage(_ message: CoordinatorUserMessage, steering: Bool = false) async throws -> SendResult {
         let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.isEmpty == false || message.files.isEmpty == false || message.stagedFiles.isEmpty == false else {
             throw CoordinatorError("The message is empty.")
@@ -51,7 +54,7 @@ extension CoordinatorController {
             let delivered = message.quickEntry.map { choices in
                 CoordinatorMessageHeader.quickEntryMessage(choices, text: text, attachmentPaths: paths)
             } ?? RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: paths)
-            return try send(delivered, byUser: true, id: id.uuidString)
+            return try sendUserText(delivered, steering: steering && message.quickEntry == nil, id: id.uuidString)
         } catch {
             // Not taken: the copies have no message. The staged files stay
             // with the folder of the message they came from.
