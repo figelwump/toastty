@@ -10,6 +10,21 @@ public enum ToasttyPendingSendResponse: Equatable, Sendable {
     case queued(position: Int)
 }
 
+/// The caption under the user's message: how a message from another device
+/// reached the agent. A message typed on this device has none.
+public enum ToasttyUserMessageCaption {
+    public static func text(
+        origin: ConversationMessageOrigin,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> String? {
+        switch deliveryMode {
+        case .queue: "from queue"
+        case .steer: "steered"
+        case .prompt, nil: origin == .remote ? "sent remotely" : nil
+        }
+    }
+}
+
 public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     public enum Content: Equatable, Sendable {
         case optimistic(response: ToasttyPendingSendResponse)
@@ -23,11 +38,16 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     public let clientRequestID: String
     public let text: String
     public let content: Content
+    /// The caption the message's transcript row will show once it arrives.
+    /// A sending bubble shows it too, so the bubble keeps its size when the
+    /// row replaces it.
+    public let sentCaption: String?
 
-    public init(clientRequestID: String, text: String, content: Content) {
+    public init(clientRequestID: String, text: String, content: Content, sentCaption: String? = nil) {
         self.clientRequestID = clientRequestID
         self.text = text
         self.content = content
+        self.sentCaption = sentCaption
     }
 
     public var isQueued: Bool {
