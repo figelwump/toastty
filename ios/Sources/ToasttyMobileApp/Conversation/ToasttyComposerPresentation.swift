@@ -98,9 +98,23 @@ enum ToasttyLocalDraftReleaseRefusal: Equatable, Sendable {
 enum ToasttyComposerSendMode: Equatable, Sendable {
     /// The prompt is open: Send types the message now.
     case prompt
-    /// The agent is working: Send holds the message on the Mac for the next
-    /// prompt. Steer, when the host allows it, types into the running turn.
+    /// The agent is working: Send steers into the running turn while the host
+    /// allows it, and otherwise holds the message on the Mac for the next
+    /// prompt.
     case working(canSteer: Bool)
+
+    /// The mode Send uses. While the agent works, Steer is the default and
+    /// Queue applies only when the user picked it or the host does not allow
+    /// steer. When the host closes steer mid-draft, the chip, the Send label,
+    /// and the send itself all follow this value, so they fall back together.
+    func deliveryMode(queueSelected: Bool) -> RemoteMessageDeliveryMode {
+        switch self {
+        case .prompt:
+            .prompt
+        case .working(let canSteer):
+            canSteer && !queueSelected ? .steer : .queue
+        }
+    }
 }
 
 enum ToasttyComposerGate: Equatable, Sendable {

@@ -484,7 +484,7 @@ extension ToasttyComposerPresentationTests {
         )
     }
 
-    func testWorkingTurnOpensTheComposerInQueueModeWithStopAndOptionalSteer() {
+    func testWorkingTurnOpensTheComposerWithStopAndSteersByDefault() {
         let steerable = ConversationComposerAuthority(
             stamp: workingStamp(), inputAvailability: .unavailable(reason: .known(.working)),
             inputControl: control(canSteer: true)
@@ -495,6 +495,10 @@ extension ToasttyComposerPresentationTests {
         XCTAssertTrue(steerablePresentation.canInterrupt)
         XCTAssertTrue(steerable.canSteer)
         XCTAssertTrue(steerablePresentation.canSubmit(draft: "queue me"))
+        // Steer is the default while the host allows it; Queue is the
+        // user's explicit choice.
+        XCTAssertEqual(steerablePresentation.gate.sendMode?.deliveryMode(queueSelected: false), .steer)
+        XCTAssertEqual(steerablePresentation.gate.sendMode?.deliveryMode(queueSelected: true), .queue)
 
         let localDraftOnMac = ConversationComposerAuthority(
             stamp: workingStamp(), inputAvailability: .unavailable(reason: .known(.working)),
@@ -502,6 +506,9 @@ extension ToasttyComposerPresentationTests {
         )
         XCTAssertEqual(presentation(localDraftOnMac).gate, .enabled(.working(canSteer: false)))
         XCTAssertFalse(localDraftOnMac.canSteer)
+        // When the host closes steer, even mid-draft, Send falls back to Queue.
+        XCTAssertEqual(presentation(localDraftOnMac).gate.sendMode?.deliveryMode(queueSelected: false), .queue)
+        XCTAssertEqual(ToasttyComposerSendMode.prompt.deliveryMode(queueSelected: true), .prompt)
 
         // An older host sends no controls: the composer stays locked as before.
         let legacy = ConversationComposerAuthority(
