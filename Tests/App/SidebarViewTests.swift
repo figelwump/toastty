@@ -2614,8 +2614,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 640))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
@@ -2804,8 +2803,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: height))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: height), styleMask: [.titled], backing: .buffered, defer: false)
@@ -2836,8 +2834,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 560))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560), styleMask: [.titled], backing: .buffered, defer: false)

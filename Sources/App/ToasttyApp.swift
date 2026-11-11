@@ -1139,9 +1139,7 @@ struct ToasttyApp: App {
         taskBoard.newTask = { [weak quickEntryController] in
             quickEntryController?.present(prefill: .empty)
         }
-        taskBoard.newTaskShortcutLabel = { [weak quickEntryController] in
-            quickEntryController?.shortcut?.symbolLabel
-        }
+        taskBoard.showShortcut(of: quickEntryController)
         terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
             quickEntryController?.presentFromSelection(text, panelID: panelID)
         }

@@ -11,6 +11,10 @@ final class QuickEntryController: ObservableObject {
     /// The configured shortcut, shown on File ▸ New Task…; nil when
     /// `tasks.toml` turns it off.
     @Published private(set) var shortcut: QuickEntryShortcut? = .default
+    /// True while macOS delivers the shortcut from every app. It is false
+    /// when another app holds the keys: the shortcut then works only in
+    /// Toastty's menu.
+    @Published private(set) var isShortcutGlobal = false
 
     private let store: AppStore
     /// The profiles in agents.toml, as a launch resolves them.
@@ -135,13 +139,21 @@ final class QuickEntryController: ObservableObject {
     private func applyShortcut(_ configured: QuickEntryShortcut?, message: String?) -> String? {
         var message = message
         shortcut = configured
-        guard registersGlobalHotKey else { return message }
+        guard registersGlobalHotKey else {
+            isShortcutGlobal = false
+            return message
+        }
 
         let hotKey = self.hotKey ?? QuickEntryHotKey { [weak self] in
             self?.handleHotKey()
         }
         self.hotKey = hotKey
         let registration = hotKey.register(configured)
+        if case .registered = registration {
+            isShortcutGlobal = true
+        } else {
+            isShortcutGlobal = false
+        }
         switch registration {
         case .registered(let shortcut):
             ToasttyLog.info("Registered the quick entry shortcut", category: .tasks, metadata: [

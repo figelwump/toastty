@@ -239,7 +239,7 @@ struct QuickEntryView: View {
 }
 
 /// A key shown as a small outlined key cap, such as "esc" or "⌘V".
-private struct KeyCap: View {
+struct KeyCap: View {
     let text: String
     var size: CGFloat = 11
     var color: Color = QuickEntryView.mutedText
