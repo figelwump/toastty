@@ -116,11 +116,17 @@ final class CoordinatorChatViewTests: XCTestCase {
         let (hostingView, window) = Self.host(transcript(scale: 1))
         defer { window.close() }
         XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1), base)
+        // The reader selected some words before the change.
+        let selected = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+            .first { $0.string.contains("is ready") })
+        let selection = (selected.string as NSString).range(of: "is ready")
+        selected.setSelectedRange(selection)
 
-        // The same views on screen take the new size.
+        // The same views on screen take the new size, and keep the selection.
         hostingView.rootView = Self.hosted(transcript(scale: 1.5))
         Self.settle(hostingView)
         XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1.5), base * 1.5, accuracy: 0.01)
+        XCTAssertEqual(selected.selectedRange(), selection)
     }
 
     /// The view in a dark window of the test's size, after its layout settled.
