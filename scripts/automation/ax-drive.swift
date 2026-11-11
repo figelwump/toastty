@@ -16,7 +16,10 @@
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
-//   key <return|shift-return|escape|up|down|cmd-period|cmd-shift-p>
+//   key <return|shift-return|escape|up|down|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
+//   click-at <x> <y>              Click the point without bringing the app forward, as in an open menu.
+//   drag <x1> <y1> <x2> <y2>      Press at the first point, move to the second with the button down,
+//                                 and let go there: a drag and drop, as a hand makes it.
 //   sheet-texts                   Print the text of the sheet on a window. Exit code 2: no sheet shows.
 //   window-frame                  Print the frame of the app's first window as "x y width height".
 //   window-set-frame <x> <y> <width> <height>
@@ -27,6 +30,8 @@
 // `identifier` is an accessibility identifier. Exit code 2: not found.
 // Exit code 4: a system prompt, such as a permission question, covers the
 // place to click. No click is made: that prompt is the user's to answer.
+// Exit code 5: another app's window covers the place to click. No click is
+// made: the click and the keys after it would go to that app.
 import AppKit
 import ApplicationServices
 import Foundation
@@ -103,23 +108,32 @@ let systemPromptOwners: Set<String> = ["UserNotificationCenter", "CoreServicesUI
 
 /// Stops when a system prompt covers the point. A click there would answer
 /// that prompt, which is the user's to answer, and would not reach the app.
-func requireNoSystemPrompt(at point: CGPoint) {
+/// With `orAnotherApp`, also stops when another app's window covers the
+/// point (exit code 5): the click, and the keys typed after it, would go to
+/// that app, such as the app of another check on a shared Mac.
+func requireNoSystemPrompt(at point: CGPoint, orAnotherApp: Bool = false) {
     // Front to back: the app's own window in front of a prompt is fine.
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     for window in windows {
         guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point) else { continue }
-        if (window[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid { return }
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point),
+              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
+        let ownerPID = (window[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
+        if ownerPID == pid { return }
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         if systemPromptOwners.contains(owner) {
             print("COVERED \(Int(point.x)),\(Int(point.y)) is under a system prompt of \(owner)")
             exit(4)
         }
+        if orAnotherApp, owner != "Window Server", owner != "Dock" {
+            print("COVERED \(Int(point.x)),\(Int(point.y)) is under a window of \(owner) (pid \(ownerPID ?? 0))")
+            exit(5)
+        }
     }
 }
 
 func click(at point: CGPoint) {
-    requireNoSystemPrompt(at: point)
+    requireNoSystemPrompt(at: point, orAnotherApp: true)
     let source = CGEventSource(stateID: .hidSystemState)
     for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
@@ -165,6 +179,34 @@ func type(_ text: String) {
             usleep(12_000)
         }
     }
+}
+
+func drag(from start: CGPoint, to end: CGPoint) {
+    requireNoSystemPrompt(at: end)
+    let source = CGEventSource(stateID: .hidSystemState)
+    func post(_ type: CGEventType, _ point: CGPoint) {
+        CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+    }
+    post(.mouseMoved, start)
+    usleep(150_000)
+    post(.leftMouseDown, start)
+    usleep(200_000)
+    // Small steps, so the source starts its drag and each view on the way
+    // sees the drag enter.
+    let steps = 40
+    for step in 1 ... steps {
+        let progress = CGFloat(step) / CGFloat(steps)
+        post(.leftMouseDragged, CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress))
+        usleep(25_000)
+    }
+    // Rest over the target before letting go, as a hand does.
+    for _ in 0 ..< 10 {
+        post(.leftMouseDragged, end)
+        usleep(50_000)
+    }
+    post(.leftMouseUp, end)
+    usleep(300_000)
 }
 
 func activate() {
@@ -337,6 +379,15 @@ case "click-text":
     activate()
     click(at: CGPoint(x: bounds.midX, y: bounds.midY))
     print("clicked text \(argument) at \(Int(bounds.midX)),\(Int(bounds.midY))")
+case "click-at":
+    guard arguments.count > 4, let x = Double(arguments[3]), let y = Double(arguments[4]) else { exit(64) }
+    click(at: CGPoint(x: x, y: y))
+    print("clicked at \(Int(x)),\(Int(y))")
+case "drag":
+    let numbers = arguments.dropFirst(3).compactMap(Double.init)
+    guard numbers.count == 4 else { exit(64) }
+    drag(from: CGPoint(x: numbers[0], y: numbers[1]), to: CGPoint(x: numbers[2], y: numbers[3]))
+    print("dragged from \(Int(numbers[0])),\(Int(numbers[1])) to \(Int(numbers[2])),\(Int(numbers[3]))")
 case "type":
     type(argument)
     print("typed \(argument.count) characters")
@@ -349,6 +400,8 @@ case "key":
     case "down": press(keyCode: 125)
     case "cmd-period": press(keyCode: 47, flags: .maskCommand)
     case "cmd-shift-p": press(keyCode: 35, flags: [.maskCommand, .maskShift])
+    case "cmd-v": press(keyCode: 9, flags: .maskCommand)
+    case "cmd-shift-g": press(keyCode: 5, flags: [.maskCommand, .maskShift])
     default:
         print("unknown key \(argument)")
         exit(64)

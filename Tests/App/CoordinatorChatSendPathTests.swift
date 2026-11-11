@@ -390,6 +390,132 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts.isEmpty)
     }
 
+    // MARK: - Files
+
+    @MainActor
+    @Test func aMessageWithFilesFromTheComposerNamesTheCoordinatorsCopiesWithoutAHeader() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let sourceFolder = URL(filePath: fixture.conversations.runtimeHome + "-attached")
+        try FileManager.default.createDirectory(at: sourceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sourceFolder) }
+        let notes = sourceFolder.appendingPathComponent("notes.txt")
+        try Data("socket closed".utf8).write(to: notes)
+        let draft = fixture.chat.attachmentDraft
+
+        // A pasted image, and a file dropped on the chat. Pasted text stays
+        // text.
+        let text = QuickEntryTests.pasteboard()
+        text.setString("alt text", forType: .string)
+        text.setData(try QuickEntryTests.pngData(), forType: .png)
+        #expect(draft.pasteAttachments(from: text) == false)
+        let image = QuickEntryTests.pasteboard()
+        image.setData(try QuickEntryTests.pngData(), forType: .png)
+        #expect(draft.pasteAttachments(from: image))
+        let drop = QuickEntryTests.pasteboard()
+        drop.writeObjects([notes as NSURL])
+        #expect(fixture.chat.attachmentDropTarget.performDrop(drop))
+        fixture.chat.draft = "What is wrong here?"
+        // A file still being copied holds the message back.
+        #expect(fixture.chat.canSend == false)
+        try await fixture.waitUntil("both files are in the composer") { draft.attachments.count == 2 }
+        #expect(draft.attachments.map(\.displayName) == ["Pasted image.png", "notes.txt"])
+        #expect(draft.attachments.first?.thumbnail != nil)
+        let draftCopies = draft.attachments.map(\.url)
+
+        fixture.chat.send()
+        try await fixture.waitUntil("the message is typed") { fixture.delivered.texts.count == 1 }
+        let id = try #require(fixture.typed.first?.id)
+        let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(id)").path
+        // No header line: the message is the user's, from the chat.
+        #expect(fixture.delivered.texts == ["""
+        What is wrong here?
+
+        Read the following files attached to this message on this Mac:
+        `\(folder)/Pasted-image.png`
+        `\(folder)/notes.txt`
+        """])
+        #expect(FileManager.default.fileExists(atPath: "\(folder)/notes.txt"))
+        // The chat shows the text and the names of the files.
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["What is wrong here?\n\nPasted-image.png, notes.txt"])
+        // The composer is empty, and its own copies are gone.
+        #expect(fixture.chat.draft.isEmpty)
+        #expect(draft.attachments.isEmpty)
+        #expect(fixture.chat.isSendingFiles == false)
+        #expect(draftCopies.allSatisfy { FileManager.default.fileExists(atPath: $0.path) == false })
+    }
+
+    @MainActor
+    @Test func filesAloneWaitAsAMessageAndRemoveTakesTheirCopies() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        fixture.chat.attachmentDraft.attachText("error: socket closed", named: "terminal log.txt")
+        #expect(fixture.chat.canSend)
+        fixture.chat.send()
+        let entry = try await fixture.waitFor("the message waits") { fixture.controller.queuedEntries.first }
+        let row = try #require(fixture.chat.presentation.sendItems.first { $0.isQueued })
+        #expect(row.text == "terminal-log.txt")
+        guard case .queued(let queued) = row.content else {
+            Issue.record("The message waits")
+            return
+        }
+        #expect(queued.attachmentCount == 1)
+        let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(entry.id)")
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("terminal-log.txt").path))
+
+        fixture.chat.perform(.remove(clientRequestID: entry.id))
+        #expect(FileManager.default.fileExists(atPath: folder.path) == false)
+        try fixture.endTurn(1)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+    }
+
+    @MainActor
+    @Test func editWaitsUntilTheMessagesFilesFitNextToTheComposers() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let draft = fixture.chat.attachmentDraft
+        draft.attachText("one", named: "one.txt")
+        draft.attachText("two", named: "two.txt")
+        fixture.chat.draft = "Two files"
+        fixture.chat.send()
+        let entry = try await fixture.waitFor("the message waits") { fixture.controller.queuedEntries.first }
+
+        // Nine files in the composer leave room for one: the message's two
+        // do not fit, so it keeps waiting and the composer is as it was.
+        for index in 0 ..< 9 {
+            draft.attachText("\(index)", named: "note.txt")
+        }
+        fixture.chat.draft = "Draft"
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: ""))
+        #expect(fixture.controller.queuedEntries.map(\.id) == [entry.id])
+        #expect(fixture.chat.draft == "Draft")
+        #expect(draft.attachments.count == 9)
+        #expect(fixture.chat.notice == .failure(
+            "This message has 2 files, and a message can have at most 10. Remove files from the message you are writing first."
+        ))
+
+        // With room, Edit takes it back: its text in front, its files first.
+        for attachment in draft.attachments.dropFirst() {
+            draft.remove(id: attachment.id)
+        }
+        fixture.chat.perform(.edit(clientRequestID: entry.id, text: ""))
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.chat.draft == "Two files\nDraft")
+        #expect(draft.attachments.map(\.displayName) == ["one.txt", "two.txt", "note.txt"])
+        #expect(draft.attachments.map(\.isDraftCopy) == [false, false, true])
+    }
+
     // MARK: - A paired phone
 
     @MainActor

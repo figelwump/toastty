@@ -355,6 +355,39 @@ transcripts under the run's artifacts directory. A build that can capture its
 window outside automation mode also writes PNG frames; a normal build cannot,
 and the check records that and continues.
 
+### Coordinator composer attachments
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-attachments-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers attachments in the coordinator
+chat's message bar; see [The coordinator's chat](../tasks.md#the-coordinators-chat).
+It needs the remote Mac's screen unlocked, uses subscription usage, and takes
+about five minutes after the build.
+
+The coordinator is the real, authenticated Claude CLI, allowed only its Read
+tool. Real mouse drags start from a small window that offers a file or a file
+promise (`scripts/automation/drag-source.swift`); `ax-drive.swift` makes the
+other clicks and keys. The check drops an image on the message field, types
+and sends, and requires Claude's answer about the image with no "did not show
+it" notice. It then drops a file promise on the conversation, pastes an image,
+chooses a file with **+ › Files…**, and requires Claude to read all three.
+
+The validation Mac is shared, and two GUI checks must not run at once. Check
+for `validate.sh`, `test.sh` and `remote-*-check.py` processes there right
+before you start. The check also stops when another check or another run's
+Toastty runs, and `ax-drive` refuses a click that another app's window covers
+(exit code 5).
+
+It writes `remote-coordinator-attachments-check.json`, the app logs and
+Claude's transcripts. `--stills` adds full-screen stills with `screencapture`;
+it is off by default because macOS can answer a screen capture from Terminal
+with a consent prompt that stays on the shared screen.
+
 ### Coordinator first run
 
 ```bash

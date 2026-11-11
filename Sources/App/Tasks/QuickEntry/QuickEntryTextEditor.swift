@@ -16,7 +16,7 @@ struct QuickEntryTextEditor: NSViewRepresentable {
     let onCancel: () -> Void
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
-    let dropTarget: QuickEntryDropTarget
+    let dropTarget: AttachmentDropTarget
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -46,7 +46,7 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityIdentifier("quick-entry.text")
         textView.string = text
-        textView.registerForDraggedTypes(QuickEntryModel.droppableTypes)
+        textView.registerForDraggedTypes(DraftAttachments.droppableTypes)
 
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
@@ -126,15 +126,13 @@ struct QuickEntryTextEditor: NSViewRepresentable {
     }
 }
 
-final class QuickEntryNSTextView: NSTextView {
+final class QuickEntryNSTextView: AttachmentTextView {
     var placeholder = "" {
         didSet { needsDisplay = true }
     }
     var onSubmit: () -> Void = {}
     var onCreateTask: () -> Void = {}
     var onCancel: () -> Void = {}
-    var onPasteAttachments: (NSPasteboard) -> Bool = { _ in false }
-    weak var dropTarget: QuickEntryDropTarget?
 
     private var hasPendingFocusRequest = false
 
@@ -193,63 +191,6 @@ final class QuickEntryNSTextView: NSTextView {
             return
         }
         onCancel()
-    }
-
-    // Files and images attach; anything else pastes as plain text. Do not
-    // narrow readablePasteboardTypes to get plain text: pasteAsPlainText(_:)
-    // then inserts nothing.
-    override func paste(_ sender: Any?) {
-        if onPasteAttachments(.general) {
-            return
-        }
-        pasteAsPlainText(sender)
-    }
-
-    // Files and images dropped on the text attach, as they do anywhere else
-    // on the panel; dropped text and links still go into the text.
-
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        if let dropTarget, dropTarget.dropEntered(sender.draggingPasteboard) {
-            return .copy
-        }
-        return super.draggingEntered(sender)
-    }
-
-    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        if QuickEntryDropTarget.carriesAttachments(sender.draggingPasteboard) {
-            return .copy
-        }
-        return super.draggingUpdated(sender)
-    }
-
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        dropTarget?.dropExited()
-        super.draggingExited(sender)
-    }
-
-    // NSTextView agrees to a drop only for types it reads as text, so a
-    // promised file or image data would end here, before
-    // performDragOperation(_:), and attach nothing.
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        if QuickEntryDropTarget.carriesAttachments(sender.draggingPasteboard) {
-            return true
-        }
-        return super.prepareForDragOperation(sender)
-    }
-
-    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        if let dropTarget, QuickEntryDropTarget.carriesAttachments(sender.draggingPasteboard) {
-            return dropTarget.performDrop(sender.draggingPasteboard)
-        }
-        dropTarget?.dropExited()
-        return super.performDragOperation(sender)
-    }
-
-    // A drag can end without an exit or a drop, for example when it is
-    // cancelled over the panel; the highlight must not stay on.
-    override func draggingEnded(_ sender: any NSDraggingInfo) {
-        dropTarget?.dropExited()
-        super.draggingEnded(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {

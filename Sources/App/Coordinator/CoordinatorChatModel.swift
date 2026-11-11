@@ -64,6 +64,14 @@ final class CoordinatorChatModel: ObservableObject {
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
     @Published var draft = ""
+    /// The files attached to the composer's message, kept here with the
+    /// text. Their changes are the model's changes.
+    let attachmentDraft: DraftAttachments
+    /// Takes files dropped on the chat or on the composer's field.
+    let attachmentDropTarget: AttachmentDropTarget
+    /// A message with files is being sent: Toastty copies its files into
+    /// the coordinator's folder. The composer waits until it is done.
+    @Published private(set) var isSendingFiles = false
     @Published var jumpToLiveEdgeRequest: UInt64 = 0
     /// Counts up each time the composer should take the keyboard.
     @Published private(set) var composerFocusRequest = 0
@@ -117,11 +125,31 @@ final class CoordinatorChatModel: ObservableObject {
     init(
         controller: CoordinatorController,
         access: any LocalConversationAccess,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        attachmentStagingURL: URL = FileManager.default.temporaryDirectory
+            .appending(path: "toastty-coordinator-composer/\(UUID().uuidString)", directoryHint: .isDirectory)
     ) {
         self.controller = controller
         self.access = access
         self.now = now
+        let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
+        self.attachmentDraft = attachmentDraft
+        attachmentDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        attachmentDraft.isEditable = { [weak self] in self?.isSendingFiles == false }
+        attachmentDraft.onError = { [weak self] message in
+            self?.transientNotice = .failure(message)
+            self?.publishMetadata()
+        }
+        attachmentDraft.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        // The draft's own copies go with the app. Files that a waiting
+        // message holds are the controller's.
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak attachmentDraft] _ in
+                MainActor.assumeIsolated { attachmentDraft?.removeStagingDirectoryNow() }
+            }
+            .store(in: &cancellables)
         // What waits, and why, changes the tail of the chat and the notice.
         // `sink` runs before the new value is stored.
         controller.objectWillChange
@@ -390,7 +418,10 @@ final class CoordinatorChatModel: ObservableObject {
                 clientRequestID: entry.id,
                 text: CoordinatorMessageHeader.displayText(of: entry.text),
                 content: .queued(ToasttyQueuedSendPresentation(
-                    position: index + 1, attachmentCount: 0, isPaused: true, canSteer: false
+                    position: index + 1,
+                    attachmentCount: Self.attachmentCount(of: entry.text),
+                    isPaused: true,
+                    canSteer: false
                 ))
             ))
         }
@@ -421,7 +452,7 @@ final class CoordinatorChatModel: ObservableObject {
                 text: CoordinatorMessageHeader.displayText(of: entry.text),
                 content: .queued(ToasttyQueuedSendPresentation(
                     position: position,
-                    attachmentCount: 0,
+                    attachmentCount: Self.attachmentCount(of: entry.text),
                     isPaused: false,
                     canSteer: false,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
@@ -429,6 +460,11 @@ final class CoordinatorChatModel: ObservableObject {
             ))
         }
         return items
+    }
+
+    /// The files that a waiting message names, as Toastty wrote them.
+    static func attachmentCount(of text: String) -> Int {
+        CoordinatorMessageHeader.attachedFiles(in: text)?.paths.count ?? 0
     }
 
     /// Why a message waits, when that is not the running turn.
@@ -546,8 +582,12 @@ final class CoordinatorChatModel: ObservableObject {
 
     // MARK: - The composer's actions
 
+    /// The composer has text or files, and no file is still being copied.
     var canSend: Bool {
-        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        isSendingFiles == false
+            && attachmentDraft.pendingCount == 0
+            && (draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                || attachmentDraft.attachments.isEmpty == false)
     }
 
     /// A turn runs that Stop can end.
@@ -555,20 +595,70 @@ final class CoordinatorChatModel: ObservableObject {
         summary?.inputControl?.canInterrupt == true
     }
 
-    /// Sends the composer's text as the user's message.
+    /// Sends the composer's text as the user's message, with its files.
     func send() {
+        guard canSend, let controller else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.isEmpty == false, let controller else { return }
-        do {
-            try controller.send(text, byUser: true)
-            draft = ""
-            transientNotice = nil
-            lastJumpRequest &+= 1
-            jumpToLiveEdgeRequest = lastJumpRequest
-        } catch {
-            transientNotice = .failure(error.localizedDescription)
+        guard attachmentDraft.attachments.isEmpty == false else {
+            do {
+                try controller.send(text, byUser: true)
+                draft = ""
+                didSend()
+            } catch {
+                transientNotice = .failure(error.localizedDescription)
+            }
+            publishMetadata()
+            return
         }
-        publishMetadata()
+        // Files that a waiting message holds are in the coordinator's
+        // folder already. The draft's own copies are copied there first.
+        let attachments = attachmentDraft.attachments
+        let message = CoordinatorUserMessage(
+            text: text,
+            files: attachments.filter(\.isDraftCopy).map(\.url),
+            stagedFiles: attachments.filter { $0.isDraftCopy == false }.map(\.url)
+        )
+        isSendingFiles = true
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await controller.sendUserMessage(message)
+                guard let self else { return }
+                isSendingFiles = false
+                draft = ""
+                attachmentDraft.clear()
+                didSend()
+            } catch {
+                self?.isSendingFiles = false
+                self?.transientNotice = .failure(error.localizedDescription)
+            }
+            self?.publishMetadata()
+        }
+    }
+
+    private func didSend() {
+        transientNotice = nil
+        lastJumpRequest &+= 1
+        jumpToLiveEdgeRequest = lastJumpRequest
+    }
+
+    /// **Files…** in the composer's ＋ menu.
+    func chooseFiles() {
+        guard attachmentDraft.canEdit, attachmentDraft.canAttachMore else { return }
+        let openPanel = DraftAttachments.makeOpenPanel()
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if response == .OK {
+                    self.attachmentDraft.attachFiles(openPanel.urls)
+                }
+                self.requestComposerFocus()
+            }
+        }
+        if let window = composerTextView?.window {
+            openPanel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            openPanel.begin(completionHandler: finish)
+        }
     }
 
     func stop() {
@@ -596,9 +686,28 @@ final class CoordinatorChatModel: ObservableObject {
         case .edit(let id, _):
             // Back into the composer, in front of what is there. It is the
             // text as it would be typed, so a quick entry message keeps
-            // Toastty's first line and the paths of its files, which stay.
-            guard let removed = controller?.removeQueuedEntry(id: id) else { return }
-            draft = draft.isEmpty ? removed.text : removed.text + "\n" + draft
+            // Toastty's first line. Its files come back as attachments and
+            // stay in their folder; when one cannot, the text keeps every
+            // path instead.
+            guard isSendingFiles == false, let controller,
+                  let entry = (controller.queuedEntries + controller.pausedEntries).first(where: { $0.id == id }) else { return }
+            // Its files must fit next to the composer's: a message has at
+            // most 10. Otherwise the message keeps waiting as it is.
+            let room = TaskRecord.maximumAttachmentCount - attachmentDraft.attachments.count - attachmentDraft.pendingCount
+            if let count = CoordinatorMessageHeader.attachedFiles(in: entry.text)?.paths.count, count > room {
+                transientNotice = .failure(
+                    "This message has \(count) files, and a message can have at most \(TaskRecord.maximumAttachmentCount). "
+                        + "Remove files from the message you are writing first."
+                )
+                break
+            }
+            guard let removed = controller.removeQueuedEntry(id: id) else { return }
+            var text = removed.text
+            if let parts = Self.editParts(of: removed.text, attachments: controller.attachments, room: room) {
+                text = parts.text
+                attachmentDraft.restore(parts.files)
+            }
+            draft = draft.isEmpty ? text : (text.isEmpty ? draft : text + "\n" + draft)
             composerFocusRequest += 1
         case .remove(let id):
             controller?.removeQueuedEntry(id: id, discardingAttachments: true)
@@ -613,6 +722,23 @@ final class CoordinatorChatModel: ObservableObject {
 
     func requestComposerFocus() {
         composerFocusRequest += 1
+    }
+
+    /// A waiting message's text without its list of files, and the files,
+    /// for Edit. `nil` when the files cannot come back as attachments: a
+    /// file that is not a copy in the coordinator's folder anymore, or more
+    /// files than `room`. The text then keeps its paths.
+    static func editParts(
+        of text: String,
+        attachments: CoordinatorAttachments,
+        room: Int
+    ) -> (text: String, files: [URL])? {
+        guard let (rest, paths) = CoordinatorMessageHeader.attachedFiles(in: text), paths.count <= room else {
+            return nil
+        }
+        let files = paths.map { URL(filePath: $0) }
+        guard files.allSatisfy(attachments.isStagedCopy) else { return nil }
+        return (rest, files)
     }
 
     // MARK: - The keyboard

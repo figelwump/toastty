@@ -660,7 +660,8 @@ you when it is not sure, and creates the task.
 - **See and remove a waiting message** in the coordinator's chat: it shows as
   **Queued** with **Edit** and **Remove**. Remove also deletes the copies of
   its files. Edit puts the text into the chat's field as Toastty would type
-  it, with its first line and the paths of its files.
+  it, with its first line, and its files go back above the field as
+  attachments.
 - **Typed once.** Toastty saves that it starts to type a message before the
   text goes to the terminal. If Toastty quits in that moment, the message is
   not typed again after the relaunch: it shows as **Paused**, and the chat
@@ -706,6 +707,20 @@ under it. On macOS 14 the panel shows the terminal.
   waiting message is saved, so it is still there after a relaunch. The
   field's hint names the quick entry shortcut, which sends to the coordinator
   from any app.
+- **Attach files.** The **+** button next to the field attaches files
+  (**Files…**) or photos from the Photos library (**Photos…**). You can also
+  drop files or images on the field or anywhere on the chat, and paste a
+  copied file or image. Pasted or dropped text stays text. Each file shows
+  above the field, an image with a preview; **×** removes it. A message can
+  have up to 10 files of up to 50 MB each, and files alone can be a message.
+  A photo in a format that Claude cannot read, such as HEIC, is sent as a
+  JPEG. When you send, Toastty copies the files to
+  `~/.toastty/coordinator/attachments/<message ID>/` and the message ends
+  with their paths, as a message from the quick entry panel does. The chat
+  shows your text and the names of the files, also on a waiting message,
+  which counts its files. **Edit** puts a waiting message's files back above
+  the field; they stay in their folder until the message that names them is
+  sent and expires, or is removed.
 - **Stop.** While a turn runs and the field is empty, the button stops the
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send

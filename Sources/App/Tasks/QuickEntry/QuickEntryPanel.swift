@@ -281,49 +281,13 @@ enum QuickEntryPlacement {
     }
 }
 
-/// Accepts drops anywhere on the panel and hands them to the model.
-@MainActor
-final class QuickEntryDropTarget {
-    weak var model: QuickEntryModel?
-
-    init(model: QuickEntryModel?) {
-        self.model = model
-    }
-
-    /// Files, promised files and images become attachments.
-    static func carriesAttachments(_ pasteboard: NSPasteboard) -> Bool {
-        pasteboard.availableType(from: QuickEntryModel.droppableTypes.filter { $0 != .URL }) != nil
-    }
-
-    static func carriesLink(_ pasteboard: NSPasteboard) -> Bool {
-        pasteboard.availableType(from: [.URL]) != nil
-    }
-
-    func dropEntered(_ pasteboard: NSPasteboard, acceptsLinks: Bool = false) -> Bool {
-        guard Self.carriesAttachments(pasteboard) || (acceptsLinks && Self.carriesLink(pasteboard)) else {
-            return false
-        }
-        model?.isDropTargeted = true
-        return true
-    }
-
-    func dropExited() {
-        model?.isDropTargeted = false
-    }
-
-    func performDrop(_ pasteboard: NSPasteboard) -> Bool {
-        model?.isDropTargeted = false
-        return model?.handleDrop(from: pasteboard) ?? false
-    }
-}
-
 /// The panel's content: SwiftUI inside a view that takes drops, so a file
 /// dropped on the footer or the border attaches too.
 @MainActor
 final class QuickEntryContentView: NSView {
-    private let dropTarget: QuickEntryDropTarget
+    private let dropTarget: AttachmentDropTarget
 
-    init<Content: View>(rootView: Content, dropTarget: QuickEntryDropTarget) {
+    init<Content: View>(rootView: Content, dropTarget: AttachmentDropTarget) {
         self.dropTarget = dropTarget
         super.init(frame: NSRect(origin: .zero, size: QuickEntryPanel.defaultSize))
         let hostingView = NSHostingView(rootView: rootView)
@@ -335,7 +299,7 @@ final class QuickEntryContentView: NSView {
             hostingView.topAnchor.constraint(equalTo: topAnchor),
             hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        registerForDraggedTypes(QuickEntryModel.droppableTypes)
+        registerForDraggedTypes(DraftAttachments.droppableTypes)
     }
 
     @available(*, unavailable)
@@ -349,7 +313,7 @@ final class QuickEntryContentView: NSView {
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
         let pasteboard = sender.draggingPasteboard
-        return QuickEntryDropTarget.carriesAttachments(pasteboard) || QuickEntryDropTarget.carriesLink(pasteboard) ? .copy : []
+        return AttachmentDropTarget.carriesAttachments(pasteboard) || AttachmentDropTarget.carriesLink(pasteboard) ? .copy : []
     }
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {

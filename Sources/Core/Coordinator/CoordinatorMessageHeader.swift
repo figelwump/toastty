@@ -157,11 +157,20 @@ public enum CoordinatorMessageHeader {
     }
 
     /// The message as a chat shows it in the user's bubble: a quick entry
-    /// message without Toastty's first line and without the folder of each
-    /// attached file. Any other message is shown as it is.
+    /// message without Toastty's first line, and any message without the
+    /// folder of each attached file. A message without either is shown as
+    /// it is.
     public static func displayText(of message: String) -> String {
-        guard case .quickEntry(let text, let detail) = kind(of: message) else { return message }
-        return [text, detail].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        switch kind(of: message) {
+        case .quickEntry(let text, let detail):
+            return [text, detail].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        case .plain:
+            let (text, fileNames) = splitAttachments(message)
+            guard fileNames.isEmpty == false else { return message }
+            return [text, fileNames.joined(separator: ", ")].filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        case .digest, .fromSender:
+            return message
+        }
     }
 
     private static func splitFirstLine(_ message: String) -> (first: Substring, rest: String) {
@@ -209,22 +218,45 @@ public enum CoordinatorMessageHeader {
         return String(text[..<id.lowerBound])
     }
 
-    /// Takes the list of attached files off the end of the text, and gives
-    /// the name of each file. Only a list as Toastty writes it counts: the
-    /// introduction, then nothing but one path in a code span on each
-    /// line, to the end. Text that only quotes those words stays text.
-    private static func splitAttachments(_ text: String) -> (text: String, fileNames: [String]) {
+    /// The list of attached files at the end of a message: the text before
+    /// it, and the path of each file. Only a list as Toastty writes it
+    /// counts: the introduction, then nothing but one absolute path in a
+    /// code span on each line, to the end. `nil` for a message without such
+    /// a list; text that only quotes those words stays text.
+    public static func attachedFiles(in message: String) -> (text: String, paths: [String])? {
         let marker = RemoteMessageAttachmentStore.Staged.attachmentsIntroduction
-        guard let range = text.range(of: marker, options: .backwards) else { return (text, []) }
-        var names: [String] = []
-        for line in text[range.upperBound...].split(whereSeparator: \.isNewline) {
-            guard line.hasPrefix("`"), line.hasSuffix("`") else { return (text, []) }
-            let path = line.trimmingCharacters(in: CharacterSet(charactersIn: "` "))
-            guard path.hasPrefix("/") else { return (text, []) }
-            names.append((path as NSString).lastPathComponent)
+        guard let range = message.range(of: marker, options: .backwards) else { return nil }
+        var paths: [String] = []
+        for line in message[range.upperBound...].split(whereSeparator: \.isNewline) {
+            guard let path = codeSpanContent(line), path.hasPrefix("/") else { return nil }
+            paths.append(path)
         }
-        guard names.isEmpty == false else { return (text, []) }
-        return (text[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines), names)
+        guard paths.isEmpty == false else { return nil }
+        return (message[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines), paths)
+    }
+
+    /// The text inside a code span that is the whole line, as
+    /// `RemoteMessageAttachmentStore.Staged.codeSpan` writes it.
+    private static func codeSpanContent(_ rawLine: Substring) -> String? {
+        let line = rawLine.trimmingCharacters(in: .whitespaces)
+        let fence = String(line.prefix { $0 == "`" })
+        guard fence.isEmpty == false, line.count > fence.count * 2, line.hasSuffix(fence) else { return nil }
+        var content = line.dropFirst(fence.count).dropLast(fence.count)
+        // The closing run of backticks must be as long as the opening one.
+        guard content.last != "`" else { return nil }
+        // A path that starts or ends with a backtick is padded with a space.
+        if content.count > 2, content.hasPrefix(" "), content.hasSuffix(" "),
+           content.dropFirst().hasPrefix("`") || content.dropLast().hasSuffix("`") {
+            content = content.dropFirst().dropLast()
+        }
+        return String(content)
+    }
+
+    /// Takes the list of attached files off the end of the text, and gives
+    /// the name of each file.
+    private static func splitAttachments(_ text: String) -> (text: String, fileNames: [String]) {
+        guard let (rest, paths) = attachedFiles(in: text) else { return (text, []) }
+        return (rest, paths.map { ($0 as NSString).lastPathComponent })
     }
 
     // MARK: - Text that is safe in a header

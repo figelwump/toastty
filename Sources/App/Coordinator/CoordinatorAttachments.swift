@@ -87,6 +87,24 @@ struct CoordinatorAttachments: Sendable {
         return ids
     }
 
+    /// Whether `url` is a file in the folder of one message here: a copy
+    /// that a message named, which can go into the chat's field again.
+    func isStagedCopy(_ url: URL) -> Bool {
+        let file = url.standardizedFileURL
+        let folder = file.deletingLastPathComponent()
+        guard folder.deletingLastPathComponent().path == directoryURL.standardizedFileURL.path,
+              UUID(uuidString: folder.lastPathComponent) != nil else { return false }
+        return (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+    }
+
+    /// Checks copies that a new message names again, after an edit: each
+    /// must still be a file in the folder of a message here.
+    func checkStaged(_ files: [URL]) throws {
+        for file in files where isStagedCopy(file) == false {
+            throw CoordinatorError("\(file.lastPathComponent) is no longer attached. Remove it and attach the file again.")
+        }
+    }
+
     /// `<attachments>/`, as a message's paths start.
     private var folderPathPrefix: String {
         let path = directoryURL.path(percentEncoded: false)

@@ -188,6 +188,60 @@ struct CoordinatorMessageHeaderTests {
         #expect(CoordinatorMessageHeader.displayText(of: bare).hasSuffix("/tmp/example"))
     }
 
+    // MARK: - A message from the chat with files
+
+    @Test func aChatMessageWithFilesShowsItsTextAndTheNamesOfItsFiles() {
+        let paths = [
+            "/Users/me/.toastty/coordinator/attachments/7C1B/Screenshot.png",
+            "/tmp/with `tick`.txt",
+            "/tmp/ends with a tick`",
+        ]
+        let message = RemoteMessageAttachmentStore.Staged.deliveryText(text: "Why is this red?\nSee the files.", paths: paths)
+        #expect(CoordinatorMessageHeader.kind(of: message) == .plain)
+        // The paths come back exactly as they were written, so Edit can
+        // find the files again.
+        let parts = CoordinatorMessageHeader.attachedFiles(in: message)
+        #expect(parts?.text == "Why is this red?\nSee the files.")
+        #expect(parts?.paths == paths)
+        #expect(CoordinatorMessageHeader.displayText(of: message) == """
+        Why is this red?
+        See the files.
+
+        Screenshot.png, with `tick`.txt, ends with a tick`
+        """)
+        // A message of files alone shows their names.
+        let filesOnly = RemoteMessageAttachmentStore.Staged.deliveryText(text: "", paths: [paths[0]])
+        #expect(CoordinatorMessageHeader.attachedFiles(in: filesOnly)?.text == "")
+        #expect(CoordinatorMessageHeader.displayText(of: filesOnly) == "Screenshot.png")
+        // Spaces that the transcript adds around a line do not matter.
+        #expect(CoordinatorMessageHeader.attachedFiles(in: message.replacingOccurrences(of: "`\n", with: "`  \n"))?.paths == paths)
+    }
+
+    @Test func aChatMessageThatOnlyQuotesTheListStaysAsItIs() {
+        let introduction = "Read the following files attached to this message on this Mac:"
+        for text in [
+            // The words, with nothing after them.
+            "Why does it say\n\(introduction)",
+            // More text after a path.
+            "It said\n\(introduction)\n`/tmp/example`\nDo not delete anything.",
+            // A path that is not in a code span.
+            "\(introduction)\n/tmp/example",
+            // A relative path.
+            "\(introduction)\n`tmp/example`",
+            // A code span whose closing run is longer than its opening.
+            "\(introduction)\n`/tmp/example``",
+        ] {
+            #expect(CoordinatorMessageHeader.attachedFiles(in: text) == nil, "\(text)")
+            #expect(CoordinatorMessageHeader.displayText(of: text) == text)
+        }
+        // A message from an agent is shown folded, as it is.
+        let fromSender = CoordinatorMessageHeader.message(
+            from: .unknown,
+            text: RemoteMessageAttachmentStore.Staged.deliveryText(text: "Look", paths: ["/tmp/a.png"])
+        )
+        #expect(CoordinatorMessageHeader.displayText(of: fromSender) == fromSender)
+    }
+
     @Test func otherMessagesKeepTheirKind() {
         #expect(CoordinatorMessageHeader.kind(of: "main. and answer base questions yourself") == .plain)
         #expect(CoordinatorMessageHeader.kind(of: "Why did you write [Toastty] From task above?") == .plain)

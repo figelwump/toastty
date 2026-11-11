@@ -1,59 +1,168 @@
 import AppKit
+import CoreState
+import PhotosUI
 import SwiftUI
 
-/// The composer for a message to the coordinator: a text field that grows
-/// with its text, and one button that sends, or stops the running turn.
+/// The composer for a message to the coordinator: a row of attached files,
+/// a ＋ menu that attaches files or photos, a text field that grows with its
+/// text, and one button that sends, or stops the running turn.
 ///
 /// It knows nothing about the chat around it, so another window can host
-/// it: the host gives the text, the state and the actions.
+/// it: the host gives the text, the files, the state and the actions.
 struct CoordinatorComposerView: View {
     @Binding var text: String
+    /// The files attached to the message.
+    @ObservedObject var attachments: DraftAttachments
     var placeholder = "Message the coordinator…"
     /// A turn runs that Stop can end.
     let canStop: Bool
+    /// False while the message is being sent with its files.
+    var isEditable = true
     /// Counts up each time the text field should take the keyboard.
     let focusRequestID: Int
     let onSend: () -> Void
     let onStop: () -> Void
+    /// ＋ › Files…: opens the open panel.
+    var onChooseFiles: () -> Void = {}
+    /// Takes files dropped on the text field. Required: without it,
+    /// AppKit would type a dropped file's path into the text.
+    let dropTarget: AttachmentDropTarget
     /// Tells the host which text view is the composer's, so the host can
     /// give it the keyboard.
     var onTextView: (NSTextView?) -> Void = { _ in }
 
-    private var canSend: Bool {
+    @State private var isPhotosPickerPresented = false
+    @State private var photoSelection: [PhotosPickerItem] = []
+
+    /// Text or a file to send.
+    private var hasMessage: Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || attachments.attachments.isEmpty == false
+    }
+
+    /// A file that is still being copied holds the message back.
+    private var canSend: Bool {
+        hasMessage && isEditable && attachments.pendingCount == 0
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            CoordinatorComposerTextEditor(
-                text: $text,
-                placeholder: placeholder,
-                focusRequestID: focusRequestID,
-                onSubmit: { if canSend { onSend() } },
-                onTextView: onTextView
-            )
-            .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 4) {
+            if attachments.isEmpty == false {
+                tray
+            }
+            HStack(alignment: .bottom, spacing: 6) {
+                attachMenu
 
-            // Stop while a turn runs and the field is empty. With text in
-            // the field the button sends: the message then waits its turn.
-            if canStop, canSend == false {
-                button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
-                    .help("Stop the coordinator's turn")
-            } else {
-                button(systemImage: "arrow.up", label: "Send", identifier: "coordinator.chat.send", action: onSend)
-                    .disabled(canSend == false)
-                    .help("Send (Return). Shift-Return starts a new line.")
+                CoordinatorComposerTextEditor(
+                    text: $text,
+                    placeholder: placeholder,
+                    isEditable: isEditable,
+                    focusRequestID: focusRequestID,
+                    onSubmit: { if canSend { onSend() } },
+                    onPasteAttachments: { attachments.pasteAttachments(from: $0) },
+                    canPasteAttachments: { attachments.canPasteAttachments(from: $0) },
+                    dropTarget: dropTarget,
+                    onTextView: onTextView
+                )
+                .padding(.vertical, 4)
+
+                // Stop while a turn runs and the field is empty. With text in
+                // the field the button sends: the message then waits its turn.
+                if canStop, hasMessage == false {
+                    button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
+                        .help("Stop the coordinator's turn")
+                } else {
+                    button(systemImage: "arrow.up", label: "Send", identifier: "coordinator.chat.send", action: onSend)
+                        .disabled(canSend == false)
+                        .help("Send (Return). Shift-Return starts a new line.")
+                }
             }
         }
-        .padding(.leading, 12)
+        .padding(.leading, 6)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
         .background(ToastyTheme.elevatedBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(ToastyTheme.hairline, lineWidth: 1)
+                .strokeBorder(
+                    attachments.isDropTargeted ? ToastyTheme.accent : ToastyTheme.hairline,
+                    lineWidth: attachments.isDropTargeted ? 1.5 : 1
+                )
         }
+        .photosPicker(
+            isPresented: $isPhotosPickerPresented,
+            selection: $photoSelection,
+            maxSelectionCount: max(1, TaskRecord.maximumAttachmentCount - attachments.attachments.count - attachments.pendingCount),
+            matching: .images
+        )
+        .onChange(of: photoSelection) { _, items in
+            guard items.isEmpty == false else { return }
+            attachments.attachPhotos(items)
+            photoSelection = []
+        }
+    }
+
+    static let trayHeight: CGFloat = 74
+
+    /// The attached files, in a row that scrolls sideways once it is full,
+    /// with a spinner while a file is being copied in.
+    private var tray: some View {
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(attachments.attachments) { attachment in
+                        AttachmentChip(attachment: attachment, accessibilityIdentifier: "coordinator.chat.attachment") {
+                            attachments.remove(id: attachment.id)
+                        }
+                        .disabled(isEditable == false)
+                    }
+                    if attachments.pendingCount > 0 {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 4)
+                            .accessibilityLabel("Copying a file")
+                            .accessibilityIdentifier("coordinator.chat.attachment.copying")
+                    }
+                    Color.clear.frame(width: 1, height: 1).id(Self.trayEndID)
+                }
+                .padding(.vertical, 1)
+                .padding(.leading, 2)
+            }
+            .frame(height: Self.trayHeight)
+            // Keeps the newest file in view once the files fill the row.
+            .onChange(of: attachments.attachments.count + attachments.pendingCount) {
+                scroller.scrollTo(Self.trayEndID, anchor: .trailing)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coordinator.chat.attachments")
+    }
+
+    private static let trayEndID = "end"
+
+    /// ＋: attach files with the open panel, or photos from Photos.
+    private var attachMenu: some View {
+        Menu {
+            Button("Files…", action: onChooseFiles)
+                .accessibilityIdentifier("coordinator.chat.attach.files")
+            Button("Photos…") { isPhotosPickerPresented = true }
+                .accessibilityIdentifier("coordinator.chat.attach.photos")
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ToastyTheme.subtleText)
+                .frame(width: 24, height: 24)
+                .contentShape(Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.bottom, 4)
+        .disabled(isEditable == false || attachments.canAttachMore == false)
+        .help("Attach files or photos. You can also paste or drop them here.")
+        .accessibilityLabel("Attach")
+        .accessibilityIdentifier("coordinator.chat.attach")
     }
 
     private func button(
@@ -82,8 +191,13 @@ struct CoordinatorComposerView: View {
 struct CoordinatorComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
+    var isEditable = true
     let focusRequestID: Int
     let onSubmit: () -> Void
+    /// Returns true when it took the pasteboard as attachments.
+    let onPasteAttachments: (NSPasteboard) -> Bool
+    let canPasteAttachments: (NSPasteboard) -> Bool
+    let dropTarget: AttachmentDropTarget
     let onTextView: (NSTextView?) -> Void
 
     static let fontSize: CGFloat = 13
@@ -131,6 +245,8 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         // that is made while its workspace is hidden must not take it.
         context.coordinator.lastFocusRequestID = focusRequestID
         configure(textView)
+        // Takes files and images as well as text.
+        textView.updateDragTypeRegistration()
         onTextView(textView)
         return scrollView
     }
@@ -177,7 +293,13 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
 
     private func configure(_ textView: CoordinatorComposerTextView) {
         textView.placeholder = placeholder
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+        }
         textView.onSubmit = onSubmit
+        textView.onPasteAttachments = onPasteAttachments
+        textView.canPasteAttachments = canPasteAttachments
+        textView.dropTarget = dropTarget
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -196,7 +318,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     }
 }
 
-final class CoordinatorComposerTextView: NSTextView {
+final class CoordinatorComposerTextView: AttachmentTextView {
     var placeholder = "" {
         didSet { needsDisplay = true }
     }
@@ -238,11 +360,6 @@ final class CoordinatorComposerTextView: NSTextView {
             }
         }
         super.keyDown(with: event)
-    }
-
-    // The message is plain text, whatever the pasteboard carries.
-    override func paste(_ sender: Any?) {
-        pasteAsPlainText(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {
