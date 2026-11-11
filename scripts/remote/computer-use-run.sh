@@ -457,7 +457,10 @@ run_remote_prepare_mode() {
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
-  "$app_binary" >"$app_log" 2>&1 &
+  # A new runtime home is a first launch, at which Toastty asks whether to
+  # start the coordinator, in a sheet over the window. The session is about
+  # something else, so it starts with the question answered.
+  "$app_binary" -toastty.coordinator.startOfferAnswered YES >"$app_log" 2>&1 &
   app_pid=$!
 
   for _ in $(seq 1 300); do

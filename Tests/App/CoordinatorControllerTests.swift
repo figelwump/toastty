@@ -35,7 +35,12 @@ struct CoordinatorControllerTests {
         /// app does.
         let queueFileURL: URL
 
-        init(readinessTimeout: Duration = .seconds(3)) throws {
+        /// `trustFolder` is the app's step that tells the agent that the
+        /// coordinator's folder is trusted.
+        init(
+            readinessTimeout: Duration = .seconds(3),
+            trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in }
+        ) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
             self.tasks = tasks
             directory = tasks.root.appendingPathComponent("runtime-home/coordinator", isDirectory: true)
@@ -55,6 +60,7 @@ struct CoordinatorControllerTests {
                     if let configError = tasks.configError { throw configError }
                     return tasks.config
                 },
+                trustFolder: trustFolder,
                 deliverText: { text, panelID in
                     let result = terminals.sendTextResult(text, submit: true, panelID: panelID, focusPolicy: .preserveFirstResponder)
                     return result == .delivered ? (deliveryOverride.result?() ?? result) : result
@@ -312,6 +318,63 @@ struct CoordinatorControllerTests {
         )))
         #expect(try fixture.status().agentState == .notRunning)
         #expect(try await fixture.controller.open().startedAgent)
+    }
+
+    // MARK: - Folder trust
+
+    /// What the trust step saw when it ran.
+    @MainActor
+    private final class TrustStep {
+        weak var fixture: Fixture?
+        var commandsSentBeforeTheWrite: Int?
+    }
+
+    @Test func aStartTellsClaudeCodeThatTheCoordinatorsFolderIsTrustedBeforeTheAgentRuns() async throws {
+        // Claude Code's config file of a user who trusted their own
+        // folders, in a home of this test.
+        let home = try ClaudeFolderTrustTests.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appending(path: ".claude.json")
+        try Data(#"{"numStartups": 3, "projects": {"/Users/someone/repos": {"hasTrustDialogAccepted": true}}}"#.utf8)
+            .write(to: config)
+        let environment = ["HOME": home.path]
+        let step = TrustStep()
+        let fixture = try Fixture(trustFolder: { [step] profileID, directory in
+            // The app's step.
+            await ClaudeFolderTrust.trustCoordinatorFolder(
+                directory, profileID: profileID, profileArgv: [], environment: environment
+            )
+            step.commandsSentBeforeTheWrite = step.fixture?.tasks.router.sendAttemptCount
+        })
+        step.fixture = fixture
+
+        try await fixture.controller.open()
+        // The entry was there before the agent's command went to the
+        // terminal, so the agent never asks.
+        #expect(step.commandsSentBeforeTheWrite == 0)
+        #expect(fixture.tasks.router.sendAttemptCount == 1)
+        let folderKey = try #require(ClaudeFolderTrust.folderKey(for: fixture.directory))
+        func document() throws -> [String: Any] {
+            try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any])
+        }
+        // The coordinator's own folder and no other: not the folder above
+        // it, and the user's entries are as they were.
+        #expect(try document()["projects"] as? [String: [String: Bool]] == [
+            "/Users/someone/repos": ["hasTrustDialogAccepted": true],
+            folderKey: ["hasTrustDialogAccepted": true],
+        ])
+        #expect(try document()["numStartups"] as? Int == 3)
+
+        // A restart finds the folder trusted and leaves the file alone.
+        let text = try String(contentsOf: config, encoding: .utf8)
+        try await fixture.controller.restart()
+        #expect(try String(contentsOf: config, encoding: .utf8) == text)
+
+        // Another agent has no such file to write.
+        fixture.tasks.config.coordinator.agent = "codex"
+        try Data(#"{"projects": {}}"#.utf8).write(to: config)
+        try await fixture.controller.restart()
+        #expect(try String(contentsOf: config, encoding: .utf8) == #"{"projects": {}}"#)
     }
 
     // MARK: - Restart

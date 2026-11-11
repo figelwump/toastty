@@ -133,6 +133,9 @@ launch_toastty_app() {
     "TOASTTY_RUNTIME_LABEL=$RUNTIME_LABEL"
     "TOASTTY_DERIVED_PATH=$DERIVED_PATH"
     "$APP_BINARY"
+    # A new runtime home is a first launch. This run is not about the
+    # question whether to start the coordinator, a sheet over the window.
+    -toastty.coordinator.startOfferAnswered YES
   )
   "${launch_command[@]}"
 }

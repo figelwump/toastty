@@ -234,7 +234,7 @@ enum AgentLaunchUI {
         }
     }
 
-    private static func window(for windowID: UUID) -> NSWindow? {
+    static func window(for windowID: UUID) -> NSWindow? {
         let identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
         return NSApplication.shared.windows.first { $0.identifier == identifier }
     }

@@ -67,13 +67,20 @@ def wait_for(description, probe, timeout=TIMEOUT, interval=0.2):
     raise AssertionError(f'Timed out waiting for {description}; last value: {last!r}')
 
 
+# A new runtime home is a first launch, at which Toastty asks whether to start
+# the coordinator. The question is a sheet over the window. A check that is
+# not about the question starts the app with it answered.
+START_OFFER_ANSWERED = ('-toastty.coordinator.startOfferAnswered', 'YES')
+
+
 class Instance:
     """One running app on a private socket and runtime home."""
 
-    def __init__(self, binary, environment, socket_path, runtime_home, log_path):
+    def __init__(self, binary, environment, socket_path, runtime_home, log_path, arguments=START_OFFER_ANSWERED):
         self.socket_path, self.runtime_home = socket_path, runtime_home
         self.log = open(log_path, 'a')
-        self.process = subprocess.Popen([str(binary)], env=environment, stdout=self.log, stderr=subprocess.STDOUT)
+        self.process = subprocess.Popen([str(binary), *arguments], env=environment,
+                                        stdout=self.log, stderr=subprocess.STDOUT)
 
     def request(self, command, payload):
         envelope = dict(protocolVersion='1.0', kind='request', requestID=str(uuid.uuid4()),

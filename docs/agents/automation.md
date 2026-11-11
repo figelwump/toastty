@@ -355,6 +355,59 @@ transcripts under the run's artifacts directory. A build that can capture its
 window outside automation mode also writes PNG frames; a normal build cannot,
 and the check records that and continues.
 
+### Coordinator first run
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-first-run-check.py --gui-session'
+```
+
+This check mutates disposable Toastty instances on the dedicated validation
+Mac, one for each scenario, each with a throwaway runtime home and user home;
+the installed production app is not touched. It covers what a new user meets:
+the question whether to start the coordinator, Claude Code's folder trust for
+the coordinator's folder, and the chat's notice while the agent waits in its
+terminal; see [The coordinator](../tasks.md#the-coordinator). It needs the
+remote Mac's screen unlocked, and takes about ten minutes.
+
+The coordinator is the real, authenticated Claude CLI, so the run uses
+subscription usage. Unlike the other checks with the real CLI, it does not
+mark the coordinator's folder as trusted: the app does. The run changes
+`~/.claude.json` only for its own temporary folders, removes those entries at
+the end under Claude Code's lock, and fails when an entry that the file had
+before is missing. It keeps a copy of the file beside it during the run, and
+writes only key names, counts and checksums to the evidence.
+
+`--scenario start|not-now|notice` runs one scenario; the default is all
+three. Every action a person makes goes through the real UI, as in the
+coordinator chat check, with `ax-drive`'s `sheet-texts`, `menu` and
+`menu-enabled` commands for the question and the Agent menu.
+
+- `start`: a first launch asks once; **Start Coordinator** opens the
+  coordinator; Claude reaches its first prompt with no folder-trust question
+  and answers the first message; two other Claude sessions that run at the
+  same time keep what they saved in `~/.claude.json`; a relaunch restores the
+  coordinator and asks nothing.
+- `not-now`: **Not Now** starts nothing and a relaunch does not ask again;
+  **Open Coordinator** in the command palette and in the Agent menu opens it;
+  **Restart Coordinator** is offered only while it is open.
+- `notice`: the `claude` profile starts with `env -u …`, so the app cannot
+  tell its config file and writes no trust. Claude asks about the folder, the
+  chat says that the agent may wait in the terminal, **Show Terminal** shows
+  the question, and after a real Return there the waiting message is typed
+  and answered. `--expect-notice no` runs this scenario against a build from
+  before the notice and expects the chat to say nothing.
+
+Every other live check starts its app with
+`-toastty.coordinator.startOfferAnswered YES`
+(`START_OFFER_ANSWERED` in `remote-task-create-check.py`), because a new
+runtime home is a first launch and the question is a sheet over the window.
+Pass it in a new check that is not about the question.
+
+It writes `remote-coordinator-first-run-check.json`, the app logs and Claude's
+transcripts under the run's artifacts directory, and PNG frames when the
+build can capture its window outside automation mode.
+
 ### Coordinator skill
 
 ```bash

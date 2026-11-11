@@ -824,8 +824,39 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            // The coordinator is an agent session in its own workspace. The
+            // command palette offers the same two commands.
+            Button(Self.openCoordinatorTitle) {
+                performCoordinatorCommand(.open)
+            }
+            .disabled(coordinatorController == nil)
+
+            Button(Self.restartCoordinatorTitle) {
+                performCoordinatorCommand(.restart)
+            }
+            .disabled(Self.canRestartCoordinator(coordinatorController) == false)
+
+            Divider()
+
             Button("Manage Agents…", action: openAgentProfilesConfiguration)
         }
+    }
+
+    static let openCoordinatorTitle = "Open Coordinator"
+    static let restartCoordinatorTitle = "Restart Coordinator"
+
+    /// `nil` when this Toastty has no task system.
+    private var coordinatorController: CoordinatorController? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController
+    }
+
+    /// Restart is for a coordinator that is open, as in the command palette.
+    static func canRestartCoordinator(_ controller: CoordinatorController?) -> Bool {
+        controller?.location != nil
+    }
+
+    private func performCoordinatorCommand(_ command: CoordinatorController.UserCommand) {
+        coordinatorController?.perform(command, windowID: commandSelection?.windowID)
     }
 
     private func selectWorkspaceFromCommandSelection(workspaceID: UUID) {

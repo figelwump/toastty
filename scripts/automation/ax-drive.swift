@@ -16,7 +16,10 @@
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
-//   key <return|shift-return|escape|cmd-period>
+//   key <return|shift-return|escape|cmd-period|cmd-shift-p>
+//   sheet-texts                   Print the text of the sheet on a window. Exit code 2: no sheet shows.
+//   menu <menu> <item>            Open the menu in the menu bar and choose the item.
+//   menu-enabled <menu> <item>    Open the menu, print "enabled" or "disabled" for the item, and close the menu.
 // `identifier` is an accessibility identifier. Exit code 2: not found.
 import AppKit
 import ApplicationServices
@@ -131,7 +134,48 @@ func activate() {
     usleep(400_000)
 }
 
+/// The item of a menu in the menu bar, once the menu is open.
+func menuItem(in barItem: AXUIElement, titled title: String) -> AXUIElement? {
+    for menu in children(barItem) {
+        if let item = children(menu).first(where: { attribute($0, kAXTitleAttribute) as? String == title }) {
+            return item
+        }
+    }
+    return nil
+}
+
 switch command {
+case "sheet-texts":
+    guard let sheet = find(app, where: { attribute($0, kAXRoleAttribute) as? String == (kAXSheetRole as String) }) else {
+        print("NO SHEET")
+        exit(2)
+    }
+    print(texts(sheet).joined(separator: "\n"))
+case "menu", "menu-enabled":
+    let itemTitle = arguments.count > 4 ? arguments[4] : ""
+    activate()
+    let barItem = waitFor("menu \(argument)") {
+        guard let bar = attribute(app, kAXMenuBarAttribute) else { return nil }
+        return children(bar as! AXUIElement).first { attribute($0, kAXTitleAttribute) as? String == argument }
+    }
+    // Open the menu as a person does, so its items are as the user sees them.
+    AXUIElementPerformAction(barItem, kAXPressAction as CFString)
+    usleep(400_000)
+    let item = waitFor("\(itemTitle) in the menu \(argument)") { menuItem(in: barItem, titled: itemTitle) }
+    let enabled = (attribute(item, kAXEnabledAttribute) as? Bool) ?? false
+    if command == "menu-enabled" {
+        print(enabled ? "enabled" : "disabled")
+        // An open menu takes the keys and clicks that follow.
+        press(keyCode: 53)
+        break
+    }
+    guard enabled else {
+        press(keyCode: 53)
+        print("DISABLED \(itemTitle)")
+        exit(3)
+    }
+    AXUIElementPerformAction(item, kAXPressAction as CFString)
+    print("chose \(argument) > \(itemTitle)")
 case "status":
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     let locked = (session?["CGSSessionScreenIsLocked"] as? Bool) ?? false
@@ -232,6 +276,7 @@ case "key":
     case "shift-return": press(keyCode: 36, flags: .maskShift)
     case "escape": press(keyCode: 53)
     case "cmd-period": press(keyCode: 47, flags: .maskCommand)
+    case "cmd-shift-p": press(keyCode: 35, flags: [.maskCommand, .maskShift])
     default:
         print("unknown key \(argument)")
         exit(64)
