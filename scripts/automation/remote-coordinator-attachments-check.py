@@ -67,10 +67,12 @@ def other_runs(own_pids=()):
     The Mac is shared, and two GUI checks must not run at once: the clicks,
     keys and global shortcuts of one reach the other's app."""
     listing = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
+    # This run's build, which the validation wrapper also starts.
+    own_bundle = os.environ.get('TOASTTY_APP_BUNDLE', '')
     found = []
     for line in listing.splitlines():
         pid, _, command = line.strip().partition(' ')
-        if not pid.isdigit() or int(pid) in own_pids:
+        if not pid.isdigit() or int(pid) in own_pids or (own_bundle and own_bundle in command):
             continue
         other_check = re.search(r'remote-[a-z0-9-]+-check\.py', command) and NAME not in command
         other_app = '/toastty-remote-gui/' in command and 'Toastty.app/Contents/MacOS/Toastty' in command
