@@ -1286,6 +1286,9 @@ function FormattedMarkdownView(props: {
   }>({ outer: null, inner: null });
   const [activeReveal, setActiveReveal] = React.useState<ActiveReveal | null>(null);
   const { filePath, contentRevision, isEditing } = props.bootstrap;
+  // React re-assigns innerHTML whenever this prop object changes, which would
+  // drop opened <details>, text selection, and reveal marks on every render.
+  const articleHTML = React.useMemo(() => ({ __html: props.html }), [props.html]);
 
   const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
     assignObjectRef(scrollRef, node);
@@ -1459,7 +1462,7 @@ function FormattedMarkdownView(props: {
           ref={handleContentRef}
           className="local-document-formatted markdown-prose"
           onClick={handleClick}
-          dangerouslySetInnerHTML={{ __html: props.html }}
+          dangerouslySetInnerHTML={articleHTML}
         />
       </div>
     </section>
