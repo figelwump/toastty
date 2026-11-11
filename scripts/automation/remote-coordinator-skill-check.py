@@ -805,7 +805,8 @@ def check_first_run_saved(run, commits_before):
     """After the user's yes: each asked section holds a rule, in one commit of the policy."""
     empty = [name for name in FIRST_RUN_SECTIONS if not run.section(name)]
     run.check('after the yes, Projects, Agents, Talking and Reviewing hold rules', not empty, run.policy())
-    run.check('the rules are committed', int(run.git('rev-list', '--count', 'HEAD') or 0) > commits_before
+    run.check('the rules are committed in one commit, so one undo removes them',
+              int(run.git('rev-list', '--count', 'HEAD') or 0) == commits_before + 1
               and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
     run.check('the ledger no longer waits for the answer', 'asked first-run' not in run.ledger(), run.ledger(),
               required=False)
@@ -917,7 +918,8 @@ def first_run_request(run):
 
 
 def first_run_upgrade(run):
-    """A policy from before Talking: it asks only about Talking, and adds the heading."""
+    """A policy from before Talking: it asks only about Talking, adds the heading, and follows the answer."""
+    run.create_task('Fix the unread dot in the sidebar', done=True)
     run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '').format(
         reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
     run.open_coordinator()
@@ -931,6 +933,10 @@ def first_run_upgrade(run):
               run.policy())
     run.check('Talking comes before Notes', run.policy().index('## Talking') < run.policy().index('## Notes'),
               run.policy())
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell("Short question: what is the first line of the app project's README.md?"))
+    run.check('with that rule, it answers a short code question itself', created_since(run, before) == []
+              and re.search(r'\bapp\b', said.lower()), [said, [t['title'] for t in created_since(run, before)]])
 
 
 def permission(run):

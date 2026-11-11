@@ -491,7 +491,8 @@ suggested answer for each part, so that "yes" takes them all:
    change.
 
 If the user's message also holds a request, handle the request first, as the
-turn says. Choose its agent, model and effort from your suggested Agents
+turn says. Choose its project, agent, model and effort as New tasks says.
+Where that gives no model or effort, take them from your suggested Agents
 table, and say so. Then ask.
 
 Add an `asked first-run` line to the ledger, and write nothing to `policy.md`
