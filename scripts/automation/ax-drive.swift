@@ -30,6 +30,8 @@
 // `identifier` is an accessibility identifier. Exit code 2: not found.
 // Exit code 4: a system prompt, such as a permission question, covers the
 // place to click. No click is made: that prompt is the user's to answer.
+// Exit code 5: another app's window covers the place to click. No click is
+// made: the click and the keys after it would go to that app.
 import AppKit
 import ApplicationServices
 import Foundation
@@ -106,23 +108,32 @@ let systemPromptOwners: Set<String> = ["UserNotificationCenter", "CoreServicesUI
 
 /// Stops when a system prompt covers the point. A click there would answer
 /// that prompt, which is the user's to answer, and would not reach the app.
-func requireNoSystemPrompt(at point: CGPoint) {
+/// With `orAnotherApp`, also stops when another app's window covers the
+/// point (exit code 5): the click, and the keys typed after it, would go to
+/// that app, such as the app of another check on a shared Mac.
+func requireNoSystemPrompt(at point: CGPoint, orAnotherApp: Bool = false) {
     // Front to back: the app's own window in front of a prompt is fine.
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     for window in windows {
         guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point) else { continue }
-        if (window[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid { return }
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point),
+              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
+        let ownerPID = (window[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
+        if ownerPID == pid { return }
         let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         if systemPromptOwners.contains(owner) {
             print("COVERED \(Int(point.x)),\(Int(point.y)) is under a system prompt of \(owner)")
             exit(4)
         }
+        if orAnotherApp, owner != "Window Server", owner != "Dock" {
+            print("COVERED \(Int(point.x)),\(Int(point.y)) is under a window of \(owner) (pid \(ownerPID ?? 0))")
+            exit(5)
+        }
     }
 }
 
 func click(at point: CGPoint) {
-    requireNoSystemPrompt(at: point)
+    requireNoSystemPrompt(at: point, orAnotherApp: true)
     let source = CGEventSource(stateID: .hidSystemState)
     for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)

@@ -33,6 +33,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -59,6 +60,28 @@ chat_check = load('chat_check', 'remote-coordinator-chat-check.py')
 coordinator_check = chat_check.coordinator_check
 steer = chat_check.steer
 require, wait_for = coordinator_check.require, coordinator_check.wait_for
+
+
+def other_runs(own_pids=()):
+    """The other checks and the other runs' Toastty instances on this Mac.
+    The Mac is shared, and two GUI checks must not run at once: the clicks,
+    keys and global shortcuts of one reach the other's app."""
+    listing = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
+    found = []
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(' ')
+        if not pid.isdigit() or int(pid) in own_pids:
+            continue
+        other_check = re.search(r'remote-[a-z0-9-]+-check\.py', command) and NAME not in command
+        other_app = '/toastty-remote-gui/' in command and 'Toastty.app/Contents/MacOS/Toastty' in command
+        if other_check or other_app:
+            found.append(line.strip()[:160])
+    return found
+
+
+def require_mini_to_itself(own_pids=()):
+    found = other_runs(own_pids)
+    require(not found, 'Another check runs on this Mac; stopping so the two do not meet: ' + ' | '.join(found))
 
 
 def solid_png(path, rgb, size=160):
@@ -137,6 +160,7 @@ def run(check):
     steer.set_directory_trust(directory, True)
     project = steer.claude_project_directory(directory)
     app_log = check.artifacts / f'{check.prefix}-app.log'
+    require_mini_to_itself()
     instance = chat_check.ChatInstance(check.binary, environment, environment['TOASTTY_SOCKET_PATH'], runtime_home, app_log)
     step = check.step
     check.evidence['stills'] = []
@@ -210,6 +234,10 @@ def run(check):
         ui.run('activate')
         wait_for('the chat', lambda: ui.exists('coordinator.chat') and ui.exists('coordinator.chat.composer'))
         wait_for('Claude at its first prompt', at_prompt, timeout=180)
+        # The agent stays up. A shell prompt in its terminal would end the
+        # session, and the check would test a message that waits.
+        time.sleep(5)
+        require(at_prompt(), f'The coordinator\'s agent did not stay at its prompt: {status()}')
         if ui.has_label('Dismiss'):
             ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
@@ -221,6 +249,7 @@ def run(check):
         step('the chat is open with Claude at its prompt', version=version)
 
         # 1. An image dragged onto the message field, text, Return.
+        require_mini_to_itself({pid})
         source = DragSource(helper, 'file', red, check.root)
         sources.append(source)
         drag(source, middle('coordinator.chat.composer'))
@@ -255,6 +284,7 @@ def run(check):
 
         # 2. A promised file dropped on the conversation, a pasted image, and
         # a file from + > Files….
+        require_mini_to_itself({pid})
         source.close()
         promise = DragSource(helper, 'promise', green, check.root)
         sources.append(promise)
@@ -291,6 +321,7 @@ def run(check):
         still('three-more-attachments')
         step('a promise drop, a paste and Files… attached', chips=chips())
 
+        require_mini_to_itself({pid})
         ui.send('Read every file attached to this message. Reply with exactly one line: ATTACH-OK, then the color '
                 'of the square in each image in the order the files are listed, in lower case, then the secret word '
                 'in the text file. For example: ATTACH-OK purple orange yellow WORD-1')
