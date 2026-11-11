@@ -328,9 +328,10 @@ release contains it.
   because it builds from the branch tip. Before you start one for a single
   task, name the others: "This also ships 3 other merged tasks: …".
 - **Start:** `toastty task release --workspace <workspaceID>`, with the
-  `workspaceID` of a `toShip` task of that project. Do not start one while a
-  release task of the project is open. If the command refuses, tell the user
-  why.
+  project's workspace ID; `toastty --json task workspace-choices` lists it.
+  When the user asks for a release, start it also when no task of the project
+  is in To ship. Do not start one while a release task of the project is
+  open. If the command refuses, tell the user why.
 - **Then follow the release task** like any other task. Its questions about
   versions, approvals and production always go to the user.
 
