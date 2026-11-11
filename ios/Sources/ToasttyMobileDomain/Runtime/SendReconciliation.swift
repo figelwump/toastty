@@ -49,17 +49,22 @@ public struct SendReconciliationRecord: Equatable, Identifiable, Sendable {
     public let text: String
     public let projectionRunID: RemoteProjectionRunID?
     public var deliveryState: SendDeliveryState
+    /// How the message was sent: at the prompt, into the Mac's queue, or
+    /// steered into a running turn. The transcript row's caption says this.
+    public let deliveryMode: RemoteMessageDeliveryMode
 
     public init(
         clientRequestID: String,
         text: String,
         projectionRunID: RemoteProjectionRunID?,
-        deliveryState: SendDeliveryState
+        deliveryState: SendDeliveryState,
+        deliveryMode: RemoteMessageDeliveryMode = .prompt
     ) {
         self.clientRequestID = clientRequestID
         self.text = text
         self.projectionRunID = projectionRunID
         self.deliveryState = deliveryState
+        self.deliveryMode = deliveryMode
     }
 }
 
@@ -119,7 +124,8 @@ public actor SendReconciliation {
     func enqueue(
         clientRequestID: String,
         text: String,
-        projectionRunID: RemoteProjectionRunID? = nil
+        projectionRunID: RemoteProjectionRunID? = nil,
+        deliveryMode: RemoteMessageDeliveryMode = .prompt
     ) async -> EnqueueAdmission? {
         if let existing = recordsByRequestID[clientRequestID] {
             return EnqueueAdmission(
@@ -150,7 +156,8 @@ public actor SendReconciliation {
             clientRequestID: clientRequestID,
             text: text,
             projectionRunID: projectionRunID ?? currentProjectionRunID,
-            deliveryState: .pending(.awaitingResponse)
+            deliveryState: .pending(.awaitingResponse),
+            deliveryMode: deliveryMode
         )
         recordsByRequestID[clientRequestID] = StoredRecord(
             insertionOrder: nextInsertionOrder,

@@ -741,7 +741,8 @@ final class LiveConversationController {
                 clientRequestID: record.clientRequestID,
                 text: record.text,
                 projectionRunID: record.projectionRunID,
-                deliveryState: .pending(.accepted)
+                deliveryState: .pending(.accepted),
+                deliveryMode: record.deliveryMode
             )
         })
     }

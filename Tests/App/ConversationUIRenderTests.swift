@@ -26,25 +26,8 @@ final class ConversationUIRenderTests: XCTestCase {
             jumpToLiveEdgeRequest: .constant(0),
             canAcknowledgeRead: false
         )
-        .frame(width: Self.transcriptSize.width, height: Self.transcriptSize.height)
-        .environment(\.colorScheme, .dark)
-
-        let hostingView = NSHostingView(rootView: transcript)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: Self.transcriptSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = hostingView
+        let (hostingView, window) = Self.host(transcript, size: Self.transcriptSize)
         defer { window.close() }
-        let deadline = Date().addingTimeInterval(0.8)
-        while Date() < deadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        hostingView.layoutSubtreeIfNeeded()
 
         // The AppKit text views carry the selectable message text.
         let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
@@ -71,18 +54,123 @@ final class ConversationUIRenderTests: XCTestCase {
         XCTAssertGreaterThan(paragraph.frame.height, lineHeight * 2)
         XCTAssertLessThan(userMessage.frame.width, paragraph.frame.width)
 
-        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
-        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        let bitmap = try Self.snapshot(hostingView)
         XCTAssertGreaterThan(
             Self.sampledColorCount(in: bitmap), 12,
             "The transcript must draw more than its background"
         )
+        try keep(bitmap, name: "conversation-ui-macos-fixture")
+    }
+
+    /// A message keeps its bubble size from sending to sent, so the bubble
+    /// does not grow and shrink back when the message arrives. On the Mac
+    /// the sent row has no caption; on the iPhone it says how it was sent.
+    func testSendingBubbleKeepsTheSizeOfTheSentBubble() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let text = "Merge it."
+        let cases: [(name: String, caption: String?, origin: ConversationMessageOrigin)] = [
+            ("mac", nil, .local),
+            ("iphone", "sent remotely", .remote),
+        ]
+        for (name, caption, origin) in cases {
+            let sending = try bubbleHeight(of: text, named: "sending-bubble-\(name)", in: .init(
+                rows: [],
+                sendItems: [ToasttySendPresentationItem(
+                    clientRequestID: "sending", text: text,
+                    content: .optimistic(response: .accepted), sentCaption: caption
+                )],
+                phase: .live, revision: .initial, historyTruncated: false
+            ))
+            let sent = try bubbleHeight(of: text, named: "sent-bubble-\(name)", in: .init(
+                rows: [Self.row(1, .userMessage(text: text, origin: origin))],
+                sendItems: [], phase: .live, revision: .initial, historyTruncated: false
+            ))
+            XCTAssertEqual(sending, sent, "\(name): the sending bubble must match the sent bubble's height")
+        }
+    }
+
+    /// The height in points of the bubble that holds `text`, measured from
+    /// the drawn pixels in a column inside the bubble's leading padding.
+    @available(macOS 15.0, *)
+    private func bubbleHeight(
+        of text: String, named name: String, in state: ToasttyConversationPresentationState
+    ) throws -> CGFloat {
+        let size = CGSize(width: 480, height: 220)
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            interactionAnswerStates: [:],
+            readAcknowledgementEpoch: .working,
+            workingIndicator: nil,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false
+        )
+        let (hostingView, window) = Self.host(transcript, size: size)
+        defer { window.close() }
+        let textView = try XCTUnwrap(
+            Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+                .first { $0.string.contains(text) },
+            "No rendered text view contains \"\(text)\""
+        )
+        let textRect = textView.convert(textView.bounds, to: hostingView)
+        let bitmap = try Self.snapshot(hostingView)
+        try keep(bitmap, name: name)
+
+        let scale = CGFloat(bitmap.pixelsWide) / hostingView.bounds.width
+        let x = Int((textRect.minX - 6) * scale)
+        // The transcript's left edge is plain background on every row.
+        func isBubble(_ y: Int) -> Bool {
+            guard y >= 0, y < bitmap.pixelsHigh,
+                  let pixel = bitmap.colorAt(x: x, y: y),
+                  let background = bitmap.colorAt(x: 2, y: y) else { return false }
+            return abs(pixel.redComponent - background.redComponent)
+                + abs(pixel.greenComponent - background.greenComponent)
+                + abs(pixel.blueComponent - background.blueComponent) > 0.03
+        }
+        var top = Int(textRect.midY * scale)
+        XCTAssertTrue(isBubble(top), "\(name): the measured column must start inside the bubble")
+        while isBubble(top - 1) { top -= 1 }
+        var bottom = Int(textRect.midY * scale)
+        while isBubble(bottom + 1) { bottom += 1 }
+        return CGFloat(bottom - top + 1) / scale
+    }
+
+    private static func host<Content: View>(_ content: Content, size: CGSize) -> (NSHostingView<some View>, NSWindow) {
+        let hostingView = NSHostingView(rootView: content
+            .frame(width: size.width, height: size.height)
+            .environment(\.colorScheme, .dark))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        let deadline = Date().addingTimeInterval(0.8)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        hostingView.layoutSubtreeIfNeeded()
+        return (hostingView, window)
+    }
+
+    private static func snapshot(_ view: NSView) throws -> NSBitmapImageRep {
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func keep(_ bitmap: NSBitmapImageRep, name: String) throws {
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
-        attachment.name = "conversation-ui-macos-fixture"
+        attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        try Self.writeEvidence(png, name: "conversation-ui-macos-fixture")
+        try Self.writeEvidence(png, name: name)
     }
 
     /// Writes the PNG when the runner sets `TOASTTY_CONVERSATION_EVIDENCE_DIR`

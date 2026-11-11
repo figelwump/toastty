@@ -1628,6 +1628,62 @@ private struct ToasttySendScrollItem: Equatable {
     }
 }
 
+/// The user's message bubble. A message that is still sending uses the same
+/// view, so the bubble keeps its size when its transcript row replaces it.
+/// The sending state changes no layout: the bubble is faded, and after a
+/// short wait a spinner shows in the empty space to its left.
+private struct ToasttyUserMessageBubble: View {
+    /// A quick send ends before this, so it shows only the fade.
+    static let sendingIndicatorDelay: Duration = .milliseconds(400)
+
+    let text: String
+    let caption: String?
+    var isSending = false
+    @State private var showsSendingIndicator = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            ToasttySelectableText(AttributedString(text),
+                                  textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
+            if let caption {
+                Text(caption)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+            }
+        }
+        .padding(12)
+        .background(ConversationDesignTokens.userBubbleSurface)
+        .overlay {
+            ConversationDesignTokens.userBubbleShape
+                .stroke(ConversationDesignTokens.userBubbleBorder)
+        }
+        .clipShape(ConversationDesignTokens.userBubbleShape)
+        .opacity(isSending ? 0.6 : 1)
+        .overlay(alignment: .bottomLeading) {
+            if isSending, showsSendingIndicator {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(ConversationDesignTokens.amberText)
+                    .frame(width: 16, height: 16)
+                    // Outside the bubble, level with its last line. An
+                    // offset takes no layout space.
+                    .offset(x: -24, y: -12)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
+        .task(id: isSending) {
+            guard isSending else { return }
+            try? await Task.sleep(for: Self.sendingIndicatorDelay)
+            guard Task.isCancelled == false else { return }
+            withAnimation(.easeIn(duration: 0.15)) { showsSendingIndicator = true }
+        }
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct ToasttySendTailItemView: View {
     let item: ToasttySendPresentationItem
     let dismiss: () -> Void
@@ -1712,31 +1768,9 @@ private struct ToasttySendTailItemView: View {
     }
 
     private var optimisticBubble: some View {
-        VStack(alignment: .trailing, spacing: 7) {
-            ToasttySelectableText(AttributedString(item.text),
-                                  textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(ConversationDesignTokens.amberText)
-                Text("Sending…")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(ConversationDesignTokens.amberText)
-            }
-        }
-        .padding(12)
-        .background(ConversationDesignTokens.userBubbleSurface)
-        .overlay {
-            ConversationDesignTokens.userBubbleShape
-                .stroke(ConversationDesignTokens.userBubbleBorder)
-        }
-        .clipShape(ConversationDesignTokens.userBubbleShape)
-        .padding(.leading, 48)
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(item.text), Sending")
-        .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
+        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, isSending: true)
+            .accessibilityLabel("\(item.text), Sending")
+            .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
     }
 
     private func receiptCard(
@@ -1857,7 +1891,7 @@ private struct ToasttyTranscriptRowView: View {
             message(
                 text: text,
                 isUser: true,
-                metadata: Self.userMessageMetadata(origin: origin, deliveryMode: deliveryMode)
+                metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode)
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -1888,19 +1922,6 @@ private struct ToasttyTranscriptRowView: View {
         }
     }
 
-    /// A remote message says how it reached the agent: typed at the prompt,
-    /// held in the Mac's queue first, or steered into a running turn.
-    static func userMessageMetadata(
-        origin: ConversationMessageOrigin,
-        deliveryMode: RemoteMessageDeliveryMode?
-    ) -> String? {
-        switch deliveryMode {
-        case .queue: "from queue"
-        case .steer: "steered"
-        case .prompt, nil: origin == .remote ? "sent remotely" : nil
-        }
-    }
-
     private var rowAccessibilityIdentifier: String {
         // Only the first chunk keeps the bare row identifier so accessibility
         // queries for a row stay unambiguous.
@@ -1912,11 +1933,11 @@ private struct ToasttyTranscriptRowView: View {
 
     @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
-        let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
-            if isUser {
-                ToasttySelectableText(AttributedString(text),
-                                      textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
-            } else {
+        if isUser {
+            ToasttyUserMessageBubble(text: text, caption: metadata)
+                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
                 ToasttyMarkdownText(
                     text: text,
                     preparedBlocks: chunk?.blocks,
@@ -1924,35 +1945,18 @@ private struct ToasttyTranscriptRowView: View {
                         ? ConversationDesignTokens.secondaryText
                         : ConversationDesignTokens.primaryText
                 )
-            }
 
-            if let metadata {
-                Text(metadata)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(ConversationDesignTokens.mutedText)
-            }
-        }
-
-        if isUser {
-            content
-                .padding(12)
-                .background(ConversationDesignTokens.userBubbleSurface)
-                .overlay {
-                    ConversationDesignTokens.userBubbleShape
-                        .stroke(ConversationDesignTokens.userBubbleBorder)
+                if let metadata {
+                    Text(metadata)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
                 }
-                .clipShape(ConversationDesignTokens.userBubbleShape)
-                .padding(.leading, 48)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
-        } else {
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Keep native text selection and links accessible within each
-                // message, including descendants of horizontal table views.
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Keep native text selection and links accessible within each
+            // message, including descendants of horizontal table views.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
         }
     }
 
