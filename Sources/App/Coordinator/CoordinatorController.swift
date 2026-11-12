@@ -530,11 +530,11 @@ final class CoordinatorController: ObservableObject {
 
     // MARK: - Policy
 
-    /// Shows `policy.md` in the coordinator's workspace, in its right
-    /// panel, so the chat stays in view; the user can read and edit it
-    /// there. The workspace becomes the selected one, and a panel that
-    /// already shows the file is used again. A missing policy is created
-    /// first, as at a start.
+    /// Shows `policy.md` in the coordinator's workspace, in the right panel
+    /// of the tab that holds the coordinator's terminal, so the chat stays
+    /// in view; the user can read and edit it there. The workspace and that
+    /// tab become the selected ones, and a panel that already shows the
+    /// file is used again. A missing policy is created first, as at a start.
     func openPolicy() throws {
         guard let location else {
             throw CoordinatorError("There is no coordinator. Open Coordinator first.")
@@ -548,6 +548,11 @@ final class CoordinatorController: ObservableObject {
             workspaceID: location.workspaceID,
             preferringUnreadSessionPanelIn: nil
         )
+        // Each tab has its own right panel.
+        if let panelID = location.panelID,
+           let tabID = store.state.workspacesByID[location.workspaceID]?.tabID(containingPanelID: panelID) {
+            _ = store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: tabID))
+        }
         guard store.createLocalDocumentPanel(
             workspaceID: location.workspaceID,
             request: LocalDocumentPanelCreateRequest(

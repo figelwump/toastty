@@ -268,6 +268,22 @@ struct CoordinatorFolderTests {
         try git("commit", "-q", "-m", "Policy: change Talking", "--", "policy.md", in: directory, environment: agentEnvironment)
         #expect(try git("log", "--format=%s", in: directory) == "Policy: change Talking\nStart the coordinator's policy")
         #expect(try git("rev-list", "--all", "--count", in: home) == "0")
+
+        // A coordinator folder that links to a place in the repository gets
+        // the ceiling of that place: git looks up from where the folder is.
+        let linkedTarget = home.appending(path: "elsewhere/coordinator", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: linkedTarget, withIntermediateDirectories: true)
+        let link = home.appending(path: "linked-home/coordinator", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: linkedTarget)
+        let linkedEnvironment = Self.gitEnvironment.merging(
+            CoordinatorFolder.gitEnvironment(for: link),
+            uniquingKeysWith: { _, new in new }
+        )
+        #expect(try git("rev-parse", "--show-toplevel", in: link) == homeTopLevel)
+        #expect(throws: TaskError.self) {
+            try git("rev-parse", "--show-toplevel", in: link, environment: linkedEnvironment)
+        }
     }
 
     // MARK: - The shipped text

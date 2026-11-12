@@ -110,7 +110,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
-    /// Added to the shell of the coordinator's terminal only.
+    /// Added to the resume command of the coordinator's agent only.
     private var coordinatorLaunchEnvironment: [String: String] = [:]
     @Published private(set) var searchStateByPanelID: [UUID: TerminalSearchState] = [:]
     @Published private(set) var searchFieldFocusedPanelID: UUID?
@@ -281,8 +281,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     /// The coordinator's agent resumes after a relaunch in its restored
-    /// terminal, through no start of the coordinator's own. It inherits
-    /// this environment from that terminal's shell.
+    /// terminal, through no start of the coordinator's own. The command
+    /// that resumes it sets this environment, as a start's command does; a
+    /// value the shell's startup files set cannot replace it.
     func setCoordinatorLaunchEnvironment(_ environment: [String: String]) {
         coordinatorLaunchEnvironment = environment
     }
@@ -1914,6 +1915,9 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
 
             var commandEnvironment = plan.environment
+            if store?.state.coordinator?.panelID == panelID {
+                commandEnvironment.merge(coordinatorLaunchEnvironment, uniquingKeysWith: { _, new in new })
+            }
             commandEnvironment[ToasttyLaunchContextEnvironment.launchReasonKey] = TerminalLaunchReason.restore.rawValue
             commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
@@ -1992,10 +1996,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     private func launchContextEnvironment(for panelID: UUID) -> [String: String] {
-        var baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
-        if coordinatorLaunchEnvironment.isEmpty == false, store?.state.coordinator?.panelID == panelID {
-            baseEnvironmentVariables.merge(coordinatorLaunchEnvironment, uniquingKeysWith: { _, new in new })
-        }
+        let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
         return baseEnvironmentVariables.merging([
             ToasttyLaunchContextEnvironment.launchReasonKey: launchReason(for: panelID).rawValue,
         ], uniquingKeysWith: { _, new in new })

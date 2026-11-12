@@ -462,9 +462,21 @@ struct CoordinatorControllerTests {
         // The coordinator's terminal stays where it was.
         #expect(workspace.allTerminalPanelIDs == [try #require(location.panelID)])
 
+        // Each tab has its own right panel. From another tab of the
+        // workspace, Open Policy goes back to the coordinator's tab and
+        // shows the same panel.
+        let coordinatorTabID = try #require(workspace.resolvedSelectedTabID)
+        let otherTabID = UUID()
+        #expect(fixture.store.send(.createBackgroundTerminalTab(
+            workspaceID: location.workspaceID, tabID: otherTabID, panelID: UUID(), terminalCWD: fixture.directory.path
+        )))
+        #expect(fixture.store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: otherTabID)))
         try fixture.controller.openPolicy()
         let again = try #require(fixture.store.state.workspacesByID[location.workspaceID])
-        #expect(again.rightAuxPanel.tabIDs.count == workspace.rightAuxPanel.tabIDs.count)
+        #expect(again.resolvedSelectedTabID == coordinatorTabID)
+        #expect(again.rightAuxPanel.tabIDs == workspace.rightAuxPanel.tabIDs)
+        let otherTab = try #require(again.tab(id: otherTabID))
+        #expect(otherTab.rightAuxPanel.tabIDs.isEmpty)
     }
 
     /// A policy the user deleted comes back with its headings, so the

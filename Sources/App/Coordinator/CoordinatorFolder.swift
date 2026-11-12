@@ -68,9 +68,11 @@ struct CoordinatorFolder: Sendable {
     /// change of the policy would be committed there. With the folder's
     /// parent as a ceiling, git stops at the folder and fails instead. The
     /// ceiling changes nothing for a path outside that parent, such as a
-    /// project's repository.
+    /// project's repository. Git looks up from the folder's real location,
+    /// so the parent is taken after links resolve: a folder that links to
+    /// another place gets the ceiling of that place.
     static func gitEnvironment(for directoryURL: URL) -> [String: String] {
-        ["GIT_CEILING_DIRECTORIES": directoryURL.standardizedFileURL.deletingLastPathComponent().path]
+        ["GIT_CEILING_DIRECTORIES": directoryURL.standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent().path]
     }
 
     let directoryURL: URL
