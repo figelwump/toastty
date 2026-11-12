@@ -914,12 +914,24 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   policy and nothing else. Toastty leaves a folder that already is a
   repository as it is. If git is missing, the coordinator still starts, and
   tells you that a change of the policy cannot be undone.
+- **Git stops at the folder.** Toastty starts the coordinator's agent with
+  `GIT_CEILING_DIRECTORIES` set to the folder that holds the coordinator's
+  folder, `~/.toastty`, also when it resumes the agent after a relaunch. If
+  the folder has no `.git`, its git commands then fail, and do not use a
+  repository in a folder above it, such as a home folder kept in git for
+  dotfiles. Git in a project outside `~/.toastty` works as before.
 
 ### The policy file
 
 `policy.md` holds your choices. A rule there wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
-reads it on each wake. The coordinator writes most of it by asking you:
+reads it on each wake. **Policy**, in the header of the coordinator's panel,
+and **Open Policy**, in the Coordinator row's context menu, show the file in
+the right panel of the coordinator's workspace, where you can read and edit
+it. A policy that is missing is first created with its headings. The next
+time the coordinator changes the policy, it first commits your edit as
+"Edited outside the coordinator". The coordinator writes most of the policy
+by asking you:
 
 ```markdown
 # Coordinator policy

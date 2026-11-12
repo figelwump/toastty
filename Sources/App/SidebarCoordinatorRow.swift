@@ -84,6 +84,7 @@ struct SidebarCoordinatorRow: View {
     @ObservedObject var controller: CoordinatorController
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let select: () -> Void
+    let openPolicy: () -> Void
     let restart: () -> Void
     let close: () -> Void
 
@@ -137,6 +138,7 @@ struct SidebarCoordinatorRow: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .contextMenu {
+            Button("Open Policy", action: openPolicy)
             Button("Restart Coordinator", action: restart)
             Button("Close Coordinator", role: .destructive, action: close)
         }

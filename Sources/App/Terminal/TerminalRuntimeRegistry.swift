@@ -110,6 +110,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
+    /// Added to the shell of the coordinator's terminal only.
+    private var coordinatorLaunchEnvironment: [String: String] = [:]
     @Published private(set) var searchStateByPanelID: [UUID: TerminalSearchState] = [:]
     @Published private(set) var searchFieldFocusedPanelID: UUID?
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
@@ -276,6 +278,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         _ provider: @escaping @Sendable (UUID) -> [String: String]
     ) {
         baseLaunchEnvironmentProvider = provider
+    }
+
+    /// The coordinator's agent resumes after a relaunch in its restored
+    /// terminal, through no start of the coordinator's own. It inherits
+    /// this environment from that terminal's shell.
+    func setCoordinatorLaunchEnvironment(_ environment: [String: String]) {
+        coordinatorLaunchEnvironment = environment
     }
 
     private func logSurfaceLaunchEnvironmentIfNeeded(
@@ -1983,7 +1992,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     private func launchContextEnvironment(for panelID: UUID) -> [String: String] {
-        let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+        var baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+        if coordinatorLaunchEnvironment.isEmpty == false, store?.state.coordinator?.panelID == panelID {
+            baseEnvironmentVariables.merge(coordinatorLaunchEnvironment, uniquingKeysWith: { _, new in new })
+        }
         return baseEnvironmentVariables.merging([
             ToasttyLaunchContextEnvironment.launchReasonKey: launchReason(for: panelID).rawValue,
         ], uniquingKeysWith: { _, new in new })

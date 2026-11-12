@@ -14,6 +14,7 @@ protocol CoordinatorAgentLaunching: AnyObject {
         workspaceID: UUID,
         panelID: UUID,
         cwd: String,
+        environment: [String: String],
         model: String?,
         reasoningEffort: String?
     ) async throws -> AgentLaunchResult
@@ -25,6 +26,7 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
         workspaceID: UUID,
         panelID: UUID,
         cwd: String,
+        environment: [String: String],
         model: String?,
         reasoningEffort: String?
     ) async throws -> AgentLaunchResult {
@@ -33,6 +35,7 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
             workspaceID: workspaceID,
             panelID: panelID,
             cwd: cwd,
+            environment: environment,
             model: model,
             reasoningEffort: reasoningEffort,
             focusPolicy: .preserveFirstResponder
@@ -525,6 +528,38 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
+    // MARK: - Policy
+
+    /// Shows `policy.md` in the coordinator's workspace, in its right
+    /// panel, so the chat stays in view; the user can read and edit it
+    /// there. The workspace becomes the selected one, and a panel that
+    /// already shows the file is used again. A missing policy is created
+    /// first, as at a start.
+    func openPolicy() throws {
+        guard let location else {
+            throw CoordinatorError("There is no coordinator. Open Coordinator first.")
+        }
+        let directory = try preparedDirectory()
+        let path = URL(filePath: directory, directoryHint: .isDirectory)
+            .appending(path: CoordinatorFolder.policyFileName, directoryHint: .notDirectory)
+            .path
+        _ = store.selectWorkspace(
+            windowID: location.windowID,
+            workspaceID: location.workspaceID,
+            preferringUnreadSessionPanelIn: nil
+        )
+        guard store.createLocalDocumentPanel(
+            workspaceID: location.workspaceID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: path,
+                placementOverride: .rightPanel,
+                formatOverride: .markdown
+            )
+        ) else {
+            throw CoordinatorError("Toastty could not open \(path).")
+        }
+    }
+
     private func createWorkspaceIfNeeded(windowID requestedWindowID: UUID?) throws -> Bool {
         guard store.state.coordinator == nil else { return false }
         guard let windowID = requestedWindowID ?? store.state.selectedWindowID ?? store.state.windows.first?.id,
@@ -611,6 +646,9 @@ final class CoordinatorController: ObservableObject {
                     workspaceID: location.workspaceID,
                     panelID: terminal.panelID,
                     cwd: directory,
+                    // Also for a new terminal that is not the coordinator's
+                    // yet, whose shell lacks it.
+                    environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
                     model: config.model,
                     reasoningEffort: config.effort
                 )

@@ -420,6 +420,73 @@ struct CoordinatorControllerTests {
         #expect(terminal.cwd == fixture.directory.path)
     }
 
+    /// Git in the agent's commands stops at the coordinator's folder, also
+    /// when Restart starts the agent in a new terminal.
+    @Test func everyStartPutsAGitCeilingAboveTheFolderOnTheAgentsCommand() async throws {
+        let fixture = try Fixture()
+        let ceiling = "GIT_CEILING_DIRECTORIES=\(fixture.directory.deletingLastPathComponent().path)"
+        let first = try await fixture.openAtPrompt()
+        let firstPanelID = try #require(first.location.panelID)
+        #expect(try #require(fixture.tasks.router.sentTextByPanelID[firstPanelID]).contains(ceiling))
+
+        let restarted = try await fixture.controller.restart()
+        let newPanelID = try #require(restarted.location.panelID)
+        #expect(newPanelID != firstPanelID)
+        #expect(try #require(fixture.tasks.router.sentTextByPanelID[newPanelID]).contains(ceiling))
+    }
+
+    // MARK: - Policy
+
+    /// The policy shows in the coordinator's right panel, from any workspace,
+    /// and a second open shows the same panel.
+    @Test func openPolicyShowsThePolicyFileInTheCoordinatorsRightPanel() async throws {
+        let fixture = try Fixture()
+        let opened = try await fixture.controller.open()
+        let location = opened.location
+        let policyPath = fixture.directory.appending(path: "policy.md").resolvingSymlinksInPath().path
+        _ = fixture.store.selectWorkspace(windowID: location.windowID, workspaceID: fixture.tasks.workspaceID, preferringUnreadSessionPanelIn: nil)
+
+        try fixture.controller.openPolicy()
+
+        #expect(fixture.store.selectedWorkspaceID(in: location.windowID) == location.workspaceID)
+        let workspace = try #require(fixture.store.state.workspacesByID[location.workspaceID])
+        let documents = workspace.rightAuxPanel.tabIDs.compactMap { tabID -> (UUID, LocalDocumentState)? in
+            guard let tab = workspace.rightAuxPanel.tabsByID[tabID],
+                  case .web(let web) = tab.panelState,
+                  let document = web.localDocument else { return nil }
+            return (tab.panelID, document)
+        }
+        #expect(documents.map(\.1.filePath) == [policyPath])
+        #expect(documents.first?.1.format == .markdown)
+        #expect(workspace.rightAuxPanel.isVisible)
+        // The coordinator's terminal stays where it was.
+        #expect(workspace.allTerminalPanelIDs == [try #require(location.panelID)])
+
+        try fixture.controller.openPolicy()
+        let again = try #require(fixture.store.state.workspacesByID[location.workspaceID])
+        #expect(again.rightAuxPanel.tabIDs.count == workspace.rightAuxPanel.tabIDs.count)
+    }
+
+    /// A policy the user deleted comes back with its headings, so the
+    /// button always shows a file.
+    @Test func openPolicyCreatesAMissingPolicy() async throws {
+        let fixture = try Fixture()
+        try await fixture.controller.open()
+        let policyURL = fixture.directory.appending(path: "policy.md")
+        try FileManager.default.removeItem(at: policyURL)
+
+        try fixture.controller.openPolicy()
+
+        #expect(try String(contentsOf: policyURL, encoding: .utf8) == CoordinatorFolder.policyTemplate)
+    }
+
+    @Test func openPolicyWithoutACoordinatorSaysSo() throws {
+        let fixture = try Fixture()
+        #expect(throws: CoordinatorError("There is no coordinator. Open Coordinator first.")) {
+            try fixture.controller.openPolicy()
+        }
+    }
+
     @Test func restartWithAnUnknownAgentLeavesTheRunningAgentAlone() async throws {
         let fixture = try Fixture()
         let first = try await fixture.controller.open()
