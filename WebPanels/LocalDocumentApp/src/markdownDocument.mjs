@@ -57,8 +57,13 @@ const SOURCE_LINE_TAGS = new Set([
   "ul"
 ]);
 
+// Images never load in this view. `picture` and `source` can name image URLs
+// through `srcset`, so they are dropped; an `img` inside becomes a placeholder.
+const IMAGE_SOURCE_TAGS = new Set(["picture", "source"]);
+
 const sanitizeSchema = {
   ...defaultSchema,
+  tagNames: (defaultSchema.tagNames ?? []).filter((tagName) => !IMAGE_SOURCE_TAGS.has(tagName)),
   // The app opens `file:` links the same way as absolute paths.
   protocols: {
     ...defaultSchema.protocols,

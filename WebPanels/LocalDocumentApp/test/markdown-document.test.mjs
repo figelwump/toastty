@@ -75,10 +75,18 @@ test("images never load and become labeled placeholders", () => {
     "![](assets/screen%20shot.png?raw=1)",
     "",
     "<img src=\"https://example.com/x.png\" alt=\"Remote\" onerror=\"alert(1)\">",
+    "",
+    "<picture><source srcset=\"https://example.com/wide.png\" media=\"(min-width: 1px)\"><img src=\"https://example.com/narrow.png\" alt=\"Responsive\"></picture>",
+    "",
+    "<source srcset=\"https://example.com/loose.png\">",
     ""
   ].join("\n"));
 
   assert.equal(html.includes("<img"), false);
+  for (const loader of ["<picture", "<source", "srcset", "wide.png", "loose.png"]) {
+    assert.equal(html.includes(loader), false, `${loader} must not reach the page`);
+  }
+  assert.match(html, /aria-label="Image: Responsive"[^>]*>Responsive<\/span>/);
   assert.match(
     html,
     /<span class="markdown-image-placeholder" role="img" aria-label="Image: Architecture diagram" title="docs\/arch.png">Architecture diagram<\/span>/
