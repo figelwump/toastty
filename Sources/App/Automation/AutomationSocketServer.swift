@@ -156,8 +156,9 @@ final class AutomationSocketServer: @unchecked Sendable {
         isStopping = false
         let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
         let directoryURL = socketURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        _ = chmod(directoryURL.path, 0o700)
+        // Never listen in a directory another user owns or can write to: they
+        // could replace the socket after it is bound.
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directoryURL)
 
         switch Self.socketBindingAvailability(for: socketPath) {
         case .available:

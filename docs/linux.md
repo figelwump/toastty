@@ -117,9 +117,14 @@ behaves the same: an isolated runtime home owns its config, `logs/`, and
 | UserDefaults suite `com.GiantThings.toastty.runtime.<hash>` | same suite name; swift-corelibs stores it as `$XDG_CONFIG_HOME/<suite>.plist` |
 
 If `$XDG_RUNTIME_DIR` is unset, relative, or missing, socket paths fall back
-to the macOS layout under `$TMPDIR` (or `/tmp`). Callers that pass an explicit
+to the macOS layout under an absolute `$TMPDIR`, and without one under
+`~/.toastty/run` (never the shared `/tmp`). Callers that pass an explicit
 environment without `XDG_RUNTIME_DIR` (most tests) therefore keep the macOS
-`TMPDIR` behavior. A relative `XDG_STATE_HOME` is ignored per the XDG spec.
+`TMPDIR` behavior. On both platforms the server only binds in a socket
+directory it owns (made 0700) or a root-owned system directory such as a
+sticky `/tmp`. Clients read `current-socket.json` and scan for sockets only in
+a directory they own that no one else can write to, and the CLI refuses a
+socket owned by another user (`AutomationSocketDirectory`). A relative `XDG_STATE_HOME` is ignored per the XDG spec.
 Note `UserDefaults.standard` on Linux uses the executable name as its domain
 (`$XDG_CONFIG_HOME/<executable>.plist`, e.g. `toastty-linux.plist`).
 swift-corelibs-foundation writes that plist only on `synchronize()` (no
@@ -1013,8 +1018,9 @@ code (macOS branches unchanged); run a macOS build
 
 | File | Reason |
 |---|---|
-| `Sources/Core/Runtime/ToasttyRuntimePaths.swift` | XDG state dir for the user-home log; `$XDG_RUNTIME_DIR` socket base (`socketBaseDirectoryPath`, `linuxXDGRuntimeDirectoryPath`) |
-| `Sources/Core/Automation/AutomationSocketLocator.swift` | `socketDirectoryURL` uses `$XDG_RUNTIME_DIR/toastty`; made `public` for the CLI probe and tests |
+| `Sources/Core/Runtime/ToasttyRuntimePaths.swift` | XDG state dir for the user-home log; `$XDG_RUNTIME_DIR` socket base (`socketBaseDirectoryPath`, `linuxXDGRuntimeDirectoryPath`), then `$TMPDIR`, then `~/.toastty/run` instead of `/tmp` |
+| `Sources/Core/Automation/AutomationSocketLocator.swift` | `socketDirectoryURL` uses `$XDG_RUNTIME_DIR/toastty`, otherwise `socketBaseDirectoryPath`; made `public` for the CLI probe and tests |
+| `Sources/Core/Automation/AutomationSocketDirectory.swift` (new; used by `AutomationSocketLocator`, `AutomationSocketServer` and `ToasttySocketClient`) | (unguarded, applies to macOS too) the server never binds in another user's socket directory; clients ignore discovery data in a directory that is not theirs or that others can write to, and refuse sockets owned by another user. Linux needed it because the socket directory could fall back to the shared `/tmp`. New file: `tuist generate` on macOS |
 | `Sources/CLIKit/DiagnosticsSocketProbe.swift` | socket directory comes from `AutomationSocketLocator` on Linux |
 | `Sources/Core/RemoteAccess/RemotePreviewFileReader.swift` | no `/private` aliases for `/tmp`, `/var`, `/etc`; descriptor path via `/proc/self/fd` instead of `F_GETPATH` |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |

@@ -20,6 +20,12 @@ struct ToasttySocketClient {
     }
 
     private func send(payload: Data) throws -> Data {
+        // Only talk to a Toastty running as this user. A socket another account
+        // planted in a shared directory would otherwise receive our requests.
+        if AutomationSocketDirectory.isOwnedByCurrentUser(atPath: socketPath) == false, geteuid() != 0 {
+            throw ToasttyCLIError.runtime("refusing to connect: socket belongs to another user: \(socketPath)")
+        }
+
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw ToasttyCLIError.runtime("socket() failed: \(socketErrorMessage())")

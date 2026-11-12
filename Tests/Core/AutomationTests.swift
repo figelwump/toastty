@@ -169,9 +169,8 @@ struct AutomationTests {
         let socketPath = AutomationSocketLocator.socketDirectoryURL(environment: environment)
             .appendingPathComponent("events-v1-\(processID).sock", isDirectory: false)
             .path
-        try FileManager.default.createDirectory(
-            at: AutomationSocketLocator.socketDirectoryURL(environment: environment),
-            withIntermediateDirectories: true
+        try AutomationSocketDirectory.prepareSocketDirectory(
+            at: AutomationSocketLocator.socketDirectoryURL(environment: environment)
         )
         FileManager.default.createFile(atPath: socketPath, contents: Data())
         try AutomationSocketLocator.writeDiscoveryRecord(
@@ -193,9 +192,8 @@ struct AutomationTests {
         let socketPath = AutomationSocketLocator.socketDirectoryURL(environment: environment)
             .appendingPathComponent("events-v1-9999.sock", isDirectory: false)
             .path
-        try FileManager.default.createDirectory(
-            at: AutomationSocketLocator.socketDirectoryURL(environment: environment),
-            withIntermediateDirectories: true
+        try AutomationSocketDirectory.prepareSocketDirectory(
+            at: AutomationSocketLocator.socketDirectoryURL(environment: environment)
         )
         FileManager.default.createFile(atPath: socketPath, contents: Data())
 
@@ -244,9 +242,8 @@ struct AutomationTests {
         let socketPath = AutomationSocketLocator.socketDirectoryURL(environment: environment)
             .appendingPathComponent("events-v1-999999.sock", isDirectory: false)
             .path
-        try FileManager.default.createDirectory(
-            at: AutomationSocketLocator.socketDirectoryURL(environment: environment),
-            withIntermediateDirectories: true
+        try AutomationSocketDirectory.prepareSocketDirectory(
+            at: AutomationSocketLocator.socketDirectoryURL(environment: environment)
         )
         FileManager.default.createFile(atPath: socketPath, contents: Data())
         try AutomationSocketLocator.writeDiscoveryRecord(
@@ -269,7 +266,7 @@ struct AutomationTests {
 
         let environment = ["TMPDIR": tempDirectory.path]
         let directoryURL = AutomationSocketLocator.socketDirectoryURL(environment: environment)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directoryURL)
 
         let olderSocketURL = directoryURL.appendingPathComponent("events-v1-1111.sock", isDirectory: false)
         let newerSocketURL = directoryURL.appendingPathComponent("events-v1-2222.sock", isDirectory: false)
@@ -300,7 +297,7 @@ struct AutomationTests {
 
         let environment = ["TMPDIR": tempDirectory.path]
         let directoryURL = AutomationSocketLocator.socketDirectoryURL(environment: environment)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directoryURL)
 
         let socketURL = directoryURL.appendingPathComponent("events-v1-\(getpid()).sock", isDirectory: false)
         FileManager.default.createFile(atPath: socketURL.path, contents: Data())
@@ -319,7 +316,7 @@ struct AutomationTests {
 
         let environment = ["TMPDIR": tempDirectory.path]
         let directoryURL = AutomationSocketLocator.socketDirectoryURL(environment: environment)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directoryURL)
 
         let fallbackSocketURL = directoryURL.appendingPathComponent("events-v1-\(getpid()).sock", isDirectory: false)
         FileManager.default.createFile(atPath: fallbackSocketURL.path, contents: Data())
@@ -456,4 +453,129 @@ struct AutomationTests {
             _ = try AutomationFixtureLoader.loadRequired(named: "not-real")
         }
     }
+}
+
+struct AutomationSocketDirectoryTests {
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-socket-dir-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func permissions(_ url: URL) throws -> Int {
+        try #require(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber).intValue
+    }
+
+    @Test
+    func preparingOwnDirectoryRestrictsItToTheUser() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("toastty-\(getuid())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: directory.path)
+        #expect(!AutomationSocketDirectory.isTrustedDirectory(atPath: directory.path))
+
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directory)
+
+        #expect(try permissions(directory) == 0o700)
+        #expect(AutomationSocketDirectory.isTrustedDirectory(atPath: directory.path))
+    }
+
+    @Test
+    func groupWritableDirectoryIsNotTrusted() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o775], ofItemAtPath: root.path)
+
+        #expect(!AutomationSocketDirectory.isTrustedDirectory(atPath: root.path))
+    }
+
+    @Test
+    func directoriesOwnedByAnotherUserAreNotTrusted() throws {
+        try #require(geteuid() != 0, "needs a non-root user")
+        // Root-owned, so not this user's: never trusted for discovery data,
+        // directly or through a symlink this user owns.
+        #expect(!AutomationSocketDirectory.isTrustedDirectory(atPath: "/usr"))
+
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appendingPathComponent("link", isDirectory: false)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/usr")
+        #expect(!AutomationSocketDirectory.isTrustedDirectory(atPath: link.path))
+    }
+
+    @Test
+    func symlinkToOwnDirectoryIsFollowed() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        let link = root.appendingPathComponent("link", isDirectory: false)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
+
+        try AutomationSocketDirectory.prepareSocketDirectory(at: link)
+
+        #expect(try permissions(target) == 0o700)
+        #expect(AutomationSocketDirectory.isTrustedDirectory(atPath: link.path))
+    }
+
+    @Test
+    func sharedStickyDirectoryIsUsedWithoutChangingIt() throws {
+        try #require(geteuid() != 0, "would otherwise own /tmp")
+        let tmp = URL(fileURLWithPath: "/tmp", isDirectory: true)
+        let before = try permissions(tmp.resolvingSymlinksInPath())
+
+        try AutomationSocketDirectory.prepareSocketDirectory(at: tmp)
+
+        #expect(try permissions(tmp.resolvingSymlinksInPath()) == before)
+        #expect(!AutomationSocketDirectory.isTrustedDirectory(atPath: tmp.path))
+    }
+
+    @Test
+    func discoveryRecordForAnotherUsersSocketIsUnusable() throws {
+        try #require(geteuid() != 0, "needs a non-root user")
+        let record = AutomationSocketDiscoveryRecord(socketPath: "/dev/null", processID: getpid())
+
+        #expect(!AutomationSocketLocator.discoveryRecordIsUsable(record, processIsAlive: { _ in true }))
+    }
+
+    @Test
+    func clientIgnoresDiscoveryDataInADirectoryOthersCanWrite() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let environment = ["TMPDIR": root.path]
+        let directory = AutomationSocketLocator.socketDirectoryURL(environment: environment)
+        let socketPath = directory.appendingPathComponent("events-v1-\(getpid()).sock", isDirectory: false).path
+        try AutomationSocketLocator.writeDiscoveryRecord(
+            socketPath: socketPath,
+            processID: getpid(),
+            environment: environment
+        )
+        FileManager.default.createFile(atPath: socketPath, contents: Data())
+        #expect(AutomationConfig.resolveSocketPath(environment: environment) == socketPath)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: directory.path)
+
+        #expect(
+            AutomationConfig.resolveSocketPath(environment: environment)
+                == AutomationSocketLocator.legacySocketPath(environment: environment)
+        )
+        #expect(AutomationSocketLocator.latestLiveSocketPath(environment: environment, processIsAlive: { _ in true }) == nil)
+    }
+
+    #if os(Linux)
+    @Test
+    func linuxSocketBaseAvoidsTheSharedTemporaryDirectory() {
+        #expect(ToasttyRuntimePaths.socketBaseDirectoryPath(environment: ["HOME": "/home/tt"]) == "/home/tt/.toastty/run")
+        #expect(
+            ToasttyRuntimePaths.socketBaseDirectoryPath(environment: ["HOME": "/home/tt", "TMPDIR": "/scratch/tt"])
+                == "/scratch/tt"
+        )
+        #expect(
+            AutomationSocketLocator.socketDirectoryURL(environment: ["HOME": "/home/tt"]).path
+                == "/home/tt/.toastty/run/toastty-\(getuid())"
+        )
+    }
+    #endif
 }
