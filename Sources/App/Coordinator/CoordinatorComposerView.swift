@@ -79,8 +79,11 @@ struct CoordinatorComposerView: View {
             if attachments.isEmpty == false {
                 tray
             }
+            // The buttons are as tall as one line of the field, so they line
+            // up with the field's last line at every text size.
             HStack(alignment: .bottom, spacing: 6) {
                 attachMenu
+                    .frame(height: rowHeight)
 
                 CoordinatorComposerTextEditor(
                     text: $text,
@@ -100,28 +103,31 @@ struct CoordinatorComposerView: View {
                     dropTarget: dropTarget,
                     onTextView: onTextView
                 )
-                .padding(.vertical, 4)
 
-                // Stop while a turn runs and the field is empty. With text or
-                // a file in the field the button sends, with the chip beside
-                // it.
-                if canStop, hasMessage == false {
-                    button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
-                        .help("Stop the coordinator's turn")
-                } else {
-                    if let delivery {
-                        deliveryChip(delivery)
+                HStack(spacing: 6) {
+                    // Stop while a turn runs and the field is empty. With text
+                    // or a file in the field the button sends, with the chip
+                    // beside it.
+                    if canStop, hasMessage == false {
+                        button(systemImage: "stop.fill", label: "Stop", identifier: "coordinator.chat.stop", action: onStop)
+                            .help("Stop the coordinator's turn")
+                    } else {
+                        if let delivery {
+                            deliveryChip(delivery)
+                        }
+                        button(
+                            systemImage: "arrow.up",
+                            label: Self.sendLabel(delivery),
+                            identifier: "coordinator.chat.send",
+                            action: onSend
+                        )
+                        .disabled(canSend == false)
+                        .help(Self.sendHelp(delivery))
                     }
-                    button(
-                        systemImage: "arrow.up",
-                        label: Self.sendLabel(delivery),
-                        identifier: "coordinator.chat.send",
-                        action: onSend
-                    )
-                    .disabled(canSend == false)
-                    .help(Self.sendHelp(delivery))
                 }
+                .frame(height: rowHeight)
             }
+            .padding(.vertical, 2)
         }
         .padding(.leading, 6)
         .padding(.trailing, 6)
@@ -149,6 +155,11 @@ struct CoordinatorComposerView: View {
     }
 
     static let trayHeight: CGFloat = 74
+
+    /// The height of the field with one line of text.
+    private var rowHeight: CGFloat {
+        CoordinatorComposerTextEditor.singleLineHeight(fontSize: fontSize)
+    }
 
     /// The coordinator's message that this message replies to: who and
     /// when, the start of the message on two lines, and ✕.
@@ -249,13 +260,12 @@ struct CoordinatorComposerView: View {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ToastyTheme.subtleText)
-                .frame(width: 24, height: 24)
+                .frame(width: CoordinatorComposerTextEditor.buttonSize, height: CoordinatorComposerTextEditor.buttonSize)
                 .contentShape(Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .padding(.bottom, 4)
         .disabled(isEditable == false || attachments.canAttachMore == false)
         .help("Attach files or photos. You can also paste or drop them here.")
         .accessibilityLabel("Attach")
@@ -272,7 +282,7 @@ struct CoordinatorComposerView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(ToastyTheme.accentDark)
-                .frame(width: 24, height: 24)
+                .frame(width: CoordinatorComposerTextEditor.buttonSize, height: CoordinatorComposerTextEditor.buttonSize)
                 .background(Circle().fill(ToastyTheme.accent))
                 .contentShape(Circle())
         }
@@ -300,7 +310,7 @@ struct CoordinatorComposerView: View {
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(queues ? ToastyTheme.accent : ToastyTheme.inactiveText)
             .padding(.horizontal, 9)
-            .frame(height: 24)
+            .frame(height: CoordinatorComposerTextEditor.buttonSize)
             .background(Capsule().fill(queues ? ToastyTheme.accent.opacity(0.16) : Color.clear))
             .overlay {
                 Capsule().strokeBorder(queues ? ToastyTheme.accent.opacity(0.45) : ToastyTheme.subtleBorder, lineWidth: 1)
@@ -359,6 +369,27 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     static let lineSpacing: CGFloat = 3
     /// The field grows with its text up to this height, then scrolls.
     static let maximumHeight: CGFloat = 180
+    /// The width and height of the buttons beside the field.
+    static let buttonSize: CGFloat = 24
+    /// The space above and below the text, at least.
+    static let minimumVerticalInset: CGFloat = 2
+
+    /// The height of one line of text, as the field lays it out.
+    static func lineHeight(fontSize: CGFloat) -> CGFloat {
+        NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: fontSize))
+    }
+
+    /// The field's height with one line: at least the buttons' height, with
+    /// the line in the middle.
+    static func singleLineHeight(fontSize: CGFloat) -> CGFloat {
+        ceil(max(buttonSize, lineHeight(fontSize: fontSize) + 2 * minimumVerticalInset))
+    }
+
+    /// The space above and below the text. It puts one line in the middle
+    /// of the field, and the last line in the middle of the buttons beside it.
+    static func verticalInset(fontSize: CGFloat) -> CGFloat {
+        (singleLineHeight(fontSize: fontSize) - lineHeight(fontSize: fontSize)) / 2
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -373,7 +404,6 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.textColor = NSColor(ToastyTheme.primaryText)
         textView.insertionPointColor = NSColor(ToastyTheme.accent)
-        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.textContainer?.lineFragmentPadding = 0
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = Self.lineSpacing
@@ -419,8 +449,11 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: container)
-        let lineHeight = ceil(NSFont.systemFont(ofSize: fontSize).boundingRectForFont.height)
-        let used = max(layoutManager.usedRect(for: container).height, lineHeight) + textView.textContainerInset.height * 2
+        let lineHeight = Self.lineHeight(fontSize: fontSize)
+        // An empty copy measures one line in the default font, which can be
+        // taller than a line at a small text size.
+        let textHeight = storage.length == 0 ? lineHeight : max(layoutManager.usedRect(for: container).height, lineHeight)
+        let used = textHeight + Self.verticalInset(fontSize: fontSize) * 2
         return CGSize(width: width, height: min(ceil(used), Self.maximumHeight))
     }
 
@@ -452,6 +485,10 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         }
         if textView.font?.pointSize != fontSize {
             textView.font = .systemFont(ofSize: fontSize)
+        }
+        let inset = NSSize(width: 0, height: Self.verticalInset(fontSize: fontSize))
+        if textView.textContainerInset != inset {
+            textView.textContainerInset = inset
         }
         textView.onSubmit = onSubmit
         textView.onQueue = onQueue

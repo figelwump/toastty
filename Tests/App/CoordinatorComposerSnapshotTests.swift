@@ -86,6 +86,66 @@ final class CoordinatorComposerSnapshotTests: XCTestCase {
         }
     }
 
+    /// The ＋ button, the send button and the field's last line share one
+    /// center line at the smallest, the default and the largest text size,
+    /// with one line and with several.
+    func testButtonsLineUpWithTheLastLineAtEachTextSize() throws {
+        let empty = DraftAttachments(stagingDirectoryURL: root.appendingPathComponent("empty"))
+        for scale in [CoordinatorChatModel.minimumTextScale, 1, CoordinatorChatModel.maximumTextScale] {
+            let fontSize = CoordinatorComposerTextEditor.defaultFontSize * scale
+            for (name, text) in [("line", "Only on click."), ("lines", "One\nTwo\nOnly on click.")] {
+                let image = try render("composer-align-\(name)-\(scale)", draft: empty, text: text, width: 520, fontSize: fontSize)
+                let centers = try Self.rowCenters(in: image, width: 520)
+                XCTAssertEqual(centers.plus, centers.text, accuracy: 1, "＋ and text, \(name) at \(scale)×")
+                XCTAssertEqual(centers.send, centers.text, accuracy: 1, "Send and text, \(name) at \(scale)×")
+            }
+        }
+    }
+
+    /// The vertical centers, in points, of the ＋ glyph, the first letter of
+    /// the field's last line, and the send button, found by their pixels.
+    /// The composer sits 16 points inside the image; see `render`.
+    private static func rowCenters(in image: NSBitmapImageRep, width: CGFloat) throws -> (plus: CGFloat, text: CGFloat, send: CGFloat) {
+        let scale = CGFloat(image.pixelsWide) / width
+        func px(_ points: CGFloat) -> Int { Int((points * scale).rounded()) }
+        let background = try XCTUnwrap(image.colorAt(x: px(width / 2), y: px(18))?.usingColorSpace(.sRGB))
+        func isInk(_ x: Int, _ y: Int) -> Bool {
+            guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+            let difference = abs(color.redComponent - background.redComponent)
+                + abs(color.greenComponent - background.greenComponent)
+                + abs(color.blueComponent - background.blueComponent)
+            return difference > 0.6
+        }
+        func inkRows(_ columns: Range<Int>, within rows: Range<Int>? = nil) -> [Int] {
+            (rows ?? 0..<image.pixelsHigh).filter { y in columns.contains { isInk($0, y) } }
+        }
+        func center(_ rows: [Int]) throws -> CGFloat {
+            let first = try XCTUnwrap(rows.first), last = try XCTUnwrap(rows.last)
+            return CGFloat(first + last + 1) / 2 / scale
+        }
+        // ＋: 16 outside, 6 inside, then a 24-point button.
+        let plus = try center(inkRows(px(22)..<px(46)))
+        // Send: the last 24-point button before the composer's trailing edge.
+        let send = try center(inkRows(px(width - 46)..<px(width - 22)))
+        // The text starts 6 points after ＋. Its last line is the last run of
+        // rows with ink, and its first letter is the first run of columns.
+        let textColumns = px(52)..<px(width - 60)
+        var lines: [[Int]] = []
+        for y in inkRows(textColumns) {
+            if let previous = lines.last?.last, y - previous <= 2 {
+                lines[lines.count - 1].append(y)
+            } else {
+                lines.append([y])
+            }
+        }
+        let lastLine = try XCTUnwrap(lines.last)
+        let lineRows = lastLine.first!..<(lastLine.last! + 1)
+        let firstInk = try XCTUnwrap(textColumns.first { x in lineRows.contains { isInk(x, $0) } })
+        let afterGlyph = (firstInk..<textColumns.upperBound).first { x in lineRows.contains { isInk(x, $0) } == false } ?? textColumns.upperBound
+        let text = try center(inkRows(firstInk..<afterGlyph, within: lineRows))
+        return (plus, text, send)
+    }
+
     /// Hosts the composer in a window, lets SwiftUI lay it out, and keeps
     /// the image. The window is on screen, far outside every display, so
     /// SwiftUI lays out and draws as it does in the app.
@@ -95,7 +155,8 @@ final class CoordinatorComposerSnapshotTests: XCTestCase {
         draft: DraftAttachments,
         text: String,
         width: CGFloat,
-        reply: CoordinatorReplyTarget? = nil
+        reply: CoordinatorReplyTarget? = nil,
+        fontSize: CGFloat = CoordinatorComposerTextEditor.defaultFontSize
     ) throws -> NSBitmapImageRep {
         let composer = CoordinatorComposerView(
             text: .constant(text),
@@ -104,6 +165,7 @@ final class CoordinatorComposerSnapshotTests: XCTestCase {
             placeholder: "Message the coordinator…  ⌥Space from anywhere",
             canStop: false,
             focusRequestID: 0,
+            fontSize: fontSize,
             onSend: {},
             onStop: {},
             dropTarget: AttachmentDropTarget(attachments: draft)
