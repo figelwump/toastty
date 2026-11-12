@@ -766,6 +766,146 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts == ["From the phone", "From the Mac"])
     }
 
+    // MARK: - Quiet wake turns
+
+    /// Toastty's wakes for the fixture's coordinator, over task states the
+    /// test changes, wired as the app wires them.
+    @MainActor
+    private final class Wakes {
+        let service = TaskWebhookService(
+            webhooksFileURL: nil,
+            outboxFileURL: nil,
+            secrets: InMemoryTaskWebhookSecretStore(),
+            timing: .init(passInterval: .seconds(3600), startupDelay: 0, settleInterval: 0)
+        )
+        private final class States {
+            var value: [UUID: TaskWebhookTaskState] = [:]
+        }
+        private let states = States()
+        private let task = UUID()
+
+        init(_ fixture: CoordinatorChatFixture) {
+            service.taskStates = { [states] in states.value }
+            service.attach(coordinator: fixture.controller)
+            fixture.conversations.sessionRuntimeStore.isQuietTurnEnd = { [weak controller = fixture.controller] sessionID in
+                controller?.turnEndsQuietly(sessionID: sessionID) ?? false
+            }
+            states.value[task] = state("running")
+            service.pass()
+        }
+
+        private func state(_ group: String, _ attention: String? = nil) -> TaskWebhookTaskState {
+            TaskWebhookTaskState(key: .init(group: group, attention: attention), title: "Fix the unread dot")
+        }
+
+        /// The task moves into Needs you for this reason, and the pass
+        /// types a digest at the coordinator's open prompt.
+        func taskNeedsYou(_ attention: String) {
+            states.value[task] = state("needsYou", attention)
+            service.pass()
+        }
+    }
+
+    @MainActor
+    private func panelIsUnread(_ fixture: CoordinatorChatFixture) throws -> Bool {
+        let workspaceID = try #require(fixture.store.state.coordinatorWorkspaceID)
+        return fixture.store.state.workspacesByID[workspaceID]?.unreadPanelIDs.contains(fixture.panelID) == true
+    }
+
+    @MainActor
+    private func statusKind(_ fixture: CoordinatorChatFixture) -> SessionStatusKind? {
+        fixture.conversations.sessionRuntimeStore.sessionRegistry.sessionsByID[fixture.conversations.sessionID]?.status?.kind
+    }
+
+    @MainActor
+    @Test func aQuietWakeTurnFoldsUnderItsLineAndItsEndAlertsNobody() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let wakes = Wakes(fixture)
+        // As in the app, the session store marks a turn's end in the
+        // windows' state.
+        fixture.conversations.sessionRuntimeStore.bind(store: fixture.store)
+        // No wake has started a turn: nothing can be quiet.
+        #expect(throws: CoordinatorError.self) { try wakes.service.setCoordinatorWake(.clear, quiet: true) }
+
+        // A wake. In its turn, with no other message in it, the coordinator
+        // finds nothing for the user and says so.
+        wakes.taskNeedsYou("agentFinished")
+        let digest = try #require(fixture.delivered.texts.last)
+        #expect(digest.hasPrefix(CoordinatorWakeState.digestPrefix))
+        try fixture.startTurn(1, userText: digest)
+        try await fixture.waitUntil("the wake turn") {
+            fixture.chat.presentation.rows.contains { if case .hostMessage = $0.content { true } else { false } }
+                && fixture.chat.summary?.state == .working
+        }
+        try wakes.service.setCoordinatorWake(.clear, quiet: true)
+        #expect(fixture.controller.isQuietDigest(digest))
+        try fixture.recordAgentMessage("Nothing needs you.")
+        fixture.report(.ready)
+        // Its end marks nothing unread: the session waits, not Ready.
+        #expect(statusKind(fixture) == .idle)
+        #expect(try panelIsUnread(fixture) == false)
+        try fixture.endTurn(1)
+
+        // The chat folds the whole turn, its answer too, under Toastty's
+        // line, which opens it.
+        let quietTurn = try await fixture.waitFor("the folded turn") { () -> ToasttyTranscriptTurn? in
+            let state = fixture.chat.presentation
+            guard let turn = state.turns.first(where: \.foldsWholeTurn),
+                  let answer = state.rows.first(where: { row in
+                      if case .assistantMessage(let text, _) = row.content { text == "Nothing needs you." } else { false }
+                  }),
+                  turn.workBlockIDs.contains(where: { $0.rowID == answer.id }) else { return nil }
+            return turn
+        }
+        let digestRow = try #require(fixture.chat.presentation.rows.first { $0.id == quietTurn.id })
+        guard case .hostMessage(let line) = digestRow.content else {
+            Issue.record("The quiet turn does not start at Toastty's line")
+            return
+        }
+        #expect(line.foldsTurn)
+        #expect(line.summary.hasPrefix("Toastty · 1 update · "))
+
+        // The next wake starts a normal turn. A message from the user comes
+        // into it, so it cannot be quiet, and its end alerts as usual.
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        wakes.taskNeedsYou("review")
+        let next = try #require(fixture.delivered.texts.last)
+        #expect(next != digest)
+        #expect(next.contains("needsYou (review)"))
+        try fixture.startTurn(2, userText: next)
+        try fixture.recordUserMessage("Is the release ready?")
+        try await fixture.waitUntil("the user's message in the wake turn") {
+            let last = fixture.chat.presentation.rows.last?.content
+            guard case .userMessage(let text, _, _, _)? = last else { return false }
+            return text == "Is the release ready?" && fixture.chat.summary?.state == .working
+        }
+        #expect(throws: CoordinatorError.self) { try wakes.service.setCoordinatorWake(.clear, quiet: true) }
+        #expect(fixture.controller.isQuietDigest(next) == false)
+        try fixture.recordAgentMessage("The release waits for your yes.")
+        fixture.report(.ready)
+        #expect(statusKind(fixture) == .ready)
+        #expect(try panelIsUnread(fixture))
+        try fixture.endTurn(2)
+        try await fixture.waitUntil("the second turn's answer") {
+            fixture.chat.presentation.rows.contains {
+                if case .assistantMessage(let text, _) = $0.content { text == "The release waits for your yes." } else { false }
+            }
+        }
+        let hostLines = fixture.chat.presentation.rows.compactMap { row -> ToasttyHostMessagePresentation? in
+            if case .hostMessage(let line) = row.content { return line }
+            return nil
+        }
+        #expect(hostLines.map(\.foldsTurn) == [true, false])
+        #expect(fixture.chat.presentation.turns.filter(\.foldsWholeTurn).count == 1)
+    }
+
     // MARK: - How long the conversation is read
 
     @MainActor

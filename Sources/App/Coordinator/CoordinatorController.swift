@@ -986,6 +986,47 @@ final class CoordinatorController: ObservableObject {
         typedMessageIDs.contains(messageID)
     }
 
+    // MARK: - Quiet turns
+
+    /// Whether the message is a digest whose turn the coordinator marked
+    /// quiet. The service that keeps the wake state sets it.
+    var isQuietDigest: (String) -> Bool = { _ in false }
+
+    /// The events read to find the newest message to the agent. A wake turn
+    /// has a few tool calls; a turn with more events than this is not read
+    /// as a quiet one.
+    private static let quietTurnEventLimit = 200
+
+    /// The text of the newest message to the agent in its conversation: the
+    /// message that started its turn, or one sent into the turn after it,
+    /// also one typed in its terminal. `nil` when Toastty cannot read the
+    /// conversation, or no message is among its newest events.
+    private func newestMessageToTheAgent() -> String? {
+        guard let subscription = syncConversationSubscription(),
+              case .page(let page) = subscription.events(before: nil, limit: Self.quietTurnEventLimit) else { return nil }
+        for event in page.events.reversed() {
+            if case .userMessage(let payload) = event.payload { return payload.text }
+        }
+        return nil
+    }
+
+    /// Whether the coordinator's agent is in a turn now that the digest with
+    /// this key started, and no other message came into that turn.
+    func runsOnlyTheTurn(ofDigestKey digestKey: String) -> Bool {
+        guard syncConversationSubscription()?.snapshot(at: now())?.summary.state == .working,
+              let text = newestMessageToTheAgent() else { return false }
+        return CoordinatorWakeState.digestKey(text) == digestKey
+    }
+
+    /// Whether the turn of this session that ends now is a quiet one: the
+    /// session is the coordinator's, and the newest message to its agent is
+    /// a digest whose turn it marked quiet. A message that came into the
+    /// turn after the digest makes the turn a normal one again.
+    func turnEndsQuietly(sessionID: String) -> Bool {
+        guard session?.sessionID == sessionID, let text = newestMessageToTheAgent() else { return false }
+        return isQuietDigest(text)
+    }
+
     /// Types the first queued entry when the prompt is open. Returns that
     /// delivery's result, or `nil` when nothing was typed.
     @discardableResult

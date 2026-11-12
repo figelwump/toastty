@@ -55,7 +55,7 @@ struct CoordinatorWakeStateTests {
     @Test func aDigestNamesEachTaskOnceWithItsNewestStage() throws {
         var wake = wake()
         for change in changes(from: [first: state("running"), second: state("running", title: "Add the API")],
-                              to: [first: state("needsYou", "review"), second: state("idle", title: "Add the API")]) {
+                              to: [first: state("needsYou", "review"), second: state("needsYou", "awaitingReply", title: "Add the API")]) {
             wake.record(change, at: at(5))
         }
         // The first task moves again before the digest is typed: its line
@@ -66,7 +66,7 @@ struct CoordinatorWakeStateTests {
         let digest = try #require(wake.digest(now: at(70)))
         #expect(digest == """
         [Toastty] Wake: this message is from Toastty, not from the user.
-        - [Add the API](toastty://task/22222222-2222-2222-2222-222222222222): idle at 2027-01-15T08:00:05Z
+        - [Add the API](toastty://task/22222222-2222-2222-2222-222222222222): needsYou (awaitingReply) at 2027-01-15T08:00:05Z
         - [Fix the login](toastty://task/11111111-1111-1111-1111-111111111111): toShip, merged at 2027-01-15T08:01:05Z
         Read `toastty task list` for details.
         """)
@@ -89,7 +89,7 @@ struct CoordinatorWakeStateTests {
     @Test func aTitleCannotBreakTheLineTheLinkOrTheTerminalPaste() throws {
         var wake = wake()
         let hostile = "Fix [urgent]\n\u{1B}[201~rm -rf ~\r](http://evil.example) \\ now"
-        for change in changes(from: [first: state("running", title: hostile)], to: [first: state("idle", title: hostile)]) {
+        for change in changes(from: [first: state("running", title: hostile)], to: [first: state("needsYou", "review", title: hostile)]) {
             wake.record(change, at: at(1))
         }
         let digest = try #require(wake.digest(now: at(2)))
@@ -102,8 +102,8 @@ struct CoordinatorWakeStateTests {
         var long = self.wake()
         for change in changes(from: [first: state("running", title: String(repeating: "word ", count: 60)),
                                      second: state("running", title: " \n ")],
-                              to: [first: state("idle", title: String(repeating: "word ", count: 60)),
-                                   second: state("idle", title: " \n ")]) {
+                              to: [first: state("needsYou", "review", title: String(repeating: "word ", count: 60)),
+                                   second: state("needsYou", "review", title: " \n ")]) {
             long.record(change, at: at(1))
         }
         let longDigest = try #require(long.digest(now: at(2)))
@@ -119,7 +119,7 @@ struct CoordinatorWakeStateTests {
         for index in 0..<45 {
             let id = UUID()
             before[id] = state("running", title: "Task \(index)")
-            after[id] = state("idle", title: "Task \(index)")
+            after[id] = state("needsYou", "review", title: "Task \(index)")
         }
         for change in changes(from: before, to: after) { wake.record(change, at: at(1)) }
         #expect(wake.changes.count == 45)
@@ -154,27 +154,101 @@ struct CoordinatorWakeStateTests {
         """)
     }
 
-    @Test func onlyAPlainMoveIntoRunningWakesNothing() {
-        // Into Running from any stage, a new task that starts, and a task
-        // that a merge or a deletion also changed.
-        let running = changes(from: [first: state("needsYou", "agentFinished"), second: state("toShip", merged: true)],
-                              to: [first: state("running"), second: state("running", merged: true)])
-        let deleted = changes(from: [first: state("running")], to: [:])
-        let created = changes(from: [:], to: [first: state("running")])
+    @Test func onlyAChangeThatMayNeedTheCoordinatorWakesIt() {
+        /// Whether the move of `first` wakes a coordinator that watches
+        /// that task, or the project with that root.
+        func wakes(
+            _ before: TaskWebhookTaskState?,
+            _ after: TaskWebhookTaskState?,
+            watchingTask: Bool = false,
+            watchingProject: String? = nil
+        ) -> Bool {
+            var wake = wake()
+            if watchingTask { wake.watch(taskID: first) }
+            if let watchingProject { wake.watch(projectRoot: watchingProject) }
+            let moves = changes(from: before.map { [first: $0] } ?? [:], to: after.map { [first: $0] } ?? [:])
+            for change in moves { wake.record(change, at: at(1)) }
+            return wake.changes.contains(where: \.wakes)
+        }
+
+        // Into Needs you, for any reason, from any stage: it wakes.
+        for attention in ["review", "awaitingReply", "agentFinished", "agentNeedsInput", "setupFailed"] {
+            #expect(wakes(state("running"), state("needsYou", attention)), "\(attention)")
+            #expect(wakes(state("idle"), state("needsYou", attention)), "\(attention)")
+        }
+        #expect(wakes(nil, state("needsYou", "pickWorkspace")))
+
+        // What the user did, or what needs nobody, waits for another wake:
+        // running, idle, a merge nothing waits for, Done, archived and a
+        // deletion.
+        let quiet: [(TaskWebhookTaskState?, TaskWebhookTaskState?)] = [
+            (state("idle"), state("running")),
+            (state("needsYou", "agentFinished"), state("running")),
+            (nil, state("running")),
+            (state("running"), state("idle")),
+            (state("needsYou", "review"), state("idle")),
+            (state("needsYou", "review"), state("toShip", merged: true)),
+            (state("needsYou", "review"), state("done", merged: true)),
+            (state("toShip", merged: true), state("done", merged: true)),
+            (state("idle"), state("done")),
+            (state("idle"), state("archived")),
+            (state("idle"), nil),
+        ]
+        for (before, after) in quiet {
+            #expect(wakes(before, after) == false, "\(String(describing: before?.key)) → \(String(describing: after?.key))")
+        }
+
+        // A merge wakes it when something waits for it: the user asked for
+        // a release right after it, or the coordinator watches the task or
+        // its project.
+        var releasing = state("toShip", merged: true)
+        releasing.releaseAfterMerge = true
+        #expect(wakes(state("needsYou", "review"), releasing))
+        #expect(wakes(state("needsYou", "review"), state("toShip", merged: true), watchingTask: true))
+        #expect(wakes(state("needsYou", "review"), state("done", merged: true), watchingProject: "/repo"))
+        #expect(wakes(state("needsYou", "review"), state("toShip", merged: true), watchingProject: "/other") == false)
+        // Only the merge itself: a merged task that moves on does not.
+        #expect(wakes(state("toShip", merged: true), state("done", merged: true), watchingProject: "/repo") == false)
+
+        // A watched task wakes it when it ends, with or without a merge,
+        // but not while it works.
+        for end in [state("done"), state("archived"), nil] {
+            #expect(wakes(state("idle"), end, watchingTask: true), "\(String(describing: end?.key))")
+        }
+        #expect(wakes(state("idle"), state("running"), watchingTask: true) == false)
+        #expect(wakes(state("running"), state("idle"), watchingTask: true) == false)
+    }
+
+    @Test func aWatchOfATaskEndsWhenItMergesOrEnds() {
         var wake = wake()
-        for change in running + created + deleted {
-            wake.record(change, at: at(1))
-            #expect(wake.changes.last?.wakes == (change.state.key.merged || change.events.contains(.deleted)),
-                    "\(change.state.key) \(change.events)")
+        wake.watch(taskID: first)
+        wake.watch(taskID: second)
+        // Working on it keeps the watch.
+        for change in changes(from: [first: state("idle")], to: [first: state("running")]) { wake.record(change, at: at(1)) }
+        #expect(wake.watchedTaskIDs == [first, second])
+        // Its merge wakes the coordinator once, and the watch ends: the
+        // task's Done after the release wakes nothing more.
+        for change in changes(from: [first: state("needsYou", "review")], to: [first: state("toShip", merged: true)]) {
+            wake.record(change, at: at(2))
         }
-        // A move out of Running into any other stage wakes it.
-        for after in [state("needsYou", "review"), state("idle"), state("toShip", merged: true), state("done"), state("archived")] {
-            var other = self.wake()
-            for change in changes(from: [first: state("running")], to: [first: after]) {
-                other.record(change, at: at(1))
-            }
-            #expect(other.changes.map(\.wakes) == [true], "\(after.key)")
+        #expect(wake.watchedTaskIDs == [second])
+        #expect(wake.changes.last?.wakes == true)
+        wake.markDelivered("digest", at: at(3))
+        for change in changes(from: [first: state("toShip", merged: true)], to: [first: state("done", merged: true)]) {
+            wake.record(change, at: at(4))
         }
+        #expect(wake.digest(now: at(5)) == nil)
+        // Ending a watch the coordinator no longer needs.
+        wake.unwatch(taskID: second)
+        #expect(wake.watchedTaskIDs.isEmpty)
+        // Watching again changes nothing, and the number has a limit.
+        var many = self.wake()
+        for _ in 0 ..< CoordinatorWakeState.maximumWatches { many.watch(taskID: UUID()) }
+        let overLimit = many.watch(taskID: UUID())
+        let again = many.watch(taskID: many.watchedTaskIDs[0])
+        #expect(overLimit == false)
+        #expect(again)
+        #expect(many.watchedTaskIDs.count == CoordinatorWakeState.maximumWatches)
     }
 
     @Test func aTasksNewestChangeDecidesWhetherItWakes() throws {
@@ -192,10 +266,10 @@ struct CoordinatorWakeStateTests {
         #expect(wake.digest(now: at(11)) == nil)
         // And the other way: a running line that waits is replaced by a
         // change that wakes.
-        for change in changes(from: [first: state("running")], to: [first: state("idle")]) {
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "awaitingReply")]) {
             wake.record(change, at: at(20))
         }
-        #expect(try #require(wake.digest(now: at(21))).contains("): idle at "))
+        #expect(try #require(wake.digest(now: at(21))).contains("): needsYou (awaitingReply) at "))
     }
 
     // MARK: - Alerts
@@ -228,6 +302,22 @@ struct CoordinatorWakeStateTests {
         // A turn the quit cut off counts at once, with or without checks.
         #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .none, interruptedAtQuit: true), at: 0) == [.interrupted])
         #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .failing, interruptedAtQuit: true), at: 0) == [.checksFailing, .interrupted])
+    }
+
+    @Test func aTurnThatAQuitCutOffWakesTheCoordinatorOnceAndGoingIdleDoesNot() throws {
+        // After a relaunch, the agent that worked waits at its prompt. Its
+        // stage moves from Running to Idle, which wakes nothing; the alert
+        // does, once.
+        var feed = feed([first: state("running")])
+        feed.observe([first: state("idle")], at: at(5))
+        #expect(feed.wake.digest(now: at(6)) == nil)
+        feed.observe([first: state("idle", alerts: [.interrupted])], at: at(7))
+        let digest = try #require(feed.wake.digest(now: at(8)))
+        #expect(digest.contains("): idle at 2027-01-15T08:00:07Z; interrupted by the quit"))
+        feed.wake.markDelivered(digest, at: at(8))
+        // It stays cut off until the agent works again: nothing new.
+        feed.observe([first: state("idle", alerts: [.interrupted])], at: at(60))
+        #expect(feed.wake.digest(now: at(61)) == nil)
     }
 
     @Test func checksToasttyCannotReadKeepTheCheckAlertsLastCounted() {
@@ -269,7 +359,7 @@ struct CoordinatorWakeStateTests {
         - [Fix the login](toastty://task/11111111-1111-1111-1111-111111111111): running at 2027-01-15T08:30:00Z; busy, no output for 30 minutes
         Read `toastty task list` for details.
         """)
-        feed.wake.markDelivered(at: at(1801))
+        feed.wake.markDelivered("digest", at: at(1801))
 
         // It holds: no change, nothing waits.
         feed.observe([first: state("running", alerts: [.silent])], at: at(1900))
@@ -291,7 +381,7 @@ struct CoordinatorWakeStateTests {
         feed.observe([first: state("running", alerts: [.silent, .checksSlow])], at: at(1800))
         #expect(try #require(feed.wake.digest(now: at(1801))).contains(
             "): running at 2027-01-15T08:30:00Z; busy, no output for 30 minutes; pull request checks pending for 30 minutes"))
-        feed.wake.markDelivered(at: at(1801))
+        feed.wake.markDelivered("digest", at: at(1801))
         // The checks finish: silence stays, and was told.
         feed.observe([first: state("running", alerts: [.silent])], at: at(1900))
         #expect(feed.wake.digest(now: at(1901)) == nil)
@@ -314,9 +404,9 @@ struct CoordinatorWakeStateTests {
         #expect(feed.events == [[.needsYou], [], []])
 
         // A told task whose alert clears: nothing wakes, also out of Running.
-        feed.wake.markDelivered(at: at(31))
+        feed.wake.markDelivered("digest", at: at(31))
         feed.observe([first: state("needsYou", "review", alerts: [.checksFailing])], at: at(40))
-        feed.wake.markDelivered(at: at(41))
+        feed.wake.markDelivered("digest", at: at(41))
         feed.observe([first: state("needsYou", "review")], at: at(50))
         #expect(feed.wake.changes.map(\.wakes) == [false])
         #expect(feed.wake.digest(now: at(51)) == nil)
@@ -383,7 +473,7 @@ struct CoordinatorWakeStateTests {
         feed.observe([first: state("toShip", merged: true, alerts: [.silent])], at: at(13), settleInterval: 3)
         #expect(feed.wake.changes.map(\.newAlerts) == [[.silent]])
         // Done counts at once; the alert that comes with it waits its time.
-        feed.wake.markDelivered(at: at(14))
+        feed.wake.markDelivered("digest", at: at(14))
         feed.observe([first: state("done", merged: true, alerts: [.silent, .checksFailing])], at: at(20), settleInterval: 3)
         #expect(feed.wake.changes.map(\.group) == ["done"])
         #expect(feed.wake.changes.map(\.alerts) == [[.silent]])
@@ -409,6 +499,18 @@ struct CoordinatorWakeStateTests {
                     == changes(from: [first: before], to: [first: after]).map(\.events), "\(after.key)")
         }
         #expect(changes(from: [first: state("idle")], to: [first: state("idle", alerts: [.checksFailing])]).map(\.events) == [[]])
+    }
+
+    @Test func aBaselineSavedBeforeReleaseAfterMergeLoads() throws {
+        // A task state as the earlier build saved it in the detector's
+        // baseline. A field it lacks must not fail the whole outbox file.
+        let saved = Data(#"{"key":{"group":"toShip","merged":true},"title":"Fix the login","projectRoot":"/repo"}"#.utf8)
+        let restored = try decoder.decode(TaskWebhookTaskState.self, from: saved)
+        #expect(restored.key == .init(group: "toShip", merged: true))
+        #expect(restored.releaseAfterMerge == false)
+        var releasing = restored
+        releasing.releaseAfterMerge = true
+        #expect(try decoder.decode(TaskWebhookTaskState.self, from: encoder.encode(releasing)).releaseAfterMerge)
     }
 
     @Test func aBaselineSavedBeforeAlertsLoadsWithNoAlerts() throws {
@@ -437,7 +539,7 @@ struct CoordinatorWakeStateTests {
         #expect(wake.requestedWakeAt == nil)
         // Days after the last wake, with open tasks or not: nothing.
         #expect(wake.digest(now: at(30 * 86_400)) == nil)
-        wake.markDelivered(at: at(60))
+        wake.markDelivered("digest", at: at(60))
         #expect(wake.digest(now: at(30 * 86_400)) == nil)
     }
 
@@ -482,7 +584,7 @@ struct CoordinatorWakeStateTests {
 
         // Typed at 300 s, before the time the coordinator set: that time is
         // gone, and no timer runs until the coordinator sets one.
-        wake.markDelivered(at: at(300))
+        wake.markDelivered("digest", at: at(300))
         #expect(wake.changes.isEmpty)
         #expect(wake.requestedWakeAt == nil)
         #expect(wake.lastWakeAt == at(300))
@@ -492,6 +594,10 @@ struct CoordinatorWakeStateTests {
 
     @Test func theStateSurvivesASave() throws {
         var wake = wake()
+        wake.markDelivered("An earlier digest", at: at(1))
+        wake.markLastDigestQuiet()
+        wake.watch(taskID: first)
+        wake.watch(projectRoot: "/other")
         wake.setRequestedWake(at(1200))
         for change in changes(from: [first: state("running"), second: state("idle")],
                               to: [first: state("done", merged: true), second: state("running", alerts: [.silent])]) {
@@ -501,6 +607,10 @@ struct CoordinatorWakeStateTests {
         let restored = try decoder.decode(CoordinatorWakeState.self, from: saved)
         #expect(restored == wake)
         #expect(restored.changes.map(\.stageWakes) == [true, false])
+        // The task's merge ended its watch; the project's stays.
+        #expect(restored.watchedTaskIDs.isEmpty)
+        #expect(restored.watchedProjectRoots == ["/other"])
+        #expect(restored.isQuietDigest("An earlier digest"))
         // The stage part keeps the key the build before alerts saved.
         #expect(String(decoding: saved, as: UTF8.self).contains(#""wakes" : false"#))
         #expect(restored.changes.map(\.newAlerts) == [[], [.silent]])
@@ -574,6 +684,53 @@ struct CoordinatorWakeStateTests {
         #expect(idle.digest(now: at(60)) == nil)
     }
 
+    // MARK: - Quiet turns
+
+    @Test func aQuietMarkBelongsToTheDigestThatStartedTheTurn() throws {
+        var wake = wake()
+        // Before the first digest there is no turn to mark.
+        let beforeAnyDigest = wake.markLastDigestQuiet()
+        #expect(beforeAnyDigest == false)
+        #expect(wake.quietDigestKeys.isEmpty)
+
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "agentFinished")]) {
+            wake.record(change, at: at(5))
+        }
+        let digest = try #require(wake.digest(now: at(6)))
+        wake.markDelivered(digest, at: at(6))
+        #expect(wake.isQuietDigest(digest) == false)
+        let marked = wake.markLastDigestQuiet()
+        #expect(marked)
+        // The transcript can keep the text with other white space around it.
+        #expect(wake.isQuietDigest(digest))
+        #expect(wake.isQuietDigest("\n" + digest + "\n"))
+        // Another digest, or the user's message, is not quiet.
+        #expect(wake.isQuietDigest(digest + " "))
+        #expect(wake.isQuietDigest(digest.replacingOccurrences(of: "agentFinished", with: "review")) == false)
+        #expect(wake.isQuietDigest("Nothing needs you.") == false)
+
+        // The next digest starts a turn that is not quiet until marked.
+        wake.setRequestedWake(at(600))
+        let next = try #require(wake.digest(now: at(600)))
+        wake.markDelivered(next, at: at(600))
+        #expect(wake.isQuietDigest(next) == false)
+        #expect(wake.isQuietDigest(digest))
+    }
+
+    @Test func theQuietMarksKeptHaveALimit() {
+        var wake = wake()
+        let limit = CoordinatorWakeState.maximumQuietDigests
+        for index in 0 ... limit {
+            wake.markDelivered("Digest \(index)", at: at(TimeInterval(index)))
+            wake.markLastDigestQuiet()
+        }
+        #expect(wake.quietDigestKeys.count == limit)
+        // The oldest is forgotten first.
+        #expect(wake.isQuietDigest("Digest 0") == false)
+        #expect(wake.isQuietDigest("Digest 1"))
+        #expect(wake.isQuietDigest("Digest \(limit)"))
+    }
+
     private var encoder: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -593,6 +750,7 @@ struct CoordinatorWakeStateTests {
         let release = changes(from: [first: state("toShip", merged: true)], to: [first: state("done", merged: true)])
         #expect(release.map(\.events) == [[]])
         var wake = wake()
+        wake.watch(taskID: first)
         for change in release { wake.record(change, at: at(5)) }
         #expect(try #require(wake.digest(now: at(6))).contains("): done, merged at "))
 

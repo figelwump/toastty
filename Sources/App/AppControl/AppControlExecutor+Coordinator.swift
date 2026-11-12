@@ -4,7 +4,7 @@ import Foundation
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
         switch self {
-        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorWake: true
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorWake, .coordinatorWatch: true
         default: false
         }
     }
@@ -140,12 +140,25 @@ extension AppControlExecutor {
         )
     }
 
-    /// Sets, moves or removes the coordinator's next check.
+    private func requiredCoordinatorWakes() throws -> TaskWebhookService {
+        guard let wakes = taskCoordinator?.webhooks else {
+            throw AutomationSocketError.invalidPayload("coordinator wakes are not available in this Toastty instance")
+        }
+        return wakes
+    }
+
+    /// Sets, moves or removes the coordinator's next check, and with quiet
+    /// marks the coordinator's running wake turn as one that needs nothing
+    /// from the user.
     func runCoordinatorWake(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
         let controller = try requiredCoordinatorController()
         try enforceCoordinatorAccess()
-        guard let wakes = taskCoordinator?.webhooks else {
-            throw AutomationSocketError.invalidPayload("coordinator wakes are not available in this Toastty instance")
+        let wakes = try requiredCoordinatorWakes()
+        let quiet = try optionalBooleanParameter("quiet", args: args, defaultValue: false)
+        // Only the coordinator's own agent says that its turn needs nobody.
+        if quiet, let coordinatorSessionID = controller.session?.sessionID,
+           callerManagedSession()?.sessionID != coordinatorSessionID {
+            throw AutomationSocketError.invalidPayload("quiet marks the coordinator's own turn: only the coordinator's agent can pass it")
         }
         let clear = try optionalBooleanParameter("clear", args: args, defaultValue: false)
         guard [args["inSeconds"] != nil, args["at"] != nil, clear].filter({ $0 }).count == 1 else {
@@ -168,7 +181,55 @@ extension AppControlExecutor {
             request = .at(date)
         }
         do {
-            try wakes.setCoordinatorWake(request)
+            try wakes.setCoordinatorWake(request, quiet: quiet)
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: coordinatorSnapshot(controller))
+    }
+
+    /// Starts or ends a watch: a task's merge or end, or every merge in a
+    /// project, then wakes the coordinator.
+    func runCoordinatorWatch(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        let wakes = try requiredCoordinatorWakes()
+        guard controller.location != nil else {
+            throw AutomationSocketError.invalidPayload("There is no coordinator. Open it first.")
+        }
+        let watching = try optionalBooleanParameter("remove", args: args, defaultValue: false) == false
+        let target: TaskWebhookService.CoordinatorWatchTarget
+        switch (args.coordinatorString("taskID"), args.coordinatorString("workspaceID")) {
+        case (let rawTaskID?, nil):
+            guard let taskID = UUID(uuidString: rawTaskID) else {
+                throw AutomationSocketError.invalidPayload("taskID must be a task ID")
+            }
+            // A watch that ends needs no task: the task can be gone.
+            if watching, taskCoordinator?.records.record(id: taskID) == nil {
+                throw AutomationSocketError.invalidPayload("No task has ID \(rawTaskID).")
+            }
+            target = .task(taskID)
+        case (nil, let rawWorkspaceID?):
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID must be a workspace ID")
+            }
+            guard let coordinator = taskCoordinator else {
+                throw AutomationSocketError.invalidPayload("tasks are not available in this Toastty instance")
+            }
+            // A subspace stands for its project, as for a release.
+            let projectID = try requiredStore().state.subspaceParentIDsByWorkspaceID()[workspaceID] ?? workspaceID
+            let root: String
+            do {
+                root = try coordinator.resolvedProjectRoot(workspaceID: projectID).path
+            } catch let error as TaskError {
+                throw AutomationSocketError.invalidPayload(error.message)
+            }
+            target = .project(root: TasksConfigFile.normalizedPath(root, homeDirectoryPath: coordinator.homeDirectoryPath))
+        default:
+            throw AutomationSocketError.invalidPayload("pass exactly one of taskID and workspaceID")
+        }
+        do {
+            try wakes.setCoordinatorWatch(target, watching: watching)
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -191,6 +252,8 @@ extension AppControlExecutor {
                 "pendingTaskCount": .int(wake.pendingTaskCount),
                 "nextWakeAt": time(wake.nextWakeAt),
                 "lastWakeAt": time(wake.lastWakeAt),
+                "watchedTaskIDs": .array(wake.watchedTaskIDs.map { .string($0.uuidString) }),
+                "watchedProjectRoots": .array(wake.watchedProjectRoots.map(AutomationJSONValue.string)),
             ])
         }
         return snapshot

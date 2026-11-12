@@ -362,6 +362,15 @@ def run_fake(check):
         quiet(seen + 1, SETTLE + 3, 'although nothing changed')
         step('the next stage gave one digest', digest=needs_you['text'])
 
+        # 2b. A task that the user finished wakes nothing: its line waits.
+        wait_for('the coordinator at its prompt', at_prompt)
+        seen = len(digests())
+        cli('task', 'mark-done', early_id)
+        wait_for('the finished task to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
+        quiet(seen, SETTLE + 6, 'for a task the user finished')
+        require(saved_changes() == [(early_id, 'done', False)], f'The finished task is not saved as quiet: {saved_changes()}')
+        step('a task the user finished typed no digest', saved=read_outbox(runtime_home)['coordinator'])
+
         # 3. A busy coordinator gets nothing typed; several changes then
         # arrive as one digest, with a task that only started running.
         task_b, _ = create('Add the export API')
@@ -378,25 +387,30 @@ def run_fake(check):
         hold(session_a)
         cli('task', 'send', task_a, 'more work')
         wait_for_stage(task_a, 'running')
-        wait_for('the first change to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 1)
+        wait_for('the first change to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 2)
+        # The coordinator watches the second task: its end wakes it.
+        watched = cli('coordinator', 'watch', '--task', task_b)['wake']
+        require(watched['watchedTaskIDs'] == [task_b], f'The watch is not shown: {watched}')
         cli('task', 'mark-done', task_b)
-        wait_for('two tasks to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 2)
+        wait_for('three tasks to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 3)
         time.sleep(SETTLE + 3)
         waiting = status()
-        require(waiting['wake']['pendingTaskCount'] == 2 and waiting['status'] == 'working' and waiting['queuedCount'] == 0,
+        require(waiting['wake']['pendingTaskCount'] == 3 and waiting['status'] == 'working' and waiting['queuedCount'] == 0,
                 f'Unexpected status while the coordinator works: {waiting}')
         require(len(digests()) == seen, f'A digest was typed while the coordinator worked: {digests()[seen:]}')
-        require(sorted(saved_changes()) == sorted([(task_a, 'running', False), (task_b, 'done', True)]),
+        require(sorted(saved_changes()) == sorted([(early_id, 'done', False), (task_a, 'running', False), (task_b, 'done', True)]),
                 f'The waiting changes are not saved: {saved_changes()}')
+        require(waiting['wake']['watchedTaskIDs'] == [], f"The task's end did not end its watch: {waiting}")
         hold(coordinator_session, on=False)
         (burst,) = new_digests(seen)
-        require(set(burst['tasks']) == {task_a, task_b}
+        require(set(burst['tasks']) == {early_id, task_a, task_b}
+                and burst['tasks'][early_id]['stage'] == 'done'
                 and burst['tasks'][task_a]['stage'] == 'running'
                 and burst['tasks'][task_b]['stage'] == 'done' and not burst['other'],
                 f'Unexpected digest after the turn: {burst}')
         wait_for('nothing to wait', lambda: status()['wake']['pendingTaskCount'] == 0)
-        step('a busy coordinator got one digest after its turn, with the running task', whileBusy=waiting,
-             digest=burst['text'])
+        step("a busy coordinator got one digest after its turn, for the watched task's end, with the quiet changes",
+             whileBusy=waiting, digest=burst['text'])
 
         # The running task's turn ends: that stage wakes the coordinator.
         wait_for('the coordinator at its prompt', at_prompt)
@@ -597,7 +611,8 @@ def run_fake(check):
         def as_earlier_build(value):
             if isinstance(value, dict):
                 return {key: as_earlier_build(item) for key, item in value.items()
-                        if key not in ('alerts', 'newAlerts', 'alertsSince')}
+                        if key not in ('alerts', 'newAlerts', 'alertsSince', 'releaseAfterMerge', 'watchedTaskIDs',
+                                       'watchedProjectRoots', 'lastDigestKey', 'quietDigestKeys')}
             return [as_earlier_build(item) for item in value] if isinstance(value, list) else value
 
         outbox = as_earlier_build(outbox)

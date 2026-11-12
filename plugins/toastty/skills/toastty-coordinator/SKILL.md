@@ -176,19 +176,28 @@ COORDINATOR_MESSAGE_END
 4. Tell the user what needs them and what you did; see Talk to the user.
 5. **Set or clear your next check before the turn ends,** in every turn
    that a digest started. Every digest removes the time you set. Toastty
-   wakes you at a stage change of a task that may need you, but not for a
-   task that only starts running. It also wakes you once when a task gets
-   an alert: its agent is busy and has written nothing for 30 minutes, its
-   pull request's checks fail, they have been pending for 30 minutes, or a
-   restart cut off its turn and its agent waits at its prompt.
-   It has no timer of its own. Your check catches the rest: a wait that
-   reaches its limit, such as a permission prompt, and a batch release
-   time. Set it only for a deadline in this table, with
+   wakes you only when something may need you: a task moves into Needs
+   you; a task gets an alert (its agent is busy and has written nothing for
+   30 minutes, its pull request's checks fail or have been pending for 30
+   minutes, or a restart cut off its turn and its agent waits at its prompt); a task you watch
+   merges or ends; a task with `releaseAfterMerge` merges. A task that
+   starts running, goes idle, or that the user merged or finished wakes
+   nothing: it shows in the next digest. Toastty has no timer of its own.
+   Your check catches the rest: a wait that reaches its limit, such as a
+   permission prompt, and a batch release time. Set it only for a deadline
+   in this table, with
    `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>` or
    `--at <ISO time>`, and take the earliest time that applies. With no such
    deadline, run
    `"$TOASTTY_CLI_PATH" coordinator wake --clear`. Do this also when you
    tell the user nothing, and never mention it to the user.
+
+   **When the turn found nothing for the user** and you did nothing that
+   you must report, add `--quiet` to that same command, such as
+   `"$TOASTTY_CLI_PATH" coordinator wake --clear --quiet`. Toastty then
+   folds the turn in the chat and does not alert the user. Use it only in a
+   turn that a digest started; Toastty refuses it in any other turn, also
+   when the user wrote to you during the turn. Then answer as usual.
 
    | Deadline | Next check |
    | --- | --- |
@@ -232,7 +241,7 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Permission prompt | `agent` is `waiting`, stage `needsYou (agentNeedsInput)` | Never answer it. When `agentMinutes` passes 10, tell the user once. Before that, say nothing about it and set the next check for that time. |
 | Question | stage `needsYou (awaitingReply)`, with `question` | Read `lastReply`. If `policy.md`, or an answer the user gave you to the same question, settles it: send the answer, name the rule in it, and tell the user what you answered. If not: pass the question to the user with the answer you suggest, and send the user's answer to the task when it comes. |
 | Ended a turn, not done | stage `needsYou (agentFinished)` | Read `lastReply` and sort it. It waits for CI: nothing to send. It waits for another task or pull request: see the next row. It asks something: treat it as a question. The work is finished but it has no pull request and no ready mark: tell it once to open the pull request or to run `toastty task ready-for-review`. It answers the user: tell the user it waits for them. |
-| Waits for another task or pull request | the reply names it | Add a `watch` line to the ledger. On each wake, see whether it merged: another Toastty task has `mergedAt` in its `task get`, and a digest names it when it merges; a pull request outside Toastty answers `gh pr view <url> --json state,mergedAt`. When it merged, tell the waiting task, under the rules for Send. Do not use `toastty task watch --notify` for another task: Toastty types that notice whatever the agent does at that moment. |
+| Waits for another task or pull request | the reply names it | Add a `watch` line to the ledger. For another Toastty task, also run `"$TOASTTY_CLI_PATH" coordinator watch --task <that task's id>`: its merge, or its end without a merge, then wakes you, because Toastty does not wake you for a merge nothing waits for. A pull request outside Toastty answers `gh pr view <url> --json state,mergedAt`; set your next check to look again. When it merged, tell the waiting task, under the rules for Send. Do not use `toastty task watch --notify` for another task: Toastty types that notice whatever the agent does at that moment. |
 | CI failed | `checks` is `failing` and the agent is `idle`. Toastty wakes you when the checks start to fail. | Read which checks fail with `gh pr checks <pr>`. Tell the task to fix them, or to rerun a check that Notes in `policy.md` names as a flake. |
 | CI slow | `checksPendingMinutes` passes 30. Toastty wakes you then. | Look with `gh pr checks <pr>` and `gh run view`. Tell the user if a run is queued or hangs. Do not rerun or cancel it. |
 | Merge conflict | `mergeState` is `DIRTY` and the agent is `idle` | Tell the task to rebase onto its base branch and resolve the conflicts. |
@@ -372,7 +381,12 @@ release contains it.
   `toShip` task and no rule, ask the user once: release on merge, or in
   batches, and when? Write the answer to Releases.
 - **On merge:** when a task of that project reaches `toShip`, start the
-  release.
+  release. Toastty does not wake you for a merge nothing waits for, so when
+  a project has this rule, run
+  `"$TOASTTY_CLI_PATH" coordinator watch --workspace <project's workspace ID>`
+  once; `"$TOASTTY_CLI_PATH" coordinator status` lists the watched projects
+  under `wake.watchedProjectRoots`. Remove the watch with `--remove` when
+  the rule changes.
 - **Batch:** propose a release when the rule says so, with the list of
   waiting tasks. Start it when the user agrees.
 - **One change right after its merge.** When the user says so, run
@@ -528,7 +542,9 @@ The Talking section of `policy.md` changes these defaults.
 - Be short. Put first what needs the user, with the answer you suggest. Then
   one line for each thing you did. Say nothing about tasks that need nothing.
 - When a wake found nothing for the user and you did nothing that you must
-  report, answer only "Nothing needs you."
+  report, mark the turn quiet (see Each turn, step 5) and answer only
+  "Nothing needs you." The user does not see that answer unless they open
+  the wake in the chat.
 - For a task that needs nothing from the user, do not report its stage or
   that its agent works: Toastty shows both. Do not mention your next check.
 - Do not repeat an agent's report, and do not summarize proof.

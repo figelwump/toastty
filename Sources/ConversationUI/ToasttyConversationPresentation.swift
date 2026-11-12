@@ -179,6 +179,10 @@ public struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
 /// commentary) between it and its first final response.
 /// Interaction cards are never part of a turn's foldable work — they stay
 /// visible so pending prompts cannot hide.
+///
+/// A host message that folds its turn (`ToasttyHostMessagePresentation.foldsTurn`)
+/// makes every later block of the turn foldable, its responses too, and the
+/// message's own line stands in for the work strip.
 public struct ToasttyTranscriptTurn: Equatable, Sendable {
     public let id: ToasttyTranscriptRowID
     public let workBlockIDs: [ToasttyTranscriptBlockID]
@@ -187,6 +191,24 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
     /// True once a final assistant message follows the work, which is what
     /// makes the work section foldable.
     public let hasResponse: Bool
+    /// The anchor is a host message that folds the whole turn.
+    public let foldsWholeTurn: Bool
+
+    public init(
+        id: ToasttyTranscriptRowID,
+        workBlockIDs: [ToasttyTranscriptBlockID],
+        toolCallCount: Int,
+        noteCount: Int,
+        hasResponse: Bool,
+        foldsWholeTurn: Bool = false
+    ) {
+        self.id = id
+        self.workBlockIDs = workBlockIDs
+        self.toolCallCount = toolCallCount
+        self.noteCount = noteCount
+        self.hasResponse = hasResponse
+        self.foldsWholeTurn = foldsWholeTurn
+    }
 
     /// Includes user turns before their first work block arrives, so the
     /// previous completed turn cannot be mistaken for the current one.
@@ -197,6 +219,7 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
         var toolCallIDs: Set<String> = []
         var noteRowIDs: Set<ToasttyTranscriptRowID> = []
         var hasResponse = false
+        var foldsWholeTurn = false
 
         func flushTurn() {
             guard let id = currentID else { return }
@@ -205,38 +228,52 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
                 workBlockIDs: workBlockIDs,
                 toolCallCount: toolCallIDs.count,
                 noteCount: noteRowIDs.count,
-                hasResponse: hasResponse
+                hasResponse: hasResponse,
+                foldsWholeTurn: foldsWholeTurn
             ))
             currentID = nil
             workBlockIDs.removeAll(keepingCapacity: true)
             toolCallIDs.removeAll(keepingCapacity: true)
             noteRowIDs.removeAll(keepingCapacity: true)
             hasResponse = false
+            foldsWholeTurn = false
+        }
+
+        /// Whether the block belongs to the current turn's foldable work:
+        /// before the turn's response, or anywhere in a turn that folds
+        /// whole.
+        var foldsAsWork: Bool {
+            currentID != nil && (hasResponse == false || foldsWholeTurn)
         }
 
         for block in blocks {
             switch block.content {
             case .row(let row):
                 switch row.content {
-                case .userMessage, .hostMessage:
+                case .userMessage:
                     flushTurn()
                     currentID = row.id
+                case .hostMessage(let message):
+                    flushTurn()
+                    currentID = row.id
+                    foldsWholeTurn = message.foldsTurn
                 case .assistantMessage(_, let phase):
                     // Only explicit commentary folds as work. Codex transcripts
                     // deliver responses with an unknown phase, so anything not
                     // marked commentary must count as the turn's response or
                     // the turn never settles.
                     if phase == .commentary {
-                        if currentID != nil, hasResponse == false {
+                        if foldsAsWork {
                             workBlockIDs.append(block.id)
                             noteRowIDs.insert(row.id)
                         }
                     } else if currentID != nil {
                         hasResponse = true
+                        if foldsWholeTurn { workBlockIDs.append(block.id) }
                     }
                 case .subagentSummary, .interactionResolved,
                      .sessionBindingChanged:
-                    if currentID != nil, hasResponse == false {
+                    if foldsAsWork {
                         workBlockIDs.append(block.id)
                     }
                 case .interaction, .toolStarted, .toolFinished:
@@ -245,15 +282,16 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
             case .messageChunk(let chunk):
                 guard case .assistantMessage(_, let phase) = chunk.row.content else { break }
                 if phase == .commentary {
-                    if currentID != nil, hasResponse == false {
+                    if foldsAsWork {
                         workBlockIDs.append(block.id)
                         noteRowIDs.insert(chunk.row.id)
                     }
                 } else if currentID != nil {
                     hasResponse = true
+                    if foldsWholeTurn { workBlockIDs.append(block.id) }
                 }
             case .toolBatch(let rows):
-                if currentID != nil, hasResponse == false {
+                if foldsAsWork {
                     workBlockIDs.append(block.id)
                     for row in rows {
                         switch row.content {

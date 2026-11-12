@@ -257,8 +257,10 @@ Through the built CLI the check creates tasks and moves them through stages,
 and reads the digests the coordinator's agent received: nothing for changes
 made before the coordinator existed, no timer while no time is set, nothing
 for a task that only starts running (also at the open prompt), one digest
-for the task's next stage, one digest after a held turn for several
-changes that lists a task that only started running, nothing for a stage
+for the task's next stage, nothing for a task that the user marks Done, one
+digest after a held turn when a task that the coordinator watches
+(`coordinator watch`) is marked Done, which also lists the changes that wake
+nothing on their own and ends the watch, nothing for a stage
 that returns in under 3 seconds, and the timer set, cleared and fired with
 `coordinator wake`. It holds a task's turn open and moves the modification
 time of that agent's transcript 31 minutes back: the real 30-minute limit
@@ -271,9 +273,9 @@ once and the scheduled check once, and that one digest line for the task
 ends with the `interrupted by the quit` alert while `task get` reports
 `interruptedAtQuit` for the restored, idle agent. Continuing that task
 clears the alert. Before a second relaunch it moves the saved last wake two hours back
-and strips the alerts from the saved file, as the build before alerts wrote
-it, and checks that the relaunch repeats neither and types no scheduled
-check of its own.
+and strips the alerts, the watches and the quiet marks from the saved file,
+as earlier builds wrote it, and checks that the relaunch repeats neither and
+types no scheduled check of its own.
 
 The `--provider claude` run uses the real, authenticated Claude CLI and
 subscription usage, with the same narrow profile and folder trust handling as
@@ -506,8 +508,13 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
-`never-merge`, `release`, `user-typed`, `busy-silent`, `new-task`, `dependency` and
-`interrupted`. The `first-run` scenarios cover the setup questions: with a
+`never-merge`, `release`, `user-typed`, `busy-silent`, `new-task`, `dependency`,
+`quiet-wake` and `interrupted`. `dependency` also checks that the coordinator
+asks Toastty to watch the task it waits for. `quiet-wake` wakes the
+coordinator for a task that only waits for CI, and checks that it marks the
+turn quiet with `coordinator wake --quiet`, that Toastty took the mark and
+did not show the turn's end as Ready, and that a turn the user starts is not
+quiet. The `first-run` scenarios cover the setup questions: with a
 history of choices, with a model rule in an instruction file (a `CLAUDE.md`
 above the coordinator's folder, which Claude Code reads), with a request as
 the first message, and with a policy from before the Talking section.

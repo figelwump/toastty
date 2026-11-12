@@ -7,10 +7,12 @@ import RemoteProtocol
 /// transcript draws.
 ///
 /// The iPhone has its own adapter, over the events it decodes from the
-/// gateway. This one differs in three ways: a digest that Toastty typed,
+/// gateway. This one differs in four ways: a digest that Toastty typed,
 /// and a message that `coordinator send` brought, become one folded line;
-/// a quick entry message shows without Toastty's first line; and a message
-/// this Mac sent is not marked as sent from another device.
+/// a digest whose turn the coordinator marked quiet folds the whole turn
+/// under that line; a quick entry message shows without Toastty's first
+/// line; and a message this Mac sent is not marked as sent from another
+/// device.
 // TODO: Share the event-to-row mapping with the iPhone's
 // `ToasttyConversationPresentationAdapter` once the iPhone can take it.
 enum CoordinatorChatTranscript {
@@ -25,6 +27,7 @@ enum CoordinatorChatTranscript {
         projectionRunID: RemoteProjectionRunID,
         projectionGeneration: UInt64,
         isSentFromThisMac: (String) -> Bool,
+        isQuietDigest: (String) -> Bool = { _ in false },
         timeText: (Date) -> String
     ) -> [ToasttyTranscriptRow] {
         let resolutions = interactionResolutions(in: events)
@@ -47,6 +50,7 @@ enum CoordinatorChatTranscript {
                     payload,
                     at: event.timestamp,
                     isSentFromThisMac: isSentFromThisMac,
+                    isQuietDigest: isQuietDigest,
                     timeText: timeText,
                     quotedRowID: { assistantRowIDs[$0] }
                 )
@@ -98,6 +102,7 @@ enum CoordinatorChatTranscript {
         _ payload: ConversationUserMessagePayload,
         at timestamp: Date,
         isSentFromThisMac: (String) -> Bool,
+        isQuietDigest: (String) -> Bool,
         timeText: (Date) -> String,
         quotedRowID: (QuotedMessage) -> ToasttyTranscriptRowID?
     ) -> ToasttyTranscriptRow.Content {
@@ -109,7 +114,8 @@ enum CoordinatorChatTranscript {
         case .digest(let updateCount):
             return .hostMessage(ToasttyHostMessagePresentation(
                 summary: CoordinatorDigestFold.summary(updateCount: updateCount, time: timeText(timestamp)),
-                text: payload.text
+                text: payload.text,
+                foldsTurn: isQuietDigest(payload.text)
             ))
         case .fromSender(let sender):
             // Not the user's words: one muted line that names the sender
