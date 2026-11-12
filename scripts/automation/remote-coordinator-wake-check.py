@@ -35,9 +35,13 @@ that:
   the agent writing clears the alert and wakes nothing; silence again wakes
   it again. The check moves the transcript's modification time back, so the
   real 30-minute limit applies and no setting is changed;
-- after the app is killed with a digest waiting and a timer set, and stays
-  down until the timer's time passed, the relaunched app types the waiting
-  change once and the scheduled check once; a second relaunch, with the
+- after the app is killed with a digest waiting, a timer set and a task's
+  agent in the middle of a turn, and stays down until the timer's time
+  passed, the relaunched app types the waiting change once and the
+  scheduled check once, and tells once that the quit cut off the task's
+  turn: the restored agent idles at its prompt, `task get` reports
+  `interruptedAtQuit`, and the task's digest line ends with the interrupted
+  alert; a second relaunch, with the
   saved last wake moved two hours back, no time set and the file stripped
   of alerts as the build before them wrote it, types neither and no
   scheduled check of its own.
@@ -80,6 +84,7 @@ FOOTER = 'Read `toastty task list` for details.'
 TASK_LINE = re.compile(r'^- \[(?P<title>.*)\]\(toastty://task/(?P<id>[0-9A-F-]{36})\): (?P<stage>.*?) '
                        r'at (?P<at>\d{4}-\d\d-\d\dT[\d:.]+Z)(?P<alerts>(?:; .+)?)$')
 SILENT = 'busy, no output for 30 minutes'
+INTERRUPTED = 'interrupted by the quit'
 
 REQUESTED_CHECK = re.compile(r'^- Scheduled check: the time you set, (?P<at>\S+), has come\.$')
 # Toastty counts a stage that an agent's status decides after 3 seconds.
@@ -491,9 +496,17 @@ def run_fake(check):
         step('a silent busy agent woke the coordinator once per silence', task=silent_task['agentState'],
              digests=[silent['text'], again['text'], ended['text']], afterWriting=cleared_status)
 
-        # 7. Kill with a digest waiting and a timer set; stay down past the
-        # timer's time; relaunch.
+        # 7. Kill with a digest waiting, a timer set and a task's agent in a
+        # turn; stay down past the timer's time; relaunch. The early task's
+        # agent works when the app goes down. Its start is a quiet change.
         wait_for('the coordinator at its prompt', at_prompt)
+        early_session = task(early_id)['agentState']['sessionID']
+        early_native = next(event['native'] for event in events()
+                            if event['event'] == 'started' and event['session'] == early_session)
+        hold(early_session)
+        cli('task', 'send', early_id, 'work until the quit')
+        wait_for_stage(early_id, 'running')
+        coordinator_check.wait_for_layout(runtime_home, early_native)
         coordinator_session = status()['sessionID']
         native = next(event['native'] for event in events()
                       if event['event'] == 'started' and event['session'] == coordinator_session)
@@ -503,18 +516,22 @@ def run_fake(check):
         wait_for('the held turn to run', lambda: status().get('status') == 'working')
         cli('task', 'mark-done', task_a)
         timer = cli('coordinator', 'wake', '--in', '60s')['wake']
-        wait_for('the change to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
+        wait_for('the changes to wait', lambda: status()['wake']['pendingTaskCount'] == 2)
         saved = read_outbox(runtime_home)['coordinator']
-        require([change['taskID'] for change in saved['changes']] == [task_a] and saved.get('requestedWakeAt'),
+        require(sorted(change['taskID'] for change in saved['changes']) == sorted([task_a, early_id])
+                and saved.get('requestedWakeAt'),
                 f'The waiting digest and the timer are not saved: {saved}')
         instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=project_id)))
         coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', native)
         time.sleep(2)
         seen = len(digests())
         before = status()
+        early_before = task(early_id)['agentState']
+        require(early_before['state'] == 'busy', f'The early task is not in a turn: {early_before}')
         instance.kill()
         hold(coordinator_session, on=False)
-        step('killed with a digest waiting', status=before, saved=saved)
+        hold(early_session, on=False)
+        step('killed with a digest waiting', status=before, saved=saved, earlyTask=early_before)
         time.sleep(max(0, parse_time(timer['nextWakeAt']) - time.time()) + 5)
 
         instance = Instance(check.binary, environment, socket_path, runtime_home, app_log)
@@ -536,7 +553,29 @@ def run_fake(check):
         require(len(checks) == 1 and checks[0]['requestedCheck'] == timer['nextWakeAt'],
                 f'The timer that came due while Toastty was quit did not fire once: {after_relaunch}')
         require(all(d['session'] == resumed['sessionID'] for d in after_relaunch), f'A digest went to another agent: {after_relaunch}')
-        step('the relaunch typed what waited once', restored=restored, digests=[d['text'] for d in after_relaunch])
+        interrupted = [d for d in after_relaunch if INTERRUPTED in d['tasks'].get(early_id, {}).get('alerts', [])]
+        early_after = task(early_id)
+        require(len(interrupted) == 1 and interrupted[0]['tasks'][early_id]['alerts'] == [INTERRUPTED],
+                f'The cut-off turn was not told once: {after_relaunch}')
+        require(early_after['agentState']['state'] == 'idle' and early_after['agentState']['interruptedAtQuit'] is True
+                and early_after['agentState']['sessionID'] != early_session,
+                f'The early task was not restored idle with its turn cut off: {early_after["agentState"]}')
+        step('the relaunch typed what waited once', restored=restored, digests=[d['text'] for d in after_relaunch],
+             interruptedTask=early_after['agentState'])
+
+        # The coordinator continues the cut-off turn: the alert clears, and
+        # the next quit cuts nothing off.
+        wait_for('the coordinator at its prompt', at_prompt)
+        restored_early = early_after['agentState']['sessionID']
+        ended = turns(restored_early)
+        cli('task', 'send', early_id, '[coordinator] Toastty restarted while you worked. Continue where you stopped.')
+        wait_for('the continued turn to end', lambda: turns(restored_early) == ended + 1)
+        wait_for('the cut-off mark to clear', lambda: task(early_id)['agentState']['interruptedAtQuit'] is False)
+        wait_for('the continued task to be told', lambda: any(
+            early_id in d['tasks'] and d['tasks'][early_id]['alerts'] == [] for d in digests()[seen:]), timeout=60)
+        require(sum(INTERRUPTED in d['tasks'].get(early_id, {}).get('alerts', []) for d in digests()[seen:]) == 1,
+                f'The cut-off turn was told again: {digests()[seen:]}')
+        step('continuing the cut-off turn cleared the alert', task=task(early_id)['agentState'])
 
         # A second relaunch repeats nothing. Its saved last wake is moved two
         # hours back, with no time set and a task open: a default timer

@@ -803,7 +803,7 @@ sets its next check.
 
 | Situation | What the coordinator does by default |
 | --- | --- |
-| Toastty restarted while an agent worked | Tells the task to continue. |
+| Toastty restarted while an agent worked | Tells the task to continue as soon as Toastty wakes it with the `interrupted` alert. If you typed in that task in the last 2 minutes, it waits until 2 minutes have passed. |
 | An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
 | An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
 | An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
@@ -1072,13 +1072,14 @@ Delivery:
 #### Alerts
 
 An alert is a condition of an open task (not Done and not Archived) that
-changes no stage, at a fixed limit of 30 minutes:
+changes no stage. Most have a fixed limit of 30 minutes:
 
 | Alert | When | Digest text |
 | --- | --- | --- |
 | `silent` | The task's agent is `busy` and its `lastOutputAt` is 30 minutes old or more. | `busy, no output for 30 minutes` |
 | `checksFailing` | The checks of the task's open pull request fail, in GitHub's last answer. | `pull request checks failing` |
 | `checksSlow` | The checks have been pending for 30 minutes on the same commit (`checksPendingSince`). | `pull request checks pending for 30 minutes` |
+| `interrupted` | A quit or a crash cut off the agent's turn (`interruptedAtQuit`), and the restored agent is `idle` at its prompt. It clears when the agent starts its next turn. | `interrupted by the quit` |
 
 - Toastty reads the alerts about once a second, so an alert that only time
   raises, such as silence, starts on time without another change. Like a

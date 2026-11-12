@@ -151,7 +151,8 @@ in a read of the open tasks that is less than a minute old:
 - `userTypedMinutesAgo` is null or more than 15. The user is working in a
   task they typed in during the last 15 minutes: leave it alone. This one
   rule does not apply to a message that carries the user's own answer or
-  instruction from this conversation;
+  instruction from this conversation, or to the message that continues a
+  turn a restart cut off (see Unblock);
 - the ledger shows no earlier nudge for the same task and condition.
 
 Start every message to a task with `[coordinator]`, and say in it who decided:
@@ -178,7 +179,8 @@ COORDINATOR_MESSAGE_END
    wakes you at a stage change of a task that may need you, but not for a
    task that only starts running. It also wakes you once when a task gets
    an alert: its agent is busy and has written nothing for 30 minutes, its
-   pull request's checks fail, or they have been pending for 30 minutes.
+   pull request's checks fail, they have been pending for 30 minutes, or a
+   restart cut off its turn and its agent waits at its prompt.
    It has no timer of its own. Your check catches the rest: a wait that
    reaches its limit, such as a permission prompt, and a batch release
    time. Set it only for a deadline in this table, with
@@ -190,7 +192,7 @@ COORDINATOR_MESSAGE_END
 
    | Deadline | Next check |
    | --- | --- |
-   | A wait is younger than its limit, such as a permission prompt or the 15 minutes after the user typed | when the limit is reached, at least `1m` |
+   | A wait is younger than its limit, such as a permission prompt, the 15 minutes after the user typed, or the 2 minutes before you continue a cut-off turn | when the limit is reached, at least `1m` |
    | A project's batch rule in Releases names a time, and a task of that project waits in `toShip` | that time |
 
    A limit in the Unblocking section of `policy.md` can make you act
@@ -226,7 +228,7 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 
 | Situation | What you see | What you do |
 | --- | --- | --- |
-| Toastty restarted in the middle of a turn | `interruptedAtQuit` is true and the agent is `idle` | Send: "Toastty restarted while you worked. Continue where you stopped." |
+| Toastty restarted in the middle of a turn | `interruptedAtQuit` is true and the agent is `idle`. Toastty wakes you then; the digest line ends with `interrupted by the quit`. | Send at once: "Toastty restarted while you worked. Continue where you stopped." The 15-minute rule of Send does not apply. Only when `userTypedMinutesAgo` is less than 2, the user may be at that prompt: set your next check for when it reaches 2, and send then if the task is still in this row. |
 | Permission prompt | `agent` is `waiting`, stage `needsYou (agentNeedsInput)` | Never answer it. When `agentMinutes` passes 10, tell the user once. Before that, say nothing about it and set the next check for that time. |
 | Question | stage `needsYou (awaitingReply)`, with `question` | Read `lastReply`. If `policy.md`, or an answer the user gave you to the same question, settles it: send the answer, name the rule in it, and tell the user what you answered. If not: pass the question to the user with the answer you suggest, and send the user's answer to the task when it comes. |
 | Ended a turn, not done | stage `needsYou (agentFinished)` | Read `lastReply` and sort it. It waits for CI: nothing to send. It waits for another task or pull request: see the next row. It asks something: treat it as a question. The work is finished but it has no pull request and no ready mark: tell it once to open the pull request or to run `toastty task ready-for-review`. It answers the user: tell the user it waits for them. |
@@ -247,6 +249,10 @@ is a release task. Pass it to the user.
 ledger. When the same condition is there again, and the task's agent is idle,
 do not send a second message: tell the user. For example, CI fails, you tell
 the task to fix it, it pushes, and CI fails again: that goes to the user.
+A turn that a restart cut off is the exception: each restart is a new
+condition. Continue the task again after a later restart, but not twice for
+the same restart: a continue in the ledger that is older than the agent's
+current idle state (`agentMinutes`) was for an earlier restart.
 
 **Tell once.** Write in the ledger what you told or asked the user, and do not
 repeat it on the next wake. Say it again only when it changed. This holds also
