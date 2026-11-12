@@ -82,6 +82,28 @@ struct AutomationSocketServerEventBatchTests: AutomationSocketServerTestSupport 
         #expect(response.ok == false)
         #expect(response.error?.code == "INVALID_PAYLOAD")
         #expect(response.error?.message.contains("events[1]") == true)
+
+        // A member gets the protocol check that a top-level event gets.
+        let compatible = try AutomationEventEnvelope.batch([
+            statusEvent(.ready, sessionID: sessionID),
+            statusEvent(.error, sessionID: sessionID),
+        ])
+        guard case .array(var members)? = compatible.payload["events"],
+              case .object(var member) = members[1] else {
+            Issue.record("expected the batched events")
+            return
+        }
+        member["protocolVersion"] = .string("2.0")
+        members[1] = .object(member)
+        let incompatible = AutomationEventEnvelope(
+            eventType: AutomationSocketProtocol.eventBatchEventType,
+            requestID: UUID().uuidString,
+            payload: ["events": .array(members)]
+        )
+        let versionResponse = try sendEvent(incompatible, socketPath: socketPath)
+        #expect(versionResponse.ok == false)
+        #expect(versionResponse.error?.code == "INCOMPATIBLE_PROTOCOL")
+
         let statusKind = await currentStatusKind(server.sessionRuntimeStore, sessionID: sessionID)
         #expect(statusKind == .working)
     }

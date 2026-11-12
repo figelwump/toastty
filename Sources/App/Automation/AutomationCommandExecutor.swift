@@ -264,6 +264,10 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                     "events[\(index)] must be an event envelope that is not a batch"
                 )
             }
+            // The socket server applies this check to every top-level envelope.
+            guard event.protocolVersion.hasPrefix("1.") else {
+                throw AutomationSocketError.incompatibleProtocol
+            }
             return event
         }
     }
