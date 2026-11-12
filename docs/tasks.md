@@ -820,7 +820,9 @@ sets its next check.
   panel, then from your policy, then from the history of your tasks. When two projects are
   still plausible, it asks first and creates the task after your answer.
   When your answer holds for more than one request, it adds a rule to the
-  policy.
+  policy. With no rule and no history, it leaves the model and effort out,
+  and the agent's default applies. It tells you the model and effort it
+  chose.
 - **Review.** When a task is ready for review, the coordinator reads its pull
   request, its checks and its verification report, and compares them with
   the Reviewing section of your policy. With weak proof, it tells the task
@@ -930,6 +932,10 @@ reads it on each wake. The coordinator writes most of it by asking you:
 - Toastty bug with a repro: codex, gpt-6.1-sol, high, start work at once.
 - Design or product question: claude, claude-opus-5-5, xhigh; shape first.
 
+## Talking
+- Answer short questions about code yourself; make a task for the rest.
+- Tell me only what blocks a task.
+
 ## Reviewing
 - Good proof = a scenario list, each checked through the real UI or CLI;
   screenshots or video for UI changes. Unit tests alone are not enough.
@@ -946,10 +952,27 @@ reads it on each wake. The coordinator writes most of it by asking you:
 - toastty: testLongSidebarScroll fails on the mini; CI decides.
 ```
 
-**The first run.** While Projects and Agents hold no rule, the coordinator
-drafts both from the history of your tasks, which is the project, agent,
-model, effort and title of recent tasks from `toastty task list`. It shows
-you the draft, and writes it after you confirm or correct it.
+**The first run.** The first time you write to the coordinator while one
+of Projects, Agents, Talking and Reviewing holds no rule, it asks you how to
+set it up, in one message with a suggested answer for each part. "Yes" takes
+all the suggestions.
+
+- **Agents:** which agent, model and effort for which kind of work, as a
+  table. It suggests a rule for choosing a model that your own agent
+  instruction files hold, such as a global `AGENTS.md`, then the history of
+  your tasks, then a starter table that keeps the agent's default model.
+- **Projects:** which work goes to which project, drafted from the history
+  and your open projects. It asks only when that is unclear.
+- **Talking:** whether it answers questions itself or makes a task for each
+  one, how long its answers are, and what it brings to you.
+- **Reviewing:** how much proof it checks before it brings you a ready task.
+
+It writes your answers to the policy in one commit, `Policy: first run`. A
+part where you kept the default gets the line `- The coordinator's
+defaults.`, so it does not ask again. If you do not answer, it does not ask
+again, and the defaults apply. Say "set yourself up again" to answer all four
+parts again. A policy from an older version has no Talking section; the
+coordinator asks about it once and adds the heading.
 
 **Undo.** The coordinator commits each change it makes to the policy as one
 commit, named `Policy: change <section>`, and shows you the line it added.

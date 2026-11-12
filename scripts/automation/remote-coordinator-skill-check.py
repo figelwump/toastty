@@ -264,6 +264,9 @@ POLICY = '''# Coordinator policy
 ## Agents
 - App bug with a clear repro: claude, claude-opus-5-5, high; start work at once.
 
+## Talking
+- The coordinator's defaults.
+
 ## Reviewing
 {reviewing}
 ## Unblocking
@@ -550,8 +553,8 @@ class Run:
 
     def seed_policy(self, reviewing='', unblocking='', releases='', text=None):
         (self.folder / 'policy.md').write_text(text if text is not None else POLICY.format(
-            reviewing=reviewing + ('\n' if reviewing else ''), unblocking=unblocking + ('\n' if unblocking else ''),
-            releases=releases + ('\n' if releases else '')))
+            reviewing=(reviewing or "- The coordinator's defaults.") + '\n',
+            unblocking=unblocking + ('\n' if unblocking else ''), releases=releases + ('\n' if releases else '')))
 
     def coordinator(self):
         return self.cli('coordinator', 'status')
@@ -795,28 +798,146 @@ def history(run, extra=()):
         run.create_task(title, project=project, model=model, effort=effort, done=True)
 
 
+FIRST_RUN_SECTIONS = ('Projects', 'Agents', 'Talking', 'Reviewing')
+
+
+def check_first_run_saved(run, commits_before):
+    """After the user's yes: each asked section holds a rule, in one commit of the policy."""
+    empty = [name for name in FIRST_RUN_SECTIONS if not run.section(name)]
+    run.check('after the yes, Projects, Agents, Talking and Reviewing hold rules', not empty, run.policy())
+    run.check('the rules are committed in one commit, so one undo removes them',
+              int(run.git('rev-list', '--count', 'HEAD') or 0) == commits_before + 1
+              and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
+    run.check('the ledger no longer waits for the answer', 'asked first-run' not in run.ledger(), run.ledger(),
+              required=False)
+
+
+def asks_every_part(run, said):
+    """The one message asks about routing, answers and review. Wording only, so these are notes."""
+    lower = said.lower()
+    run.check('it asks about model and effort', 'effort' in lower and 'model' in lower, said, required=False)
+    run.check('it asks how it should answer (Talking)', re.search(r'talking|answer|questions', lower), said,
+              required=False)
+    run.check('it asks how much it checks (Reviewing)', re.search(r'review|proof|ready|check', lower), said,
+              required=False)
+    run.check('it asks the user to confirm or correct it',
+              re.search(r'\?|confirm|correct|"?yes|tell me what to change|let me know', lower), said, required=False)
+
+
 def first_run(run):
-    """The first run drafts Projects and Agents from the task history and asks."""
+    """The first run drafts Projects and Agents from the task history, and asks about all four parts."""
     history(run)
     run.open_coordinator()
     template = run.policy()
-    run.check('Toastty made the policy with headings only', run.section('Projects') == [] and run.section('Agents') == [], template)
+    run.check('Toastty made the policy with headings only, Talking among them',
+              all(run.section(name) == [] for name in FIRST_RUN_SECTIONS) and '## Talking' in template, template)
     turns = run.tell('Hi. I just turned you on.')
     said = run.said(turns)
     run.check('the draft names both projects', 'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     run.check('the draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    run.check('it asks the user to confirm or correct the draft',
-              re.search(r'\?|confirm|correct|say "?yes|tell me what to change|let me know', said.lower()), said)
+    asks_every_part(run, said)
     run.check('it writes nothing before the answer', run.policy() == template and run.git('rev-list', '--count', 'HEAD') == '1',
               run.policy())
     run.check('the ledger records that it asked', 'first-run' in run.ledger(), run.ledger(), required=False)
-    turns = run.tell('Yes, that is right. Save it.')
-    projects, agents = run.section('Projects'), run.section('Agents')
-    run.check('after the yes, Projects and Agents hold rules',
-              any('marketing' in line.lower() for line in projects) and any('sonnet' in line.lower() for line in agents),
+    run.tell('Yes, that is right. Save it.')
+    check_first_run_saved(run, 1)
+    run.check('Projects and Agents hold the drafted rules',
+              any('marketing' in line.lower() for line in run.section('Projects'))
+              and any('sonnet' in line.lower() for line in run.section('Agents')), run.policy())
+
+
+# A rule for choosing models, as a user keeps it in a global AGENTS.md. Claude
+# Code reads CLAUDE.md files above its folder, so the check puts it there.
+INSTRUCTION_RULE = """# My agent rules
+
+## Choosing a model for handed-off work
+
+When you hand work to another agent or task, pick its model and effort by this table:
+
+| Work | Model / effort |
+| --- | --- |
+| Small change with clear requirements | claude-sonnet-5-5 / medium |
+| Feature with clear requirements | claude-opus-5-5 / high |
+| Open decisions, or hard to verify | claude-opus-5-5 / xhigh |
+"""
+
+
+def created_since(run, before):
+    return [t for t in run.cli('task', 'list')['tasks'] if t['taskID'] not in before]
+
+
+def first_run_instructions(run):
+    """With no choices in the history, it suggests the model rule from the user's instruction files, and uses it."""
+    for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
+        run.create_task(title, done=True)
+    (run.runtime_home / 'CLAUDE.md').write_text(INSTRUCTION_RULE)
+    run.open_coordinator()
+    said = run.said(run.tell('Hi. I just turned you on.'))
+    lower = said.lower()
+    run.check("it suggests the instruction file's table", 'sonnet' in lower and 'xhigh' in lower, said)
+    run.check('it says where the table comes from', re.search(r'claude\.md|agents\.md|instruction', lower), said,
+              required=False)
+    asks_every_part(run, said)
+    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
+    run.tell('Yes.')
+    check_first_run_saved(run, commits)
+    agents = '\n'.join(run.section('Agents')).lower()
+    run.check('Agents holds the three rows', 'sonnet' in agents and 'xhigh' in agents and 'medium' in agents, agents)
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell('New task: the README says "teh app". Make it "the app".'))
+    created = created_since(run, before)
+    run.check('a small, clear change gets the small row', len(created) == 1
+              and created[0].get('model') == 'claude-sonnet-5-5' and created[0].get('effort') == 'medium',
+              [(t['title'], t.get('model'), t.get('effort')) for t in created])
+    run.check('it names the model and effort it chose', 'sonnet' in said.lower() and 'medium' in said.lower(), said,
+              required=False)
+
+
+def first_run_request(run):
+    """The first message is a request: it makes the task and asks; after the answer, new tasks follow the table."""
+    for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
+        run.create_task(title, done=True)
+    run.open_coordinator()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell('Add a --verbose flag to the import command. It should print each file it reads.'))
+    run.check('it makes the task at once', len(created_since(run, before)) == 1,
+              [t['title'] for t in created_since(run, before)])
+    asks_every_part(run, said)
+    run.check('it suggests a starter table with rising effort', re.search(r'medium|low', said.lower())
+              and re.search(r'x?high', said.lower()), said)
+    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
+    run.tell('Use claude-sonnet-5-5 at medium for small clear changes, claude-opus-5-5 at high for features, '
+             'and claude-opus-5-5 at xhigh for hard or open work. The rest as you suggest.')
+    check_first_run_saved(run, commits)
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    run.tell('New task: find out why the importer sometimes skips files on network drives. Nobody knows the cause yet; '
+             'it may need a redesign of how we watch folders.')
+    created = created_since(run, before)
+    run.check('hard, open work gets the xhigh row', len(created) == 1
+              and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'xhigh',
+              [(t['title'], t.get('model'), t.get('effort')) for t in created])
+
+
+def first_run_upgrade(run):
+    """A policy from before Talking: it asks only about Talking, adds the heading, and follows the answer."""
+    run.create_task('Fix the unread dot in the sidebar', done=True)
+    run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '').format(
+        reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
+    run.open_coordinator()
+    said = run.said(run.tell('Hi.'))
+    lower = said.lower()
+    run.check('it asks how it should answer', re.search(r'talking|answer|questions', lower), said, required=False)
+    run.check('it does not ask about the sections that hold rules', not re.search(r'which model|routing table', lower),
+              said, required=False)
+    run.tell('Answer short questions about code yourself, and make a task for the rest. Otherwise your defaults.')
+    run.check('the policy has a Talking section with a rule', '## Talking' in run.policy() and run.section('Talking'),
               run.policy())
-    run.check('the rules are committed', int(run.git('rev-list', '--count', 'HEAD') or 0) >= 2
-              and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
+    run.check('Talking comes before Notes', run.policy().index('## Talking') < run.policy().index('## Notes'),
+              run.policy())
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell("Short question: what is the first line of the app project's README.md?"))
+    run.check('with that rule, it answers a short code question itself', created_since(run, before) == []
+              and re.search(r'\bapp\b', said.lower()), [said, [t['title'] for t in created_since(run, before)]])
 
 
 def permission(run):
@@ -1194,6 +1315,9 @@ def interrupted(run):
 
 SCENARIOS = {
     'first-run': first_run,
+    'first-run-instructions': first_run_instructions,
+    'first-run-request': first_run_request,
+    'first-run-upgrade': first_run_upgrade,
     'permission': permission,
     'question-settled': question_settled,
     'question-open': question_open,
@@ -1210,8 +1334,8 @@ SCENARIOS = {
     'interrupted': interrupted,
 }
 # The scenarios whose result depends on the coordinator's judgment.
-JUDGMENT = ('first-run', 'question-settled', 'question-open', 'dependency', 'weak-proof', 'good-proof', 'never-merge',
-            'new-task', 'release')
+JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
+            'question-open', 'dependency', 'weak-proof', 'good-proof', 'never-merge', 'new-task', 'release')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):
