@@ -84,11 +84,14 @@ final class DisplayShortcutInterceptor {
         if installEventMonitor {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
-                guard let action = self.shortcutAction(for: event) else { return event }
+                let windowID = self.shortcutWindowID(for: event)
+                guard let action = self.shortcutAction(for: event, appOwnedWindowID: windowID) else {
+                    return event
+                }
                 // Keep workspace switching in the local monitor so the embedded
                 // terminal's key handling cannot swallow Option+digit before the
                 // menu-based workspace switch path can run reliably.
-                let didHandleShortcut = self.handle(action)
+                let didHandleShortcut = self.handle(action, appOwnedWindowID: windowID)
                 // If no workspace or panel is mapped to this shortcut, keep default key behavior.
                 return didHandleShortcut ? nil : event
             }
@@ -99,10 +102,6 @@ final class DisplayShortcutInterceptor {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
         }
-    }
-
-    private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
-        shortcutAction(for: event, appOwnedWindowID: appOwnedShortcutWindowID())
     }
 
     func shortcutAction(for event: NSEvent, appOwnedWindowID: UUID?) -> ShortcutAction? {
@@ -291,10 +290,6 @@ final class DisplayShortcutInterceptor {
         case nil:
             return nil
         }
-    }
-
-    private func handle(_ action: ShortcutAction) -> Bool {
-        handle(action, appOwnedWindowID: appOwnedShortcutWindowID())
     }
 
     func handle(_ action: ShortcutAction, appOwnedWindowID: UUID?) -> Bool {
@@ -813,16 +808,49 @@ final class DisplayShortcutInterceptor {
     }
 
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
+        // Be conservative around active text input so Cmd+W stays with the
+        // field editor or text control rather than being reclaimed by Toastty.
+        if let keyWindow,
+           toasttyResponderUsesReservedClosePanelShortcut(keyWindow.firstResponder) {
+            return nil
+        }
+        return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+    }
+
+    /// The window that the shortcut in `event` acts on. Text input focus
+    /// keeps most shortcuts with the text control, but Cmd+Shift+P has no
+    /// text-editing meaning, so the command palette also opens from text
+    /// views such as the Coordinator message bar and its transcript.
+    static func shortcutWindowID(
+        for event: NSEvent,
+        keyWindow: NSWindow?,
+        modalWindow: NSWindow?
+    ) -> UUID? {
+        if isCommandPaletteShortcut(event) {
+            return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+        }
+        return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+    }
+
+    private static func keyToasttyWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
         guard modalWindow == nil else { return nil }
         guard let keyWindow else { return nil }
         guard keyWindow.sheetParent == nil else { return nil }
-        // Be conservative around active text input so Cmd+W stays with the
-        // field editor or text control rather than being reclaimed by Toastty.
-        if toasttyResponderUsesReservedClosePanelShortcut(keyWindow.firstResponder) {
-            return nil
-        }
         guard let rawWindowID = keyWindow.identifier?.rawValue else { return nil }
         return UUID(uuidString: rawWindowID)
+    }
+
+    private func shortcutWindowID(for event: NSEvent) -> UUID? {
+        guard let store,
+              let windowID = Self.shortcutWindowID(
+                  for: event,
+                  keyWindow: NSApp.keyWindow,
+                  modalWindow: NSApp.modalWindow
+              ),
+              store.window(id: windowID) != nil else {
+            return nil
+        }
+        return windowID
     }
 
     private func appOwnedShortcutWindowID() -> UUID? {
