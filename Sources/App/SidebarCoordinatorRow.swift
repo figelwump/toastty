@@ -110,9 +110,7 @@ struct SidebarCoordinatorRow: View {
         let label = SidebarCoordinatorPresentation.accessibilityLabel(mark, isSelected: isSelected)
         Button(action: select) {
             HStack(spacing: 8) {
-                Image(systemName: "diamond.fill")
-                    .font(.system(size: 7.5, weight: .medium))
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                railMark(mark)
                     .frame(width: 14)
                 Text(AppState.coordinatorWorkspaceTitle)
                     .font(.system(size: 12.5, weight: .semibold))
@@ -153,15 +151,32 @@ struct SidebarCoordinatorRow: View {
         .background(ToastyTheme.chromeBackground)
     }
 
+    /// The left rail shows the agent's status where session rows show
+    /// theirs, so it is easy to see. Without a status, it shows the diamond.
+    @ViewBuilder
+    private func railMark(_ mark: SidebarCoordinatorPresentation.Mark) -> some View {
+        switch mark {
+        case .working:
+            SessionRailStatusIcon(state: .spinner)
+        case .unread:
+            SessionRailStatusIcon(state: .unreadDot)
+        case .needsApproval:
+            SessionRailStatusIcon(state: .approvalDot)
+        case .error:
+            SessionRailStatusIcon(state: .errorDot)
+        case .quiet, .starting, .notRunning:
+            Image(systemName: "diamond.fill")
+                .font(.system(size: 7.5, weight: .medium))
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+        }
+    }
+
+    /// The words at the right end, as on a session row's first line.
     @ViewBuilder
     private func markView(_ mark: SidebarCoordinatorPresentation.Mark) -> some View {
         switch mark {
-        case .quiet:
+        case .quiet, .working, .unread:
             EmptyView()
-        case .working:
-            SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .unread:
-            SessionStatusIndicator(state: .dot, size: 7)
         case .needsApproval:
             SessionStatusBadge(kind: .needsApproval)
         case .error:

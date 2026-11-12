@@ -3944,6 +3944,8 @@ final class SidebarViewTests: XCTestCase {
             cwd: "/Users/tester/.toastty/coordinator", repoRoot: nil, at: Date()
         )
         XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        try attachSidebarRender(root, name: "coordinator-row-quiet")
+        try writeSidebarEvidence(root, name: "coordinator-row-quiet")
         report(.working)
         XCTAssertEqual(coordinatorLabels(), ["Coordinator, working"])
         try attachSidebarRender(root, name: "coordinator-row-working")
@@ -3954,6 +3956,8 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(root, name: "coordinator-row-needs-approval")
         report(.error)
         XCTAssertEqual(coordinatorLabels(), ["Coordinator, error"])
+        try attachSidebarRender(root, name: "coordinator-row-error")
+        try writeSidebarEvidence(root, name: "coordinator-row-error")
         // The turn ended while another workspace was selected: its output
         // is unread, as on any agent's row.
         report(.idle)
