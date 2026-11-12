@@ -189,20 +189,7 @@ final class CoordinatorChatViewTests: XCTestCase {
         """
         let source = try AttributedString(markdown: markdown)
         func hosted(width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
-            let view = ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: chips.presenter))
-                .frame(width: width)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(12)
-                .background(Color.black)
-                .environment(\.colorScheme, .dark)
-            let hostingView = NSHostingView(rootView: AnyView(view))
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 24, height: 200),
-                                  styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.contentView = hostingView
-            hostingView.layoutSubtreeIfNeeded()
-            return (hostingView, window)
+            Self.hostChipText(source, presenter: chips.presenter, width: width)
         }
 
         let (probe, probeWindow) = hosted(width: 600)
@@ -279,6 +266,104 @@ final class CoordinatorChatViewTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
             try Self.writeEvidence(png, name: name)
+        }
+    }
+
+    /// A working task's chip draws a turning spinner where its dot was. The
+    /// chip keeps the dot's width and line height, so the text around it
+    /// does not move when the task starts or stops working.
+    func testWorkingTaskChipDrawsATurningSpinnerInPlaceOfItsDot() throws {
+        let workingID = Self.reviewTaskID
+        let idleID = Self.questionTaskID
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(workingID, title: "Task-system worktree Xcode build failure", stage: .running,
+                      agent: .working),
+            Self.item(idleID, title: "Composer blank line", stage: .running),
+        ])
+        let working = try XCTUnwrap(chips.chips[workingID])
+        XCTAssertTrue(working.showsActivity)
+        XCTAssertEqual(chips.chips[idleID]?.showsActivity, false)
+
+        // The same chip with and without the spinner.
+        var still = working
+        still.showsActivity = false
+        func presenter(_ chip: ConversationLinkChip) -> ConversationLinkPresenter {
+            ConversationLinkPresenter(revision: chip.hashValue) { _ in .chip(chip) }
+        }
+        let source = try AttributedString(markdown: """
+        The build fails in [the worktree task](toastty://task/\(workingID.uuidString)), and its agent \
+        is looking at the Xcode log now.
+        """)
+        struct Render {
+            let hostingView: NSHostingView<AnyView>
+            let window: NSWindow
+            let textView: ToasttyTranscriptTextView
+            let outlines: [NSRect]
+            let spinners: [NSRect]
+        }
+        func render(_ chip: ConversationLinkChip, width: CGFloat) throws -> Render {
+            let (hostingView, window) = Self.hostChipText(source, presenter: presenter(chip), width: width)
+            let textView = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).first)
+            let storage = try XCTUnwrap(textView.textStorage)
+            let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+            var chipRange = NSRange()
+            let start = (storage.string as NSString).range(of: "●").location
+            XCTAssertNotEqual(start, NSNotFound)
+            _ = storage.attribute(.toasttyChip, at: start, longestEffectiveRange: &chipRange,
+                                  in: NSRange(location: 0, length: storage.length))
+            let dot = NSRange(location: start, length: 1)
+            return Render(
+                hostingView: hostingView, window: window, textView: textView,
+                outlines: manager.chipOutlineRects(forCharacterRange: chipRange),
+                spinners: manager.chipSpinnerRects(forCharacterRange: dot)
+                    .map { textView.convert($0.offsetBy(dx: textView.textContainerOrigin.x,
+                                                        dy: textView.textContainerOrigin.y), to: hostingView) }
+            )
+        }
+
+        for width in [CGFloat(600), 300, 220] {
+            let spinning = try render(working, width: width)
+            let plain = try render(still, width: width)
+            defer {
+                spinning.window.close()
+                plain.window.close()
+            }
+            XCTAssertEqual(spinning.outlines, plain.outlines, "At width \(width) the chip must keep its size")
+            XCTAssertEqual(spinning.textView.frame.size, plain.textView.frame.size,
+                           "At width \(width) the text must keep its line height")
+            XCTAssertEqual(spinning.textView.chipSpinnerRects().count, 1)
+            XCTAssertTrue(plain.textView.chipSpinnerRects().isEmpty)
+        }
+
+        let spinning = try render(working, width: 600)
+        let plain = try render(still, width: 600)
+        defer {
+            spinning.window.close()
+            plain.window.close()
+        }
+        let spinner = try XCTUnwrap(spinning.spinners.first)
+        // The spinner covers the dot: the plain chip's dot fills its center.
+        let plainImage = try Self.snapshot(plain.hostingView)
+        XCTAssertTrue(Self.isMarkColor(plainImage.color(at: NSPoint(x: spinner.midX, y: spinner.midY))),
+                      "The spinner must sit over the dot's ink")
+        // The spinner is a hollow arc in the dot's color, and no dot shows.
+        let first = try Self.snapshot(spinning.hostingView)
+        XCTAssertFalse(Self.isMarkColor(first.color(at: NSPoint(x: spinner.midX, y: spinner.midY))))
+        XCTAssertTrue(first.points(in: spinner).contains { Self.isMarkColor(first.color(at: $0)) })
+
+        // The view's timer turns the spinner.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        spinning.hostingView.displayIfNeeded()
+        let later = try Self.snapshot(spinning.hostingView)
+        XCTAssertTrue(later.points(in: spinner).contains { first.color(at: $0) != later.color(at: $0) },
+                      "The spinner must turn")
+
+        for (name, image) in [("task-chip-working", first), ("task-chip-not-working", plainImage)] {
+            let attachment = XCTAttachment(data: image.png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try Self.writeEvidence(image.png, name: name)
         }
     }
 
@@ -517,6 +602,61 @@ final class CoordinatorChatViewTests: XCTestCase {
         )
     }
 
+    /// Markdown with task links in one text view, at `width`, as the chat
+    /// draws an answer.
+    private static func hostChipText(_ source: AttributedString, presenter: ConversationLinkPresenter,
+                                     width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
+        let view = ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: presenter))
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(Color.black)
+            .environment(\.colorScheme, .dark)
+        let hostingView = NSHostingView(rootView: AnyView(view))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 24, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        hostingView.layoutSubtreeIfNeeded()
+        return (hostingView, window)
+    }
+
+    /// A drawn view, read by the point.
+    private struct Snapshot {
+        let bitmap: NSBitmapImageRep
+        let scale: CGFloat
+        let flipped: Bool
+        let height: CGFloat
+        let png: Data
+
+        func color(at point: NSPoint) -> NSColor? {
+            let y = flipped ? point.y : height - point.y
+            return bitmap.colorAt(x: Int(point.x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+        }
+
+        /// The points of a rect, half a point apart.
+        func points(in rect: NSRect) -> [NSPoint] {
+            stride(from: rect.minX, through: rect.maxX, by: 0.5).flatMap { x in
+                stride(from: rect.minY, through: rect.maxY, by: 0.5).map { NSPoint(x: x, y: $0) }
+            }
+        }
+    }
+
+    private static func snapshot(_ view: NSView) throws -> Snapshot {
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return Snapshot(bitmap: bitmap, scale: CGFloat(bitmap.pixelsWide) / view.bounds.width,
+                        flipped: view.isFlipped, height: view.bounds.height,
+                        png: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])))
+    }
+
+    /// The accent of a working task's mark, on the black test background.
+    private static func isMarkColor(_ color: NSColor?) -> Bool {
+        guard let color else { return false }
+        return color.redComponent > 0.6 && color.greenComponent > 0.35 && color.blueComponent < 0.35
+    }
+
     /// Writes the PNG when the runner sets `TOASTTY_CONVERSATION_EVIDENCE_DIR`
     /// (pass it as `TEST_RUNNER_…` to xcodebuild).
     private static func writeEvidence(_ png: Data, name: String) throws {
@@ -539,13 +679,14 @@ final class CoordinatorChatViewTests: XCTestCase {
         _ taskID: UUID,
         title: String,
         stage: TaskStage,
+        agent: TaskAgentActivity = .idle,
         pullRequest: Int? = nil
     ) -> TaskBoardItem {
         TaskBoardItem(
             id: .task(taskID),
             title: title,
             stage: stage,
-            agent: .idle,
+            agent: agent,
             pullRequest: pullRequest.flatMap {
                 WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/\($0)")
             },

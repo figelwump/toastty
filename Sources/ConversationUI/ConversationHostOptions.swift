@@ -134,11 +134,16 @@ public struct ConversationLinkChip: Hashable, Sendable {
     public var markColor: ConversationChipColor
     public var title: String
     public var detail: String?
+    /// Draws a spinner in the mark's color in place of the dot, for work
+    /// that is in progress. The chip keeps the dot's size.
+    public var showsActivity: Bool
 
-    public init(markColor: ConversationChipColor, title: String, detail: String? = nil) {
+    public init(markColor: ConversationChipColor, title: String, detail: String? = nil,
+                showsActivity: Bool = false) {
         self.markColor = markColor
         self.title = title
         self.detail = detail
+        self.showsActivity = showsActivity
     }
 }
 
@@ -217,6 +222,14 @@ enum ConversationChipAttribute: AttributedStringKey {
     static let name = "toastty.conversationChip"
 }
 
+/// Marks a chip's dot that the platform's text view replaces with a
+/// spinner. The dot stays in the text, so the chip keeps its size and line
+/// height. A text view that draws no spinner shows the dot.
+enum ConversationChipSpinnerAttribute: AttributedStringKey {
+    typealias Value = Bool
+    static let name = "toastty.conversationChipSpinner"
+}
+
 enum ConversationLinkDecoration {
     /// Draws each link the presenter answers for: as a chip, or as plain
     /// text. Other links, and text with no links, come back unchanged.
@@ -260,7 +273,11 @@ enum ConversationLinkDecoration {
             return text
         }
         let title = chip.title.replacingOccurrences(of: " ", with: noBreakSpace)
-        var text = piece("\(noBreakSpace)●\(noBreakSpace)", color: chip.markColor.color)
+        var text = piece(noBreakSpace, color: chip.markColor.color)
+        var mark = piece("●", color: chip.markColor.color)
+        if chip.showsActivity { mark[ConversationChipSpinnerAttribute.self] = true }
+        text.append(mark)
+        text.append(piece(noBreakSpace, color: chip.markColor.color))
         text.append(piece(title, color: ConversationDesignTokens.primaryText))
         if let detail = chip.detail, detail.isEmpty == false {
             text.append(piece(
