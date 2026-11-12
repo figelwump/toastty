@@ -1457,7 +1457,8 @@ struct ToasttyApp: App {
             coordinatorController.conversationAccess = remoteAccessService
             coordinatorController.chat = CoordinatorChatModel(
                 controller: coordinatorController,
-                access: remoteAccessService
+                access: remoteAccessService,
+                defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
             )
             // Keyboard focus meant for the terminal under the chat goes to
             // the chat's composer.

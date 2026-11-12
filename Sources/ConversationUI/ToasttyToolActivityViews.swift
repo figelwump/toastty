@@ -58,24 +58,24 @@ struct ToasttyToolBatchCard: View {
             Button(action: toggleDetails) {
                 HStack(spacing: 10) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .font(.caption.weight(.semibold))
+                        .conversationFont(.caption, weight: .semibold)
                         .foregroundStyle(ConversationDesignTokens.amberText)
                         .frame(width: 30, height: 30)
                         .background(ConversationDesignTokens.amber.opacity(0.12), in: Circle())
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
-                            .font(.caption.monospaced().weight(.semibold))
+                            .conversationFont(.caption, weight: .semibold, monospaced: true)
                             .foregroundStyle(ConversationDesignTokens.secondaryText)
                         Text(isExpanded ? "Hide details" : "Show details")
-                            .font(.caption2.monospaced())
+                            .conversationFont(.caption2, monospaced: true)
                             .foregroundStyle(ConversationDesignTokens.mutedText)
                     }
 
                     Spacer(minLength: 4)
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
+                        .conversationFont(.caption, weight: .semibold)
                         .foregroundStyle(ConversationDesignTokens.mutedText)
                 }
                 .padding(.horizontal, 12)
@@ -123,17 +123,17 @@ private struct ToasttyToolEventRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: row.toolIcon)
-                .font(.body)
+                .conversationFont(.body)
                 .foregroundStyle(row.toolColor)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(row.toolSummary)
-                    .font(.caption.monospaced().weight(.semibold))
+                    .conversationFont(.caption, weight: .semibold, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.secondaryText)
                 if let detail = row.toolDetail, detail.isEmpty == false {
                     Text(detail)
-                        .font(.caption.monospaced())
+                        .conversationFont(.caption, monospaced: true)
                         .foregroundStyle(ConversationDesignTokens.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)

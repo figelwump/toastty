@@ -1008,6 +1008,12 @@ final class DisplayShortcutInterceptor {
             _ = store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
         case (.browser(_, let panelID), .reset):
             _ = store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        case (.coordinatorChat, .increase):
+            coordinatorChat?.changeTextScale(.increase)
+        case (.coordinatorChat, .decrease):
+            coordinatorChat?.changeTextScale(.decrease)
+        case (.coordinatorChat, .reset):
+            coordinatorChat?.changeTextScale(.reset)
         }
         return true
     }
@@ -1359,7 +1365,15 @@ final class DisplayShortcutInterceptor {
               let store else {
             return nil
         }
-        return store.focusedScaleCommandTarget(preferredWindowID: preferredWindowID)
+        let coordinatorController = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return store.focusedScaleCommandTarget(
+            preferredWindowID: preferredWindowID,
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true }
+        )
+    }
+
+    private var coordinatorChat: CoordinatorChatModel? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController?.chat
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {

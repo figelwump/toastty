@@ -85,7 +85,7 @@ struct ToasttyMarkdownText: View {
         case .list(let marker, let depth):
             HStack(alignment: .top, spacing: 8) {
                 Text(block.isContinuation ? "" : marker.label)
-                    .font(.body.monospaced())
+                    .conversationFont(.body, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.secondaryText)
                     .frame(minWidth: 16, alignment: .trailing)
                 ToasttySelectableText(presented(block.content), textColor: textColor)
@@ -104,7 +104,7 @@ struct ToasttyMarkdownText: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let language, language.isEmpty == false {
                     Text(language)
-                        .font(.caption2.monospaced())
+                        .conversationFont(.caption2, monospaced: true)
                         .foregroundStyle(ConversationDesignTokens.mutedText)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)

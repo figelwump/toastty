@@ -302,10 +302,13 @@ enum FocusedScaleCommandTarget: Equatable {
     case terminal(windowID: UUID)
     case markdown(windowID: UUID)
     case browser(windowID: UUID, panelID: UUID)
+    /// The coordinator's chat, which covers the coordinator's terminal.
+    case coordinatorChat(windowID: UUID)
 
     var windowID: UUID {
         switch self {
-        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
+        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _),
+             .coordinatorChat(let windowID):
             return windowID
         }
     }
@@ -314,7 +317,7 @@ enum FocusedScaleCommandTarget: Equatable {
         switch self {
         case .browser:
             return "Zoom In"
-        case .terminal, .markdown:
+        case .terminal, .markdown, .coordinatorChat:
             return "Increase Text Size"
         }
     }
@@ -323,7 +326,7 @@ enum FocusedScaleCommandTarget: Equatable {
         switch self {
         case .browser:
             return "Zoom Out"
-        case .terminal, .markdown:
+        case .terminal, .markdown, .coordinatorChat:
             return "Decrease Text Size"
         }
     }
@@ -332,7 +335,7 @@ enum FocusedScaleCommandTarget: Equatable {
         switch self {
         case .browser:
             return "Actual Size"
-        case .terminal, .markdown:
+        case .terminal, .markdown, .coordinatorChat:
             return "Reset Text Size"
         }
     }

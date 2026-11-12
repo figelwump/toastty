@@ -206,7 +206,7 @@ struct ToasttyInteractionCard: View {
     private var standardContent: some View {
         if interaction.questions == nil {
             Text(interaction.prompt)
-                .font(.body)
+                .conversationFont(.body)
                 .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -225,11 +225,11 @@ struct ToasttyInteractionCard: View {
     private var header: some View {
         HStack(spacing: 7) {
             Label(kindLabel, systemImage: kindIcon)
-                .font(.caption.monospaced().weight(.semibold))
+                .conversationFont(.caption, weight: .semibold, monospaced: true)
                 .foregroundStyle(accentColor)
             Spacer(minLength: 6)
             Text(interaction.state.rawValue)
-                .font(.caption2.monospaced().weight(.semibold))
+                .conversationFont(.caption2, weight: .semibold, monospaced: true)
                 .foregroundStyle(stateColor)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -250,7 +250,7 @@ struct ToasttyInteractionCard: View {
                     if state.status == .submitting { ProgressView().controlSize(.small) }
                     Text(submitTitle(state.status))
                 }
-                .font(.subheadline.weight(.semibold))
+                .conversationFont(.subheadline, weight: .semibold)
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
@@ -259,7 +259,7 @@ struct ToasttyInteractionCard: View {
             .accessibilityIdentifier("toastty-mobile-interaction-submit-\(interaction.id.rawValue)")
 
             Label("You can also answer on the desktop", systemImage: "desktopcomputer")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
         }
     }
@@ -271,10 +271,10 @@ struct ToasttyInteractionCard: View {
         let draft = state.drafts[question.id] ?? ToasttyInteractionQuestionDraft()
         return VStack(alignment: .leading, spacing: 8) {
             Text(question.header)
-                .font(.caption.monospaced().weight(.semibold))
+                .conversationFont(.caption, weight: .semibold, monospaced: true)
                 .foregroundStyle(ConversationDesignTokens.amberText)
             Text(question.question)
-                .font(.subheadline.weight(.medium))
+                .conversationFont(.subheadline, weight: .medium)
                 .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -333,7 +333,7 @@ struct ToasttyInteractionCard: View {
                 )
                 if let preview = option.preview, preview.isEmpty == false {
                     Text(preview)
-                        .font(.caption.monospaced())
+                        .conversationFont(.caption, monospaced: true)
                         .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -363,9 +363,9 @@ struct ToasttyInteractionCard: View {
                 : (selected ? "largecircle.fill.circle" : "circle"))
                 .foregroundStyle(selected ? ConversationDesignTokens.amberText : ConversationDesignTokens.mutedText)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.medium))
+                Text(title).conversationFont(.subheadline, weight: .medium)
                 if let detail, detail.isEmpty == false {
-                    Text(detail).font(.caption).foregroundStyle(ConversationDesignTokens.mutedText)
+                    Text(detail).conversationFont(.caption).foregroundStyle(ConversationDesignTokens.mutedText)
                 }
             }
             .foregroundStyle(ConversationDesignTokens.secondaryText)
@@ -401,21 +401,21 @@ struct ToasttyInteractionCard: View {
             if let questions = interaction.questions {
                 ForEach(questions) { question in
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(question.header).font(.caption.monospaced().weight(.semibold))
-                        Text(question.question).font(.subheadline)
+                        Text(question.header).conversationFont(.caption, weight: .semibold, monospaced: true)
+                        Text(question.question).conversationFont(.subheadline)
                         ForEach(question.options, id: \.id) { option in
-                            Text("• \(option.label)").font(.caption)
+                            Text("• \(option.label)").conversationFont(.caption)
                         }
                     }
                 }
             } else if interaction.options.isEmpty == false {
                 ForEach(interaction.options, id: \.id) { option in
-                    Text(option.label).font(.subheadline.weight(.medium))
+                    Text(option.label).conversationFont(.subheadline, weight: .medium)
                 }
             }
             if interaction.state == .pending {
                 Label(readOnlyMessage, systemImage: "desktopcomputer")
-                    .font(.caption.weight(.semibold))
+                    .conversationFont(.caption, weight: .semibold)
                     .foregroundStyle(ConversationDesignTokens.amberText)
             }
         }
@@ -424,7 +424,7 @@ struct ToasttyInteractionCard: View {
     private func resolvedAnswers(_ answers: [RemoteInteractionAnswer]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Claude accepted", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.semibold))
+                .conversationFont(.caption, weight: .semibold)
                 .foregroundStyle(ConversationDesignTokens.green)
             ForEach(answers, id: \.questionID) { answer in
                 let question = interaction.questions?.first { $0.id == answer.questionID }
@@ -434,10 +434,10 @@ struct ToasttyInteractionCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let question {
                         Text(question.header)
-                            .font(.caption.monospaced().weight(.semibold))
+                            .conversationFont(.caption, weight: .semibold, monospaced: true)
                             .foregroundStyle(ConversationDesignTokens.amberText)
                         Text(question.question)
-                            .font(.caption)
+                            .conversationFont(.caption)
                             .foregroundStyle(ConversationDesignTokens.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -445,7 +445,7 @@ struct ToasttyInteractionCard: View {
                         .compactMap { $0 }
                         .filter { $0.isEmpty == false }
                         .joined(separator: ", ")))
-                        .font(.subheadline)
+                        .conversationFont(.subheadline)
                         .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }

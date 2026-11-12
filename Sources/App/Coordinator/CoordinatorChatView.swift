@@ -24,6 +24,10 @@ struct CoordinatorChatView: View {
     /// The coordinator's terminal is the panel that has the keyboard.
     let hasPanelFocus: Bool
 
+    /// The size of the notice's text before the text scale: the caption
+    /// style's size on macOS.
+    static let captionSize = NSFont.preferredFont(forTextStyle: .caption1).pointSize
+
     /// Lines of text stay readable in a wide panel.
     static let maximumContentWidth: CGFloat = 760
     static let transcriptOptions = ToasttyTranscriptOptions(
@@ -57,6 +61,7 @@ struct CoordinatorChatView: View {
         }
         .background(ConversationDesignTokens.background)
         .environment(\.conversationLinkPresenter, chips.presenter)
+        .environment(\.conversationTextScale, model.textScale)
         .environment(\.openURL, OpenURLAction { url in open(url, chips: chips) })
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
@@ -91,6 +96,7 @@ struct CoordinatorChatView: View {
                 isEditable: model.isSendingFiles == false,
                 delivery: model.delivery,
                 focusRequestID: model.composerFocusRequest,
+                fontSize: CoordinatorComposerTextEditor.defaultFontSize * model.textScale,
                 onSend: { model.send() },
                 onQueue: { model.send(queueing: true) },
                 onChooseQueue: { model.queueSelected = $0 },
@@ -111,7 +117,7 @@ struct CoordinatorChatView: View {
     private func noticeRow(_ notice: CoordinatorChatModel.Notice) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(Self.text(for: notice))
-                .font(.caption)
+                .font(.system(size: Self.captionSize * model.textScale))
                 .foregroundStyle(ConversationDesignTokens.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -159,7 +165,7 @@ struct CoordinatorChatView: View {
     private func noticeButton(_ title: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(.plain)
-            .font(.caption.weight(.semibold))
+            .font(.system(size: Self.captionSize * model.textScale, weight: .semibold))
             .foregroundStyle(ConversationDesignTokens.amberText)
             .accessibilityIdentifier(identifier)
     }

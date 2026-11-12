@@ -20,13 +20,13 @@ struct ToasttyPermissionRequestContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(interaction.prompt)
-                .font(.body)
+                .conversationFont(.body)
                 .foregroundStyle(ConversationDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let description = permission.description, description.isEmpty == false,
                description != interaction.prompt {
                 Text(description)
-                    .font(.caption)
+                    .conversationFont(.caption)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -46,7 +46,7 @@ struct ToasttyPermissionRequestContent: View {
             VStack(alignment: .leading, spacing: 4) {
                 ScrollView {
                     Text(permission.preview)
-                        .font(.caption.monospaced())
+                        .conversationFont(.caption, monospaced: true)
                         .foregroundStyle(ConversationDesignTokens.secondaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -60,7 +60,7 @@ struct ToasttyPermissionRequestContent: View {
                 .accessibilityIdentifier("toastty-mobile-permission-preview-\(interaction.id.rawValue)")
                 if permission.previewTruncated {
                     Label(options.shortenedPreviewMessage, systemImage: "scissors")
-                        .font(.caption)
+                        .conversationFont(.caption)
                         .foregroundStyle(ConversationDesignTokens.amberText)
                 }
             }
@@ -75,7 +75,7 @@ struct ToasttyPermissionRequestContent: View {
             }
             statusView(state)
             Label("You can also respond on the desktop", systemImage: "desktopcomputer")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
         }
     }
@@ -93,11 +93,11 @@ struct ToasttyPermissionRequestContent: View {
             HStack(spacing: 8) {
                 VStack(alignment: kind == .allowOnce ? .center : .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.subheadline.weight(.semibold))
+                        .conversationFont(.subheadline, weight: .semibold)
                         .multilineTextAlignment(kind == .allowOnce ? .center : .leading)
                     if let detail = option.detail, detail.isEmpty == false, kind != .allowOnce {
                         Text(detail)
-                            .font(.caption)
+                            .conversationFont(.caption)
                             .opacity(0.8)
                             .multilineTextAlignment(.leading)
                     }
@@ -118,19 +118,19 @@ struct ToasttyPermissionRequestContent: View {
         switch state.status {
         case .editing where state.connectionIsLive == false:
             Label("Reconnect to your Mac to respond", systemImage: "wifi.slash")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
         case .submitting:
             Text("Sending…")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.mutedText)
         case .awaitingClaude:
             Label("Sent · \(sentLabel ?? "decision") · waiting for Claude", systemImage: "hourglass")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.amberText)
         case .failed(let message), .unavailable(let message):
             Label(message, systemImage: "exclamationmark.circle")
-                .font(.caption)
+                .conversationFont(.caption)
                 .foregroundStyle(ConversationDesignTokens.amberText)
                 .fixedSize(horizontal: false, vertical: true)
         case .editing, .resolved:
@@ -144,12 +144,12 @@ struct ToasttyPermissionRequestContent: View {
     private var outcome: some View {
         if let sentLabel {
             Label("Sent from iPhone: \(sentLabel)", systemImage: "iphone")
-                .font(.caption.weight(.semibold))
+                .conversationFont(.caption, weight: .semibold)
                 .foregroundStyle(interaction.state == .pending
                     ? ConversationDesignTokens.amberText : ConversationDesignTokens.secondaryText)
         } else if interaction.state == .pending {
             Label(readOnlyMessage, systemImage: "desktopcomputer")
-                .font(.caption.weight(.semibold))
+                .conversationFont(.caption, weight: .semibold)
                 .foregroundStyle(ConversationDesignTokens.amberText)
         }
     }

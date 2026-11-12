@@ -29,6 +29,7 @@ struct ToasttySelectableParagraph: Equatable {
 @MainActor
 struct ToasttySelectableText: NSViewRepresentable {
     @Environment(\.legibilityWeight) private var legibilityWeight
+    @Environment(\.conversationTextScale) private var textScale
     @Environment(\.openURL) private var openURL
 
     let paragraphs: [ToasttySelectableParagraph]
@@ -180,7 +181,7 @@ struct ToasttySelectableText: NSViewRepresentable {
             }
             if case .listMarker(let label, let depth) = paragraph.decoration {
                 let markerAttributes: [NSAttributedString.Key: Any] = [
-                    .font: Self.markerFont,
+                    .font: markerFont,
                     .foregroundColor: NSColor(ConversationDesignTokens.secondaryText),
                     .paragraphStyle: style,
                 ]
@@ -208,7 +209,7 @@ struct ToasttySelectableText: NSViewRepresentable {
     private func appendRuns(of paragraph: ToasttySelectableParagraph, style: NSParagraphStyle,
                             to result: NSMutableAttributedString) -> [NSAttributedString.Key: Any] {
         let boldText = legibilityWeight == .bold
-        let preferred = NSFont.preferredFont(forTextStyle: paragraph.textStyle)
+        let preferred = scaled(NSFont.preferredFont(forTextStyle: paragraph.textStyle))
         let text = paragraph.text
         var last: [NSAttributedString.Key: Any] = [.font: preferred, .paragraphStyle: style]
         for run in text.runs {
@@ -261,7 +262,7 @@ struct ToasttySelectableText: NSViewRepresentable {
             // The SwiftUI list row: a marker column at least 16 points wide
             // with the marker at its trailing edge, 8 points, then the text.
             let indent = CGFloat(max(0, depth - 1)) * 16
-            let labelWidth = ceil((label as NSString).size(withAttributes: [.font: Self.markerFont]).width)
+            let labelWidth = ceil((label as NSString).size(withAttributes: [.font: markerFont]).width)
             let markerEdge = indent + max(16, labelWidth)
             let textStart = markerEdge + 8
             style.firstLineHeadIndent = indent
@@ -294,8 +295,13 @@ struct ToasttySelectableText: NSViewRepresentable {
         return false
     }
 
-    private static var markerFont: NSFont {
-        NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize, weight: .regular)
+    private var markerFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: scaled(NSFont.preferredFont(forTextStyle: .body)).pointSize, weight: .regular)
+    }
+
+    /// The text style's font at the chat's text scale.
+    private func scaled(_ font: NSFont) -> NSFont {
+        textScale == 1 ? font : NSFont(descriptor: font.fontDescriptor, size: font.pointSize * textScale) ?? font
     }
 
     /// A 3-point bar, then 10 points of space.

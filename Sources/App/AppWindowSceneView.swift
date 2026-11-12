@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import SwiftUI
 
@@ -49,7 +50,10 @@ struct AppWindowSceneView: View {
 
     private var focusedScaleHUDMeasurement: FocusedScaleHUDMeasurement? {
         guard windowState != nil,
-              let target = store.focusedScaleCommandTarget(preferredWindowID: windowID) else {
+              let target = store.focusedScaleCommandTarget(
+                  preferredWindowID: windowID,
+                  coordinatorChatCovers: coordinatorChatCovers
+              ) else {
             return nil
         }
 
@@ -69,7 +73,24 @@ struct AppWindowSceneView: View {
                 return nil
             }
             return .browser(panelID: panelID, zoom: webState.effectiveBrowserPageZoom)
+
+        case .coordinatorChat:
+            // The chat's scale is not app state. See `coordinatorChatTextScaleChanges`.
+            return nil
         }
+    }
+
+    private var coordinatorChatCovers: (UUID) -> Bool {
+        let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return { controller?.coversTerminal(panelID: $0) == true }
+    }
+
+    /// Each new text scale of the coordinator's chat, after a change.
+    private var coordinatorChatTextScaleChanges: AnyPublisher<Double, Never> {
+        guard let chat = sessionRuntimeStore.taskCoordinator?.coordinatorController?.chat else {
+            return Empty().eraseToAnyPublisher()
+        }
+        return chat.$textScale.removeDuplicates().dropFirst().eraseToAnyPublisher()
     }
 
     private var showsEmptyState: Bool {
@@ -138,6 +159,14 @@ struct AppWindowSceneView: View {
         .onDisappear {
             hideFontHUDTask?.cancel()
             hideFontHUDTask = nil
+        }
+        .onReceive(coordinatorChatTextScaleChanges) { scale in
+            // Only the window whose focused panel is the chat shows it.
+            guard case .coordinatorChat = store.focusedScaleCommandTarget(
+                preferredWindowID: windowID,
+                coordinatorChatCovers: coordinatorChatCovers
+            ) else { return }
+            showFontHUD(.coordinatorChat(scale: scale))
         }
         .onChange(of: focusedScaleHUDMeasurement) { previousMeasurement, nextMeasurement in
             guard let previousMeasurement, let nextMeasurement else { return }
@@ -262,6 +291,7 @@ private enum FontHUDValue: Equatable {
     case terminal(points: Double)
     case markdown(scale: Double)
     case browser(zoom: Double)
+    case coordinatorChat(scale: Double)
 }
 
 private struct FontHUD: View {
@@ -288,6 +318,8 @@ private struct FontHUD: View {
             return "Markdown Text \(Int((scale * 100).rounded()))%"
         case .browser(let zoom):
             return "Zoom \(Int((zoom * 100).rounded()))%"
+        case .coordinatorChat(let scale):
+            return "Chat Text \(Int((scale * 100).rounded()))%"
         }
     }
 }

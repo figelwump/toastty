@@ -33,6 +33,8 @@ struct CoordinatorComposerView: View {
     var delivery: CoordinatorComposerDelivery?
     /// Counts up each time the text field should take the keyboard.
     let focusRequestID: Int
+    /// The size of the text in the field.
+    var fontSize = CoordinatorComposerTextEditor.defaultFontSize
     let onSend: () -> Void
     /// Command-Return: the text waits for the turn's end, whatever the chip
     /// shows.
@@ -76,6 +78,7 @@ struct CoordinatorComposerView: View {
                     placeholder: placeholder,
                     isEditable: isEditable,
                     focusRequestID: focusRequestID,
+                    fontSize: fontSize,
                     onSubmit: { if canSend { onSend() } },
                     onQueue: { if canSend { onQueue() } },
                     onPasteAttachments: { attachments.pasteAttachments(from: $0) },
@@ -274,6 +277,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     let placeholder: String
     var isEditable = true
     let focusRequestID: Int
+    let fontSize: CGFloat
     let onSubmit: () -> Void
     /// Command-Return.
     var onQueue: () -> Void = {}
@@ -283,7 +287,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     let dropTarget: AttachmentDropTarget
     let onTextView: (NSTextView?) -> Void
 
-    static let fontSize: CGFloat = 13
+    static let defaultFontSize: CGFloat = 13
     static let lineSpacing: CGFloat = 3
     /// The field grows with its text up to this height, then scrolls.
     static let maximumHeight: CGFloat = 180
@@ -299,7 +303,6 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: Self.fontSize)
         textView.textColor = NSColor(ToastyTheme.primaryText)
         textView.insertionPointColor = NSColor(ToastyTheme.accent)
         textView.textContainerInset = NSSize(width: 0, height: 2)
@@ -348,7 +351,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: container)
-        let lineHeight = ceil(NSFont.systemFont(ofSize: Self.fontSize).boundingRectForFont.height)
+        let lineHeight = ceil(NSFont.systemFont(ofSize: fontSize).boundingRectForFont.height)
         let used = max(layoutManager.usedRect(for: container).height, lineHeight) + textView.textContainerInset.height * 2
         return CGSize(width: width, height: min(ceil(used), Self.maximumHeight))
     }
@@ -378,6 +381,9 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         textView.placeholder = placeholder
         if textView.isEditable != isEditable {
             textView.isEditable = isEditable
+        }
+        if textView.font?.pointSize != fontSize {
+            textView.font = .systemFont(ofSize: fontSize)
         }
         textView.onSubmit = onSubmit
         textView.onQueue = onQueue
@@ -461,7 +467,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
             y: textContainerInset.height
         )
         (placeholder as NSString).draw(at: origin, withAttributes: [
-            .font: font ?? .systemFont(ofSize: CoordinatorComposerTextEditor.fontSize),
+            .font: font ?? .systemFont(ofSize: CoordinatorComposerTextEditor.defaultFontSize),
             .foregroundColor: NSColor(ToastyTheme.inactiveText).withAlphaComponent(0.6),
         ])
     }
