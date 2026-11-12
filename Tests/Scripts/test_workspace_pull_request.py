@@ -18,10 +18,29 @@ sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).resolve().parents[2] / "Sources/App/Resources/workspace-pull-request.py"
 
 FAKE_GH = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, subprocess, sys
 state_path = os.environ["FAKE_STATE"]
 state = json.load(open(state_path))
 args = sys.argv[1:]
+
+def target():
+    """The repository the call acts on, resolved as gh does: --repo, the
+    argument of repo view, the api path, or else a guess from the remotes of
+    the current directory that prefers upstream, then github, then origin."""
+    if "--repo" in args or "-R" in args:
+        return args[args.index("--repo" if "--repo" in args else "-R") + 1]
+    if args[:2] == ["repo", "view"] and len(args) > 2 and not args[2].startswith("-"):
+        return args[2]
+    if args[:1] == ["api"]:
+        return "/".join(next(a for a in args if a.startswith("repos/")).split("/")[1:3])
+    urls = dict(line.split(" ", 1) for line in subprocess.run(
+        ["git", "config", "--get-regexp", r"^remote\..*\.url$"], capture_output=True, text=True).stdout.splitlines())
+    name = next(n for n in ("upstream", "github", "origin") if f"remote.{n}.url" in urls)
+    return re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", urls[f"remote.{name}.url"]).group(1)
+
+repo = target()
+with open(os.environ["FAKE_GH_TARGETS"], "a") as out:
+    out.write(f"{repo} {' '.join(args[:2])}\n")
 
 def log():
     # Logged with the Toastty calls, so tests can check the order of changes.
@@ -32,9 +51,12 @@ def save():
     json.dump(state, open(state_path, "w"))
 
 if args[:2] == ["repo", "view"]:
-    print(json.dumps({"nameWithOwner": "test/repo", "defaultBranchRef": {"name": "main"},
+    print(json.dumps({"nameWithOwner": repo, "defaultBranchRef": {"name": "main"},
                       "mergeCommitAllowed": state.get("merge_commit_allowed", True),
                       "squashMergeAllowed": True, "rebaseMergeAllowed": True}))
+elif args[:1] == ["pr"] and repo != "test/repo":
+    # Every fake PR is in test/repo, as figelwump/ghostty#5 is not in ghostty-org/ghostty.
+    sys.exit(f"GraphQL: Could not resolve to a PullRequest with the number of {args[2]}. (repository.pullRequest)")
 elif args[:2] == ["pr", "view"]:
     pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
     field = args[args.index("--json") + 1]
@@ -138,6 +160,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
         subprocess.run(["git", "init", "--bare", "-b", "main", str(self.origin)], check=True, capture_output=True)
         subprocess.run(["git", "clone", "-q", str(self.origin), str(self.repo)], check=True, capture_output=True)
         self.git("config", "user.name", "Cleanup Test")
+        self.git("config", f"url.{self.origin}.insteadOf", "https://github.com/test/repo.git")
+        self.git("remote", "set-url", "origin", "https://github.com/test/repo.git")
         self.git("config", "user.email", "cleanup@example.invalid")
         self.commit(self.repo, "base")
         self.git("push", "-q", "origin", "main")
@@ -148,8 +172,10 @@ class WorkspacePullRequestTests(unittest.TestCase):
             (bin_dir / name).chmod(0o755)
         self.state_file = self.root / "state.json"
         self.log = self.root / "toastty.log"
+        self.gh_targets = self.root / "gh-targets.log"
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_STATE=str(self.state_file),
-                        FAKE_TOASTTY_LOG=str(self.log), TOASTTY_CLI_PATH=str(bin_dir / "toastty"))
+                        FAKE_TOASTTY_LOG=str(self.log), TOASTTY_CLI_PATH=str(bin_dir / "toastty"),
+                        FAKE_GH_TARGETS=str(self.gh_targets))
         self.prs, self.workspaces = [], []
         self.extra_state = {}
 
@@ -412,7 +438,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.extra_state["merge_commit_allowed"] = False
         result = self.run_script("merge", 1)
         self.assertEqual(result["status"], "waiting", result)
-        self.assertEqual(self.actions(), ["gh pr ready 1"])
+        self.assertEqual(self.actions(), ["gh pr ready 1 --repo test/repo"])
 
         self.prs[0]["isDraft"] = False
         self.prs[0]["mergeStateStatus"] = "CLEAN"
@@ -1129,12 +1155,16 @@ class WorkspacePullRequestTests(unittest.TestCase):
 
     def test_cleanup_with_an_unreachable_origin_is_partial(self):
         branch, path = self.task(1)
-        self.git("remote", "set-url", "origin", str(self.root / "missing.git"))
+        # Origin still names test/repo, but Git cannot reach it.
+        github_url = "https://github.com/test/repo.git"
+        self.git("config", "--unset", f"url.{self.origin}.insteadOf")
+        self.git("config", f"url.{self.root / 'missing.git'}.insteadOf", github_url)
         result = self.run_script("clean-up", 1)
         self.assertEqual(result["status"], "partial", result)
         self.assertIn("could not query origin", result["detail"])
         self.assertFalse(path.exists())
-        self.git("remote", "set-url", "origin", str(self.origin))
+        self.git("config", "--unset", f"url.{self.root / 'missing.git'}.insteadOf")
+        self.git("config", f"url.{self.origin}.insteadOf", github_url)
         self.assertTrue(self.remote_has(branch))
 
     def test_cleanup_runs_from_the_worktree_being_removed(self):
@@ -1153,7 +1183,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertIn("closed PR #1", result["detail"])
         self.assertIn("kept the branch on GitHub", result["detail"])
         actions = self.actions()
-        self.assertEqual(actions[0], "gh pr close 1")
+        self.assertEqual(actions[0], "gh pr close 1 --repo test/repo")
         self.assertIn("workspace.close", actions[1])
         self.assertFalse(path.exists())
         self.assertEqual(self.git("branch", "--list", branch), "")
@@ -1187,6 +1217,48 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertIn("closed PR #1", result["detail"])
         self.assertIn("unsaved document changes; workspace kept", result["detail"])
         self.assertEqual(self.closed(), [])
+        self.assertTrue(path.exists())
+
+    def test_a_fork_checkout_with_an_upstream_remote_acts_on_the_prs_repository(self):
+        # A fork's checkout: origin is the fork, which has the PRs, and upstream is
+        # the parent. Left to guess, gh prefers upstream and finds no such PR there.
+        self.git("remote", "add", "upstream", "https://github.com/upstream-org/repo.git")
+        _, merged_path = self.task(1, state="OPEN")
+        head = self.prs[-1]["headRefOid"]
+        self.prs[-1].update(isDraft=True, mergeStateStatus="UNKNOWN")
+        waiting = self.run_script("merge", 1)
+        self.assertEqual(waiting["status"], "waiting", waiting)
+        self.prs[-1].update(isDraft=False, mergeStateStatus="CLEAN")
+        self.assertEqual(self.run_script("merge", 1, head=head)["status"], "merged")
+        self.prs[-1]["state"] = "MERGED"
+        self.assertEqual(self.run_script("clean-up", 1)["status"], "cleaned")
+        _, closed_path = self.task(2, state="OPEN")
+        self.assertEqual(self.run_script("close", 2)["status"], "cleaned")
+        _, detached_path = self.detached_task(3)
+        self.assertEqual(self.run_script("clean-up", 3)["status"], "cleaned")
+
+        self.assertEqual(self.actions(), [
+            "gh pr ready 1 --repo test/repo", self.merge_call(1, head),
+            f"--json action run workspace.close --workspace {workspace_id(1)} requireDone=true",
+            "gh pr close 2 --repo test/repo", f"--json action run workspace.close --workspace {workspace_id(2)}",
+            f"--json action run workspace.close --workspace {workspace_id(3)} requireDone=true"])
+        calls = [line.split(" ", 1) for line in self.gh_targets.read_text().splitlines()]
+        self.assertEqual({call for _, call in calls},
+                         {"repo view", "pr view", "pr ready", "api --method", "pr close", "pr list"})
+        self.assertEqual({repo for repo, _ in calls}, {"test/repo"})
+        self.assertFalse(any(p.exists() for p in (merged_path, closed_path, detached_path)))
+        self.assertFalse(self.remote_has("task-1"))
+        self.assertTrue(self.remote_has("task-2"))
+
+    def test_refuses_when_origin_is_not_the_prs_repository(self):
+        # The checkout's origin is the parent; the PR is in the fork. The script
+        # fetches and deletes branches on origin, so it must not act.
+        _, path = self.task(1)
+        self.git("remote", "set-url", "origin", "git@github.com:upstream-org/repo.git")
+        result = self.run_script("clean-up", 1)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertIn("the checkout's origin is upstream-org/repo", result["detail"])
+        self.assertEqual(self.actions(), [])
         self.assertTrue(path.exists())
 
     def test_close_refuses_a_pr_url_from_another_repository(self):

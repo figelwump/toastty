@@ -42,7 +42,11 @@ ACTION is one of:
             be reopened. The remote branch must be at the PR head before anything
             changes, so no work exists only locally.
 
---pr-url must be the PR's URL, so a number from another repository is refused.
+--pr-url must be the PR's URL. Every gh call names the repository in that URL,
+so gh never guesses it from the checkout's remotes (it prefers a remote named
+upstream, which in a fork's checkout is the parent). The checkout's origin remote
+must be that repository too: the script fetches, compares, and deletes branches
+there. Otherwise, or for a number from another repository, it refuses.
 --expect-absent-worktree, with clean-up, permits only workspace closure after
 the worktree is gone; it adds a refusal if a checkout is found by branch name.
 --workspace is the one Toastty workspace clean-up and close may close. They skip,
@@ -92,6 +96,8 @@ MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 # a final write from a dying command shows up as uncommitted changes.
 CLOSE_GRACE_SECONDS = 2.0
 PR_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)", re.IGNORECASE)
+# owner/name at the end of a remote URL: https://host/owner/name.git, git@host:owner/name.
+REMOTE_SLUG = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
 
 class Refusal(Exception):
@@ -108,6 +114,11 @@ def run(args: list[str], cwd: str | None = None, check: bool = True) -> str:
 def succeeds(args: list[str], cwd: str | None = None) -> tuple[bool, str]:
     result = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     return result.returncode == 0, (result.stdout or result.stderr).strip()
+
+
+def gh_pr(repo_slug: str, *args: str) -> list[str]:
+    """A `gh pr` command for the PR's repository, not the one gh would guess."""
+    return ["gh", "pr", *args, "--repo", repo_slug]
 
 
 @dataclass
@@ -249,8 +260,8 @@ def refresh_merge_state(ctx: Context) -> None:
     for _ in range(2):
         if ctx.pr.get("mergeStateStatus") != "UNKNOWN":
             return
-        view = run(["gh", "pr", "view", str(ctx.pr["number"]), "--json", "mergeable,mergeStateStatus,baseRefName"],
-                   cwd=ctx.repo, check=False)
+        view = run(gh_pr(ctx.repo_slug, "view", str(ctx.pr["number"]), "--json",
+                         "mergeable,mergeStateStatus,baseRefName"), cwd=ctx.repo, check=False)
         ctx.pr.update(json.loads(view or "{}"))
 
 
@@ -319,7 +330,7 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         raise Refusal("the repository allows no merge method")
 
     if pr["isDraft"]:
-        ok, output = succeeds(["gh", "pr", "ready", str(number)], cwd=ctx.repo)
+        ok, output = succeeds(gh_pr(ctx.repo_slug, "ready", str(number)), cwd=ctx.repo)
         if not ok:
             return "failed", f"could not mark draft PR #{number} ready: {output}", accepted
         return "waiting", f"marked draft PR #{number} ready; waiting for GitHub to allow the merge", accepted
@@ -338,7 +349,7 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
             raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
     # Recheck after the other calls. The API locks the head SHA, but has no
     # equivalent target-branch condition, so the final request still has a race.
-    current = json.loads(run(["gh", "pr", "view", str(number), "--json", "baseRefName"], cwd=ctx.repo))
+    current = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "baseRefName"), cwd=ctx.repo))
     check_target_branch(current.get("baseRefName"), accepted_base)
     # GitHub's merge API merges now or fails; unlike `gh pr merge`, it never
     # turns on auto-merge or adds the PR to a merge queue. `sha` makes GitHub
@@ -347,7 +358,8 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
                            "-f", f"sha={accepted}", "-f", f"merge_method={method}"], cwd=ctx.repo)
     if not ok:
         return "failed", f"GitHub did not merge PR #{number}: {output}", accepted
-    view = json.loads(run(["gh", "pr", "view", str(number), "--json", "state"], cwd=ctx.repo, check=False) or "{}")
+    view = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "state"), cwd=ctx.repo,
+                          check=False) or "{}")
     if view.get("state") == "MERGED":
         return "merged", f"merged PR #{number}", accepted
     return "failed", f"GitHub reported the merge, but PR #{number} is {view.get('state', 'unknown').lower()}", accepted
@@ -509,7 +521,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
         return "stopped", message
 
     if close_pr and pr["state"] == "OPEN":
-        ok, output = succeeds(["gh", "pr", "close", str(number)], cwd=ctx.repo)
+        ok, output = succeeds(gh_pr(ctx.repo_slug, "close", str(number)), cwd=ctx.repo)
         if not ok:
             return stop(f"could not close PR #{number}: {output}")
         done.append(f"closed PR #{number}")
@@ -561,8 +573,8 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
         if branch == ctx.default_branch:
             keep_branches = "it is the repository's default branch"
         else:
-            ok, output = succeeds(["gh", "pr", "list", "--head", branch, "--state", "open", "--json",
-                                   "number,isCrossRepository,headRefName"], cwd=ctx.repo)
+            ok, output = succeeds(gh_pr(ctx.repo_slug, "list", "--head", branch, "--state", "open", "--json",
+                                        "number,isCrossRepository,headRefName"), cwd=ctx.repo)
             try:
                 open_prs = json.loads(output) if ok else None
             except json.JSONDecodeError:
@@ -616,23 +628,42 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
 
 # MARK: - Main
 
+def origin_slug(repo: str) -> str:
+    """owner/name from the origin remote's configured URL. Only the path is read,
+    so a host alias such as git@github-work:owner/name still works."""
+    ok, url = succeeds(["git", "config", "--get", "remote.origin.url"], cwd=repo)
+    match = REMOTE_SLUG.search(url) if ok else None
+    if not match:
+        raise Refusal(f"could not read a GitHub repository from the checkout's origin remote ({url or 'none'})")
+    return match.group(1)
+
+
 def load(options: argparse.Namespace) -> Context:
+    url_match = PR_URL.search(options.pr_url)
+    if not url_match or int(url_match.group(2)) != options.pr:
+        raise Refusal(f"{options.pr_url} is not the URL of a PR #{options.pr}")
+    pr_slug = url_match.group(1)
     checkout = real(run(["git", "rev-parse", "--show-toplevel"], cwd=options.repo).strip())
     repo = main_checkout(checkout)
     clicked_head = None
     if options.action == "merge" and not options.head:
         ok, head = succeeds(["git", "rev-parse", "HEAD"], cwd=checkout)
         clicked_head = head if ok else ""
+    # Ask about origin by name: GitHub resolves a renamed repository to its
+    # current name, which must be the PR's repository.
+    repo_info = json.loads(run(["gh", "repo", "view", origin_slug(repo), "--json",
+                                "nameWithOwner,defaultBranchRef,mergeCommitAllowed,squashMergeAllowed,"
+                                "rebaseMergeAllowed"], cwd=repo))
+    if repo_info["nameWithOwner"].lower() != pr_slug.lower():
+        raise Refusal(f"{options.pr_url} is not this repository's PR #{options.pr}: "
+                      f"the checkout's origin is {repo_info['nameWithOwner']}")
     if not options.head:
         # A merge that is waiting reads only GitHub; it runs every 30 seconds.
         # FETCH_HEAD belongs to task start-work, which reads it under its own
         # lock; this fetch only refreshes the remote-tracking refs.
         subprocess.run(["git", "fetch", "--quiet", "--prune", "--no-write-fetch-head", "origin"], cwd=repo,
                        capture_output=True)
-    repo_info = json.loads(run(["gh", "repo", "view", "--json",
-                                "nameWithOwner,defaultBranchRef,mergeCommitAllowed,squashMergeAllowed,"
-                                "rebaseMergeAllowed"], cwd=repo))
-    pr = json.loads(run(["gh", "pr", "view", str(options.pr), "--json", PR_FIELDS], cwd=repo))
+    pr = json.loads(run(gh_pr(repo_info["nameWithOwner"], "view", str(options.pr), "--json", PR_FIELDS), cwd=repo))
     if (pr.get("url") or "").rstrip("/").lower() != options.pr_url.rstrip("/").lower():
         # The number alone could name a PR in another repository.
         raise Refusal(f"{options.pr_url} is not this repository's PR #{options.pr} ({pr.get('url')})")
