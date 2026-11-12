@@ -1768,6 +1768,38 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testCommandPaletteShortcutWindowIDIgnoresTextInputFocus() throws {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        let paletteEvent = try makeKeyEvent(characters: "P", modifiers: [.command, .shift], keyCode: 0x23)
+        let closeEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
+        // The Coordinator message bar, and a read-only text view like the
+        // Coordinator transcript's selectable text.
+        let transcriptTextView = NSTextView()
+        transcriptTextView.isEditable = false
+
+        for responder in [CoordinatorComposerTextView(), transcriptTextView] {
+            window.forcedFirstResponder = responder
+            XCTAssertEqual(
+                DisplayShortcutInterceptor.shortcutWindowID(for: paletteEvent, keyWindow: window, modalWindow: nil),
+                windowID
+            )
+            // Cmd+W stays with the text view.
+            XCTAssertNil(
+                DisplayShortcutInterceptor.shortcutWindowID(for: closeEvent, keyWindow: window, modalWindow: nil)
+            )
+        }
+
+        XCTAssertNil(
+            DisplayShortcutInterceptor.shortcutWindowID(for: paletteEvent, keyWindow: window, modalWindow: NSWindow())
+        )
+        window.forcedSheetParent = NSWindow()
+        XCTAssertNil(
+            DisplayShortcutInterceptor.shortcutWindowID(for: paletteEvent, keyWindow: window, modalWindow: nil)
+        )
+    }
+
     func testClosePanelShortcutWindowIDAllowsTerminalHostViewResponder() {
         let windowID = UUID()
         let window = ShortcutTestWindow()
