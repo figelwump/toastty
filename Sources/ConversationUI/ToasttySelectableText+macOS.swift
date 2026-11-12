@@ -365,6 +365,17 @@ public final class ToasttyTranscriptTextView: NSTextView {
 
     override public func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        let center = NSWorkspace.shared.notificationCenter
+        let name = NSWorkspace.accessibilityDisplayOptionsDidChangeNotification
+        center.removeObserver(self, name: name, object: nil)
+        if window != nil {
+            // The spinners turn again when Reduce Motion goes off.
+            center.addObserver(self, selector: #selector(displayOptionsDidChange), name: name, object: nil)
+        }
+        updateChipSpinners()
+    }
+
+    @objc private func displayOptionsDidChange(_ notification: Notification) {
         updateChipSpinners()
     }
 

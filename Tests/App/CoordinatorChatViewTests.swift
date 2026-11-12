@@ -311,14 +311,21 @@ final class CoordinatorChatViewTests: XCTestCase {
             XCTAssertNotEqual(start, NSNotFound)
             _ = storage.attribute(.toasttyChip, at: start, longestEffectiveRange: &chipRange,
                                   in: NSRange(location: 0, length: storage.length))
-            let dot = NSRange(location: start, length: 1)
             return Render(
                 hostingView: hostingView, window: window, textView: textView,
                 outlines: manager.chipOutlineRects(forCharacterRange: chipRange),
-                spinners: manager.chipSpinnerRects(forCharacterRange: dot)
-                    .map { textView.convert($0.offsetBy(dx: textView.textContainerOrigin.x,
-                                                        dy: textView.textContainerOrigin.y), to: hostingView) }
+                spinners: try dotRects(textView, in: hostingView)
             )
+        }
+        /// The square over the dot's ink, in the hosting view.
+        func dotRects(_ textView: ToasttyTranscriptTextView, in hostingView: NSView) throws -> [NSRect] {
+            let storage = try XCTUnwrap(textView.textStorage)
+            let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+            let dot = (storage.string as NSString).range(of: "●")
+            XCTAssertNotEqual(dot.location, NSNotFound)
+            return manager.chipSpinnerRects(forCharacterRange: dot)
+                .map { textView.convert($0.offsetBy(dx: textView.textContainerOrigin.x,
+                                                    dy: textView.textContainerOrigin.y), to: hostingView) }
         }
 
         for width in [CGFloat(600), 300, 220] {
@@ -357,6 +364,16 @@ final class CoordinatorChatViewTests: XCTestCase {
         let later = try Self.snapshot(spinning.hostingView)
         XCTAssertTrue(later.points(in: spinner).contains { first.color(at: $0) != later.color(at: $0) },
                       "The spinner must turn")
+
+        // When the task stops working, the same text view draws the dot again.
+        spinning.hostingView.rootView = Self.chipText(source, presenter: presenter(still), width: 600)
+        spinning.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(spinning.textView.chipSpinnerRects().isEmpty)
+        let stopped = try Self.snapshot(spinning.hostingView)
+        // The new root view can resize the hosting view, which moves the dot.
+        let dot = try XCTUnwrap(dotRects(spinning.textView, in: spinning.hostingView).first)
+        XCTAssertTrue(Self.isMarkColor(stopped.color(at: NSPoint(x: dot.midX, y: dot.midY))),
+                      "The dot must come back when the task stops working")
 
         for (name, image) in [("task-chip-working", first), ("task-chip-not-working", plainImage)] {
             let attachment = XCTAttachment(data: image.png, uniformTypeIdentifier: "public.png")
@@ -606,13 +623,7 @@ final class CoordinatorChatViewTests: XCTestCase {
     /// draws an answer.
     private static func hostChipText(_ source: AttributedString, presenter: ConversationLinkPresenter,
                                      width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
-        let view = ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: presenter))
-            .frame(width: width)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(12)
-            .background(Color.black)
-            .environment(\.colorScheme, .dark)
-        let hostingView = NSHostingView(rootView: AnyView(view))
+        let hostingView = NSHostingView(rootView: chipText(source, presenter: presenter, width: width))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 24, height: 200),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -620,6 +631,16 @@ final class CoordinatorChatViewTests: XCTestCase {
         window.contentView = hostingView
         hostingView.layoutSubtreeIfNeeded()
         return (hostingView, window)
+    }
+
+    private static func chipText(_ source: AttributedString, presenter: ConversationLinkPresenter,
+                                 width: CGFloat) -> AnyView {
+        AnyView(ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: presenter))
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(Color.black)
+            .environment(\.colorScheme, .dark))
     }
 
     /// A drawn view, read by the point.
