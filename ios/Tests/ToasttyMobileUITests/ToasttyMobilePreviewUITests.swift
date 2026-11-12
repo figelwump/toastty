@@ -136,7 +136,9 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         link.tap()
         let targetLine = documentTargetLine(in: app)
         XCTAssertTrue(targetLine.waitForExistence(timeout: 10))
-        XCTAssertTrue(targetLine.isHittable)
+        // The reveal scrolls the line into view a frame or two after its text appears.
+        let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: targetLine)
+        wait(for: [revealed], timeout: 5)
         attach(app, name: "conversation-file-line-12")
         XCTAssertTrue(app.buttons["toastty-preview-close"].exists)
         app.buttons["toastty-preview-close"].tap()
@@ -259,8 +261,10 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
     }
 
     private func documentTargetLine(in app: XCUIApplication) -> XCUIElement {
+        // Line 12 starts a two-line paragraph. The formatted Markdown view
+        // exposes the whole paragraph as one text element.
         app.webViews.staticTexts.matching(NSPredicate(format: "label MATCHES %@",
-            #"^Tap a filename in the conversation\.\s*$"#)).firstMatch
+            #"(?s)^Tap a filename in the conversation\.(\s.*)?$"#)).firstMatch
     }
 
     private func launchWorkspace() -> XCUIApplication {

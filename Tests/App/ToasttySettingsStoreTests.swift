@@ -47,6 +47,28 @@ final class ToasttySettingsStoreTests: XCTestCase {
         XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).workspaceMergeMode, .mergeAndCleanUp)
     }
 
+    func testLocalDocumentMarkdownViewModeDefaultsToFormattedAndPersists() {
+        let userDefaults = makeUserDefaults()
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .formatted)
+
+        ToasttySettingsStore.persistLocalDocumentMarkdownViewMode(.source, userDefaults: userDefaults)
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .source)
+
+        userDefaults.set("wysiwyg", forKey: "toastty.localDocumentMarkdownViewMode")
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentMarkdownViewMode, .formatted)
+    }
+
+    func testLocalDocumentAppearanceDefaultsToSystemAndPersists() {
+        let userDefaults = makeUserDefaults()
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentAppearance, .system)
+
+        ToasttySettingsStore.persistLocalDocumentAppearance(.light, userDefaults: userDefaults)
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentAppearance, .light)
+
+        userDefaults.set("sepia", forKey: "toastty.localDocumentAppearance")
+        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentAppearance, .system)
+    }
+
     func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
         let userDefaults = makeUserDefaults()
 

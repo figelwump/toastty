@@ -12,6 +12,10 @@ struct ToasttySettings: Equatable {
     /// its shortcut. Off until task lifecycle hooks replace it; there is no
     /// settings UI, so turn it on by writing the defaults key.
     var isWorkspaceMergeEnabled = false
+    /// How Markdown panels open. Each panel's header changes it.
+    var localDocumentMarkdownViewMode = LocalDocumentMarkdownViewMode.formatted
+    /// Light or dark colors for document panels, or the app's appearance.
+    var localDocumentAppearance = LocalDocumentAppearance.system
 }
 
 enum ToasttySettingsStore {
@@ -20,6 +24,8 @@ enum ToasttySettingsStore {
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
     private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
     private static let workspaceMergeEnabledKey = "toastty.workspaceMergeEnabled"
+    private static let localDocumentMarkdownViewModeKey = "toastty.localDocumentMarkdownViewMode"
+    private static let localDocumentAppearanceKey = "toastty.localDocumentAppearance"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
@@ -27,7 +33,11 @@ enum ToasttySettingsStore {
             askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults),
             workspaceMergeMode: userDefaults.string(forKey: workspaceMergeModeKey)
                 .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp,
-            isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey)
+            isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey),
+            localDocumentMarkdownViewMode: userDefaults.string(forKey: localDocumentMarkdownViewModeKey)
+                .flatMap(LocalDocumentMarkdownViewMode.init(rawValue:)) ?? .formatted,
+            localDocumentAppearance: userDefaults.string(forKey: localDocumentAppearanceKey)
+                .flatMap(LocalDocumentAppearance.init(rawValue:)) ?? .system
         )
     }
 
@@ -71,6 +81,20 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(mode.rawValue, forKey: workspaceMergeModeKey)
+    }
+
+    static func persistLocalDocumentMarkdownViewMode(
+        _ mode: LocalDocumentMarkdownViewMode,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(mode.rawValue, forKey: localDocumentMarkdownViewModeKey)
+    }
+
+    static func persistLocalDocumentAppearance(
+        _ appearance: LocalDocumentAppearance,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(appearance.rawValue, forKey: localDocumentAppearanceKey)
     }
 
     private static func loadTerminalFontSizePoints(userDefaults: UserDefaults) -> Double? {
