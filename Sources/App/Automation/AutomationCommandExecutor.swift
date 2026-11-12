@@ -138,61 +138,35 @@ final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     func execute(envelope: AutomationIncomingEnvelope) async -> AutomationResponseEnvelope {
+        let request: AutomationRequestEnvelope
+        switch envelope {
+        case .event(let event) where event.eventType == AutomationSocketProtocol.eventBatchEventType:
+            return executeEventBatch(event)
+        case .event(let event):
+            return executeAuditedEvent(event)
+        case .request(let value):
+            request = value
+        }
+
         let startedAt = Date()
-        let responseRequestID = envelope.requestID ?? UUID().uuidString
         let response: AutomationResponseEnvelope
-
         do {
-            let result: [String: AutomationJSONValue]?
-
-            switch envelope {
-            case .request(let request):
-                let context = AutomationRequestContext(
-                    callerSessionID: normalizedOptionalText(request.callerSessionID),
-                    commandName: request.command
-                )
-                result = try await executeCommand(
+            let context = AutomationRequestContext(
+                callerSessionID: normalizedOptionalText(request.callerSessionID),
+                commandName: request.command
+            )
+            response = AutomationResponseEnvelope(
+                requestID: request.requestID,
+                ok: true,
+                result: try await executeCommand(
                     named: request.command,
                     payload: request.payload,
                     context: context
-                )
-            case .event(let event):
-                result = try executeEvent(event)
-            }
-
-            response = AutomationResponseEnvelope(
-                requestID: responseRequestID,
-                ok: true,
-                result: result,
+                ),
                 error: nil
             )
-        } catch let socketError as AutomationSocketError {
-            response = AutomationResponseEnvelope(
-                requestID: responseRequestID,
-                ok: false,
-                result: nil,
-                error: socketError.errorBody
-            )
-        } catch let launchError as AgentLaunchError {
-            response = AutomationResponseEnvelope(
-                requestID: responseRequestID,
-                ok: false,
-                result: nil,
-                error: AutomationResponseError(
-                    code: "INVALID_PAYLOAD",
-                    message: launchError.localizedDescription
-                )
-            )
         } catch {
-            response = AutomationResponseEnvelope(
-                requestID: responseRequestID,
-                ok: false,
-                result: nil,
-                error: AutomationResponseError(
-                    code: "INTERNAL_ERROR",
-                    message: error.localizedDescription
-                )
-            )
+            response = Self.failureResponse(requestID: request.requestID, error: error)
         }
 
         recordAutomationRequest(
@@ -201,6 +175,110 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             startedAt: startedAt
         )
         return response
+    }
+
+    @MainActor
+    private func executeAuditedEvent(_ event: AutomationEventEnvelope) -> AutomationResponseEnvelope {
+        let startedAt = Date()
+        let requestID = event.requestID ?? UUID().uuidString
+        let response: AutomationResponseEnvelope
+        do {
+            response = AutomationResponseEnvelope(
+                requestID: requestID,
+                ok: true,
+                result: try executeEvent(event),
+                error: nil
+            )
+        } catch {
+            response = Self.failureResponse(requestID: requestID, error: error)
+        }
+
+        recordAutomationRequest(
+            envelope: .event(event),
+            response: response,
+            startedAt: startedAt
+        )
+        return response
+    }
+
+    /// Applies the events of one batch in order, without a suspension point
+    /// between them, and answers once. An agent hook sends all the updates
+    /// of one hook event this way: when the hook's request times out, the
+    /// app still applies every update, not only the first one.
+    ///
+    /// The diagnostics audit records each event of the batch, and the batch
+    /// itself only when it is malformed. The first event that fails stops
+    /// the batch. Earlier events of the batch stay applied.
+    @MainActor
+    private func executeEventBatch(_ batch: AutomationEventEnvelope) -> AutomationResponseEnvelope {
+        let requestID = batch.requestID ?? UUID().uuidString
+        let events: [AutomationEventEnvelope]
+        do {
+            events = try batchedEvents(in: batch)
+        } catch {
+            let response = Self.failureResponse(requestID: requestID, error: error)
+            recordAutomationRequest(envelope: .event(batch), response: response, startedAt: Date())
+            return response
+        }
+
+        var results: [AutomationJSONValue] = []
+        for (index, event) in events.enumerated() {
+            let response = executeAuditedEvent(event)
+            guard response.ok else {
+                return AutomationResponseEnvelope(
+                    requestID: requestID,
+                    ok: false,
+                    result: nil,
+                    error: response.error.map { error in
+                        AutomationResponseError(
+                            code: error.code,
+                            message: "event \(index + 1) of \(events.count) (\(event.eventType)): \(error.message)"
+                        )
+                    }
+                )
+            }
+            results.append(response.result.map(AutomationJSONValue.object) ?? .null)
+        }
+        return AutomationResponseEnvelope(
+            requestID: requestID,
+            ok: true,
+            result: [
+                "eventType": .string(batch.eventType),
+                "results": .array(results),
+            ],
+            error: nil
+        )
+    }
+
+    private func batchedEvents(in batch: AutomationEventEnvelope) throws -> [AutomationEventEnvelope] {
+        guard case .array(let values)? = batch.payload["events"], values.isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("events must be a non-empty array")
+        }
+        return try values.enumerated().map { index, value in
+            guard let data = try? JSONEncoder().encode(value),
+                  let event = try? JSONDecoder().decode(AutomationEventEnvelope.self, from: data),
+                  event.kind == "event",
+                  event.eventType.isEmpty == false,
+                  event.eventType != AutomationSocketProtocol.eventBatchEventType else {
+                throw AutomationSocketError.invalidPayload(
+                    "events[\(index)] must be an event envelope that is not a batch"
+                )
+            }
+            return event
+        }
+    }
+
+    private static func failureResponse(requestID: String, error: Error) -> AutomationResponseEnvelope {
+        let body: AutomationResponseError
+        switch error {
+        case let socketError as AutomationSocketError:
+            body = socketError.errorBody
+        case let launchError as AgentLaunchError:
+            body = AutomationResponseError(code: "INVALID_PAYLOAD", message: launchError.localizedDescription)
+        default:
+            body = AutomationResponseError(code: "INTERNAL_ERROR", message: error.localizedDescription)
+        }
+        return AutomationResponseEnvelope(requestID: requestID, ok: false, result: nil, error: body)
     }
 
     @MainActor
