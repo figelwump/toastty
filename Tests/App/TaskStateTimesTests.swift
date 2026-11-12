@@ -311,10 +311,13 @@ extension TaskAppControlTests {
         #expect(try agentState()["state"] == .string("idle"))
         #expect(try agentState()["interruptedAtQuit"] == .bool(true))
         #expect(object(try listed(executor, task.id)?["agentState"])["interruptedAtQuit"] == .bool(true))
+        // The idle agent of a cut-off turn raises the coordinator's alert.
+        #expect(relaunched.alertFacts(for: [task.id])[task.id]?.interruptedAtQuit == true)
 
         // The next turn clears it, and it stays clear after that turn.
         report(fixture, "restored", .working)
         #expect(try agentState()["interruptedAtQuit"] == .bool(false))
+        #expect(relaunched.alertFacts(for: [task.id])[task.id]?.interruptedAtQuit == false)
         report(fixture, "restored", .idle)
         #expect(try agentState()["interruptedAtQuit"] == .bool(false))
         #expect(relaunched.records.record(id: task.id)?.stateTimes?.turnLaunchID == nil)
@@ -343,6 +346,8 @@ extension TaskAppControlTests {
         executor = makeExecutor(fixture, coordinator: relaunched)
         #expect(try agentState()["state"] == .string("notRunning"))
         #expect(try agentState()["interruptedAtQuit"] == .bool(true))
+        // No agent to continue yet: no alert until it waits at its prompt.
+        #expect(relaunched.alertFacts(for: [task.id])[task.id]?.interruptedAtQuit == false)
 
         // The restored agent finishes a turn; the next quit cuts nothing off.
         try restoreAgent(fixture, for: task, sessionID: "restored")

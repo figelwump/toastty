@@ -619,6 +619,40 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "running", at: clock.now) + "; busy, no output for 30 minutes"))
     }
 
+    @Test func aTurnTheQuitCutOffWakesTheCoordinatorOnceWithoutAStageChange() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        // After a relaunch the restored agent of a cut-off turn waits at
+        // its prompt; its stage was already counted as idle.
+        let current = States([task: state("idle")])
+        let facts = Facts([task: TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .none)])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock, settleInterval: 3) { current.value }
+        service.taskAlertFacts = { facts.read($0) }
+        service.pass()
+
+        facts.value[task]?.interruptedAtQuit = true
+        service.pass()
+        clock.advance(3)
+        service.pass()
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "idle", at: clock.now) + "; interrupted by the quit")])
+
+        // One wake while the agent waits.
+        try await runTurn(fixture)
+        clock.advance(900)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+
+        // The agent starts its next turn: the alert clears, which wakes
+        // nothing.
+        facts.value[task]?.interruptedAtQuit = false
+        current.value[task] = state("running")
+        service.pass()
+        clock.advance(3)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+    }
+
     @Test func failingAndSlowChecksEachWakeTheCoordinatorOnceAndFireNoWebhookEvent() async throws {
         let fixture = try Fixture()
         let clock = Clock()

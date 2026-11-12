@@ -124,9 +124,10 @@ extension TaskCoordinator {
     }
 
     /// What Toastty reads to find these tasks' alerts (`TaskAlert`): whether
-    /// the task's agent is busy, when it last wrote, and GitHub's last
-    /// answer about the checks of the task's open pull request. These are
-    /// the facts `task get` reports as `agentState` and `pullRequest`.
+    /// the task's agent is busy, when it last wrote, whether a quit cut off
+    /// its turn while it now waits at its prompt, and GitHub's last answer
+    /// about the checks of the task's open pull request. These are the
+    /// facts `task get` reports as `agentState` and `pullRequest`.
     func alertFacts(for taskIDs: Set<UUID>) -> [UUID: TaskAlertFacts] {
         var facts: [UUID: TaskAlertFacts] = [:]
         for record in records.records where taskIDs.contains(record.id) {
@@ -135,7 +136,8 @@ extension TaskCoordinator {
             facts[record.id] = TaskAlertFacts(
                 agentBusy: busy,
                 lastOutputAt: busy ? agent.session.flatMap { sessions?.lastOutputAt(sessionID: $0.sessionID) } : nil,
-                checks: checks(of: record)
+                checks: checks(of: record),
+                interruptedAtQuit: agent.activity == .idle && wasInterruptedAtQuit(record)
             )
         }
         return facts

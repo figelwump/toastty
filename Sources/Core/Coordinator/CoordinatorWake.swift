@@ -248,6 +248,10 @@ public enum TaskAlert: String, Codable, CaseIterable, Sendable {
     /// The checks of the task's open pull request have been pending for
     /// `limit` on the same commit.
     case checksSlow
+    /// A quit or a crash cut off the agent's turn, and the agent now waits
+    /// at its prompt: `task get` reports `interruptedAtQuit`. It clears
+    /// when the agent starts its next turn.
+    case interrupted
 
     public static let limit: TimeInterval = 30 * 60
 
@@ -258,6 +262,7 @@ public enum TaskAlert: String, Codable, CaseIterable, Sendable {
         case .silent: return "busy, no output for \(minutes) minutes"
         case .checksFailing: return "pull request checks failing"
         case .checksSlow: return "pull request checks pending for \(minutes) minutes"
+        case .interrupted: return "interrupted by the quit"
         }
     }
 }
@@ -282,11 +287,15 @@ public struct TaskAlertFacts: Equatable, Sendable {
     /// not know.
     public var lastOutputAt: Date?
     public var checks: Checks
+    /// A quit or a crash cut off the agent's turn, and the agent is idle
+    /// at its prompt.
+    public var interruptedAtQuit: Bool
 
-    public init(agentBusy: Bool, lastOutputAt: Date?, checks: Checks) {
+    public init(agentBusy: Bool, lastOutputAt: Date?, checks: Checks, interruptedAtQuit: Bool = false) {
         self.agentBusy = agentBusy
         self.lastOutputAt = lastOutputAt
         self.checks = checks
+        self.interruptedAtQuit = interruptedAtQuit
     }
 
     /// The task's alerts at `now`, in `TaskAlert.allCases` order. While the
@@ -303,6 +312,8 @@ public struct TaskAlertFacts: Equatable, Sendable {
                 return true
             case (.checksSlow, .pending(let since?)):
                 return now.timeIntervalSince(since) >= TaskAlert.limit
+            case (.interrupted, _):
+                return interruptedAtQuit
             case (_, .unknown):
                 return previous.contains(alert)
             default:

@@ -224,14 +224,18 @@ struct CoordinatorWakeStateTests {
         // Two at once, in a fixed order.
         let both = TaskAlertFacts(agentBusy: true, lastOutputAt: t0, checks: .pending(since: t0))
         #expect(alerts(both, at: limit) == [.silent, .checksSlow])
+
+        // A turn the quit cut off counts at once, with or without checks.
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .none, interruptedAtQuit: true), at: 0) == [.interrupted])
+        #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .failing, interruptedAtQuit: true), at: 0) == [.checksFailing, .interrupted])
     }
 
     @Test func checksToasttyCannotReadKeepTheCheckAlertsLastCounted() {
         // As after a relaunch, before GitHub's first answer: the check
-        // alerts stay as the detector last counted them. Silence is read
-        // live, so it is not carried.
+        // alerts stay as the detector last counted them. Silence and a
+        // cut-off turn are read live, so they are not carried.
         let unknown = TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .unknown)
-        #expect(unknown.alerts(now: at(10), previous: [.silent, .checksFailing]) == [.checksFailing])
+        #expect(unknown.alerts(now: at(10), previous: [.silent, .checksFailing, .interrupted]) == [.checksFailing])
         #expect(unknown.alerts(now: at(10), previous: [.checksSlow]) == [.checksSlow])
         #expect(unknown.alerts(now: at(10), previous: []).isEmpty)
     }
