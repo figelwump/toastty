@@ -44,6 +44,87 @@ public struct ToasttyHostMessagePresentation: Equatable, Sendable {
     }
 }
 
+// MARK: - Replies
+
+/// The agent's message that a user's message answers. The user's bubble
+/// shows one line of it above the user's text.
+public struct ToasttyMessageQuote: Equatable, Sendable {
+    /// The whole quoted message.
+    public var text: String
+    /// When the agent wrote it, as the host shows a time, such as "14:05".
+    public var timeText: String?
+    /// The quoted message's row, when the host found it among the rows it
+    /// gave the transcript. A click on the quote then scrolls to that row.
+    public var sourceRowID: ToasttyTranscriptRowID?
+
+    public init(text: String, timeText: String? = nil, sourceRowID: ToasttyTranscriptRowID? = nil) {
+        self.text = text
+        self.timeText = timeText
+        self.sourceRowID = sourceRowID
+    }
+
+    /// The quote on one line, for the strip in the bubble: the start of the
+    /// message as plain text, with its line breaks as spaces. A link shows
+    /// as its title, without Markdown's marks. The strip cuts it to its
+    /// width.
+    public var excerpt: String { Self.excerpt(of: text) }
+
+    public static func excerpt(of text: String) -> String {
+        let start = String(text.prefix(2_000))
+        let plain = (try? AttributedString(
+            markdown: start,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
+        )).map { String($0.characters) } ?? start
+        return plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+/// The agent's message that the user chose to reply to.
+public struct ToasttyMessageReplyRequest: Equatable, Sendable {
+    public var rowID: ToasttyTranscriptRowID
+    /// The whole message, also when the transcript draws it as several rows.
+    public var text: String
+    public var timestamp: Date
+
+    public init(rowID: ToasttyTranscriptRowID, text: String, timestamp: Date) {
+        self.rowID = rowID
+        self.text = text
+        self.timestamp = timestamp
+    }
+}
+
+/// The transcript's Reply action on an agent's message. The host's action
+/// is not compared: it is the same for the life of one transcript.
+struct ToasttyMessageReplyAction {
+    let reply: @MainActor (ToasttyMessageReplyRequest) -> Void
+}
+
+/// Scrolls the transcript to the row that a quote names.
+struct ToasttyRevealRowAction {
+    let reveal: @MainActor (ToasttyTranscriptRowID) -> Void
+}
+
+private struct ToasttyMessageReplyActionKey: EnvironmentKey {
+    static let defaultValue: ToasttyMessageReplyAction? = nil
+}
+
+private struct ToasttyRevealRowActionKey: EnvironmentKey {
+    static let defaultValue: ToasttyRevealRowAction? = nil
+}
+
+extension EnvironmentValues {
+    /// `nil`, the default, offers no Reply on agent messages.
+    var toasttyMessageReply: ToasttyMessageReplyAction? {
+        get { self[ToasttyMessageReplyActionKey.self] }
+        set { self[ToasttyMessageReplyActionKey.self] = newValue }
+    }
+
+    var toasttyRevealRow: ToasttyRevealRowAction? {
+        get { self[ToasttyRevealRowActionKey.self] }
+        set { self[ToasttyRevealRowActionKey.self] = newValue }
+    }
+}
+
 // MARK: - Links the host draws itself
 
 /// A link drawn as a small labelled mark instead of as link text: a colored

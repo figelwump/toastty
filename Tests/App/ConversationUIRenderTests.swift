@@ -66,7 +66,9 @@ final class ConversationUIRenderTests: XCTestCase {
     /// the bubble does not grow and shrink back, or move, when the message
     /// arrives. On the Mac the sent row has no caption; on the iPhone it
     /// says how it was sent. Where messages have a copy button, the sending
-    /// bubble keeps the button's space. Earlier messages fill the view, so
+    /// bubble keeps the button's space. A reply's quote line is the same in
+    /// both, also when the sent row's quote opens the message it quotes.
+    /// Earlier messages fill the view, so
     /// the transcript stays at its bottom edge, as in a real conversation.
     func testSendingBubbleKeepsTheSizeOfTheSentBubble() throws {
         guard #available(macOS 15.0, *) else {
@@ -79,23 +81,27 @@ final class ConversationUIRenderTests: XCTestCase {
                 phase: .final
             ))
         }
-        let cases: [(name: String, caption: String?, origin: ConversationMessageOrigin, copyButton: Bool)] = [
-            ("mac", nil, .local, false),
-            ("iphone", "sent remotely", .remote, false),
-            ("mac-copy-button", nil, .local, true),
+        let cases: [(name: String, caption: String?, origin: ConversationMessageOrigin, copyButton: Bool, replies: Bool)] = [
+            ("mac", nil, .local, false, false),
+            ("iphone", "sent remotely", .remote, false, false),
+            ("mac-copy-button", nil, .local, true, false),
+            ("mac-reply", nil, .local, true, true),
         ]
-        for (name, caption, origin, copyButton) in cases {
+        for (name, caption, origin, copyButton, replies) in cases {
             let options = ToasttyTranscriptOptions(showsMessageCopyButton: copyButton)
-            let sending = try bubbleHeight(of: text, named: "sending-bubble-\(name)", options: options, in: .init(
+            let quoted = "Earlier answer 4, long enough to take a few lines in the narrow test window."
+            let sendingQuote = replies ? ToasttyMessageQuote(text: quoted, timeText: "14:05") : nil
+            let sentQuote = replies ? ToasttyMessageQuote(text: quoted, timeText: "14:05", sourceRowID: earlier[3].id) : nil
+            let sending = try bubbleHeight(of: text, named: "sending-bubble-\(name)", options: options, replies: replies, in: .init(
                 rows: earlier,
                 sendItems: [ToasttySendPresentationItem(
                     clientRequestID: "sending", text: text,
-                    content: .optimistic(response: .accepted), sentCaption: caption
+                    content: .optimistic(response: .accepted), sentCaption: caption, quote: sendingQuote
                 )],
                 phase: .live, revision: .initial, historyTruncated: false
             ))
-            let sent = try bubbleHeight(of: text, named: "sent-bubble-\(name)", options: options, in: .init(
-                rows: earlier + [Self.row(5, .userMessage(text: text, origin: origin))],
+            let sent = try bubbleHeight(of: text, named: "sent-bubble-\(name)", options: options, replies: replies, in: .init(
+                rows: earlier + [Self.row(5, .userMessage(text: text, origin: origin, quote: sentQuote))],
                 sendItems: [], phase: .live, revision: .initial, historyTruncated: false
             ))
             XCTAssertEqual(sending.height, sent.height, "\(name): the sending bubble must match the sent bubble's height")
@@ -111,6 +117,7 @@ final class ConversationUIRenderTests: XCTestCase {
         of text: String,
         named name: String,
         options: ToasttyTranscriptOptions,
+        replies: Bool = false,
         in state: ToasttyConversationPresentationState
     ) throws -> (height: CGFloat, top: CGFloat) {
         let size = CGSize(width: 480, height: 220)
@@ -122,7 +129,8 @@ final class ConversationUIRenderTests: XCTestCase {
             workingIndicator: nil,
             jumpToLiveEdgeRequest: .constant(0),
             canAcknowledgeRead: false,
-            options: options
+            options: options,
+            replyToMessage: replies ? { _ in } : nil
         )
         let (hostingView, window) = Self.host(transcript, size: size)
         defer { window.close() }

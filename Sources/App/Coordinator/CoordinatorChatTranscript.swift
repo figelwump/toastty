@@ -14,6 +14,12 @@ import RemoteProtocol
 // TODO: Share the event-to-row mapping with the iPhone's
 // `ToasttyConversationPresentationAdapter` once the iPhone can take it.
 enum CoordinatorChatTranscript {
+    /// An agent message as a reply names it.
+    struct QuotedMessage: Hashable {
+        let text: String
+        let time: String
+    }
+
     static func rows(
         from events: [ConversationEvent],
         projectionRunID: RemoteProjectionRunID,
@@ -23,12 +29,32 @@ enum CoordinatorChatTranscript {
     ) -> [ToasttyTranscriptRow] {
         let resolutions = interactionResolutions(in: events)
         var toolNames: [String: String] = [:]
+        // The newest row of each agent message so far, by its text as a
+        // reply quotes it and by its time as the reply's line writes it: a
+        // reply's quote opens the message it answers.
+        var assistantRowIDs: [QuotedMessage: ToasttyTranscriptRowID] = [:]
         return events.compactMap { event -> ToasttyTranscriptRow? in
+            let rowID = ToasttyTranscriptRowID(
+                projectionRunID: projectionRunID.rawValue,
+                projectionGeneration: projectionGeneration,
+                conversationID: event.conversationID.rawValue,
+                sequence: event.sequence
+            )
             let content: ToasttyTranscriptRow.Content
             switch event.payload {
             case .userMessage(let payload):
-                content = userMessage(payload, at: event.timestamp, isSentFromThisMac: isSentFromThisMac, timeText: timeText)
+                content = userMessage(
+                    payload,
+                    at: event.timestamp,
+                    isSentFromThisMac: isSentFromThisMac,
+                    timeText: timeText,
+                    quotedRowID: { assistantRowIDs[$0] }
+                )
             case .assistantMessage(let payload):
+                assistantRowIDs[QuotedMessage(
+                    text: CoordinatorMessageHeader.quoteText(payload.text),
+                    time: CoordinatorMessageHeader.replyTime(timeText(event.timestamp))
+                )] = rowID
                 content = .assistantMessage(text: payload.text, phase: payload.phase)
             case .toolStarted(let payload):
                 toolNames[payload.callID] = payload.toolName
@@ -60,12 +86,7 @@ enum CoordinatorChatTranscript {
                 return nil
             }
             return ToasttyTranscriptRow(
-                id: ToasttyTranscriptRowID(
-                    projectionRunID: projectionRunID.rawValue,
-                    projectionGeneration: projectionGeneration,
-                    conversationID: event.conversationID.rawValue,
-                    sequence: event.sequence
-                ),
+                id: rowID,
                 timestamp: event.timestamp,
                 provider: event.provider,
                 content: content
@@ -77,11 +98,13 @@ enum CoordinatorChatTranscript {
         _ payload: ConversationUserMessagePayload,
         at timestamp: Date,
         isSentFromThisMac: (String) -> Bool,
-        timeText: (Date) -> String
+        timeText: (Date) -> String,
+        quotedRowID: (QuotedMessage) -> ToasttyTranscriptRowID?
     ) -> ToasttyTranscriptRow.Content {
         // Toastty's first line says whose message it is. The line is the
         // only thing read here: text after it cannot change the answer.
         let text: String
+        var quote: ToasttyMessageQuote?
         switch CoordinatorMessageHeader.kind(of: payload.text) {
         case .digest(let updateCount):
             return .hostMessage(ToasttyHostMessagePresentation(
@@ -95,6 +118,10 @@ enum CoordinatorChatTranscript {
                 summary: "From \(sender) · \(timeText(timestamp))",
                 text: payload.text
             ))
+        case .reply(let quoted, let time, _, _):
+            text = CoordinatorMessageHeader.displayText(of: payload.text)
+            let source = time.flatMap { quotedRowID(QuotedMessage(text: quoted, time: $0)) }
+            quote = ToasttyMessageQuote(text: quoted, timeText: time, sourceRowID: source)
         case .quickEntry, .plain:
             text = CoordinatorMessageHeader.displayText(of: payload.text)
         }
@@ -102,9 +129,11 @@ enum CoordinatorChatTranscript {
         // sent from another device. For a message from this Mac that is
         // not so, and the chat says only that it steered a running turn.
         if let clientRequestID = payload.clientRequestID, isSentFromThisMac(clientRequestID) {
-            return .userMessage(text: text, origin: .local, deliveryMode: payload.deliveryMode == .steer ? .steer : nil)
+            return .userMessage(
+                text: text, origin: .local, deliveryMode: payload.deliveryMode == .steer ? .steer : nil, quote: quote
+            )
         }
-        return .userMessage(text: text, origin: payload.origin, deliveryMode: payload.deliveryMode)
+        return .userMessage(text: text, origin: payload.origin, deliveryMode: payload.deliveryMode, quote: quote)
     }
 
     /// The last resolution of each interaction. A later event without

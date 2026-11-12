@@ -42,12 +42,22 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     /// A sending bubble shows it too, so the bubble keeps its size when the
     /// row replaces it.
     public let sentCaption: String?
+    /// The agent's message that this message answers, as its row will
+    /// show it.
+    public let quote: ToasttyMessageQuote?
 
-    public init(clientRequestID: String, text: String, content: Content, sentCaption: String? = nil) {
+    public init(
+        clientRequestID: String,
+        text: String,
+        content: Content,
+        sentCaption: String? = nil,
+        quote: ToasttyMessageQuote? = nil
+    ) {
         self.clientRequestID = clientRequestID
         self.text = text
         self.content = content
         self.sentCaption = sentCaption
+        self.quote = quote
     }
 
     public var isQueued: Bool {

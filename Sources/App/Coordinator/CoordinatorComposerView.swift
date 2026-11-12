@@ -1,4 +1,5 @@
 import AppKit
+import ConversationUI
 import CoreState
 import PhotosUI
 import SwiftUI
@@ -12,7 +13,8 @@ struct CoordinatorComposerDelivery: Equatable {
     var canSteer: Bool
 }
 
-/// The composer for a message to the coordinator: a row of attached files,
+/// The composer for a message to the coordinator: the coordinator's message
+/// that it replies to, a row of attached files,
 /// a ＋ menu that attaches files or photos, a text field that grows with its
 /// text, and one button that sends, or stops the running turn. While a turn
 /// runs, a chip beside the button says whether Send steers the turn or
@@ -24,6 +26,10 @@ struct CoordinatorComposerView: View {
     @Binding var text: String
     /// The files attached to the message.
     @ObservedObject var attachments: DraftAttachments
+    /// The coordinator's message that this message replies to.
+    var reply: CoordinatorReplyTarget?
+    /// ✕ on the reply, or Escape in an empty field.
+    var onCancelReply: () -> Void = {}
     var placeholder = "Message the coordinator…"
     /// A turn runs that Stop can end.
     let canStop: Bool
@@ -67,6 +73,9 @@ struct CoordinatorComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let reply {
+                replyBar(reply)
+            }
             if attachments.isEmpty == false {
                 tray
             }
@@ -81,6 +90,11 @@ struct CoordinatorComposerView: View {
                     fontSize: fontSize,
                     onSubmit: { if canSend { onSend() } },
                     onQueue: { if canSend { onQueue() } },
+                    onCancel: {
+                        guard reply != nil, text.isEmpty, isEditable else { return false }
+                        onCancelReply()
+                        return true
+                    },
                     onPasteAttachments: { attachments.pasteAttachments(from: $0) },
                     canPasteAttachments: { attachments.canPasteAttachments(from: $0) },
                     dropTarget: dropTarget,
@@ -135,6 +149,58 @@ struct CoordinatorComposerView: View {
     }
 
     static let trayHeight: CGFloat = 74
+
+    /// The coordinator's message that this message replies to: who and
+    /// when, the start of the message on two lines, and ✕.
+    private func replyBar(_ reply: CoordinatorReplyTarget) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label {
+                    Text(reply.time.map { "Replying to the coordinator · \($0)" } ?? "Replying to the coordinator")
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.primaryText)
+                Text(ToasttyMessageQuote.excerpt(of: reply.text))
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("coordinator.chat.reply.excerpt")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onCancelReply) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(ToastyTheme.subtleText)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isEditable == false)
+            .help("Do not reply to this message (Escape in an empty field)")
+            .accessibilityLabel("Remove reply")
+            .accessibilityIdentifier("coordinator.chat.reply.remove")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(ToastyTheme.accent.opacity(0.08))
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(ToastyTheme.accent)
+                .frame(width: 3)
+                .padding(.vertical, 2)
+        }
+        .padding(.horizontal, 2)
+        .padding(.top, 1)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coordinator.chat.reply")
+    }
 
     /// The attached files, in a row that scrolls sideways once it is full,
     /// with a spinner while a file is being copied in.
@@ -281,6 +347,8 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     /// Command-Return.
     var onQueue: () -> Void = {}
+    /// Escape. Returns true when it took the key.
+    var onCancel: () -> Bool = { false }
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
     let canPasteAttachments: (NSPasteboard) -> Bool
@@ -387,6 +455,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         }
         textView.onSubmit = onSubmit
         textView.onQueue = onQueue
+        textView.onCancel = onCancel
         textView.onPasteAttachments = onPasteAttachments
         textView.canPasteAttachments = canPasteAttachments
         textView.dropTarget = dropTarget
@@ -414,6 +483,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
     }
     var onSubmit: () -> Void = {}
     var onQueue: () -> Void = {}
+    var onCancel: () -> Bool = { false }
 
     private var hasPendingFocusRequest = false
 
@@ -457,6 +527,12 @@ final class CoordinatorComposerTextView: AttachmentTextView {
             }
         }
         super.keyDown(with: event)
+    }
+
+    /// Escape. While an input method composes, Escape belongs to it.
+    override func cancelOperation(_ sender: Any?) {
+        if hasMarkedText() == false, onCancel() { return }
+        super.cancelOperation(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {

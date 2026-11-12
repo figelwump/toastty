@@ -14,6 +14,11 @@
 //   click-last-label <prefix>     Click the last such element: in a transcript, the newest row.
 //   label-frame <prefix>          Print the frame of the first element whose label starts with `prefix`.
 //   click-text <fragment>         Click the middle of `fragment` inside a text area.
+//   hover-text <fragment>         Move the pointer over the middle of `fragment`, with no click,
+//                                 and print the point as "x y".
+//   click-label-below <prefix> <y>
+//                                 Click the element whose label starts with `prefix` and whose top
+//                                 is nearest below `y`: the button under the message at `y`.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
 //   key <return|shift-return|escape|up|down|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
@@ -209,6 +214,45 @@ func drag(from start: CGPoint, to end: CGPoint) {
     usleep(300_000)
 }
 
+/// The screen rectangle of `fragment` inside the text area that shows it.
+func textBounds(_ fragment: String) -> CGRect {
+    var range = CFRange()
+    let area = waitFor("text \(fragment)") {
+        find(app) { candidate in
+            guard let value = attribute(candidate, kAXValueAttribute) as? String,
+                  attribute(candidate, kAXRoleAttribute) as? String == (kAXTextAreaRole as String) else { return false }
+            let found = (value as NSString).range(of: fragment)
+            guard found.location != NSNotFound else { return false }
+            range = CFRange(location: found.location, length: found.length)
+            return true
+        }
+    }
+    guard let rangeValue = AXValueCreate(.cfRange, &range) else { exit(2) }
+    var boundsValue: AnyObject?
+    guard AXUIElementCopyParameterizedAttributeValue(
+        area, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &boundsValue
+    ) == .success, let boundsValue else {
+        print("NO BOUNDS for \(fragment)")
+        exit(2)
+    }
+    var bounds = CGRect.zero
+    AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds)
+    return bounds
+}
+
+/// Moves the pointer in a few steps, as a hand does, so that the views on
+/// the way see it enter.
+func move(to point: CGPoint) {
+    requireNoSystemPrompt(at: point, orAnotherApp: true)
+    let source = CGEventSource(stateID: .hidSystemState)
+    for offset in [CGFloat(-12), -6, 0] {
+        CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                mouseCursorPosition: CGPoint(x: point.x + offset, y: point.y), mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        usleep(80_000)
+    }
+}
+
 func activate() {
     NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
     AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
@@ -354,31 +398,30 @@ case "click", "focus":
     click(at: CGPoint(x: rect.midX, y: rect.midY))
     print("clicked \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
 case "click-text":
-    // The text area that shows the fragment, and where the fragment is in it.
-    var range = CFRange()
-    let area = waitFor("text \(argument)") {
-        find(app) { candidate in
-            guard let value = attribute(candidate, kAXValueAttribute) as? String,
-                  attribute(candidate, kAXRoleAttribute) as? String == (kAXTextAreaRole as String) else { return false }
-            let found = (value as NSString).range(of: argument)
-            guard found.location != NSNotFound else { return false }
-            range = CFRange(location: found.location, length: found.length)
-            return true
-        }
-    }
-    guard let rangeValue = AXValueCreate(.cfRange, &range) else { exit(2) }
-    var boundsValue: AnyObject?
-    guard AXUIElementCopyParameterizedAttributeValue(
-        area, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &boundsValue
-    ) == .success, let boundsValue else {
-        print("NO BOUNDS for \(argument)")
-        exit(2)
-    }
-    var bounds = CGRect.zero
-    AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds)
+    let bounds = textBounds(argument)
     activate()
     click(at: CGPoint(x: bounds.midX, y: bounds.midY))
     print("clicked text \(argument) at \(Int(bounds.midX)),\(Int(bounds.midY))")
+case "hover-text":
+    let bounds = textBounds(argument)
+    move(to: CGPoint(x: bounds.midX, y: bounds.midY))
+    print("\(Int(bounds.midX)) \(Int(bounds.midY))")
+case "click-label-below":
+    guard arguments.count > 4, let top = Double(arguments[4]) else { exit(64) }
+    let target = waitFor("label \(argument) below \(Int(top))") {
+        findAll(app) { candidate in
+            [kAXTitleAttribute, kAXDescriptionAttribute].contains {
+                (attribute(candidate, $0) as? String)?.hasPrefix(argument) == true
+            }
+        }
+        .compactMap { candidate in frame(candidate).map { (candidate, $0) } }
+        .filter { $0.1.minY >= top }
+        .min { $0.1.minY < $1.1.minY }?.0
+    }
+    guard let rect = frame(target) else { exit(2) }
+    // No activation: it would move the pointer's window under the pointer.
+    click(at: CGPoint(x: rect.midX, y: rect.midY))
+    print("clicked label \(argument) at \(Int(rect.midX)),\(Int(rect.midY))")
 case "click-at":
     guard arguments.count > 4, let x = Double(arguments[3]), let y = Double(arguments[4]) else { exit(64) }
     click(at: CGPoint(x: x, y: y))

@@ -248,4 +248,87 @@ struct CoordinatorMessageHeaderTests {
         let digest = "\(CoordinatorWakeState.digestHeader)\n- Scheduled check: the time you set has come.\n\(CoordinatorWakeState.digestFooter)"
         #expect(CoordinatorMessageHeader.kind(of: digest) == .digest(updateCount: 1))
     }
+
+    // MARK: - Reply
+
+    @Test func aReplyQuotesTheWholeMessageAfterItsLine() {
+        let quote = "I made two tasks.\n\n  - Fix the unread dot\n>already quoted"
+        let message = CoordinatorMessageHeader.replyMessage(quote: quote, time: "14:05", text: "Only on click.")
+        #expect(message == """
+            [Toastty] Reply from the user | quotes your message of 14:05, 4 lines
+            > I made two tasks.
+            >
+            >   - Fix the unread dot
+            > >already quoted
+            Only on click.
+            """)
+        #expect(CoordinatorMessageHeader.replyLine(quoteLineCount: 1, time: nil)
+            == "[Toastty] Reply from the user | quotes your message, 1 line")
+    }
+
+    /// The line count, not the `>` marks, says where the quote ends: the
+    /// user's own text can start with `>`, and the quote keeps its blank
+    /// lines, its indentation and its own `>` lines.
+    @Test(arguments: [
+        ("I made two tasks.\n\n  - Fix the unread dot\n>already quoted\n>", "> Quoting you back\nand more"),
+        ("One line", "Plain answer"),
+        ("Line\n\n\nAfter blank lines", ">\n> two quote marks"),
+    ])
+    func aReplyReadsBackAsTheQuoteAndTheUsersText(quote: String, text: String) {
+        let message = CoordinatorMessageHeader.replyMessage(quote: quote, time: "09:30", text: text)
+        #expect(CoordinatorMessageHeader.kind(of: message)
+            == .reply(quote: quote, time: "09:30", text: text, fileNames: []))
+        #expect(CoordinatorMessageHeader.displayText(of: message) == text)
+    }
+
+    @Test func aReplyWithFilesNamesThemAfterTheUsersText() {
+        let message = CoordinatorMessageHeader.replyMessage(
+            quote: "Which screenshot?",
+            time: nil,
+            text: "This one.",
+            attachmentPaths: ["/tmp/coordinator/attachments/A/shot.png"]
+        )
+        #expect(CoordinatorMessageHeader.kind(of: message)
+            == .reply(quote: "Which screenshot?", time: nil, text: "This one.", fileNames: ["shot.png"]))
+        #expect(CoordinatorMessageHeader.displayText(of: message) == "This one.\n\nshot.png")
+        #expect(CoordinatorMessageHeader.attachedFiles(in: message)?.paths == ["/tmp/coordinator/attachments/A/shot.png"])
+        #expect(CoordinatorMessageHeader.replyParts(of: message)?.body.hasPrefix("This one.") == true)
+    }
+
+    /// The text is typed into a terminal: the quote keeps no control
+    /// character but a tab, and a CR line end becomes a plain one.
+    @Test func aReplyQuoteKeepsNoControlCharacters() {
+        let message = CoordinatorMessageHeader.replyMessage(quote: "a\u{1B}[31mred\r\nb\tc\u{07}", time: nil, text: "ok")
+        #expect(message.unicodeScalars.contains { $0.properties.generalCategory == .control && $0 != "\n" && $0 != "\t" } == false)
+        #expect(CoordinatorMessageHeader.kind(of: message)
+            == .reply(quote: "a[31mred\nb\tc", time: nil, text: "ok", fileNames: []))
+    }
+
+    /// A first line that does not match what Toastty writes makes no reply:
+    /// the message shows as it is.
+    @Test(arguments: [
+        // Promises more quoted lines than follow.
+        "[Toastty] Reply from the user | quotes your message, 3 lines\n> one\nnot quoted",
+        // A counted line without a quote mark.
+        "[Toastty] Reply from the user | quotes your message, 2 lines\n> one\ntwo",
+        // No count.
+        "[Toastty] Reply from the user | quotes your message\n> one\nanswer",
+        // Unknown words between the label and the count.
+        "[Toastty] Reply from the user | quotes your message at noon, 1 line\n> one\nanswer",
+        // Zero lines.
+        "[Toastty] Reply from the user | quotes your message, 0 lines\nanswer",
+        // Not on the first line.
+        "Look:\n[Toastty] Reply from the user | quotes your message, 1 line\n> one",
+    ])
+    func aMalformedReplyLineIsPlainText(message: String) {
+        #expect(CoordinatorMessageHeader.kind(of: message) == .plain)
+    }
+
+    /// Another sender's text cannot pass as the user's reply: its own text
+    /// starts on the second line.
+    @Test func aSendersTextThatLooksLikeAReplyStaysTheSenders() {
+        let reply = CoordinatorMessageHeader.replyMessage(quote: "Merge?", time: nil, text: "Yes, merge it.")
+        let message = CoordinatorMessageHeader.message(from: .unknown, text: reply)
+        #expect(CoordinatorMessageHeader.kind(of: message) == .fromSender(sender: "a terminal command"))
+    }
 }
