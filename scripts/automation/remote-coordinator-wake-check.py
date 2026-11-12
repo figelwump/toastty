@@ -18,20 +18,29 @@ UserPromptSubmit and Stop hooks do. A turn lasts a second, or
 as long as its hold file exists. Through the real CLI the check then proves
 that:
 - with no coordinator, a task's changes are saved nowhere, and a
-  coordinator opened later is not told about them;
-- one stage change of a task gives one digest, typed at the coordinator's
-  prompt, with one line for the task in the documented form;
+  coordinator opened later is not told about them; with open tasks and no
+  time set, no timer runs;
+- a task that only starts running types no digest, also at the
+  coordinator's open prompt; its next stage gives one digest, with one line
+  for the task in the documented form;
 - changes made while the coordinator works are not typed; after its turn
   they arrive as one digest with one line for each task and its newest
-  stage;
+  stage, also a task that only started running;
 - a stage that returns in under 3 seconds wakes nothing;
 - `coordinator wake --in` sets the timer, `coordinator status` shows it,
-  `--clear` returns to the default, and the timer wake arrives at its time
-  as a digest with the scheduled-check line;
+  `--clear` removes it, and the timer wake arrives at its time as a digest
+  with the scheduled-check line;
+- a busy task agent whose transcript last changed 31 minutes ago wakes the
+  coordinator once, by the clock alone, with the silent alert in its line;
+  the agent writing clears the alert and wakes nothing; silence again wakes
+  it again. The check moves the transcript's modification time back, so the
+  real 30-minute limit applies and no setting is changed;
 - after the app is killed with a digest waiting and a timer set, and stays
   down until the timer's time passed, the relaunched app types the waiting
-  change once and the scheduled check once; a second relaunch repeats
-  neither.
+  change once and the scheduled check once; a second relaunch, with the
+  saved last wake moved two hours back, no time set and the file stripped
+  of alerts as the build before them wrote it, types neither and no
+  scheduled check of its own.
 
 With '--provider claude', the coordinator is the real CLI. The check sets the
 timer and proves from Claude's transcript that the typed digest started a
@@ -68,7 +77,10 @@ require, wait_for, Instance = coordinator_check.require, coordinator_check.wait_
 
 HEADER = '[Toastty] Wake: this message is from Toastty, not from the user.'
 FOOTER = 'Read `toastty task list` for details.'
-TASK_LINE = re.compile(r'^- \[(?P<title>.*)\]\(toastty://task/(?P<id>[0-9A-F-]{36})\): (?P<stage>.*) at (?P<at>\S+)$')
+TASK_LINE = re.compile(r'^- \[(?P<title>.*)\]\(toastty://task/(?P<id>[0-9A-F-]{36})\): (?P<stage>.*?) '
+                       r'at (?P<at>\d{4}-\d\d-\d\dT[\d:.]+Z)(?P<alerts>(?:; .+)?)$')
+SILENT = 'busy, no output for 30 minutes'
+
 REQUESTED_CHECK = re.compile(r'^- Scheduled check: the time you set, (?P<at>\S+), has come\.$')
 # Toastty counts a stage that an agent's status decides after 3 seconds.
 SETTLE = 3
@@ -179,7 +191,8 @@ def parse_digest(text):
         task, check = TASK_LINE.match(line), REQUESTED_CHECK.match(line)
         if task:
             require(task['id'] not in tasks, f'A digest names a task twice: {text!r}')
-            tasks[task['id']] = dict(title=task['title'], stage=task['stage'], at=task['at'])
+            tasks[task['id']] = dict(title=task['title'], stage=task['stage'], at=task['at'],
+                                     alerts=task['alerts'].split('; ')[1:])
         elif check:
             requested_check = check['at']
         else:
@@ -237,6 +250,14 @@ def run_fake(check):
 
     def task(task_id):
         return cli('task', 'get', task_id)
+
+    def open_tasks():
+        return [t['taskID'] for t in cli('task', 'list')['tasks'] if t['stage']['group'] not in ('done', 'archived')]
+
+    def saved_changes():
+        """Each waiting change: its task, its group, and whether it wakes."""
+        return [(change['taskID'], change['group'], change.get('wakes') or bool(change.get('newAlerts')))
+                for change in read_outbox(runtime_home)['coordinator']['changes']]
 
     def create(title):
         """A task whose agent ran its first turn, which nobody has read."""
@@ -297,14 +318,18 @@ def run_fake(check):
         require(opened['startedAgent'] and opened['agentState'] == 'running', f'Open did not start the coordinator: {opened}')
         wait_for('the coordinator at its prompt', at_prompt)
         first_status = status()
-        require(first_status['wake']['pendingTaskCount'] == 0 and first_status['wake']['nextWakeSource'] == 'default',
-                f'Unexpected first wake status: {first_status}')
+        # The early task is open, and no time is set: no timer.
+        require(first_status['wake']['pendingTaskCount'] == 0 and first_status['wake']['nextWakeAt'] is None
+                and 'nextWakeSource' not in first_status['wake'] and open_tasks(),
+                f'Unexpected first wake status: {first_status} {open_tasks()}')
         quiet(0, 12, 'for a change made before the coordinator existed')
         step('no coordinator, nothing queued', outboxBefore=outbox, status=first_status)
 
-        # 2. One stage change, one digest at the open prompt.
+        # 2. A task that only starts running types no digest, also at the
+        # open prompt. Its next stage gives one digest.
         task_a, session_a = create('Fix the unread [dot]')
-        # A new task is told with the stage it has, and again when that moves.
+        # A new task starts running, which wakes nothing; the end of its
+        # first turn does.
         wait_for('the digest for the new task', lambda: told_at_rest(task_a))
         wait_for('the coordinator at its prompt', at_prompt)
         time.sleep(SETTLE + 3)
@@ -312,25 +337,28 @@ def run_fake(check):
         hold(session_a)
         cli('task', 'send', task_a, 'work on it')
         wait_for_stage(task_a, 'running')
-        (running,) = new_digests(seen)
-        require(list(running['tasks']) == [task_a] and running['tasks'][task_a]['stage'] == 'running'
-                and running['tasks'][task_a]['title'] == r'Fix the unread \[dot\]'
-                and not running['other'] and running['requestedCheck'] is None,
-                f'Unexpected digest for one stage change: {running}')
-        require(running['session'] == status()['sessionID'], f'The digest went to another agent: {running}')
-        quiet(seen + 1, SETTLE + 3, 'although nothing changed')
-        step('one stage change gave one digest', digest=running['text'])
+        wait_for('the running change to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
+        quiet(seen, SETTLE + 6, 'for a task that only started running')
+        quiet_status = at_prompt()
+        require(quiet_status and quiet_status['wake']['pendingTaskCount'] == 1 and quiet_status['wake']['nextWakeAt'] is None,
+                f'The coordinator is not at its prompt with the running change waiting: {status()}')
+        require(saved_changes() == [(task_a, 'running', False)], f'The running change is not saved as quiet: {saved_changes()}')
+        step('a task that started running typed no digest at the open prompt', status=quiet_status,
+             saved=read_outbox(runtime_home)['coordinator'])
 
-        seen = len(digests())
         hold(session_a, on=False)
         finished = wait_for_stage(task_a, 'needsYou', 'agentFinished')
         (needs_you,) = new_digests(seen)
-        require(list(needs_you['tasks']) == [task_a] and needs_you['tasks'][task_a]['stage'] == stage_text(task(task_a)),
-                f'The digest does not use the stage task get reports: {needs_you} {finished}')
-        step('the next stage gave the next digest', digest=needs_you['text'])
+        require(list(needs_you['tasks']) == [task_a] and needs_you['tasks'][task_a]['stage'] == stage_text(task(task_a))
+                and needs_you['tasks'][task_a]['title'] == r'Fix the unread \[dot\]'
+                and not needs_you['other'] and needs_you['requestedCheck'] is None,
+                f'Unexpected digest for the next stage: {needs_you} {finished}')
+        require(needs_you['session'] == status()['sessionID'], f'The digest went to another agent: {needs_you}')
+        quiet(seen + 1, SETTLE + 3, 'although nothing changed')
+        step('the next stage gave one digest', digest=needs_you['text'])
 
         # 3. A busy coordinator gets nothing typed; several changes then
-        # arrive as one digest.
+        # arrive as one digest, with a task that only started running.
         task_b, _ = create('Add the export API')
         wait_for('the digest for the second task', lambda: told_at_rest(task_b))
         wait_for('the coordinator at its prompt', at_prompt)
@@ -348,25 +376,33 @@ def run_fake(check):
         wait_for('the first change to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 1)
         cli('task', 'mark-done', task_b)
         wait_for('two tasks to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 2)
-        hold(session_a, on=False)
-        wait_for_stage(task_a, 'needsYou', 'agentFinished')
         time.sleep(SETTLE + 3)
         waiting = status()
         require(waiting['wake']['pendingTaskCount'] == 2 and waiting['status'] == 'working' and waiting['queuedCount'] == 0,
                 f'Unexpected status while the coordinator works: {waiting}')
         require(len(digests()) == seen, f'A digest was typed while the coordinator worked: {digests()[seen:]}')
-        saved = read_outbox(runtime_home)['coordinator']
-        require({change['taskID'] for change in saved['changes']} == {task_a, task_b},
-                f'The waiting changes are not saved: {saved}')
+        require(sorted(saved_changes()) == sorted([(task_a, 'running', False), (task_b, 'done', True)]),
+                f'The waiting changes are not saved: {saved_changes()}')
         hold(coordinator_session, on=False)
         (burst,) = new_digests(seen)
         require(set(burst['tasks']) == {task_a, task_b}
-                and burst['tasks'][task_a]['stage'] == 'needsYou (agentFinished)'
+                and burst['tasks'][task_a]['stage'] == 'running'
                 and burst['tasks'][task_b]['stage'] == 'done' and not burst['other'],
                 f'Unexpected digest after the turn: {burst}')
         wait_for('nothing to wait', lambda: status()['wake']['pendingTaskCount'] == 0)
-        quiet(seen + 1, SETTLE + 3, 'after the burst was told')
-        step('a busy coordinator got one digest after its turn', whileBusy=waiting, digest=burst['text'])
+        step('a busy coordinator got one digest after its turn, with the running task', whileBusy=waiting,
+             digest=burst['text'])
+
+        # The running task's turn ends: that stage wakes the coordinator.
+        wait_for('the coordinator at its prompt', at_prompt)
+        seen = len(digests())
+        hold(session_a, on=False)
+        wait_for_stage(task_a, 'needsYou', 'agentFinished')
+        (rested,) = new_digests(seen)
+        require(list(rested['tasks']) == [task_a] and rested['tasks'][task_a]['stage'] == 'needsYou (agentFinished)',
+                f'Unexpected digest for the end of the turn: {rested}')
+        quiet(seen + 1, SETTLE + 3, 'after the turn was told')
+        step('the end of the running task\'s turn gave one digest', digest=rested['text'])
 
         # 4. A stage that returns in under 3 seconds wakes nothing.
         wait_for('the coordinator at its prompt', at_prompt)
@@ -385,25 +421,77 @@ def run_fake(check):
         require(refused.returncode != 0 and 'at least 1 minute' in refused.stdout + refused.stderr,
                 f'A time under a minute was accepted: {refused.stdout} {refused.stderr}')
         far = cli('coordinator', 'wake', '--in', '2h')['wake']
-        require(far['nextWakeSource'] == 'coordinator' and 7100 < parse_time(far['nextWakeAt']) - time.time() < 7300,
+        require(far.get('nextWakeAt') and 7100 < parse_time(far['nextWakeAt']) - time.time() < 7300,
                 f'Unexpected timer: {far}')
         cleared = cli('coordinator', 'wake', '--clear')['wake']
-        require(cleared['nextWakeSource'] == 'default'
-                and abs(parse_time(cleared['nextWakeAt']) - parse_time(cleared['lastWakeAt']) - 3600) < 2,
-                f'Clear did not return to the default: {cleared}')
+        require(cleared['nextWakeAt'] is None and open_tasks(),
+                f'Clear left a timer, or no task is open: {cleared} {open_tasks()}')
         seen = len(digests())
         timer = cli('coordinator', 'wake', '--in', '60s')['wake']
         due = parse_time(timer['nextWakeAt'])
-        require(status()['wake'] == timer and timer['nextWakeSource'] == 'coordinator', f'Status does not show the timer: {status()}')
+        require(status()['wake'] == timer, f'Status does not show the timer: {status()}')
         (scheduled,) = new_digests(seen, timeout=100)
         require(scheduled['requestedCheck'] == timer['nextWakeAt'] and not scheduled['tasks'] and not scheduled['other'],
                 f'Unexpected timer digest: {scheduled}')
         require(due - 1 <= scheduled['receivedAt'] <= due + 15, f'The timer fired at the wrong time: due {due}, {scheduled}')
-        after_timer = wait_for('the timer to be gone', lambda: (w := status()['wake'])['nextWakeSource'] == 'default' and w)
+        after_timer = wait_for('the timer to be gone', lambda: (w := status()['wake'])['nextWakeAt'] is None and w)
         quiet(seen + 1, 6, 'after the timer fired once')
         step('the timer fired at its time', timer=timer, digest=scheduled['text'], after=after_timer)
 
-        # 6. Kill with a digest waiting and a timer set; stay down past the
+        # 6. A busy agent that writes nothing for 30 minutes wakes the
+        # coordinator once, by the clock alone. The fake agent writes its
+        # transcript only when it starts, so moving that file's
+        # modification time back is the agent's silence.
+        wait_for('the coordinator at its prompt', at_prompt)
+        native_a = next(event['native'] for event in events()
+                        if event['event'] == 'started' and event['session'] == session_a)
+        transcript = records / f'{native_a}.jsonl'
+        hold(session_a)
+        cli('task', 'send', task_a, 'think for a long time')
+        wait_for_stage(task_a, 'running')
+        wait_for('Toastty to read the transcript', lambda: task(task_a)['agentState'].get('lastOutputAt'))
+        wait_for('the running change to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
+        seen = len(digests())
+        quiet(seen, SETTLE + 3, 'for a busy agent that wrote recently')
+
+        def go_silent():
+            moved_to = time.time() - 31 * 60
+            os.utime(transcript, (moved_to, moved_to))
+            return wait_for('the silence to show', lambda: (t := task(task_a))['agentState'].get('lastOutputAt')
+                            and time.time() - parse_time(t['agentState']['lastOutputAt']) > 30 * 60 and t)
+
+        silent_task = go_silent()
+        silent_at = time.time()
+        (silent,) = new_digests(seen, timeout=30)
+        require(list(silent['tasks']) == [task_a] and silent['tasks'][task_a]['stage'] == 'running'
+                and silent['tasks'][task_a]['alerts'] == [SILENT] and not silent['other'] and silent['requestedCheck'] is None,
+                f'Unexpected digest for a silent agent: {silent}')
+        require(silent['receivedAt'] - silent_at < SETTLE + 8, f'The silent alert came late: {silent_at} {silent}')
+        wait_for('the coordinator at its prompt', at_prompt)
+        quiet(seen + 1, SETTLE + 6, 'while the agent stayed silent')
+
+        # The agent writes: the alert clears and wakes nothing.
+        os.utime(transcript, None)
+        wait_for('the cleared alert to wait', lambda: saved_changes() == [(task_a, 'running', False)])
+        quiet(seen + 1, SETTLE + 3, 'when the silent agent wrote')
+        cleared_status = status()
+        # Silent again: one more wake.
+        go_silent()
+        (again,) = new_digests(seen + 1, timeout=30)
+        require(list(again['tasks']) == [task_a] and again['tasks'][task_a]['alerts'] == [SILENT],
+                f'Unexpected digest for the second silence: {again}')
+        wait_for('the coordinator at its prompt', at_prompt)
+        quiet(seen + 2, SETTLE + 3, 'after the second silence was told')
+        # The turn ends: a stage change, and no alert.
+        hold(session_a, on=False)
+        wait_for_stage(task_a, 'needsYou', 'agentFinished')
+        (ended,) = new_digests(seen + 2)
+        require(ended['tasks'][task_a]['stage'] == 'needsYou (agentFinished)' and ended['tasks'][task_a]['alerts'] == [],
+                f'Unexpected digest for the end of the silent turn: {ended}')
+        step('a silent busy agent woke the coordinator once per silence', task=silent_task['agentState'],
+             digests=[silent['text'], again['text'], ended['text']], afterWriting=cleared_status)
+
+        # 7. Kill with a digest waiting and a timer set; stay down past the
         # timer's time; relaunch.
         wait_for('the coordinator at its prompt', at_prompt)
         coordinator_session = status()['sessionID']
@@ -434,7 +522,7 @@ def run_fake(check):
         restored = status()
         require(restored['exists'] and restored['workspaceID'] == before['workspaceID']
                 and restored['wake']['pendingTaskCount'] >= 1
-                and restored['wake']['nextWakeAt'] == timer['nextWakeAt'] and restored['wake']['nextWakeSource'] == 'coordinator',
+                and restored['wake']['nextWakeAt'] == timer['nextWakeAt'],
                 f'The waiting digest or the timer was not restored: {restored}')
         resumed = wait_for('the agent to be resumed', lambda: (s := status()).get('sessionID') and s, timeout=90)
         require(resumed['sessionID'] != before['sessionID'], 'The resumed agent should have a new session')
@@ -450,7 +538,10 @@ def run_fake(check):
         require(all(d['session'] == resumed['sessionID'] for d in after_relaunch), f'A digest went to another agent: {after_relaunch}')
         step('the relaunch typed what waited once', restored=restored, digests=[d['text'] for d in after_relaunch])
 
-        # A second relaunch repeats nothing.
+        # A second relaunch repeats nothing. Its saved last wake is moved two
+        # hours back, with no time set and a task open: a default timer
+        # would fire at once. The file is also stripped of alerts, as the
+        # build before them wrote it: it must still load.
         wait_for('the coordinator at its prompt', at_prompt)
         native = next(event['native'] for event in events()
                       if event['event'] == 'started' and event['session'] == resumed['sessionID'])
@@ -458,14 +549,32 @@ def run_fake(check):
         time.sleep(2)
         seen = len(digests())
         instance.kill()
+        outbox_path = runtime_home / 'task-webhook-outbox.json'
+        outbox = json.loads(outbox_path.read_text())
+        require(outbox['coordinator'].get('requestedWakeAt') is None, f'A time is still set: {outbox["coordinator"]}')
+        two_hours_ago = datetime.fromtimestamp(time.time() - 7200, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        outbox['coordinator']['lastWakeAt'] = two_hours_ago
+
+        def as_earlier_build(value):
+            if isinstance(value, dict):
+                return {key: as_earlier_build(item) for key, item in value.items()
+                        if key not in ('alerts', 'newAlerts', 'alertsSince')}
+            return [as_earlier_build(item) for item in value] if isinstance(value, list) else value
+
+        outbox = as_earlier_build(outbox)
+        outbox_path.write_text(json.dumps(outbox, indent=2, sort_keys=True))
         instance = Instance(check.binary, environment, socket_path, runtime_home, app_log)
         instance.wait_until_ready()
+        moved = status()
+        require(moved['wake']['lastWakeAt'] == two_hours_ago and moved['wake']['nextWakeAt'] is None and open_tasks(),
+                f'The moved last wake was not restored, a timer runs, or no task is open: {moved} {open_tasks()}')
         wait_for('the agent to be resumed', lambda: (s := status()).get('sessionID') and s, timeout=90)
         wait_for('the coordinator at its prompt', at_prompt)
         time.sleep(25)
-        repeated = [d for d in digests()[seen:] if task_a in d['tasks'] or d['requestedCheck']]
-        require(not repeated, f'A second relaunch repeated a digest: {repeated}')
-        step('a second relaunch repeated nothing', digests=[d['text'] for d in digests()[seen:]], status=status())
+        repeated = [d for d in digests()[seen:] if task_a in d['tasks'] or d['requestedCheck'] or d['other']]
+        require(not repeated, f'A second relaunch repeated a digest or fired a timer: {repeated}')
+        step('a second relaunch repeated nothing and fired no timer', restored=moved, openTasks=open_tasks(),
+             digests=[d['text'] for d in digests()[seen:]], status=status())
         check.evidence['digests'] = [d['text'] for d in digests()]
     finally:
         try:
@@ -563,7 +672,7 @@ def run_claude(check):
         # The turn ends, or stops at a permission prompt for a command.
         after = wait_for('the turn to end or ask',
                          lambda: (s := status()).get('status') in ('idle', 'ready', 'needs_approval') and s, timeout=180)
-        require(after['wake']['nextWakeSource'] != 'coordinator' and after['wake']['pendingTaskCount'] == 0,
+        require(after['wake']['nextWakeAt'] is None and after['wake']['pendingTaskCount'] == 0,
                 f'The typed digest did not clear the timer: {after}')
         turn = turn_for_digest()
         step('the digest started a turn', digest=turn['digest'], reply=[text[:600] for text in turn['reply']], status=after)

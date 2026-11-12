@@ -722,7 +722,7 @@ class Run:
         missing = [turn['prompt'][:200] for turn in turns if turn['wake']
                    and not any(re.search(r'coordinator\s+wake\s+--(in|at|clear)', c) for c in turn['commands'])]
         wakes = len([turn for turn in turns if turn['wake']])
-        self.check(f'every turn a digest started set the next check ({wakes} such turns)', not missing, missing)
+        self.check(f'every turn a digest started set or cleared the next check ({wakes} such turns)', not missing, missing)
         outside = [path for turn in turns for path in turn['edits']
                    if Path(path).name not in ('policy.md', 'ledger.md') or Path(path).resolve().parent != self.folder]
         self.check('writes no file but policy.md and ledger.md', not outside, outside)
@@ -831,7 +831,7 @@ def permission(run):
     seconds = (parse_time(wake.get('nextWakeAt')) - time.time()) if wake.get('nextWakeAt') else None
     run.check('nothing is sent to the waiting agent', run.messages(task) == [], run.messages(task))
     run.check('the next check is set for when the prompt reaches the age',
-              wake.get('nextWakeSource') == 'coordinator' and seconds is not None and seconds <= 200, wake)
+              seconds is not None and seconds <= 200, wake)
     run.check('the user is not told before the age', task.link not in run.said(first), run.said(first), required=False)
     later = run.new_turns(wake=True, timeout=400)
     run.check('after the age, the user is told, with the task link', task.link in run.said(first + later), run.said(later))

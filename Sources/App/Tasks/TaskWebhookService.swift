@@ -50,6 +50,9 @@ final class TaskWebhookService: ObservableObject {
 
     /// Every task's current state; set by the app from the task board.
     var taskStates: @MainActor () -> [UUID: TaskWebhookTaskState] = { [:] }
+    /// What Toastty reads to find the alerts of these tasks; set by the
+    /// app. Read only while a coordinator exists.
+    var taskAlertFacts: @MainActor (Set<UUID>) -> [UUID: TaskAlertFacts] = { _ in [:] }
 
     private let webhooksFileURL: URL?
     private let outboxFileURL: URL?
@@ -217,7 +220,8 @@ final class TaskWebhookService: ObservableObject {
             if coordinatorWake != wakeBefore { saveOutbox() }
             return
         }
-        let states = taskStates()
+        var states = taskStates()
+        if coordinatorWake != nil { addAlerts(to: &states, at: at) }
         let changes = detector.observe(states, now: at, settleInterval: timing.settleInterval)
         var queued = false
         for change in changes {
@@ -237,7 +241,7 @@ final class TaskWebhookService: ObservableObject {
             saveOutbox()
         }
         deliverDue(at: at)
-        wakeCoordinator(at: at, states: states)
+        wakeCoordinator(at: at)
     }
 
     private func enqueue(type: TaskWebhookEventType, taskID: UUID, state: TaskWebhookTaskState, webhook: TaskWebhook, at: Date) {

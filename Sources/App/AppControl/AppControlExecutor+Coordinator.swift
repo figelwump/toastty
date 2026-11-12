@@ -189,8 +189,7 @@ extension AppControlExecutor {
             }
             snapshot["wake"] = .object([
                 "pendingTaskCount": .int(wake.pendingTaskCount),
-                "nextWakeAt": time(wake.nextWake?.at),
-                "nextWakeSource": wake.nextWake.map { .string($0.isRequested ? "coordinator" : "default") } ?? .null,
+                "nextWakeAt": time(wake.nextWakeAt),
                 "lastWakeAt": time(wake.lastWakeAt),
             ])
         }

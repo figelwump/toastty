@@ -738,8 +738,8 @@ Common query IDs include:
 `coordinator.get` returns `exists`, and for an open coordinator `windowID`,
 `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
 `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
-`queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt`,
-`nextWakeSource` (`coordinator` or `default`) and `lastWakeAt`.
+`queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt` (the
+time that `coordinator.wake` set, or `null`) and `lastWakeAt`.
 `coordinator.open` (optional `windowID` and
 `select`) and `coordinator.restart` (optional `windowID`) return the same
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.

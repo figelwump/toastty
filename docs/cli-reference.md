@@ -1017,10 +1017,9 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`
   after a start that did not work, and `queuedCount` and `hold` for messages
   that wait. `wake` holds what Toastty will type on its own:
-  `pendingTaskCount`, the tasks whose stage changes wait for the next digest;
-  `nextWakeAt` and `nextWakeSource` (`coordinator` when `wake` set the time,
-  `default` for 1 hour after the last digest, both `null` when there is no
-  timer); and `lastWakeAt`.
+  `pendingTaskCount`, the tasks whose stage changes or alerts wait for the
+  next digest, also a task that only started running; `nextWakeAt`, the time that `wake`
+  set (`null` when no time is set: then no timer runs); and `lastWakeAt`.
 - `send` puts a first line before the message that names the sender, which
   Toastty takes from the caller and not from the text: the task whose space
   the calling session is in, else that session, else "a terminal command".
@@ -1034,13 +1033,14 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   text again, and holds later messages until a turn runs. It fails when there
   is no coordinator.
 - `wake` sets the coordinator's next check: the time when Toastty wakes it if
-  no task changes first. `--in` takes a duration with units `s`, `m`, `h` and
+  no task change or alert does first. `--in` takes a duration with units `s`, `m`, `h` and
   `d`, such as `90s`, `20m`, `2h` or `1h30m`; `--at` takes an ISO 8601 time
   such as `2026-11-09T18:30:00Z`. The time must be at least 1 minute from
-  now. `--clear` removes the time, so the default applies: 1 hour after the
-  last digest while a task is open. Every digest that Toastty types removes
-  the time, so the coordinator sets it again in each turn that a digest
-  starts. It returns the `status` fields and fails when there is no
+  now. `--clear` removes the time. Toastty has no timer of its own: with no
+  time set, only a task change that may need the coordinator, or an alert,
+  wakes it. Every
+  digest that Toastty types removes the time, so the coordinator sets or
+  clears it in each turn that a digest starts. It returns the `status` fields and fails when there is no
   coordinator. See
   [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
 

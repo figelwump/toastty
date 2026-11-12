@@ -335,7 +335,7 @@ def run_failed_turn(check, expect):
             require(not digests(), f'The digest was typed: {digests()}')
             # Claude's idle reminder returns the status to ready after a
             # minute. The conversation still shows a running turn.
-            require(held['wake']['nextWakeSource'] == 'coordinator' and held['wake']['nextWakeAt'] == timer['nextWakeAt'],
+            require(held['wake']['nextWakeAt'] == timer['nextWakeAt'],
                     f'The timer is not waiting: {held}')
             step('the digest is held, 45 seconds after its time', status=held, timer=timer, userMessages=user_messages())
             return
@@ -348,7 +348,7 @@ def run_failed_turn(check, expect):
         wait_for('the second turn to fail', lambda: len(api_errors()) >= 2, timeout=600, interval=2)
         time.sleep(5)
         after_digest = status()
-        require(after_digest.get('status') == 'error' and after_digest['wake']['nextWakeSource'] != 'coordinator',
+        require(after_digest.get('status') == 'error' and after_digest['wake']['nextWakeAt'] is None,
                 f'Unexpected status after the digest: {after_digest}')
         again = cli('coordinator', 'send', 'Say OK again.')
         require(again['delivery'] == 'sent', f'A message after the second failure was not typed: {again} {status()}')

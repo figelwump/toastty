@@ -11,22 +11,34 @@ import Foundation
 /// is typed only at an open prompt, and counts as told only when it was
 /// typed. Until then it waits here and grows.
 ///
-/// The coordinator's timer is part of the same state. A timer that came
-/// due adds one line to the digest, or is a digest of its own.
+/// A change that wakes nothing on its own, a task that only starts
+/// running, waits without starting a digest.
+///
+/// The pass also reads each open task's alerts (`TaskAlert`) with its own
+/// clock, so an alert that only time raises, such as an agent that has
+/// been silent for 30 minutes, starts within about a second. Alerts are
+/// part of the detector's key, so they settle, are saved and survive a
+/// relaunch as a stage does. No webhook event reads them.
+///
+/// The coordinator's timer is part of the same state. It runs only for a
+/// time the coordinator set. A timer that came due adds one line to the
+/// digest, or is a digest of its own.
 extension TaskWebhookService {
     /// The coordinator's next check, as it asks for it.
     enum CoordinatorWakeRequest: Equatable {
         case after(TimeInterval)
         case at(Date)
-        /// Removes the time the coordinator set. The default applies again.
+        /// Removes the time the coordinator set: no timer runs.
         case clear
     }
 
     struct CoordinatorWakeStatus: Equatable {
-        /// The tasks whose changes wait for the next digest.
+        /// The tasks whose changes wait for the next digest, also the
+        /// changes that wake nothing on their own.
         var pendingTaskCount: Int
-        /// `nil` when the coordinator set no time and no task is open.
-        var nextWake: CoordinatorWakeState.NextWake?
+        /// The time the coordinator set for its next check. `nil` when it
+        /// set none: then no timer runs.
+        var nextWakeAt: Date?
         var lastWakeAt: Date
     }
 
@@ -70,12 +82,25 @@ extension TaskWebhookService {
         ToasttyLog.info("Task changes now wake the coordinator", category: .tasks)
     }
 
+    /// Sets the alerts of every open task in `states`. While Toastty cannot
+    /// read the checks, as before GitHub's first answer after a launch, the
+    /// check alerts the detector last counted stay, so a relaunch does not
+    /// tell them again.
+    func addAlerts(to states: inout [UUID: TaskWebhookTaskState], at: Date) {
+        let open = Set(states.compactMap { id, state in
+            state.key.group == "\(TaskStage.Group.done)" || state.key.group == "\(TaskStage.Group.archived)" ? nil : id
+        })
+        guard open.isEmpty == false else { return }
+        for (id, facts) in taskAlertFacts(open) where open.contains(id) {
+            states[id]?.key.alerts = facts.alerts(now: at, previous: detector.baseline?[id]?.key.alerts ?? [])
+        }
+    }
+
     /// Types the digest when one waits and the coordinator's prompt is
     /// open. A coordinator that works, has the user's draft, starts or
     /// does not run gets nothing: the digest stays here.
-    func wakeCoordinator(at: Date, states: [UUID: TaskWebhookTaskState]) {
-        guard let coordinator, var wake = coordinatorWake,
-              let digest = wake.digest(now: at, hasOpenTasks: Self.hasOpenTasks(states)) else { return }
+    func wakeCoordinator(at: Date) {
+        guard let coordinator, var wake = coordinatorWake, let digest = wake.digest(now: at) else { return }
         guard let result = try? coordinator.send(digest, queueWhenHeld: false), result.wasTyped else { return }
         let taskCount = wake.changes.count
         wake.markDelivered(at: at)
@@ -121,12 +146,8 @@ extension TaskWebhookService {
     private func status(of wake: CoordinatorWakeState) -> CoordinatorWakeStatus {
         CoordinatorWakeStatus(
             pendingTaskCount: wake.changes.count,
-            nextWake: wake.nextWake(hasOpenTasks: Self.hasOpenTasks(taskStates())),
+            nextWakeAt: wake.requestedWakeAt,
             lastWakeAt: wake.lastWakeAt
         )
-    }
-
-    private static func hasOpenTasks(_ states: [UUID: TaskWebhookTaskState]) -> Bool {
-        states.values.contains { CoordinatorWakeState.isOpen(group: $0.key.group) }
     }
 }

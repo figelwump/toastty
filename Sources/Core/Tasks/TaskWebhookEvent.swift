@@ -12,11 +12,21 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
         /// Why the task needs the user, inside needsYou.
         public var attention: String?
         public var merged: Bool
+        /// The task's alerts for the coordinator, in `TaskAlert.allCases`
+        /// order. No webhook event reads them: `events(from:to:)` looks at
+        /// the stage only, and the payload does not carry them.
+        public var alerts: [TaskAlert]
 
-        public init(group: String, attention: String? = nil, merged: Bool = false) {
+        public init(group: String, attention: String? = nil, merged: Bool = false, alerts: [TaskAlert] = []) {
             self.group = group
             self.attention = attention
             self.merged = merged
+            self.alerts = alerts
+        }
+
+        /// The same stage, whatever the alerts.
+        func hasSameStage(as other: Key) -> Bool {
+            group == other.group && attention == other.attention && merged == other.merged
         }
 
         /// A stage the record decides, not the live agent: it cannot
@@ -53,6 +63,19 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
     }
 }
 
+extension TaskWebhookTaskState.Key {
+    /// A key saved before Toastty had alerts has none. An alert this build
+    /// does not know, saved by a newer one, is left out, so the saved
+    /// baseline still loads.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        group = try container.decode(String.self, forKey: .group)
+        attention = try container.decodeIfPresent(String.self, forKey: .attention)
+        merged = try container.decode(Bool.self, forKey: .merged)
+        alerts = try container.decodeIfPresent([String].self, forKey: .alerts)?.compactMap(TaskAlert.init(rawValue:)) ?? []
+    }
+}
+
 /// Turns task states, sampled about once a second, into webhook events.
 ///
 /// A stage the live agent decides (needs you, running, idle) must hold for
@@ -60,23 +83,36 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
 /// boundary sends nothing. Stages the record decides (done, to ship,
 /// archived), a merge, and a deletion count at once.
 ///
+/// The alerts settle on a clock of their own and always wait the settle
+/// interval. A change of the alerts while a stage settles does not restart
+/// the stage's time, so the alerts never delay or hide a stage's event.
+/// A change that counts carries the stage and the alerts that have settled.
+///
 /// The baseline is saved, so after a relaunch a task that already waited
 /// sends nothing new, and a change made while Toastty was quit, such as a
 /// merge on GitHub, still fires once.
 public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
     public static let defaultSettleInterval: TimeInterval = 3
 
-    /// A change of a task's stage that counted. `events` is empty for a
-    /// change that fires no webhook event, such as To ship to Done.
+    /// A change of a task's stage or alerts that counted. `events` is
+    /// empty for a change that fires no webhook event, such as To ship to
+    /// Done, or a change of only the alerts.
     public struct Change: Equatable, Sendable {
         public var taskID: UUID
         public var events: [TaskWebhookEventType]
         public var state: TaskWebhookTaskState
+        /// The key that counted before; `nil` for a new task.
+        public var previous: TaskWebhookTaskState.Key?
     }
 
+    /// The newest key seen that differs from the settled one.
     private struct Candidate: Codable, Equatable, Sendable {
         var key: TaskWebhookTaskState.Key
+        /// Since when its stage has held.
         var since: Date
+        /// Since when its alerts have held. `nil` in a candidate saved
+        /// before alerts, which had none: then `since`.
+        var alertsSince: Date?
     }
 
     /// The last state that counted for each task. `nil` until the first
@@ -113,7 +149,7 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
             guard let previous = settled[id] else {
                 // A new task: what it is now counts as a change from nothing.
                 settled[id] = state
-                changes.append(Change(taskID: id, events: Self.events(from: nil, to: state.key), state: state))
+                changes.append(Change(taskID: id, events: Self.events(from: nil, to: state.key), state: state, previous: nil))
                 continue
             }
             if previous.key == state.key {
@@ -122,31 +158,43 @@ public struct TaskWebhookEventDetector: Codable, Equatable, Sendable {
                 settled[id] = state
                 continue
             }
-            let mergeChanged = previous.key.merged != state.key.merged
-            if state.key.isSettledByRecord || mergeChanged {
-                candidates[id] = nil
-            } else if let candidate = candidates[id], candidate.key == state.key {
-                guard now.timeIntervalSince(candidate.since) >= settleInterval else { continue }
-                candidates[id] = nil
-            } else {
-                candidates[id] = Candidate(key: state.key, since: now)
-                guard settleInterval <= 0 else { continue }
-                candidates[id] = nil
+            let seen = candidates[id]
+            let stageSince = seen.flatMap { $0.key.hasSameStage(as: state.key) ? $0.since : nil } ?? now
+            let alertsSince = seen.flatMap { $0.key.alerts == state.key.alerts ? $0.alertsSince ?? $0.since : nil } ?? now
+            candidates[id] = Candidate(key: state.key, since: stageSince, alertsSince: alertsSince)
+            let stageCounts = previous.key.hasSameStage(as: state.key) == false
+                && (state.key.isSettledByRecord || previous.key.merged != state.key.merged
+                    || now.timeIntervalSince(stageSince) >= settleInterval)
+            let alertsCount = previous.key.alerts != state.key.alerts && now.timeIntervalSince(alertsSince) >= settleInterval
+            guard stageCounts || alertsCount else { continue }
+            var counted = state
+            if stageCounts == false {
+                counted.key = .init(group: previous.key.group, attention: previous.key.attention,
+                                    merged: previous.key.merged, alerts: state.key.alerts)
+            } else if alertsCount == false {
+                counted.key.alerts = previous.key.alerts
             }
-            settled[id] = state
-            changes.append(Change(taskID: id, events: Self.events(from: previous.key, to: state.key), state: state))
+            if counted.key == state.key { candidates[id] = nil }
+            settled[id] = counted
+            changes.append(Change(
+                taskID: id,
+                events: Self.events(from: previous.key, to: counted.key),
+                state: counted,
+                previous: previous.key
+            ))
         }
         for (id, previous) in settled where current[id] == nil {
             settled[id] = nil
             candidates[id] = nil
-            changes.append(Change(taskID: id, events: [.deleted], state: previous))
+            changes.append(Change(taskID: id, events: [.deleted], state: previous, previous: previous.key))
         }
         baseline = settled
         return changes
     }
 
     /// The events a move from `previous` to `current` fires. `previous` is
-    /// `nil` for a task that did not exist.
+    /// `nil` for a task that did not exist. Only the stage counts: a change
+    /// of only the alerts fires none.
     static func events(from previous: TaskWebhookTaskState.Key?, to current: TaskWebhookTaskState.Key) -> [TaskWebhookEventType] {
         var events: [TaskWebhookEventType] = []
         if current.merged, previous?.merged != true {

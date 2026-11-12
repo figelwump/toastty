@@ -591,4 +591,73 @@ extension TaskAppControlTests {
         #expect(date(object(try pullRequest())["checksPendingSince"]) == at(1300))
         _ = board
     }
+
+    // MARK: - Alert facts
+
+    @Test func alertFactsAreTheAgentStateAndTheChecksThatTaskGetReports() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.clock = Self.t0
+        func at(_ seconds: TimeInterval) -> Date { Self.t0.addingTimeInterval(seconds) }
+        let sessions = TaskStartWorkTests.FakeSessions()
+        fixture.coordinator.sessions = sessions
+        let gitHub = PullRequestStateCache(runner: OfflineGitHub())
+        let board = makeBoard(fixture, coordinator: fixture.coordinator, pullRequests: gitHub)
+        let task = try await startTask(fixture)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        func facts() throws -> TaskAlertFacts { try #require(fixture.coordinator.alertFacts(for: [task.id])[task.id]) }
+        func agent(_ kind: SessionStatusKind) throws {
+            sessions.sessions[session] = TaskSessionInfo(
+                sessionID: session, agent: .claude, panelID: try #require(task.operation.taskSpace?.panelID),
+                workspaceID: try #require(task.taskSpaceWorkspaceID), cwd: nil, isActive: true,
+                isInTurn: kind == .working || kind == .needsApproval, nativeConversationID: nil, title: nil,
+                status: SessionStatus(kind: kind, summary: "\(kind)")
+            )
+        }
+
+        // A busy agent, with the time its transcript last changed.
+        try agent(.working)
+        sessions.outputAt[session] = at(5)
+        #expect(try facts() == TaskAlertFacts(agentBusy: true, lastOutputAt: at(5), checks: .none))
+        // Waiting for an approval, or at its prompt: not busy.
+        try agent(.needsApproval)
+        #expect(try facts().agentBusy == false)
+        try agent(.idle)
+        #expect(try facts() == TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .none))
+        #expect(fixture.coordinator.alertFacts(for: [UUID()]).isEmpty)
+
+        // A linked pull request GitHub has not answered for: unknown.
+        let url = "https://github.com/toastty/toastty/pull/7"
+        let link = try #require(WorkspacePullRequestLink(annotationURL: url))
+        _ = fixture.coordinator.records.update(id: task.id) { $0.pullRequestURL = url }
+        #expect(try facts().checks == .unknown)
+        func answer(_ checks: PullRequestMergeability.Checks?, head: String, state: TaskPullRequestState.State = .open, at date: Date) {
+            gitHub.store(
+                TaskPullRequestState(state: state, headSHA: head, mergeability: PullRequestMergeability(mergeState: .blocked, checks: checks)),
+                for: link, observedAt: date
+            )
+        }
+        // Pending since Toastty first saw them pending on this commit, as
+        // `checksPendingSince` reports.
+        answer(.running, head: "aaa", at: at(10))
+        fixture.coordinator.recordStateTimes()
+        #expect(try facts().checks == .pending(since: at(10)))
+        // A push that the saved time does not belong to yet: no time.
+        answer(.running, head: "bbb", at: at(1000))
+        #expect(try facts().checks == .pending(since: nil))
+        fixture.coordinator.recordStateTimes()
+        #expect(try facts().checks == .pending(since: at(1000)))
+        answer(.failing, head: "bbb", at: at(1100))
+        #expect(try facts().checks == .failing)
+        answer(.passing, head: "bbb", at: at(1200))
+        #expect(try facts().checks == .passing)
+        answer(nil, head: "ccc", at: at(1300))
+        #expect(try facts().checks == .none)
+        // A closed or merged pull request has no checks to tell.
+        answer(.failing, head: "ccc", state: .closed, at: at(1400))
+        #expect(try facts().checks == .none)
+        answer(.failing, head: "ccc", at: at(1500))
+        _ = fixture.coordinator.records.update(id: task.id) { $0.mergedAt = at(1500) }
+        #expect(try facts().checks == .none)
+        _ = board
+    }
 }

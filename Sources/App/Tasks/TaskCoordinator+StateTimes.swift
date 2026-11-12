@@ -123,6 +123,41 @@ extension TaskCoordinator {
         return sessions?.lastOutputAt(sessionID: session.sessionID)
     }
 
+    /// What Toastty reads to find these tasks' alerts (`TaskAlert`): whether
+    /// the task's agent is busy, when it last wrote, and GitHub's last
+    /// answer about the checks of the task's open pull request. These are
+    /// the facts `task get` reports as `agentState` and `pullRequest`.
+    func alertFacts(for taskIDs: Set<UUID>) -> [UUID: TaskAlertFacts] {
+        var facts: [UUID: TaskAlertFacts] = [:]
+        for record in records.records where taskIDs.contains(record.id) {
+            let agent = agentStatus(of: record)
+            let busy = agent.activity == .busy
+            facts[record.id] = TaskAlertFacts(
+                agentBusy: busy,
+                lastOutputAt: busy ? agent.session.flatMap { sessions?.lastOutputAt(sessionID: $0.sessionID) } : nil,
+                checks: checks(of: record)
+            )
+        }
+        return facts
+    }
+
+    /// The checks of the task's open pull request, from GitHub's last
+    /// answer for its head commit. A pull request Toastty has no answer for
+    /// yet, also when every request failed, is unknown.
+    private func checks(of record: TaskRecord) -> TaskAlertFacts.Checks {
+        guard let url = record.pullRequestURL, record.mergedAt == nil else { return .none }
+        guard let answer = board?.pullRequests?.entries[url]?.answer else { return .unknown }
+        guard answer.state == .open else { return .none }
+        switch answer.mergeability?.checks {
+        case .failing?: return .failing
+        case .passing?: return .passing
+        case .running?:
+            let pending = record.stateTimes?.checksPending
+            return .pending(since: pending?.headSHA == answer.headSHA ? pending?.since : nil)
+        case nil: return .none
+        }
+    }
+
     /// When the user last worked in the task: the live time, or the saved
     /// one after a relaunch.
     func lastUserInputAt(of record: TaskRecord) -> Date? {
