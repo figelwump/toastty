@@ -27,6 +27,12 @@ late. The check proves that the next message is typed after the time limit,
 that a message taken late is typed once, and that each message starts one
 turn.
 
+'--scenario stalled-stop' uses the same script. The check freezes the app
+with SIGSTOP while the script's Stop hook runs, until the hook gives up
+waiting for a reply, and then lets the app run again. The check proves that
+the hook timed out and that the next message is still typed: the app
+applied the hook's turn end after the stall, not only its Ready status.
+
 '--expect stuck' records the fault instead: the next message stays queued.
 Use it against a build without the repair.
 
@@ -42,6 +48,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -77,7 +84,9 @@ LOG_LINES = (
 # its turns as Claude's UserPromptSubmit and Stop hooks do. A turn lasts a
 # second. With the file `drop-next-return`, the next Return submits nothing:
 # the text stays in the composer and goes out with the next message. With
-# `take-late`, the next turn starts after that many seconds.
+# `take-late`, the next turn starts after that many seconds. With
+# `stall-stop`, the next turn waits before its Stop hook until the file
+# `app-stopped` exists, and records how the hook ended.
 FAKE_AGENT = r'''#!__PYTHON__
 import json, os, subprocess, sys, time, uuid
 from datetime import datetime, timezone
@@ -102,7 +111,7 @@ def record(event, **facts):
 
 
 def hook(name, **fields):
-    subprocess.run(
+    return subprocess.run(
         [cli, 'session', 'ingest-agent-event', '--source', 'claude-hooks', '--session', session, '--panel', panel],
         input=json.dumps(dict(hook_event_name=name, session_id=native, transcript_path=transcript, cwd=os.getcwd(), **fields)),
         text=True, capture_output=True)
@@ -141,7 +150,17 @@ def turn(message):
     record('message', text=message)
     time.sleep(1)
     write('assistant', [dict(type='text', text='Done.')], stop_reason='end_turn')
-    hook('Stop', stop_hook_active=False, last_assistant_message='Done.')
+    if control('stall-stop'):
+        record('stop pending', text=message)
+        while not os.path.exists(os.path.join(here, 'app-stopped')):
+            time.sleep(0.1)
+        os.remove(os.path.join(here, 'app-stopped'))
+        started = time.time()
+        result = hook('Stop', stop_hook_active=False, last_assistant_message='Done.')
+        record('stop hook returned', text=message, code=result.returncode,
+               seconds=round(time.time() - started, 2), error=result.stderr.strip()[-300:])
+    else:
+        hook('Stop', stop_hook_active=False, last_assistant_message='Done.')
     record('turn ended', text=message)
 
 
@@ -381,10 +400,10 @@ def run_failed_turn(check, expect):
             shutil.rmtree(project, ignore_errors=True)
 
 
-# MARK: - A lost send to a fake agent
+# MARK: - A lost send or a stalled Stop hook, with a fake agent
 
 
-def run_lost_send(check, expect):
+def run_fake_agent(check, scenario, expect):
     fake_bin = check.root / 'bin'
     fake_bin.mkdir()
     agent = fake_bin / 'claude'
@@ -420,6 +439,46 @@ def run_lost_send(check, expect):
         require(answer['delivery'] == delivery, f'{text!r} was not {delivery}: {answer} {status()}')
         return answer
 
+    def stalled_stop():
+        # The app stops answering while the agent's Stop hook runs, longer
+        # than the hook CLI waits for a reply. SIGSTOP freezes the whole
+        # app; the kernel keeps the hook's request until the app reads it.
+        (records / 'stall-stop').write_text('1')
+        send('stalled turn', 'sent')
+        wait_for('the agent to reach its Stop hook', lambda: events('stop pending'))
+        pid = instance.process.pid
+        os.kill(pid, signal.SIGSTOP)
+        stopped_at = time.time()
+        try:
+            (records / 'app-stopped').write_text('1')
+            returned = wait_for('the Stop hook to give up',
+                                lambda: (found := events('stop hook returned')) and found[0], timeout=30)
+            time.sleep(2)
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        require(returned['code'] != 0 and 'timed out' in returned['error'],
+                f'The Stop hook did not time out: {returned}')
+        step('the app was frozen past the Stop hook time limit',
+             frozenSeconds=round(time.time() - stopped_at, 1), stopHook=returned)
+
+        if expect == 'stuck':
+            time.sleep(5)
+            queued = send('after the stall', 'queued')
+            time.sleep(20)
+            held = status()
+            require(not turns_with('after the stall'), f'The next message was typed: {events("message")}')
+            require(held.get('queuedCount') == 1 and held.get('hold') == 'busy', f'Unexpected status: {held}')
+            step('the next message is held, 25 seconds after the stall', answer=queued, status=held,
+                 agentEvents=events())
+            return
+        wait_for('the agent at its prompt', at_prompt)
+        time.sleep(1.5)
+        sent = send('after the stall', 'sent')
+        wait_for('that turn to end', lambda: any('after the stall' in e['text'] for e in events('turn ended')))
+        step('the next message was typed after the stall', answer=sent, status=status(),
+             received=[event['text'] for event in events('message')])
+        check.evidence['agentEvents'] = events()
+
     try:
         instance.wait_until_ready()
         opened = cli('coordinator', 'open')
@@ -431,6 +490,9 @@ def run_lost_send(check, expect):
         wait_for('the agent at its prompt', at_prompt)
         time.sleep(1.5)
         step('a normal message ran its turn', opened=opened, status=status())
+        if scenario == 'stalled-stop':
+            stalled_stop()
+            return
 
         # 1. The agent leaves one Return unanswered.
         (records / 'drop-next-return').write_text('1')
@@ -496,7 +558,7 @@ def run_lost_send(check, expect):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--scenario', choices=('failed-turn', 'lost-send'), required=True)
+    parser.add_argument('--scenario', choices=('failed-turn', 'lost-send', 'stalled-stop'), required=True)
     parser.add_argument('--expect', choices=('open', 'stuck'), default='open',
                         help="'stuck' records the fault on a build without the repair")
     parser.add_argument('--gui-session', action='store_true',
@@ -509,7 +571,10 @@ def main():
     check = ReopenCheck(options.scenario)
     check.evidence.update(startedAt=datetime.now(timezone.utc).isoformat(), scenario=options.scenario, expect=options.expect)
     try:
-        (run_failed_turn if options.scenario == 'failed-turn' else run_lost_send)(check, options.expect)
+        if options.scenario == 'failed-turn':
+            run_failed_turn(check, options.expect)
+        else:
+            run_fake_agent(check, options.scenario, options.expect)
         check.evidence['status'] = 'passed'
     except Exception as error:  # noqa: BLE001 - always keep the evidence
         check.evidence['failure'] = repr(error)

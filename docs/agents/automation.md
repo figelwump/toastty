@@ -288,13 +288,16 @@ sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
   --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario lost-send'
 sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
   --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario failed-turn --gui-session'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario stalled-stop'
 ```
 
 These checks mutate one disposable Toastty instance on the dedicated
 validation Mac, with a throwaway runtime home and user home; the installed
-production app is not touched. They cover the two cases in which no turn end
+production app is not touched. They cover the cases in which no turn end
 would open the coordinator's prompt again. Run them after a change to Claude's
-hooks, to the send confirmation deadline, or to the prompt epochs.
+hooks, to how the hook CLI sends their updates, to the send confirmation
+deadline, or to the prompt epochs.
 
 `lost-send` takes about three minutes and uses a fake `claude` script that
 reports its turns as Claude's `UserPromptSubmit` and `Stop` hooks do. The
@@ -302,6 +305,13 @@ script leaves one Return unanswered, and later starts one turn after the
 10-second limit. The check proves that the next message is typed about 10
 seconds after the lost one, that no message is typed twice, and that a
 message taken late and the one behind it each run one turn.
+
+`stalled-stop` takes about one minute and uses the same fake `claude`
+script. The check freezes the app with `SIGSTOP` while the script's Stop hook
+runs, until the hook CLI gives up waiting for a reply (10 seconds), and then
+lets the app run again. It proves that the hook timed out and that the next
+message is still typed, so the app applied the hook's turn end after the
+stall and not only its Ready status.
 
 `failed-turn` takes about five minutes and runs the real Claude CLI as the
 coordinator, in the GUI session like the other checks with the real CLI. It

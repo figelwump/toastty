@@ -1209,6 +1209,40 @@ struct ToasttyCLITests {
         #expect(parsedPanelID == panelID)
     }
 
+    /// A Claude Stop hook sends its Ready status and its turn end in one
+    /// request, so a reply that times out cannot deliver only the status.
+    @Test
+    func hookEventSendsAllItsUpdatesInOneRequest() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: UUID(),
+            payload: Data(
+                #"{"hook_event_name":"Stop","session_id":"claude-root","turn_id":"turn-7","stop_hook_active":false,"last_assistant_message":"Done"}"#.utf8
+            )
+        )
+        let request = try #require(try ToasttyCLI.ingestRequest(for: commands))
+
+        #expect(request.eventType == AutomationSocketProtocol.eventBatchEventType)
+        guard case .array(let values)? = request.payload["events"] else {
+            Issue.record("expected the batched events")
+            return
+        }
+        let events = try values.map {
+            try JSONDecoder().decode(AutomationEventEnvelope.self, from: JSONEncoder().encode($0))
+        }
+        let expected = commands.map { $0.makeEventEnvelope() }
+        #expect(events.map(\.eventType) == ["session.status", "session.provider_conversation.observation"])
+        #expect(events.map(\.eventType) == expected.map(\.eventType))
+        #expect(events.map(\.sessionID) == expected.map(\.sessionID))
+        #expect(events.map(\.panelID) == expected.map(\.panelID))
+        #expect(events.map(\.payload) == expected.map(\.payload))
+
+        // One update needs no batch, and no update needs no request.
+        #expect(try ToasttyCLI.ingestRequest(for: [commands[0]])?.eventType == "session.status")
+        #expect(try ToasttyCLI.ingestRequest(for: []) == nil)
+    }
+
     @Test
     func socketClientTimesOutWhenServerDoesNotReply() throws {
         let socketPath = "/tmp/toastty-cli-tests-\(UUID().uuidString.prefix(8)).sock"

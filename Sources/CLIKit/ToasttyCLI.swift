@@ -3045,9 +3045,8 @@ public enum ToasttyCLI {
             )
         }
 
-        let client = ToasttySocketClient(socketPath: options.socketPath)
-        for command in commands {
-            let response = try client.send(command.makeEventEnvelope())
+        if let request = try ingestRequest(for: commands) {
+            let response = try ToasttySocketClient(socketPath: options.socketPath).send(request)
             if response.ok == false {
                 if let error = response.error {
                     throw ToasttyCLIError.runtime(
@@ -3076,6 +3075,17 @@ public enum ToasttyCLI {
         }
 
         return 0
+    }
+
+    /// The one socket request for all the updates of one agent hook event.
+    /// Separate requests can lose updates: each waits for its own response,
+    /// and the CLI stops at the first timeout. A Claude Stop once delivered
+    /// its Ready status but not its turn end, so the conversation stayed
+    /// "working" after the turn had ended.
+    static func ingestRequest(for commands: [CLICommand]) throws -> AutomationEventEnvelope? {
+        let events = commands.map { $0.makeEventEnvelope() }
+        guard events.count > 1 else { return events.first }
+        return try AutomationEventEnvelope.batch(events, requestID: UUID().uuidString)
     }
 
     /// Cursor and Grok own their hook producers, so read no more than the parser's limit
