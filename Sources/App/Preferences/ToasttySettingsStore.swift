@@ -14,6 +14,8 @@ struct ToasttySettings: Equatable {
     var isWorkspaceMergeEnabled = false
     /// How Markdown panels open. Each panel's header changes it.
     var localDocumentMarkdownViewMode = LocalDocumentMarkdownViewMode.formatted
+    /// Light or dark colors for document panels, or the app's appearance.
+    var localDocumentAppearance = LocalDocumentAppearance.system
 }
 
 enum ToasttySettingsStore {
@@ -23,6 +25,7 @@ enum ToasttySettingsStore {
     private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
     private static let workspaceMergeEnabledKey = "toastty.workspaceMergeEnabled"
     private static let localDocumentMarkdownViewModeKey = "toastty.localDocumentMarkdownViewMode"
+    private static let localDocumentAppearanceKey = "toastty.localDocumentAppearance"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
@@ -32,7 +35,9 @@ enum ToasttySettingsStore {
                 .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp,
             isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey),
             localDocumentMarkdownViewMode: userDefaults.string(forKey: localDocumentMarkdownViewModeKey)
-                .flatMap(LocalDocumentMarkdownViewMode.init(rawValue:)) ?? .formatted
+                .flatMap(LocalDocumentMarkdownViewMode.init(rawValue:)) ?? .formatted,
+            localDocumentAppearance: userDefaults.string(forKey: localDocumentAppearanceKey)
+                .flatMap(LocalDocumentAppearance.init(rawValue:)) ?? .system
         )
     }
 
@@ -83,6 +88,13 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(mode.rawValue, forKey: localDocumentMarkdownViewModeKey)
+    }
+
+    static func persistLocalDocumentAppearance(
+        _ appearance: LocalDocumentAppearance,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(appearance.rawValue, forKey: localDocumentAppearanceKey)
     }
 
     private static func loadTerminalFontSizePoints(userDefaults: UserDefaults) -> Double? {

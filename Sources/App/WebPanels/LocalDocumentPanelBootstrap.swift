@@ -6,6 +6,15 @@ enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
     case dark
 }
 
+/// The user's color choice for document panels, from a panel's right-click
+/// menu. `system` uses the app's light or dark appearance; `light` and `dark`
+/// override it in every document panel.
+enum LocalDocumentAppearance: String, Codable, CaseIterable, Equatable, Sendable {
+    case system
+    case light
+    case dark
+}
+
 /// How a Markdown document shows when it is not being edited. The panel
 /// ignores it for other formats.
 enum LocalDocumentMarkdownViewMode: String, Codable, Equatable, Sendable {

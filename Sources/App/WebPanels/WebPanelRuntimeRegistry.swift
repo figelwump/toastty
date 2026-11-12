@@ -97,6 +97,10 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             markdownViewModeDidChange: { [weak self] mode in
                 self?.store?.setLocalDocumentMarkdownViewMode(mode)
             },
+            appearance: store?.localDocumentAppearance ?? .system,
+            appearanceDidChange: { [weak self] appearance in
+                self?.setLocalDocumentAppearance(appearance)
+            },
             linkedURLOpener: { [weak self] panelID, url in
                 self?.openURL(url, fromPanelID: panelID) ?? false
             }
@@ -109,6 +113,16 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             runtime.requestReveal(lineNumber: pendingRevealLine)
         }
         return runtime
+    }
+
+    /// Saves an appearance choice made in one document panel and applies it
+    /// to every open document panel. Panels that open later read it from the
+    /// store.
+    private func setLocalDocumentAppearance(_ appearance: LocalDocumentAppearance) {
+        store?.setLocalDocumentAppearance(appearance)
+        for runtime in localDocumentRuntimeByPanelID.values {
+            runtime.applyAppearance(appearance)
+        }
     }
 
     /// Opens a link that a web panel's page cannot open itself, in the window

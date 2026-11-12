@@ -775,6 +775,7 @@ struct ToasttyApp: App {
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
             initialLocalDocumentMarkdownViewMode: initialToasttySettings.localDocumentMarkdownViewMode,
+            initialLocalDocumentAppearance: initialToasttySettings.localDocumentAppearance,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()

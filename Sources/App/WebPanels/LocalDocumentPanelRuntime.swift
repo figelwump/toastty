@@ -321,6 +321,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
     private let markdownViewModeDidChange: @MainActor (LocalDocumentMarkdownViewMode) -> Void
+    private let appearanceDidChange: @MainActor (LocalDocumentAppearance) -> Void
     private let linkedURLOpener: LinkedURLOpener
     private let webView: FocusAwareWKWebView
     private let entryURL: URL?
@@ -351,6 +352,10 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private var currentBootstrap: LocalDocumentPanelBootstrap?
     private var session: LocalDocumentEditingSession?
     private var currentTheme: LocalDocumentPanelTheme = .dark
+    private var currentAppearance: LocalDocumentAppearance
+    /// The appearance of the view that holds the panel. The theme follows it
+    /// when the appearance choice is `system`.
+    private var containerAppearance: NSAppearance?
     private var currentTextScale: Double = AppState.defaultMarkdownTextScale
     private var currentMarkdownViewMode: LocalDocumentMarkdownViewMode
     private var searchStateValue: LocalDocumentSearchState?
@@ -367,6 +372,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
         markdownViewMode: LocalDocumentMarkdownViewMode = .formatted,
         markdownViewModeDidChange: @escaping @MainActor (LocalDocumentMarkdownViewMode) -> Void = { _ in },
+        appearance: LocalDocumentAppearance = .system,
+        appearanceDidChange: @escaping @MainActor (LocalDocumentAppearance) -> Void = { _ in },
         linkedURLOpener: @escaping LinkedURLOpener = { _, _ in false },
         bundle: Bundle = .main,
         entryURL: URL? = nil,
@@ -415,6 +422,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.metadataDidChange = metadataDidChange
         self.currentMarkdownViewMode = markdownViewMode
         self.markdownViewModeDidChange = markdownViewModeDidChange
+        self.currentAppearance = appearance
+        self.appearanceDidChange = appearanceDidChange
         self.linkedURLOpener = linkedURLOpener
         self.entryURL = entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle)
         self.assetDirectoryURL = (entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
@@ -452,6 +461,10 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         webView.responderDidRequestFocus = { [panelID] in
             responderDidRequestFocus?(panelID)
         }
+        webView.additionalContextMenuItems = { [weak self] in
+            guard let self else { return [] }
+            return [self.appearanceContextMenuItem()]
+        }
         webView.navigationDelegate = self
         webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
     }
@@ -464,6 +477,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
             webView.responderDidRequestFocus = nil
+            webView.additionalContextMenuItems = nil
             webView.navigationDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptMessageHandlerName)
             webView.removeFromSuperview()
@@ -918,6 +932,35 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     }
 
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
+        containerAppearance = appearance
+        updateWebViewAppearanceAndTheme()
+    }
+
+    /// Applies an appearance choice from this panel's right-click menu. The
+    /// choice is app-wide, so the callback passes it to the other panels.
+    func selectAppearance(_ appearance: LocalDocumentAppearance) {
+        guard appearance != currentAppearance else { return }
+        applyAppearance(appearance)
+        appearanceDidChange(appearance)
+    }
+
+    /// Applies an app-wide appearance choice made in any document panel.
+    func applyAppearance(_ appearance: LocalDocumentAppearance) {
+        guard appearance != currentAppearance else { return }
+        currentAppearance = appearance
+        logDiagnostic(
+            .debug,
+            "Local document appearance changed",
+            metadata: ["appearance": appearance.rawValue]
+        )
+        updateWebViewAppearanceAndTheme()
+    }
+
+    private func updateWebViewAppearanceAndTheme() {
+        let appearance = Self.webViewAppearance(
+            for: currentAppearance,
+            containerAppearance: containerAppearance
+        )
         // Re-assigning the same appearance still invalidates WKWebView cursor
         // rects, which can briefly reset the cursor to AppKit's default arrow
         // before WebKit reasserts its hovered cursor on the next mouse move.
@@ -929,6 +972,67 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         guard nextTheme != currentTheme else { return }
         currentTheme = nextTheme
         pushDisplaySettingsUpdateIfPossible()
+    }
+
+    /// The web view gets the chosen appearance too, so native parts such as
+    /// scroll bars match the page colors.
+    nonisolated static func webViewAppearance(
+        for appearance: LocalDocumentAppearance,
+        containerAppearance: NSAppearance?
+    ) -> NSAppearance? {
+        switch appearance {
+        case .system:
+            return containerAppearance
+        case .light:
+            return NSAppearance(named: .aqua)
+        case .dark:
+            return NSAppearance(named: .darkAqua)
+        }
+    }
+
+    nonisolated static let appearanceMenuItemIdentifier = NSUserInterfaceItemIdentifier(
+        "dev.toastty.local-document.appearance"
+    )
+
+    /// The "Appearance" submenu for the panel's right-click menu. A check
+    /// mark shows the current choice.
+    func appearanceContextMenuItem() -> NSMenuItem {
+        let submenu = NSMenu(title: "Appearance")
+        for appearance in LocalDocumentAppearance.allCases {
+            let item = NSMenuItem(
+                title: Self.appearanceMenuTitle(for: appearance),
+                action: #selector(selectAppearanceFromContextMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = appearance.rawValue
+            item.state = appearance == currentAppearance ? .on : .off
+            submenu.addItem(item)
+        }
+
+        let item = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        item.identifier = Self.appearanceMenuItemIdentifier
+        item.submenu = submenu
+        return item
+    }
+
+    nonisolated static func appearanceMenuTitle(for appearance: LocalDocumentAppearance) -> String {
+        switch appearance {
+        case .system:
+            return "Match System"
+        case .light:
+            return "Light"
+        case .dark:
+            return "Dark"
+        }
+    }
+
+    @objc private func selectAppearanceFromContextMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let appearance = LocalDocumentAppearance(rawValue: rawValue) else {
+            return
+        }
+        selectAppearance(appearance)
     }
 
     nonisolated static func theme(for appearance: NSAppearance?) -> LocalDocumentPanelTheme {

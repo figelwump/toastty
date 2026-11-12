@@ -2532,6 +2532,64 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrapCallCount, 1)
     }
 
+    func testAppearanceChoiceOverridesAppAppearanceUntilMatchSystemIsChosen() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        var reportedAppearances: [LocalDocumentAppearance] = []
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            appearanceDidChange: { reportedAppearances.append($0) },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
+        )
+        runtime.applyEffectiveAppearance(NSAppearance(named: .darkAqua))
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
+
+        let menuItem = runtime.appearanceContextMenuItem()
+        XCTAssertEqual(menuItem.title, "Appearance")
+        let submenu = try XCTUnwrap(menuItem.submenu)
+        XCTAssertEqual(submenu.items.map(\.title), ["Match System", "Light", "Dark"])
+        XCTAssertEqual(submenu.items.map(\.state), [.on, .off, .off])
+
+        submenu.performActionForItem(at: 1)
+        XCTAssertEqual(reportedAppearances, [.light])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+        XCTAssertEqual(runtime.appearanceContextMenuItem().submenu?.items.map(\.state), [.off, .on, .off])
+
+        // A fixed choice ignores the app switching between light and dark.
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        runtime.applyEffectiveAppearance(NSAppearance(named: .darkAqua))
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+
+        runtime.selectAppearance(.system)
+        XCTAssertEqual(reportedAppearances, [.light, .system])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+
+        // A choice made in another panel applies here without reporting back.
+        runtime.applyAppearance(.dark)
+        XCTAssertEqual(reportedAppearances, [.light, .system])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
+    }
+
     func testApplyTextScaleDoesNotReReadMarkdownContent() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")

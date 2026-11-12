@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import AppKit
 import CoreState
 import XCTest
 
@@ -134,6 +135,29 @@ final class WebPanelRuntimeRegistryTests: XCTestCase {
         notesRuntime.apply(webState: notesWebState)
         let notesBootstrap = try await waitForBootstrap(of: notesRuntime)
         XCTAssertEqual(notesBootstrap.markdownViewMode, .source, "A later panel opens with the remembered view")
+    }
+
+    func testAppearanceChoiceAppliesToEveryDocumentPanel() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        let darkAppearance = NSAppearance(named: .darkAqua)
+        let firstRuntime = registry.localDocumentRuntime(for: UUID())
+        let secondRuntime = registry.localDocumentRuntime(for: UUID())
+        firstRuntime.applyEffectiveAppearance(darkAppearance)
+        secondRuntime.applyEffectiveAppearance(darkAppearance)
+        XCTAssertEqual(secondRuntime.automationState().currentTheme, .dark)
+
+        firstRuntime.selectAppearance(.light)
+
+        XCTAssertEqual(store.localDocumentAppearance, .light)
+        XCTAssertEqual(firstRuntime.automationState().currentTheme, .light)
+        XCTAssertEqual(secondRuntime.automationState().currentTheme, .light)
+        XCTAssertEqual(secondRuntime.appearanceContextMenuItem().submenu?.items.map(\.state), [.off, .on, .off])
+
+        let laterRuntime = registry.localDocumentRuntime(for: UUID())
+        laterRuntime.applyEffectiveAppearance(darkAppearance)
+        XCTAssertEqual(laterRuntime.automationState().currentTheme, .light, "A later panel opens with the saved choice")
     }
 
     private func waitForBootstrap(
