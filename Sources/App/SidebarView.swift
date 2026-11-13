@@ -1092,6 +1092,14 @@ struct SidebarView: View {
                         preferringUnreadSessionPanelIn: sessionRuntimeStore
                     )
                 },
+                openPolicy: {
+                    cancelWorkspaceRename()
+                    do {
+                        try controller.openPolicy()
+                    } catch {
+                        TaskActions.presentFailure("Unable to Open the Coordinator's Policy", error.localizedDescription)
+                    }
+                },
                 restart: {
                     Task { @MainActor in
                         do {

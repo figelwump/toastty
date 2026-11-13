@@ -412,7 +412,8 @@ for a yes that answers your proposal.
 `policy.md` has these sections: Projects, Agents, Talking, Reviewing,
 Unblocking, Releases, and Notes (facts you keep, such as a test that is a
 known flake). Read it at the start of every turn that a digest started, and
-before you choose anything for a new task. The user can edit it at any time.
+before you choose anything for a new task. The user can edit it at any time;
+**Policy**, in the header of your panel, shows it to them.
 A policy from an older version can miss a section, such as Talking: when you
 first write a rule to it, add its heading before Notes.
 

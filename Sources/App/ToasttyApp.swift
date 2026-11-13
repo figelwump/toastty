@@ -942,6 +942,9 @@ struct ToasttyApp: App {
             restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
         )
         terminalRuntimeRegistry.setAgentCatalogProvider(agentCatalogStore)
+        terminalRuntimeRegistry.setCoordinatorLaunchEnvironment(
+            CoordinatorFolder.gitEnvironment(for: runtimePaths.coordinatorDirectoryURL)
+        )
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)

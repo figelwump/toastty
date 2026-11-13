@@ -4461,9 +4461,11 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
-        if let coordinatorController, coordinatorController.supportsChat, coordinatorController.chat != nil,
-           coordinatorController.location?.panelID == panelID {
-            CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+        if let coordinatorController, coordinatorController.location?.panelID == panelID {
+            CoordinatorPolicyButton(controller: coordinatorController)
+            if coordinatorController.supportsChat, coordinatorController.chat != nil {
+                CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+            }
         }
 
         switch resolvedPanelHeaderTrailingAccessory {

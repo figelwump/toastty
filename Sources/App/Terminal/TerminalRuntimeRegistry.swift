@@ -110,6 +110,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
+    /// Added to the resume command of the coordinator's agent only.
+    private var coordinatorLaunchEnvironment: [String: String] = [:]
     @Published private(set) var searchStateByPanelID: [UUID: TerminalSearchState] = [:]
     @Published private(set) var searchFieldFocusedPanelID: UUID?
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
@@ -276,6 +278,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         _ provider: @escaping @Sendable (UUID) -> [String: String]
     ) {
         baseLaunchEnvironmentProvider = provider
+    }
+
+    /// The coordinator's agent resumes after a relaunch in its restored
+    /// terminal, through no start of the coordinator's own. The command
+    /// that resumes it sets this environment, as a start's command does; a
+    /// value the shell's startup files set cannot replace it.
+    func setCoordinatorLaunchEnvironment(_ environment: [String: String]) {
+        coordinatorLaunchEnvironment = environment
     }
 
     private func logSurfaceLaunchEnvironmentIfNeeded(
@@ -1905,6 +1915,9 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
 
             var commandEnvironment = plan.environment
+            if store?.state.coordinator?.panelID == panelID {
+                commandEnvironment.merge(coordinatorLaunchEnvironment, uniquingKeysWith: { _, new in new })
+            }
             commandEnvironment[ToasttyLaunchContextEnvironment.launchReasonKey] = TerminalLaunchReason.restore.rawValue
             commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
