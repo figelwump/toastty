@@ -189,7 +189,10 @@ public enum TaskStage: Equatable, Sendable {
             return .done
         }
         if facts.mergedAt != nil || live.pullRequest?.state == .merged {
-            return releaseTagsConfigured ? .toShip : .done
+            let target = live.pullRequest?.mergeTarget ?? facts.mergeTarget
+            // Keep the previous release wait until an older record's destination
+            // is known. Never infer it from the branch the work started from.
+            return releaseTagsConfigured && target?.waitsForRelease != false ? .toShip : .done
         }
         switch facts.setup {
         case .needsWorkspace(let reason):
@@ -271,6 +274,7 @@ public struct TaskStageFacts: Equatable, Sendable {
     /// When the agent marked that it waits for the user's reply.
     public var replyRequestedAt: Date?
     public var mergedAt: Date?
+    public var mergeTarget: TaskMergeTarget?
     public var shippedAt: Date?
     public var archivedAt: Date?
     public var doneAt: Date?
@@ -288,6 +292,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         readyForReviewAt: Date? = nil,
         replyRequestedAt: Date? = nil,
         mergedAt: Date? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
         shippedAt: Date? = nil,
         archivedAt: Date? = nil,
         doneAt: Date? = nil,
@@ -301,6 +306,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.readyForReviewAt = readyForReviewAt
         self.replyRequestedAt = replyRequestedAt
         self.mergedAt = mergedAt
+        self.mergeTarget = mergeTarget
         self.shippedAt = shippedAt
         self.archivedAt = archivedAt
         self.doneAt = doneAt
@@ -317,6 +323,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             readyForReviewAt: record.readyForReviewAt,
             replyRequestedAt: record.replyRequest?.askedAt,
             mergedAt: record.mergedAt,
+            mergeTarget: record.mergeTarget,
             shippedAt: record.shippedAt,
             archivedAt: record.archivedAt,
             doneAt: record.doneAt,
@@ -370,6 +377,7 @@ public struct TaskPullRequestState: Equatable, Sendable {
     public var isDraft: Bool
     public var headSHA: String?
     public var mergeCommit: String?
+    public var mergeTarget: TaskMergeTarget?
     /// Whether GitHub would merge it now, and why not. `nil` when the
     /// answer did not say.
     public var mergeability: PullRequestMergeability?
@@ -379,12 +387,14 @@ public struct TaskPullRequestState: Equatable, Sendable {
         isDraft: Bool = false,
         headSHA: String? = nil,
         mergeCommit: String? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
         mergeability: PullRequestMergeability? = nil
     ) {
         self.state = state
         self.isDraft = isDraft
         self.headSHA = headSHA
         self.mergeCommit = mergeCommit
+        self.mergeTarget = mergeTarget
         self.mergeability = mergeability
     }
 }

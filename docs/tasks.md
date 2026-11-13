@@ -386,8 +386,8 @@ Watch conditions:
 The stage conditions follow the [stages](#stages), in the order
 `ready-for-review`, `merged`, `to-ship`, `done`. A condition still holds after
 the task moves past it, so a watch fires even when the task skips a stage. For
-example, a merged task also meets `ready-for-review`, and a merge in a project
-without `release_tags`, which goes straight to Done, also meets `to-ship`. A
+example, a merged task also meets `ready-for-review`. A feature-branch merge,
+or a merge without release tracking, goes straight to Done and also meets `to-ship`. A
 task marked done by hand meets only `ready-for-review` and `done`. A task
 that finishes through its child tasks counts as merged with them: in To ship it
 meets `ready-for-review`, `merged` and `to-ship`, and in Done all four. The message
@@ -1317,8 +1317,8 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | --- | --- |
 | Needs you | the cleanup after its merge, archive or release stopped: "Merged · clean up?" |
 | Archived | the task was closed without finishing |
-| Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
-| To ship | it merged, and its project has `release_tags` |
+| Done | it was marked done or shipped; or it merged into a feature branch; or its repository has no `release_tags` |
+| To ship | it merged into the repository's default branch, and release tracking is configured |
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
 | Running | an agent that works or waits on its sub-agents; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
@@ -1544,8 +1544,9 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 4. Toastty records the merge on the task first. Once the agent's turn ends, it
    closes the task space, removes the worktree and deletes the branch, the same
    way as the Merge button does for any task space. In a project with
-   `release_tags`, the cleanup runs the same way, and the task then waits in
-   To ship until a release tag contains its merge; see [Release](#release).
+   `release_tags`, the cleanup runs the same way. A merge into the repository's
+   default branch waits in To ship until a release tag contains its merge.
+   A merge into a feature branch is Done for that branch; see [Release](#release).
 
 Saying "merge it" to the task's agent runs the same skill. From outside the
 task, `toastty task request-merge <task-id>` does what Merge does, and always
@@ -1638,8 +1639,21 @@ archived.
 
 ## Release
 
-With `release_tags` set, a merged task waits in To ship until a release tag
-contains its merge commit. A project can release from Toastty when
+With `release_tags` set, a task merged into the repository's default branch
+waits in To ship until a release tag contains its merge commit. A merge into
+a feature branch is Done for that branch, which does not mean it shipped.
+The task that later merges the feature into the default branch owns the
+release wait. The actual PR destination decides, not the branch the task
+started from. Older merged records are refreshed from GitHub once to learn
+their destination; until it is known, an existing release wait stays in place.
+
+Related Git worktrees inherit `release_tags`, `release_skill` and
+`release_prompt` from the repository's main checkout. An explicit value for
+the worktree takes precedence. Other task settings do not inherit this way.
+A release includes eligible merges from related project directories, and only
+one release of that repository can be under way at a time.
+
+A project can release from Toastty when
 `tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release…** on
 its To ship line makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
@@ -1802,9 +1816,11 @@ branch_prefix = "feat"
   project directory). It may take up to 30 minutes. If it exits non-zero, the
   move fails with its last lines of output.
 - `branch_prefix` is the default first part of worktree branch names.
-- `release_tags` turns on the To ship stage for the project: a merged task
-  waits there until a tag matching this pattern, such as `"v*"`, contains its
-  merge commit, instead of going straight to Done. See [Release](#release).
+- `release_tags` turns on To ship for merges into the repository's default
+  branch. The task waits until a tag matching this pattern, such as `"v*"`,
+  contains its merge commit. Feature-branch merges go to Done. Related Git
+  worktrees share release settings from the main checkout unless they set
+  their own values. See [Release](#release).
 - `release_prompt` is text a release task's agent gets after the release
   skill line, such as `"Wait for my approval before any production change."`.
   A project with `release_skill`, `release_prompt` or both shows a Release
