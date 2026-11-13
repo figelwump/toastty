@@ -110,18 +110,18 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         card.tap()
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
 
+        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
         // A chip shows the task's current title and pull request number,
         // not the link's text.
         let question = link(containing: "early-session-titles", in: app)
-        XCTAssertTrue(question.waitForExistence(timeout: 5))
-        XCTAssertTrue(question.label.contains("#45"), question.label)
+        XCTAssertTrue(question.exists)
+        XCTAssertTrue(Self.words(question.label).contains("#45"), question.label)
         XCTAssertFalse(link(containing: "Should the badge", in: app).exists)
-        XCTAssertTrue(link(containing: "compact-session-rows", in: app).label.contains("#36"))
+        XCTAssertTrue(Self.words(link(containing: "compact-session-rows", in: app).label).contains("#36"))
         XCTAssertTrue(link(containing: "#259", in: app).exists)
         // A task the Mac does not list, a task space with no task, and any
         // other Toastty link are text that a tap cannot open.
-        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
-        XCTAssertTrue(answer.exists)
         for text in ["Removed task", "Watched space", "a settings link"] {
             XCTAssertTrue((answer.value as? String)?.contains(text) == true, text)
             XCTAssertFalse(link(containing: text, in: app).exists, text)
@@ -138,8 +138,15 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
+    /// A chip keeps its text on one line with no-break spaces and word
+    /// joiners; compare its words without them.
     private func link(containing text: String, in app: XCUIApplication) -> XCUIElement {
-        app.links.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        let matches = app.links.allElementsBoundByIndex.filter { Self.words($0.label).contains(text) }
+        return matches.first ?? app.links["no link contains \(text)"]
+    }
+
+    private static func words(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{2060}", with: "").replacingOccurrences(of: "\u{00A0}", with: " ")
     }
 
     private func launchTaskFixture(taskLinks: Bool = false) -> XCUIApplication {

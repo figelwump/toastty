@@ -167,14 +167,32 @@ struct ToasttySelectableText: UIViewRepresentable {
                 ]
                 if let color = run.backgroundColor { attributes[.backgroundColor] = UIColor(color) }
                 if let link = run.link { attributes[.link] = link }
+                var characters = String(text[run.range].characters)
                 // A chip's dot stays a dot here: this view draws no spinner.
-                if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = true }
+                // The chip's link names it, so two chips side by side keep
+                // two outlines.
+                if run[ConversationChipAttribute.self] != nil {
+                    attributes[.toasttyChip] = run.link ?? true
+                    characters = Self.unbreakable(characters)
+                }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-                result.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
+                result.append(NSAttributedString(string: characters, attributes: attributes))
             }
             return result
         }
+
+        /// No line break inside a chip, such as after a hyphen in its title:
+        /// a word joiner follows each character. TextKit 2 has no hook that
+        /// refuses a break, as the Mac's layout manager does. A chip wider
+        /// than the line still wraps, because TextKit then breaks by
+        /// character.
+        static func unbreakable(_ characters: String) -> String {
+            characters.map(String.init).joined(separator: wordJoiner)
+        }
     }
+
+    /// Zero width, with no line break on either side.
+    nonisolated static let wordJoiner = "\u{2060}"
 
     final class Coordinator: NSObject, UITextViewDelegate {
         fileprivate var input: RenderingInput?
@@ -238,7 +256,9 @@ final class ToasttyTranscriptTextView: UITextView {
         // Transcript colors belong to Toastty. Pasting elsewhere must not carry
         // its dark-theme rich text or inline-code backgrounds. A chip keeps
         // its words together with no-break spaces; a copy gets plain spaces.
-        UIPasteboard.general.string = selection.replacingOccurrences(of: "\u{00A0}", with: " ")
+        UIPasteboard.general.string = selection
+            .replacingOccurrences(of: ToasttySelectableText.wordJoiner, with: "")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
     }
 
     /// The outline is four points taller than a line of the chip's text and
