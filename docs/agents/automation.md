@@ -195,6 +195,37 @@ The Claude check also saves its transcript files, then removes the project
 directory and trust entry for its temporary working directory. Other provider
 history for that directory can remain in the validation account.
 
+### Task send with steer
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider claude --gui-session'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider codex'
+```
+
+Run this after a change to `task send --steer` or to the input checks it
+uses. Each run mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home; the installed production app is
+not touched. It uses the real, authenticated provider CLI and subscription
+usage. Remote Access stays off, so nothing follows the agent's conversation
+before the first send.
+
+The check makes one task with a real agent and sends to it with
+`task send --steer`: at its open prompt (`sent`), and in a turn that runs
+`sleep` (`steered`, and the agent follows the message in that turn). With
+Claude it also sends while a permission prompt is on screen: the result must be
+`queued`, the prompt must stay unanswered, and its command must not run. The
+check then answers the prompt, and the held message must arrive after the turn
+ends. It records how long after the prompt was on screen Toastty reported the
+agent as waiting. Codex runs without permission prompts here. The Claude
+profile allows only `sleep` without a prompt, and the run marks only its
+temporary repository trusted in `~/.claude.json`, then removes that entry and
+the repository's Claude project directory.
+
+It writes `remote-task-steer-<provider>.json`, the app logs and, for Claude, the
+transcript under the run's artifacts directory.
+
 ### Coordinator
 
 ```bash
@@ -508,8 +539,10 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
-`never-merge`, `release`, `user-typed`, `busy-silent`, `new-task`, `dependency`,
-`quiet-wake` and `interrupted`. `dependency` also checks that the coordinator
+`never-merge`, `release`, `user-typed`, `busy-silent`, `user-words-busy`, `new-task`, `dependency`,
+`quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+correction from the user for a task whose agent works, and checks that it
+passes the words on with `task send --steer` and not without it. `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. `quiet-wake` wakes the
 coordinator for a task that only waits for CI, and checks that it marks the
 turn quiet with `coordinator wake --quiet`, that Toastty took the mark and
@@ -529,7 +562,8 @@ otherwise. `interrupted` kills and relaunches its instance.
 Every run also checks what must hold whatever the coordinator decided: no
 merge, review approval or push; no call that changes GitHub; every message to
 a task starts with `[coordinator]`; no message to an agent that works or
-waits at a prompt; every turn that a digest started set the next check; and
+waits at a prompt, except a `task send --steer` to one that works, and no
+send without `--steer` to a task whose agent works; every turn that a digest started set the next check; and
 no file written or committed but the policy and the ledger.
 
 A check on what the coordinator does is required; a check on its wording is

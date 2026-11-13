@@ -134,6 +134,16 @@ struct TaskStartWorkTests {
             return deliveryResult
         }
 
+        /// What the next checked deliveries report.
+        var steerResult: Result<TaskSteerDelivery, TaskSteerFailure> = .failure(.stateUnknown)
+        /// Text given to each panel's checked delivery, in order.
+        private(set) var steered: [(panelID: UUID, text: String)] = []
+
+        func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+            steered.append((panelID, text))
+            return steerResult
+        }
+
         func lastReply(sessionID: String) -> TaskAgentReply? { replies[sessionID] }
 
         func scope(sessionID: String) -> Set<UUID>? { scopes[sessionID] }

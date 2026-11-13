@@ -588,9 +588,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. A busy agent queues the message as typed input. Fails when the task has no running agent. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
+                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Without steer, Toastty types whatever the agent does: a busy agent queues the message as typed input, and the Return key can answer a permission prompt that is on screen. With steer=true, Toastty checks the agent first and types nothing into a permission prompt or a question: an agent at its open prompt gets the message (delivery sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty holds the message and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). Toastty holds at most 5 messages for an agent, loses them when it quits or the agent restarts, and reports neither. A steer send fails, with nothing typed, when Toastty cannot tell what the agent does (an agent whose conversation it does not follow, or one that starts, ended or failed), when text that someone typed in the terminal can still be in the agent's prompt, and when 5 messages already wait. Fails when the task has no running agent. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
                 selectors: [],
-                parameters: [.taskID(required: true), .taskMessage(required: true)]
+                parameters: [.taskID(required: true), .taskMessage(required: true), .taskSteer(required: false)]
             )
         case .coordinatorOpen:
             return .init(
@@ -1196,6 +1196,15 @@ private extension AppControlParameterDescriptor {
 
     static func taskMessage(required: Bool) -> Self {
         .init(name: "text", summary: "The message, typed into the agent and submitted.", valueType: .string, required: required)
+    }
+
+    static func taskSteer(required: Bool) -> Self {
+        .init(
+            name: "steer",
+            summary: "true checks the agent first: the message goes to its open prompt or into its running turn, or waits for its next open prompt. Nothing is typed into a permission prompt or a question.",
+            valueType: .boolean,
+            required: required
+        )
     }
 
     static func taskWatchCondition(required: Bool) -> Self {

@@ -642,25 +642,25 @@ struct LocalConversationAccessTests {
 
     // MARK: - Helpers
 
-    private static func codexLine(_ payload: String, at timestamp: String) -> Data {
+    static func codexLine(_ payload: String, at timestamp: String) -> Data {
         Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
     }
 
-    private static func userMessage(_ text: String, at timestamp: String) -> Data {
+    static func userMessage(_ text: String, at timestamp: String) -> Data {
         codexLine(
             #"{"type":"user_message","message":"\#(text)","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
             at: timestamp
         )
     }
 
-    private static func taskStarted(at timestamp: String) -> Data {
+    static func taskStarted(at timestamp: String) -> Data {
         codexLine(
             #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
             at: timestamp
         )
     }
 
-    private static func taskComplete(at timestamp: String) -> Data {
+    static func taskComplete(at timestamp: String) -> Data {
         codexLine(
             #"{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#,
             at: timestamp
@@ -673,7 +673,7 @@ struct LocalConversationAccessTests {
     }
 
     @MainActor
-    private static func waitFor<Value>(
+    static func waitFor<Value>(
         _ description: String,
         _ probe: @MainActor () -> Value?
     ) async throws -> Value {
@@ -688,7 +688,7 @@ struct LocalConversationAccessTests {
     }
 
     @MainActor
-    private static func waitUntil(
+    static func waitUntil(
         _ description: String,
         _ condition: @MainActor () -> Bool
     ) async throws {

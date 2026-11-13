@@ -1376,7 +1376,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore
             ) ?? false
         }
-        taskCoordinator.sessions = LiveTaskSessions(
+        let taskSessions = LiveTaskSessions(
             sessionRuntimeStore: sessionRuntimeStore,
             closeController: remoteSessionCloseController,
             exitController: sessionExitController,
@@ -1397,6 +1397,7 @@ struct ToasttyApp: App {
                 ) ?? .unavailable
             }
         )
+        taskCoordinator.sessions = taskSessions
         taskCoordinator.coordinatorController = CoordinatorController(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -1462,6 +1463,8 @@ struct ToasttyApp: App {
             quickEntryController: quickEntryController
         )
         _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
+        // `task send --steer` types through the same path.
+        taskSessions.conversationAccess = remoteAccessService
         // The coordinator types through its agent's conversation, the path
         // a paired phone uses, so one prompt check covers every sender.
         if let coordinatorController = taskCoordinator.coordinatorController {
