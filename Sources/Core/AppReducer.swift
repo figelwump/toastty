@@ -1257,6 +1257,17 @@ public struct AppReducer {
             state.windows[windowIndex].sidebarSegment = segment
             return true
 
+        case .setSidebarWorkspaceCollapsed(let windowID, let workspaceID, let collapsed):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].workspaceIDs.contains(workspaceID),
+                  state.windows[windowIndex].collapsedSidebarWorkspaceIDs.contains(workspaceID) != collapsed else { return false }
+            if collapsed {
+                state.windows[windowIndex].collapsedSidebarWorkspaceIDs.insert(workspaceID)
+            } else {
+                state.windows[windowIndex].collapsedSidebarWorkspaceIDs.remove(workspaceID)
+            }
+            return true
+
         case .setTasksViewShown(let windowID, let shown):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
                   state.windows[windowIndex].showsTasksView != shown else { return false }

@@ -71,6 +71,9 @@ enum SidebarSubspacePresentation {
         var linkedParentID: UUID? = nil
         /// Set when the row draws under its parent in this list.
         var isLinkedChild = false
+        /// The task that started this one, named on the row with a ↖ when
+        /// the list shows the row without that task.
+        var parentTaskTitle: String? = nil
         /// How many of the tasks this one started have merged, such as
         /// "1/3 merged".
         var childProgressLabel: String? = nil
@@ -448,6 +451,9 @@ enum SidebarSubspacePresentation {
         }
         if showsSpawnerTag, let spawnerName = row.spawnerName {
             components.append("spawned by \(spawnerName)")
+        }
+        if let parentTaskTitle = row.parentTaskTitle {
+            components.append("started by \(parentTaskTitle)")
         }
         return components.joined(separator: ", ")
     }

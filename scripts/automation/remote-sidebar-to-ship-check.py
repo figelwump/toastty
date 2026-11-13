@@ -14,11 +14,10 @@ so their merge times differ, and closes every task space but the newest
 task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - the project card's To ship line starts collapsed, with no rows; expanded,
   it shows the three newest merges as rows, newest first, then "Show 2 more",
-  including the task whose quiet task space left the card; the Status segment
-  shows the same tasks under the project's To ship line, the newest as its
-  task space row;
-- "Show 2 more" in either segment opens the Tasks view with the newest task
-  the sidebar did not show selected;
+  including the task whose quiet task space left the card, and Release;
+- "Show 2 more" opens the Tasks view with the newest task the sidebar did not
+  show selected;
+- the Needs you segment lists none of the To ship tasks;
 - a To ship row whose task space has closed opens the Tasks view with its
   task selected; the newest task's row opens its task space, which is still
   open because the task has no worktree to clean up;
@@ -251,6 +250,7 @@ def main():
         rows = sidebar_rows()
         step('projects rows', rows=rows)
         require(rows == [*newest[:3], 'Show 2 more tasks to ship in the Tasks view'], f'Unexpected card rows: {rows}')
+        require('Release' in labels(), 'The To ship line should offer Release')
         capture('projects-five-to-ship')
 
         open_from_sidebar('Show 2 more', newest[3], 'projects-show-more')
@@ -263,27 +263,18 @@ def main():
         capture('projects-row-opens-task-space')
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
 
-        # 2. Status: the same rows under the project's To ship line.
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        run_tool(driver, 'press-label', pid, 'To ship, 5 tasks, collapsed')
-        wait_for('the Status rows', lambda: sidebar_rows()[:3] == newest[:3])
-        rows = sidebar_rows()
-        step('status rows', rows=rows)
-        require('Release' in labels(), 'The To ship line should keep its Release pill')
-        require(rows == [*newest[:3], 'Show 2 more tasks to ship in the Tasks view'], f'Unexpected Status rows: {rows}')
-        capture('status-five-to-ship')
-        open_from_sidebar('Show 2 more', newest[3], 'status-show-more')
-        open_from_sidebar(f'{newest[2]}, ', newest[2], 'status-row-opens-task')
+        # 2. Needs you: To ship tasks wait for a release, not for the user.
+        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=needsYou')
+        wait_for('the Needs you segment', lambda: 'To ship, 5 tasks, expanded' not in labels())
+        require(sidebar_rows() == [], f'Needs you should list no To ship task: {sidebar_rows()}')
+        capture('needs-you-no-to-ship')
+        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
 
-        # 3. Two To ship tasks and three done.
+        # 3. Two To ship tasks and three done. The card keeps the expanded
+        # state from step 1.
         for title in TITLES[:3]:
             cli_json('task', 'mark-done', tasks[title])
             wait_for(f'{title} to be done', lambda: stage(tasks[title])['group'] == 'done')
-        wait_for('two Status rows', lambda: sidebar_rows() == newest[:2])
-        step('status rows with two', rows=sidebar_rows())
-        capture('status-two-to-ship')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
-        # The card keeps the expanded state from step 1.
         wait_for('two card rows', lambda: sidebar_rows() == newest[:2])
         require('To ship, 2 tasks, expanded' in labels(), f'The card should stay expanded: {labels()}')
         done_label = 'Finished tasks: 3 done. Opens the Tasks view.'

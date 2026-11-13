@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the Status sidebar's Needs you group and `task needs-reply` in a real app.
+"""Check the sidebar's Needs you bucket and `task needs-reply` in a real app.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-needs-you-check.py'. It needs an unlocked
@@ -7,7 +7,7 @@ screen: it reads the sidebar through Accessibility.
 
 The check starts its own instance of the wrapper's build with a throwaway
 runtime home and user home and a fake agent, as remote-task-stages-check.py
-does, and shows the Status segment. Through the real CLI and socket it checks
+does, and shows the All segment. Through the real CLI and socket it checks
 that:
 - a task whose agent ran `task needs-reply --question` before it ended its
   turn is `needsYou`/`awaitingReply`, shows the question, stays so after the
@@ -41,7 +41,7 @@ PULL_REQUEST = 'https://github.com/toastty-check/no-such-repo/pull/11'
 QUESTION = 'Pick a hostname option'
 # One line of task-stages-ui-helper's dump.
 DUMP_LINE = re.compile(r'^\d+ \S+ id=(?P<id>\S*) title=(?P<title>.*) frame=-?\d+,(?P<y>-?\d+) \d+x\d+$')
-# The Status segment draws its group titles in capitals.
+# A project card draws its bucket titles in capitals.
 GROUP_HEADERS = {'NEEDS YOU': 'Needs you', 'RUNNING': 'Running', 'IDLE': 'Idle'}
 
 
@@ -125,8 +125,22 @@ def main():
         step('captured', file=path.name)
 
     def sidebar_order():
-        """The Status segment's group headers and task space rows, top to
-        bottom, from the Accessibility tree: ('header', 'Needs you') or
+        """The project card's bucket headers and task space rows, top to
+        bottom, once two reads half a second apart agree: a row that changes
+        bucket slides to its new place, and a read during the slide puts it
+        in the wrong bucket."""
+        previous = None
+        for _ in range(8):
+            current = sidebar_order_once()
+            if current == previous:
+                return current
+            previous = current
+            time.sleep(0.5)
+        return previous
+
+    def sidebar_order_once():
+        """One read of the bucket headers and task space rows, top to bottom,
+        from the Accessibility tree: ('header', 'Needs you') or
         ('row', workspaceID)."""
         found = []
         for line in run_tool('dump', pid).stdout.splitlines():
@@ -178,7 +192,7 @@ def main():
     try:
         workspaces = instance.wait_until_ready()
         workspace_id, window_id = workspaces[0]['workspaceID'], workspaces[0]['windowID']
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
+        # The sidebar opens on All, which shows the card's buckets.
         step('booted', workspaceID=workspace_id)
 
         # 1. A question waits for the user's reply, read or not.
