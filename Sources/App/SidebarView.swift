@@ -675,6 +675,15 @@ struct SidebarView: View {
     private static let sessionParentTagMaximumWidth: CGFloat = 90
     private static let linkedChildIndent: CGFloat = 14
 
+    /// The ↳ mark in a linked child row's indent, level with the row's
+    /// first line and just left of its status mark.
+    private static var linkedChildArrow: some View {
+        TaskChildArrowMark()
+            .frame(width: linkedChildIndent, height: sessionRowLineMinHeight)
+            .padding(.leading, 6)
+            .padding(.top, 4)
+    }
+
     /// A small tag on a task row's second line: its project, or how many of
     /// the tasks it started have merged.
     static func sidebarTaskTag(_ text: String) -> some View {
@@ -1082,19 +1091,40 @@ struct SidebarView: View {
            let workspace = store.state.workspacesByID[location.workspaceID] {
             let isSelected = selectedWorkspaceID == location.workspaceID
                 && store.window(id: windowID)?.showsTasksView != true
+            let dockShows = controller.dockShows(in: windowID)
             SidebarCoordinatorRow(
                 workspace: workspace,
                 isSelected: isSelected,
-                selectedPanelID: workspace.focusedPanelID,
+                // The full view's panel, or the dock's chat, is read.
+                readPanelID: isSelected ? workspace.focusedPanelID : (dockShows ? location.panelID : nil),
+                offersDock: controller.chatIsAvailable,
+                dockShows: dockShows,
                 controller: controller,
                 sessionRuntimeStore: sessionRuntimeStore,
                 select: {
                     cancelWorkspaceRename()
-                    _ = store.selectWorkspace(
-                        windowID: windowID,
-                        workspaceID: location.workspaceID,
-                        preferringUnreadSessionPanelIn: sessionRuntimeStore
-                    )
+                    // Where the chat can show, a click opens the dock with
+                    // the keyboard in its field. In the full view, the
+                    // field there takes the keyboard.
+                    if controller.chatIsAvailable, isSelected == false {
+                        controller.showDock(focusComposer: true)
+                    } else if controller.chatIsAvailable {
+                        controller.chat?.requestComposerFocus(host: .panel)
+                    } else {
+                        _ = store.selectWorkspace(
+                            windowID: windowID,
+                            workspaceID: location.workspaceID,
+                            preferringUnreadSessionPanelIn: sessionRuntimeStore
+                        )
+                    }
+                },
+                openFullView: {
+                    cancelWorkspaceRename()
+                    controller.openFullView()
+                },
+                toggleDock: {
+                    cancelWorkspaceRename()
+                    controller.toggleDock()
                 },
                 openPolicy: {
                     cancelWorkspaceRename()
@@ -1453,6 +1483,11 @@ struct SidebarView: View {
                         parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
                     ) { openTasksView(selecting: item.id) }
                         .padding(.leading, entry.isLinkedChild ? Self.linkedChildIndent : 0)
+                        .overlay(alignment: .topLeading) {
+                            if entry.isLinkedChild {
+                                Self.linkedChildArrow
+                            }
+                        }
                         .contextMenu {
                             TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
                         }
@@ -4973,17 +5008,11 @@ struct SidebarView: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A task an agent split off draws under the task that started it,
-        // on the same rail sub-agent rows use.
+        // indented, with a ↳ mark.
         .padding(.leading, row.isLinkedChild ? Self.linkedChildIndent : 0)
-        .overlay(alignment: .leading) {
+        .overlay(alignment: .topLeading) {
             if row.isLinkedChild {
-                Rectangle()
-                    .fill(ToastyTheme.sidebarChildContextText.opacity(0.35))
-                    .frame(width: 1)
-                    .padding(.leading, Self.linkedChildIndent / 2 + 4)
-                    .padding(.vertical, 2)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                Self.linkedChildArrow
             }
         }
         .background(background, in: RoundedRectangle(cornerRadius: 5))

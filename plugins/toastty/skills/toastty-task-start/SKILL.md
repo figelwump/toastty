@@ -34,6 +34,16 @@ the skill line and the task. The repository has its own instructions, such as
 requests. Both take precedence over this skill where they differ. This skill
 gives the defaults and Toastty's own rules.
 
+## Show suggested UI changes as mockups
+
+When you suggest a change to a UI, a design, or a user experience, at any step
+of the task, include a mockup of it in the same answer. Publish it in a
+Scratchpad in this task workspace, as `toastty-scratchpad` describes, and keep
+it separate from the verification report. Do not describe the change only in
+words. Show the current UI next to the change when that makes the difference
+clear. If you are not sure which direction is best, mock up a few directions
+next to each other and recommend one.
+
 ## 1. Read the request and check the location
 
 The text after the skill line, or after "The task, as written:", is the user's
@@ -129,8 +139,14 @@ ready when they pass. Readiness does not authorize a merge.
   it.
 - Follow the pull request's checks to their result. Use one waiter, such as
   `gh pr checks --watch`, and keep the turn active until it returns. Pending
-  checks are not a blocker and not a reason to hand off. If a check fails, fix
-  it within the task's scope and check again.
+  checks are not a blocker and not a reason to hand off. Only results for the
+  pull request's current head commit count. When checks are expected, an
+  empty check list, or a waiter that exits before the checks start, is not a
+  pass. If no checks apply, or they start only when the pull request is
+  marked ready, follow the repository's readiness rule. An error from the query
+  is an error, not a pending result. Marking the pull request ready can start
+  more checks: follow those too. If a check fails, fix it within the task's
+  scope and check again.
 - After later changes, update the pull request's description and the evidence
   for the new commit.
 
@@ -146,8 +162,14 @@ workspace's Scratchpad, as `toastty-scratchpad` describes.
   and the result.
 - Then give each check: the command or user steps, the commit, the result, and
   its proof, such as terminal output, or screenshots or video for a visual
-  change. Size the proof to the change. List what the checks do not cover.
+  change. Size the proof to the change. Link each material change and risk
+  to the check that covers it, or list it as not covered.
+- Look at the screenshots and video yourself, and confirm that they show in
+  the report.
 - After later changes, refresh the same report so it names the current commit.
+- Open the pull request's panel before you publish the final version of the
+  report, so that the report is the selected tab in the right panel. Do not
+  publish it again only to select it.
 - Do not change the user's selected workspace, tab or keyboard focus to show
   the report or the pull request.
 

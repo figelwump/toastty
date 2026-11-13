@@ -6,6 +6,10 @@ import Foundation
 /// space drawn under the task that started it, so the order does not change
 /// while the user jumps. Panels without session rows remain reachable after
 /// those rows.
+///
+/// The coordinator's workspace is left out: its chat shows in the dock
+/// beside the user's tasks, and its toolbar button shows when it needs the
+/// user. Jump to Next Active stays about the tasks.
 @MainActor
 struct SidebarPanelNavigationOrder {
     let forward: [PanelNavigationTarget]
@@ -73,9 +77,8 @@ struct SidebarPanelNavigationOrder {
         linkedParentID: (UUID) -> UUID?
     ) -> (targets: [PanelNavigationTarget], sessionPanelIDs: Set<UUID>, workspaceIDs: [UUID]) {
         guard let window = state.window(id: windowID) else { return ([], [], []) }
-        // The coordinator's pinned row is above the cards.
-        var workspaceIDs = state.coordinator.flatMap { $0.windowID == windowID ? [$0.workspaceID] : nil } ?? []
-        workspaceIDs += state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
+        let coordinatorWorkspaceID = state.coordinatorWorkspaceID
+        var workspaceIDs = state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
             [parentID] + SidebarSubspacePresentation.groupingLinkedChildren(
                 state.subspaceWorkspaceIDs(of: parentID),
                 id: { $0 },
@@ -83,7 +86,7 @@ struct SidebarPanelNavigationOrder {
             )
         }
         let sidebarWorkspaceIDs = Set(workspaceIDs)
-        workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) }
+        workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) && $0 != coordinatorWorkspaceID }
         var targets: [PanelNavigationTarget] = []
         var seenPanelIDs = Set<UUID>()
         var sessionPanelIDs = Set<UUID>()
