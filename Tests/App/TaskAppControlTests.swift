@@ -622,13 +622,18 @@ extension TaskAppControlTests {
         _ = try executor.runAction(id: "window.tasks.hide", args: args)
         #expect(fixture.store.window(id: windowID)?.showsTasksView == false)
 
+        _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("needsYou")]) { $1 })
+        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .needsYou)
+        _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("all")]) { $1 })
+        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .all)
+        // Scripts written for the earlier segment names keep working.
         _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("status")]) { $1 })
-        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .status)
+        #expect(fixture.store.window(id: windowID)?.sidebarSegment == .needsYou)
         do {
             _ = try executor.runAction(id: "window.sidebar.set-segment", args: args.merging(["segment": .string("stages")]) { $1 })
             Issue.record("an unknown segment should fail")
         } catch AutomationSocketError.invalidPayload(let message) {
-            #expect(message == "segment must be projects or status")
+            #expect(message == "segment must be all or needsYou")
         }
     }
 

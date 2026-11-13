@@ -7,7 +7,7 @@ after setup fails.
 
 This page covers the quick entry panel, creating tasks from the CLI, from
 an agent, or from Toastty Mobile, moving a task into its own git worktree, task stages with the
-Status sidebar and the Tasks view, `~/.toastty/tasks.toml`, and optional
+sidebar and the Tasks view, `~/.toastty/tasks.toml`, and optional
 triage.
 
 A task needs a workspace and an agent. You choose them when you create the
@@ -524,7 +524,7 @@ it are in [the policy file](#the-policy-file).
   the workspace on first use, selects it and starts the agent. Later it
   selects the workspace, and starts the agent only when none runs there.
 - The sidebar pins one **Coordinator** row at the top, above the Tasks row, in
-  both the Projects and the Status segment. The row shows the agent's state
+  both the All and the Needs you segment. The row shows the agent's state
   (a spinner while it works, an approval or error badge, a dot for unread
   output) and says **Not running** when no agent runs. It is not a project
   card: it has no number, does not reorder, and its name does not change.
@@ -557,7 +557,7 @@ value, so the entry goes to the config file in your home folder, which that
 Claude Code does not read.
 
 The coordinator is not a task. It has no task record, so `task list`, the
-Tasks view, the Status segment's groups, webhook events and its own digests
+Tasks view, the sidebar's buckets, webhook events and its own digests
 never show it. It
 is not a project either: a task cannot be placed in its workspace, nothing
 nests under it, and quick entry and the workspace picker do not offer it. A
@@ -1332,8 +1332,8 @@ continues within that scope instead of asking for the same approval again.
 
 A parent that finishes through its child tasks stores nothing: its stage
 follows theirs. A new child that is not finished moves it back to Idle, and its
-agent's next turn moves it to Running. Its task space stays open, and Projects
-hides it as for any To ship or Done task. Children that were archived, or
+agent's next turn moves it to Running. Its task space stays open, and its
+project card hides it as for any To ship or Done task. Children that were archived, or
 marked done without a merge, do not finish a parent alone; it stays Idle, and
 you decide.
 
@@ -1369,43 +1369,55 @@ including when its parent requested the merge. Accepting a merge does not
 mark the reply read. Quiet unread replies in Done, Archived or To ship tasks
 are skipped; working agents, approval requests and errors remain reachable.
 
-The Tasks row at the top of the sidebar opens the Tasks view; its badge counts
-the tasks that need you, and its ＋ creates a task. Below it, a switcher groups
-the sidebar by **Projects** or by **Status**. The choice is saved for each
-window.
+The Tasks row at the top of the sidebar opens the Tasks view, and its ＋
+creates a task. Below it, a switcher shows **All** or only what **Needs you**.
+The **Needs you** side counts the sessions and tasks that need you. The choice
+is saved for each window.
 
-- **Projects** is the workspace list. A task space whose task is To ship or
-  Done leaves its card's task space list unless an agent in it is working or
-  waiting for you. After the card's task spaces, a To ship line with the
-  purple To ship mark lists the project's other To ship tasks, with the Done
-  count on its right. Like
-  Status, it starts collapsed; click it to expand it in place, and the choice
-  resets when the sidebar hides or the app quits. Expanded, the 3 most
-  recently merged To ship tasks show as rows, then **Show N more** when the
-  project has more. When every To ship task shows as a task space row, the
-  footer counts To ship tasks instead.
-- **Status** lists task spaces by stage: Needs you, Running, Idle, To ship,
-  and a Done count. Each row carries its project's name, except under To ship.
-  A task and the tasks it started list together, in the group of the most
+- **All** is the workspace list. Each project card lists the project's agent
+  sessions and its task spaces together, in three buckets: **Needs you**,
+  **Running** and **Idle**. An empty bucket does not show, and the card's
+  header counts each bucket. A session needs you when its agent asks for an
+  approval, reports an error, or finished a turn you have not read; a task
+  needs you when its stage does, such as a question, a pull request to
+  review, or a failed setup. A working agent or a starting task is Running,
+  and anything else is Idle. A task with no open task space, such as one
+  whose task space closed, lists in its project's card as a row of its own.
+  Tasks whose project is not open in the window, such as one that waits for
+  you to pick its workspace, list in an **Other tasks** card at the end.
+  Click the chevron left of a card's name to collapse the card to that name
+  line and its counts; the choice is saved with the window.
+  A task and the tasks it started list together, in the bucket of the most
   urgent one: an idle parent whose child needs you lists in Needs you, dimmed,
-  with the child under it. Group counts include only the tasks whose own stage
-  is in that group, and a row listed in a group its own stage is not in is
-  dimmed. Inside a group, tasks keep the Projects order: by project, then in
-  the order their task spaces opened, so a row moves only when its stage
-  changes its group. The selected task's family keeps its group while you
-  read a finished turn, so the row dims instead of moving from under the
-  pointer. Selecting another row releases it; the selected task resuming
-  work moves its family to Running at once unless a relative still needs
-  you. A task that starts to need you also moves at once.
+  with the child under it. A bucket's count includes only the rows whose own
+  state is in it. Inside a bucket, the project's sessions come first in the
+  card's order, then its task spaces in the order they opened, then its tasks
+  without a task space in the order they were created, so a row moves only
+  when its bucket changes. The selected row, and its family, keep their
+  bucket while you read a finished turn, so the row dims instead of moving
+  from under the pointer. Selecting another row releases it; the selected row
+  resuming work moves to Running at once unless a relative still needs you.
+  A row that starts to need you also moves at once.
   A parent without a pull request moves to To ship or Done when its
-  children finish, so the whole family leaves Idle. A parent in To ship counts
-  in its project's To ship line with its children.
-  To ship starts collapsed to one line that names each project and its count.
-  Click it to expand the group in place; the choice resets when the sidebar
-  hides or the app quits. Expanded, each project has a header as in the Tasks
-  view, with its 3 most recently merged tasks under it, then **Show N more**
-  when the project has more.
-  Top-level workspaces show only in Projects.
+  children finish, so the whole family leaves Idle.
+  A task space whose task is To ship or Done leaves its card unless an agent
+  in it is working or waiting for you. After the buckets, a To ship line with
+  the purple To ship mark lists the project's other To ship tasks, with
+  **Release** when the project can release (see [Release](#release)) and the
+  Done count on its right. It starts collapsed; click it to expand it in
+  place, and the choice resets when the sidebar hides or the app quits.
+  Expanded, the 3 most recently merged To ship tasks show as rows, then
+  **Show N more** when the project has more. When every To ship task shows
+  as a task space row, the footer counts To ship tasks instead. A parent in
+  To ship counts in its project's To ship line with its children.
+- **Needs you** lists only the rows that need you, from every project, under
+  each project's name and count. A project with nothing for you does not
+  show, a collapsed card's rows still list here, and with nothing waiting the
+  segment says **Nothing needs you**. A row lists under its parent task only
+  when the parent needs you too; otherwise a ↖ tag names the parent. Only the
+  selected row stays while you read its turn, and it leaves once you select
+  another row or it starts work again. Running, Idle, To ship and Done stay
+  in **All**.
 
 A To ship row opens the Tasks view with the task selected. The task space
 closed at the merge; if you kept it open, the row opens it instead. **Show N more**
@@ -1434,8 +1446,8 @@ request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
 and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project can release (see
-[Release](#release)); the sidebar's
-Status To ship project headers have one too when the group is expanded. A task that is starting, or whose setup or
+[Release](#release)); the project card's To ship line in the sidebar has
+one too. A task that is starting, or whose setup or
 move failed, shows its setup controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
 it hides the view and returns to the workspace it covered. Up and Down Arrow
@@ -1467,7 +1479,7 @@ both.
 ### Context menus
 
 Right-click a task's row to act on it: its task space row in the sidebar, its
-row in the sidebar's Status segment, a To ship row, or its row in the Tasks
+row in a project card for a task whose task space closed, a To ship row, or its row in the Tasks
 view. The menu
 lists what the detail pane offers now, with the same confirmations: **Open
 Task Space** and **Open PR #N**, then Merge or Merge Without Checks, Cancel

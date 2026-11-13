@@ -178,6 +178,9 @@ public enum AppAction: Equatable, Sendable {
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
     case setSidebarSegment(windowID: UUID, segment: SidebarSegment)
+    /// Collapses a project card in the All segment to its name line, or
+    /// expands it again.
+    case setSidebarWorkspaceCollapsed(windowID: UUID, workspaceID: UUID, collapsed: Bool)
     /// Shows or hides the Tasks view. Selecting a workspace hides it.
     case setTasksViewShown(windowID: UUID, shown: Bool)
     case setSidebarWidth(windowID: UUID, width: Double, defaultWidth: Double)
@@ -344,6 +347,8 @@ public extension AppAction {
             return "toggleSidebar"
         case .setSidebarSegment:
             return "setSidebarSegment"
+        case .setSidebarWorkspaceCollapsed:
+            return "setSidebarWorkspaceCollapsed"
         case .setTasksViewShown:
             return "setTasksViewShown"
         case .setSidebarWidth:

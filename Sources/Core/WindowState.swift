@@ -1,10 +1,31 @@
 import Foundation
 
-/// How a window's sidebar groups its rows: by project, as workspace cards,
-/// or by task stage.
+/// What a window's sidebar lists: every project card, with its sessions and
+/// tasks in Needs you, Running and Idle, or only the rows that need the user.
 public enum SidebarSegment: String, Codable, CaseIterable, Sendable {
-    case projects
-    case status
+    case all
+    case needsYou
+
+    /// A segment by its name. The names saved before the segments were
+    /// renamed still work: `projects` is All and `status` is Needs you.
+    public init?(name: String) {
+        switch name {
+        case Self.all.rawValue, "projects": self = .all
+        case Self.needsYou.rawValue, "status": self = .needsYou
+        default: return nil
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        guard let segment = Self(name: name) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Unknown sidebar segment \(name)"
+            ))
+        }
+        self = segment
+    }
 }
 
 public struct WindowState: Codable, Equatable, Identifiable, Sendable {
@@ -22,6 +43,10 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
     public var sidebarSegment: SidebarSegment
+    /// The project cards collapsed to their name line in the All segment.
+    /// Saved with the window; a workspace that leaves the window drops out
+    /// when the window is saved.
+    public var collapsedSidebarWorkspaceIDs: Set<UUID>
     /// Whether the Tasks view covers the workspace content. Not saved: a
     /// relaunch opens the workspace the window had selected.
     public var showsTasksView: Bool
@@ -35,7 +60,8 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         sidebarWidthPointsOverride: Double? = nil,
         terminalFontSizePointsOverride: Double? = nil,
         markdownTextScaleOverride: Double? = nil,
-        sidebarSegment: SidebarSegment = .projects,
+        sidebarSegment: SidebarSegment = .all,
+        collapsedSidebarWorkspaceIDs: Set<UUID> = [],
         showsTasksView: Bool = false
     ) {
         self.id = id
@@ -47,6 +73,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
         self.sidebarSegment = sidebarSegment
+        self.collapsedSidebarWorkspaceIDs = collapsedSidebarWorkspaceIDs
         self.showsTasksView = showsTasksView
     }
 
@@ -84,6 +111,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case terminalFontSizePointsOverride
         case markdownTextScaleOverride
         case sidebarSegment
+        case collapsedSidebarWorkspaceIDs
     }
 
     public init(from decoder: Decoder) throws {
@@ -109,8 +137,11 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
                 forKey: .markdownTextScaleOverride
             )
         )
-        // An unknown segment from a newer version falls back to projects.
-        sidebarSegment = (try? container.decodeIfPresent(SidebarSegment.self, forKey: .sidebarSegment)) ?? .projects
+        // An unknown segment from a newer version falls back to All.
+        sidebarSegment = (try? container.decodeIfPresent(SidebarSegment.self, forKey: .sidebarSegment)) ?? .all
+        collapsedSidebarWorkspaceIDs = Set(
+            ((try? container.decodeIfPresent([UUID].self, forKey: .collapsedSidebarWorkspaceIDs)) ?? nil) ?? []
+        )
         showsTasksView = false
     }
 
@@ -125,5 +156,9 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
         try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
         try container.encode(sidebarSegment, forKey: .sidebarSegment)
+        let collapsed = workspaceIDs.filter(collapsedSidebarWorkspaceIDs.contains)
+        if collapsed.isEmpty == false {
+            try container.encode(collapsed, forKey: .collapsedSidebarWorkspaceIDs)
+        }
     }
 }

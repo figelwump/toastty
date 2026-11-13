@@ -2171,36 +2171,51 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
 
-        // Projects lists task spaces only; there is no Inbox above the cards.
+        // Tasks with no project open in the window list in the last card,
+        // Other tasks: one that is starting with Running, and one whose setup
+        // failed with Needs you. There is no Inbox above the cards.
         var textValues = renderedTextValues(in: harness.hostingView)
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains(SidebarView.otherTasksCardTitle), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, ⚠ setup failed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Setting up"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Setting up · choosing a workspace"), "\(textValues)")
+        let otherBuckets = try semanticTextFrame(in: harness.hostingView, prefix: SidebarView.otherTasksCardTitle)
+        let billing = try semanticTextFrame(in: harness.hostingView, prefix: "Billing page shows the old plan")
+        let settingUp = try semanticTextFrame(in: harness.hostingView, prefix: "Flaky scratchpad unread test")
+        let downward: (CGRect, CGRect) -> Bool = { upper, lower in
+            harness.hostingView.isFlipped ? upper.midY < lower.midY : upper.midY > lower.midY
+        }
+        XCTAssertTrue(downward(otherBuckets, billing) && downward(billing, settingUp), "Needs you lists above Running in the card")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-other-tasks-all")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-other-tasks-all")
 
-        // Status lists a task that is starting with Running, and one whose
-        // setup failed with Needs you.
-        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
+        // Needs you lists the two that need the user, and not the starting ones.
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .needsYou))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: harness.hostingView)
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Fix the unread dot, ⚠ setup failed"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Setting up"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Setting up · choosing a workspace"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Composer keeps a blank line") }, "\(textValues)")
         let board = try XCTUnwrap(harness.taskBoard)
         let sections = SidebarStatusSections.make(board.items(windowID: harness.windowID))
         let needsYou = Set(sections.needsYou.map(\.item.title))
         let running = Set(sections.running.map(\.item.title))
         XCTAssertTrue(needsYou.isSuperset(of: ["Billing page shows the old plan", "Fix the unread dot"]), "\(needsYou)")
         XCTAssertTrue(running.isSuperset(of: ["Flaky scratchpad unread test", "Composer keeps a blank line"]), "\(running)")
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-starting")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-status-starting")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-needs-you-starting")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-needs-you-starting")
     }
 
     /// The report behind these rules: a clicked unread task jumped to Idle
     /// from under the pointer, a parent showed apart from its child, and a
-    /// question looked idle once read.
-    func testStatusSegmentKeepsQuestionsFamiliesAndTheClickedRowInPlace() throws {
+    /// question looked idle once read. The Needs you segment then lists only
+    /// the rows that need the user.
+    func testBucketsKeepQuestionsFamiliesAndTheClickedRowInPlace() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
         var workspaces = [project]
@@ -2262,14 +2277,16 @@ final class SidebarViewTests: XCTestCase {
                 at: now.addingTimeInterval(seconds)
             )
         }
-        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
         let root = harness.hostingView
 
-        /// Group headers and rows, top to bottom.
+        /// Group headers and rows, top to bottom, once rows that changed
+        /// bucket have finished moving.
         func layout() throws -> [String] {
             pumpMainRunLoop(duration: 0.6)
             root.layoutSubtreeIfNeeded()
-            let top = try semanticTextFrame(in: root, prefix: "Tasks, ")
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
             // Not every group shows, so look up without recording a failure.
             func frame(_ prefix: String) -> CGRect? {
                 semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
@@ -2305,8 +2322,8 @@ final class SidebarViewTests: XCTestCase {
             abs(questionPill.midY - questionRow.midY), abs(questionPill.midY - neighborRow.midY),
             "The pill should sit in the question row: \(questionPill), rows \(questionRow) \(neighborRow)"
         )
-        try writeSidebarEvidence(root, name: "status-1-before-click")
-        try attachSidebarRender(root, name: "status-1-before-click")
+        try writeSidebarEvidence(root, name: "buckets-1-before-click")
+        try attachSidebarRender(root, name: "buckets-1-before-click")
 
         // Selecting the unread task reads it; it holds its place, dimmed and
         // no longer counted.
@@ -2318,8 +2335,8 @@ final class SidebarViewTests: XCTestCase {
         ])
         textValues = renderedTextValues(in: root)
         XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
-        try writeSidebarEvidence(root, name: "status-2-clicked-row-holds")
-        try attachSidebarRender(root, name: "status-2-clicked-row-holds")
+        try writeSidebarEvidence(root, name: "buckets-2-clicked-row-holds")
+        try attachSidebarRender(root, name: "buckets-2-clicked-row-holds")
 
         // Resuming work moves the selected row to Running at normal opacity.
         harness.sessionRuntimeStore.updateStatus(
@@ -2332,8 +2349,8 @@ final class SidebarViewTests: XCTestCase {
         textValues = renderedTextValues(in: root)
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
         XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
-        try writeSidebarEvidence(root, name: "status-3-selected-row-resumes")
-        try attachSidebarRender(root, name: "status-3-selected-row-resumes")
+        try writeSidebarEvidence(root, name: "buckets-3-selected-row-resumes")
+        try attachSidebarRender(root, name: "buckets-3-selected-row-resumes")
         harness.sessionRuntimeStore.updateStatus(
             sessionID: "Thumbnail filenames", status: SessionStatus(kind: .idle, summary: "Waiting"),
             at: now.addingTimeInterval(6)
@@ -2344,8 +2361,281 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try layout(), [
             "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "IDLE", "Thumbnail filenames",
         ])
-        try writeSidebarEvidence(root, name: "status-4-after-selection-moves")
-        try attachSidebarRender(root, name: "status-4-after-selection-moves")
+        try writeSidebarEvidence(root, name: "buckets-4-after-selection-moves")
+        try attachSidebarRender(root, name: "buckets-4-after-selection-moves")
+
+        // Needs you lists only what needs the user: the idle parent stays
+        // out, and its child that waits for review names it instead.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Only what needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos, 2 need you"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Thumbnail filenames, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Hostname options, task space, waiting for your reply") }, "\(textValues)")
+        let child = try XCTUnwrap(textValues.first { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+        XCTAssertTrue(child.hasSuffix("started by Public URL warning"), child)
+        try writeSidebarEvidence(root, name: "buckets-5-needs-you-segment")
+        try attachSidebarRender(root, name: "buckets-5-needs-you-segment")
+    }
+
+    /// Plain sessions list in the same buckets as task spaces. A card
+    /// collapses to its name line and keeps its counts, and the Needs you
+    /// segment still lists what waits in it.
+    func testAllCardsBucketSessionsWithTaskSpacesAndCollapseToTheNameLine() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let assessPanel = UUID(), plaidPanel = UUID(), domainPanel = UUID()
+        let emptyos = WorkspaceState(
+            id: UUID(),
+            title: "emptyos",
+            layoutTree: .split(
+                nodeID: UUID(), orientation: .horizontal, ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: assessPanel),
+                second: .split(
+                    nodeID: UUID(), orientation: .vertical, ratio: 0.5,
+                    first: .slot(slotID: UUID(), panelID: plaidPanel),
+                    second: .slot(slotID: UUID(), panelID: domainPanel)
+                )
+            ),
+            panels: [
+                assessPanel: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                plaidPanel: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+                domainPanel: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: assessPanel,
+            unreadPanelIDs: [plaidPanel]
+        )
+        let toastty = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [emptyos]
+        var records: [TaskRecord] = []
+        var sessions: [(title: String, panelID: UUID, workspaceID: UUID, kind: SessionStatusKind)] = [
+            ("Assess Plaid integration options", assessPanel, emptyos.id, .ready),
+            ("Plaid integration layer", plaidPanel, emptyos.id, .ready),
+            ("Evaluate public user domain", domainPanel, emptyos.id, .working),
+        ]
+        func task(_ title: String, kind: SessionStatusKind, question: String? = nil) {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: emptyos.id, setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, parentWorkspaceID: emptyos.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            sessions.append((title, panelID, workspaceID, kind))
+        }
+        task("Hostname options", kind: .idle, question: "Pick a hostname option")
+        task("Move computer addresses", kind: .working)
+        workspaces.append(toastty)
+        let toasttyPanel = try XCTUnwrap(toastty.focusedPanelID)
+        sessions.append(("Fix the sidebar", toasttyPanel, toastty.id, .needsApproval))
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: toastty.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (index, session) in sessions.enumerated() {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: session.title, agent: .codex, panelID: session.panelID, windowID: windowID,
+                workspaceID: session.workspaceID, codexStatusTrackingSource: .externallyReported,
+                displayTitleOverride: session.title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: session.title, status: SessionStatus(kind: session.kind, summary: "Status"),
+                at: now.addingTimeInterval(TimeInterval(index + 1))
+            )
+        }
+        // The Assess turn was read; the Plaid turn was not.
+        _ = harness.store.send(.markPanelNotificationsRead(workspaceID: emptyos.id, panelID: assessPanel))
+        let root = harness.hostingView
+
+        /// The emptyos card's bucket headers and rows, top to bottom, once
+        /// rows that changed bucket have finished moving.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you, 2", "Running, 2", "Idle, 1"] {
+                if let found = frame(header) { frames.append((header.uppercased(), found)) }
+            }
+            for title in sessions.map(\.title) where title != "Fix the sidebar" {
+                if let found = frame("\(title), ") { frames.append((title, found)) }
+            }
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // Sessions and task spaces share the buckets. Inside a bucket the
+        // project's own sessions come first, then its task spaces.
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU, 2", "Plaid integration layer", "Hostname options",
+            "RUNNING, 2", "Evaluate public user domain", "Move computer addresses",
+            "IDLE, 1", "Assess Plaid integration options",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("2 need you, 2 running, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("1 needs you"), "\(textValues)")
+        // The segment counts sessions and tasks that need the user.
+        XCTAssertTrue(textValues.contains("Only what needs you, 3"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "all-1-buckets")
+        try attachSidebarRender(root, name: "all-1-buckets")
+
+        // Collapsed, the card keeps its name line and its counts; the choice
+        // is saved with the window.
+        try clickSemanticText(prefix: "Collapse emptyos", in: root)
+        XCTAssertEqual(try layout(), [])
+        XCTAssertEqual(harness.store.window(id: windowID)?.collapsedSidebarWorkspaceIDs, [emptyos.id])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Expand emptyos"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("2 need you, 2 running, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix the sidebar, ") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "all-2-collapsed")
+        try attachSidebarRender(root, name: "all-2-collapsed")
+
+        // Needs you lists the waiting session and question from the collapsed
+        // card, and the other project's approval, and nothing else.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("emptyos, 2 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("toastty, 1 needs you"), "\(textValues)")
+        for title in ["Plaid integration layer", "Hostname options", "Fix the sidebar"] {
+            XCTAssertTrue(textValues.contains { $0.hasPrefix("\(title), ") }, "\(title): \(textValues)")
+        }
+        for title in ["Evaluate public user domain", "Move computer addresses", "Assess Plaid integration options"] {
+            XCTAssertFalse(textValues.contains { $0.hasPrefix("\(title), ") }, "\(title): \(textValues)")
+        }
+        try writeSidebarEvidence(root, name: "all-3-needs-you-segment")
+        try attachSidebarRender(root, name: "all-3-needs-you-segment")
+
+        // Back in All, the chevron expands the card again.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .all))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Expand emptyos", in: root)
+        XCTAssertEqual(try layout().first, "NEEDS YOU, 2")
+        XCTAssertEqual(harness.store.window(id: windowID)?.collapsedSidebarWorkspaceIDs, [])
+    }
+
+    /// Tasks without a task space under a card list by their own rows: in
+    /// their project's order, not by their latest activity; a child names its
+    /// parent when it lists alone; and a task space left at top level, such
+    /// as when its project closed, still shows its task's stage.
+    func testTaskRowsKeepTheirOrderAndNameTheirParent() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        func record(
+            _ title: String, minutesAgo: Double, project projectID: UUID?, parent: UUID? = nil,
+            taskSpace: (workspaceID: UUID, panelID: UUID)? = nil, question: String? = nil
+        ) -> TaskRecord {
+            var record = TaskRecord(
+                id: UUID(), createdAt: now.addingTimeInterval(-minutesAgo * 60), text: title, title: title,
+                slug: TaskRecord.sanitizedSlug(title) ?? "task", source: .cli, resolved: TaskFields(agent: "codex"),
+                workspaceID: projectID, setup: .started, parentTaskID: parent,
+                // A task space that is not open: the task space closed.
+                operation: TaskOperation(taskSpace: .init(
+                    workspaceID: taskSpace?.workspaceID ?? UUID(), panelID: taskSpace?.panelID ?? UUID()
+                ))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            return record
+        }
+        let older = record("Older closed task", minutesAgo: 30, project: project.id)
+        var newer = record("Newer closed task", minutesAgo: 20, project: project.id)
+        // The newer task changed last, which used to list it first.
+        newer.readyForReviewAt = now
+        let parentSpace = UUID(), parentPanel = UUID()
+        let parent = record("Parent runs", minutesAgo: 10, project: project.id, taskSpace: (parentSpace, parentPanel))
+        let child = record("Child asks", minutesAgo: 5, project: project.id, parent: parent.id)
+        let promotedSpace = UUID(), promotedPanel = UUID()
+        // Its project is not open, and its task space is a top-level workspace.
+        let promoted = record(
+            "Promoted question", minutesAgo: 1, project: UUID(), taskSpace: (promotedSpace, promotedPanel), question: "Keep it?"
+        )
+        var parentWorkspace = WorkspaceState(
+            id: parentSpace, title: "parent-runs", layoutTree: .slot(slotID: UUID(), panelID: parentPanel),
+            panels: [parentPanel: .terminal(TerminalPanelState(title: "Parent runs", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: parentPanel, parentWorkspaceID: project.id
+        )
+        parentWorkspace.taskID = parent.id
+        var promotedWorkspace = WorkspaceState(
+            id: promotedSpace, title: "promoted-question", layoutTree: .slot(slotID: UUID(), panelID: promotedPanel),
+            panels: [promotedPanel: .terminal(TerminalPanelState(title: "Promoted", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: promotedPanel
+        )
+        promotedWorkspace.taskID = promoted.id
+        workspaces += [parentWorkspace, promotedWorkspace]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state, windowID: windowID, taskRecords: [older, newer, parent, child, promoted], withTaskBoard: true
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "parent-agent", agent: .codex, panelID: parentPanel, windowID: windowID, workspaceID: parentSpace,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: "Parent runs", cwd: "/repo", repoRoot: "/repo", at: now
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "parent-agent", status: SessionStatus(kind: .working, summary: "Working"), at: now
+        )
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+
+        // All: the closed tasks list in the order they were created.
+        let first = try semanticTextFrame(in: root, prefix: "Older closed task, ")
+        let second = try semanticTextFrame(in: root, prefix: "Newer closed task, ")
+        XCTAssertTrue(root.isFlipped ? first.midY < second.midY : first.midY > second.midY, "creation order: \(first) \(second)")
+        var textValues = renderedTextValues(in: root)
+        // The promoted task space lists with Other tasks, with its question.
+        XCTAssertTrue(textValues.contains(SidebarView.otherTasksCardTitle), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-all")
+        try attachSidebarRender(root, name: "task-rows-all")
+
+        // Needs you: the child lists without its running parent and names it.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        let childRow = try XCTUnwrap(textValues.first { $0.hasPrefix("Child asks, ") }, "\(textValues)")
+        XCTAssertTrue(childRow.hasSuffix("started by Parent runs"), childRow)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Parent runs, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-needs-you")
+        try attachSidebarRender(root, name: "task-rows-needs-you")
     }
 
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
@@ -2367,7 +2657,7 @@ final class SidebarViewTests: XCTestCase {
 
         // Needs you: the agent asking for approval, the linked pull request
         // with no agent working on it, and the task triage could not place.
-        XCTAssertTrue(textValues.contains("Tasks, 3 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Only what needs you, ") }, "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
         // The finished task space leaves its card; the footer counts it.
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Checklist, task space") }, "\(textValues)")
@@ -2375,149 +2665,30 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
         try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
 
-        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
-        pumpMainRunLoop(duration: 0.6)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        textValues = renderedTextValues(in: harness.hostingView)
-        // The task triage could not place needs the user too.
-        XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
+        // The task triage could not place lists in Other tasks.
         XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
         // An idle agent lists apart from the working one.
-        XCTAssertTrue(textValues.contains("Idle, 1"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review task 1, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Running, ") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Idle, ") }, "\(textValues)")
         let sections = SidebarStatusSections.make(try XCTUnwrap(harness.taskBoard).items(windowID: harness.windowID))
         XCTAssertEqual(sections.running.map(\.item.agent), [.working])
         XCTAssertEqual(sections.idle.map(\.item.agent), [.idle])
-        XCTAssertTrue(textValues.contains("Done, 1 task, opens the Tasks view"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix nav drawer focus, task space, needs approval") && $0.contains("in emptyos-computer") }, "\(textValues)")
-        // Top-level workspaces show only in Projects.
-        XCTAssertFalse(textValues.contains { $0.contains("ios-tab-footer") }, "\(textValues)")
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-status")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-status")
-    }
 
-    func testStatusToShipStartsCollapsedAndExpandsUnderProjectHeaders() throws {
-        let now = Date()
-        let emptyosID = UUID()
-        let toasttyID = UUID()
-        let taskSpacePanelID = UUID()
-        let mcpTaskID = UUID()
-        var taskSpace = WorkspaceState(
-            id: UUID(),
-            title: "mcp-page-tools",
-            layoutTree: .slot(slotID: UUID(), panelID: taskSpacePanelID),
-            panels: [taskSpacePanelID: .terminal(TerminalPanelState(title: "mcp", shell: "zsh", cwd: "/repo/emptyos"))],
-            focusedPanelID: taskSpacePanelID,
-            annotations: ["github-pr": WorkspaceAnnotation(text: "PR #322", url: "https://github.com/example/emptyos/pull/322")],
-            parentWorkspaceID: emptyosID
-        )
-        // The task space belongs to the MCP task, so the board lists them as one item.
-        taskSpace.taskID = mcpTaskID
-        func merged(_ title: String, project: UUID, root: String, hoursAgo: Double, taskSpace: WorkspaceState? = nil) -> TaskRecord {
-            var record = TaskRecord(
-                id: taskSpace == nil ? UUID() : mcpTaskID,
-                createdAt: now.addingTimeInterval(-3 * 86_400),
-                text: title,
-                title: title,
-                slug: title,
-                source: .cli,
-                workspaceID: project,
-                projectRoot: root,
-                setup: .started
-            )
-            record.mergedAt = now.addingTimeInterval(-hoursAgo * 3_600 - 60)
-            if let taskSpace {
-                record.operation.taskSpace = .init(workspaceID: taskSpace.id, panelID: taskSpacePanelID)
-                // The board drops a merge recorded for another pull request.
-                record.pullRequestURL = taskSpace.annotations["github-pr"]?.url
-            }
-            return record
-        }
-        let workspaces = [
-            makeSinglePanelWorkspace(id: emptyosID, title: "emptyos"),
-            taskSpace,
-            makeSinglePanelWorkspace(id: toasttyID, title: "toastty"),
-        ]
-        let windowID = UUID()
-        let state = AppState(
-            windows: [
-                WindowState(
-                    id: windowID,
-                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
-                    workspaceIDs: workspaces.map(\.id),
-                    selectedWorkspaceID: emptyosID
-                ),
-            ],
-            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
-            selectedWindowID: windowID
-        )
-        let harness = try makeSidebarHarness(
-            state: state,
-            windowID: windowID,
-            taskRecords: [
-                merged("MCP page tools: private pages", project: emptyosID, root: "/repo/emptyos", hoursAgo: 9, taskSpace: taskSpace),
-                merged("Show archive button when done", project: toasttyID, root: "/repo/toastty", hoursAgo: 24),
-                merged("mini-scheduled-cleanup", project: toasttyID, root: "/repo/toastty", hoursAgo: 14),
-            ],
-            withTaskBoard: true,
-            tasksConfig: TasksConfig(workspaces: ["/repo/emptyos", "/repo/toastty"].map {
-                TasksConfig.Workspace(path: $0, releaseTags: "v*", releasePrompt: "Release the merged tasks.")
-            })
-        )
-        defer { harness.window.orderOut(nil) }
-        harness.sessionRuntimeStore.startSession(
-            sessionID: "mcp-agent",
-            agent: .codex,
-            panelID: taskSpacePanelID,
-            windowID: windowID,
-            workspaceID: taskSpace.id,
-            codexStatusTrackingSource: .externallyReported,
-            displayTitleOverride: "MCP page tools: private pages",
-            cwd: "/repo/emptyos",
-            repoRoot: "/repo/emptyos",
-            at: now
-        )
-        harness.sessionRuntimeStore.updateStatus(
-            sessionID: "mcp-agent",
-            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting for review"),
-            at: now
-        )
-        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .needsYou))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
-
-        // Collapsed by default: one line names each project and its count.
-        var textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("To ship, 3 tasks, collapsed, emptyos 1, toastty 2"), "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("emptyos, 1 task to ship") }, "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show archive button when done") }, "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("MCP page tools: private pages") }, "\(textValues)")
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-to-ship-collapsed")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-status-to-ship-collapsed")
-
-        // Expanded: each project's header, with its tasks under it.
-        try clickSemanticText(prefix: "To ship, 3 tasks, collapsed", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.3)
-        harness.hostingView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("To ship, 3 tasks, expanded"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("emptyos, 1 task to ship, oldest 9h"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("toastty, 2 tasks to ship, oldest 1d"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("Show archive button when done, ") }, "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("mini-scheduled-cleanup, ") }, "\(textValues)")
-        // The header names the project, so the task space row does not.
-        let taskSpaceRow = try XCTUnwrap(textValues.first { $0.hasPrefix("MCP page tools: private pages, task space") }, "\(textValues)")
-        XCTAssertFalse(taskSpaceRow.contains("in emptyos"), taskSpaceRow)
-        try writeSidebarEvidence(harness.hostingView, name: "sidebar-status-to-ship-expanded")
-        try attachSidebarRender(harness.hostingView, name: "sidebar-status-to-ship-expanded")
-
-        try clickSemanticText(prefix: "To ship, 3 tasks, expanded", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.3)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("To ship, 3 tasks, collapsed, emptyos 1, toastty 2"), "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show archive button when done") }, "\(textValues)")
+        // Needs you: the agent asking for approval, the linked pull request
+        // with no agent working on it, and the task triage could not place.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix nav drawer focus, task space, needs approval") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        // Running and idle rows, and the Done count, stay in All.
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Review task 1, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Running, ") || $0.hasPrefix("Idle, ") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Finished tasks:") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-needs-you")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-needs-you")
     }
 
     func testProjectCardToShipStartsCollapsedWithTheDoneCountAndExpandsInPlace() throws {
@@ -2625,7 +2796,7 @@ final class SidebarViewTests: XCTestCase {
 
     /// The rows of a task the user asked to release right after its merge
     /// carry a small mark, before the merge and while the task waits in To
-    /// ship: in the project card, the Status segment and the Tasks view.
+    /// ship: in the project card and the Tasks view.
     func testReleaseAfterMergeMarkShowsOnOpenAndToShipRows() throws {
         let now = Date()
         let toasttyID = UUID()
@@ -2721,20 +2892,12 @@ final class SidebarViewTests: XCTestCase {
             )
             XCTAssertTrue(textValues.contains("Update the docs, Merged · waiting for a release"), "\(place): \(textValues)")
         }
-        try assertRows(renderedTextValues(in: harness.hostingView), "project card")
+        let cardTextValues = renderedTextValues(in: harness.hostingView)
+        try assertRows(cardTextValues, "project card")
+        // The project can release from Toastty, so its To ship line offers it.
+        XCTAssertTrue(cardTextValues.contains(SidebarView.cardReleaseLabel), "\(cardTextValues)")
         try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-projects")
         try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-projects")
-
-        // The Status segment: Idle, then To ship under the project's header.
-        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .status))
-        pumpMainRunLoop(duration: 0.6)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        try clickSemanticText(prefix: "To ship, 2 tasks, collapsed", in: harness.hostingView)
-        pumpMainRunLoop(duration: 0.3)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        try assertRows(renderedTextValues(in: harness.hostingView), "Status segment")
-        try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-status")
-        try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-status")
 
         // The Tasks view, with the To ship task in the detail pane.
         let board = try XCTUnwrap(harness.taskBoard)
@@ -2823,7 +2986,7 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.3)
         XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
         harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Tasks, ", in: harness.hostingView)
+        try clickSemanticText(prefix: "Tasks", in: harness.hostingView)
         pumpMainRunLoop(duration: 0.6)
         tasks.hostingView.layoutSubtreeIfNeeded()
         XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
@@ -2832,14 +2995,13 @@ final class SidebarViewTests: XCTestCase {
         tasks.window.orderOut(nil)
         tasks.window.contentView = nil
 
-        // The Status segment's Done expands Done in a view that opens after
-        // the click, as the app opens it.
+        // With the Tasks view closed, the card's Done count expands Done in
+        // the view that opens after the click, as the app opens it.
         _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
-        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .status))
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
         harness.window.makeKeyAndOrderFront(nil)
-        try clickSemanticText(prefix: "Done, 1 task, opens the Tasks view", in: harness.hostingView)
+        try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
         pumpMainRunLoop(duration: 0.3)
         XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
         XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
@@ -3586,7 +3748,11 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         harness.hostingView.layoutSubtreeIfNeeded()
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), otherID)
-        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView, titles: titles), titles)
+        // The family's turns are read and the selection left it, so it moved
+        // to Idle; the selected task holds its place in Needs you.
+        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView, titles: titles), [
+            "Review task 1", "Checklist", "Fix nav drawer focus",
+        ])
     }
 
     func testNextActiveReviewCyclesKeepTaskSpacesInWorkspaceOrder() throws {
@@ -3958,8 +4124,8 @@ final class SidebarViewTests: XCTestCase {
             XCTAssertTrue(towardTop, "\(segment): the coordinator's row is not above the Tasks row")
         }
 
-        // Projects: above the Tasks row, and not one of the cards.
-        try checkPinned("projects")
+        // All: above the Tasks row, and not one of the cards.
+        try checkPinned("all")
         var textValues = renderedTextValues(in: root)
         XCTAssertTrue(textValues.contains("toastty"), "\(textValues)")
         XCTAssertTrue(textValues.contains("emptyos"), "\(textValues)")
@@ -3970,13 +4136,16 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(root, name: "coordinator-row-projects-not-running")
         try writeSidebarEvidence(root, name: "coordinator-row-projects-not-running")
 
-        // Status: the cards go, the coordinator's row stays.
-        _ = harness.store.send(.setSidebarSegment(windowID: fixture.windowID, segment: .status))
-        try checkPinned("status")
+        // Needs you: the cards go, the coordinator's row stays.
+        _ = harness.store.send(.setSidebarSegment(windowID: fixture.windowID, segment: .needsYou))
+        try checkPinned("needs you")
         textValues = renderedTextValues(in: root)
         XCTAssertFalse(textValues.contains("toastty"), "\(textValues)")
-        try attachSidebarRender(root, name: "coordinator-row-status-not-running")
-        try writeSidebarEvidence(root, name: "coordinator-row-status-not-running")
+        // Nothing waits for the user, and the segment says so.
+        XCTAssertTrue(textValues.contains("Nothing needs you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only what needs you"), "\(textValues)")
+        try attachSidebarRender(root, name: "coordinator-row-needs-you-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-needs-you-not-running")
     }
 
     func testCoordinatorRowShowsTheAgentsStateAndSelectsItsWorkspace() throws {

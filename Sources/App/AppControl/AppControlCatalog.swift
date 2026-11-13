@@ -793,11 +793,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Group a window's sidebar by project (segment=projects) or by task stage (segment=status).",
+                summary: "Show every project card in a window's sidebar (segment=all), or only the rows that need the user (segment=needsYou).",
                 selectors: [.windowID],
                 parameters: [.init(
                     name: "segment",
-                    summary: "projects or status.",
+                    summary: "all or needsYou. The older names projects and status also work.",
                     valueType: .string,
                     required: true,
                     allowedValues: SidebarSegment.allCases.map(\.rawValue)

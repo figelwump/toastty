@@ -176,19 +176,55 @@ struct TaskWindowStateTests {
     @Test
     func theSidebarSegmentIsSavedButTheTasksViewIsNot() throws {
         var (state, windowID, _) = state()
-        #expect(state.windows[0].sidebarSegment == .projects)
-        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state))
-        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .status), state: &state) == false)
+        #expect(state.windows[0].sidebarSegment == .all)
+        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .needsYou), state: &state))
+        #expect(AppReducer.reduce(action: .setSidebarSegment(windowID: windowID, segment: .needsYou), state: &state) == false)
         _ = AppReducer.reduce(action: .setTasksViewShown(windowID: windowID, shown: true), state: &state)
 
-        let decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(state.windows[0]))
-        #expect(decoded.sidebarSegment == .status)
+        let encoded = try JSONEncoder().encode(state.windows[0])
+        let decoded = try JSONDecoder().decode(WindowState.self, from: encoded)
+        #expect(decoded.sidebarSegment == .needsYou)
         #expect(decoded.showsTasksView == false)
 
-        // Windows saved before segments existed open on Projects.
-        var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state.windows[0])) as? [String: Any])
+        // Windows saved before segments existed open on All; windows saved
+        // with the earlier segment names open on the segment that replaced them.
+        var object = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "sidebarSegment")
         let older = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(older.sidebarSegment == .projects)
+        #expect(older.sidebarSegment == .all)
+        for (savedName, segment) in [("projects", SidebarSegment.all), ("status", .needsYou), ("stages", .all)] {
+            object["sidebarSegment"] = savedName
+            let saved = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: object))
+            #expect(saved.sidebarSegment == segment, "\(savedName)")
+        }
+    }
+
+    @Test
+    func aCollapsedProjectCardIsSavedWithItsWindow() throws {
+        var (state, windowID, workspaceIDs) = state()
+        #expect(state.windows[0].collapsedSidebarWorkspaceIDs.isEmpty)
+        let collapse = AppAction.setSidebarWorkspaceCollapsed(windowID: windowID, workspaceID: workspaceIDs[1], collapsed: true)
+        #expect(AppReducer.reduce(action: collapse, state: &state))
+        #expect(AppReducer.reduce(action: collapse, state: &state) == false)
+        // A workspace that is not in the window cannot collapse there.
+        #expect(AppReducer.reduce(
+            action: .setSidebarWorkspaceCollapsed(windowID: windowID, workspaceID: UUID(), collapsed: true),
+            state: &state
+        ) == false)
+
+        var decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(state.windows[0]))
+        #expect(decoded.collapsedSidebarWorkspaceIDs == [workspaceIDs[1]])
+
+        // A workspace that left the window drops out when the window is saved.
+        var window = state.windows[0]
+        window.workspaceIDs.removeAll { $0 == workspaceIDs[1] }
+        decoded = try JSONDecoder().decode(WindowState.self, from: JSONEncoder().encode(window))
+        #expect(decoded.collapsedSidebarWorkspaceIDs.isEmpty)
+
+        #expect(AppReducer.reduce(
+            action: .setSidebarWorkspaceCollapsed(windowID: windowID, workspaceID: workspaceIDs[1], collapsed: false),
+            state: &state
+        ))
+        #expect(state.windows[0].collapsedSidebarWorkspaceIDs.isEmpty)
     }
 }

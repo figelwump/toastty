@@ -981,7 +981,8 @@ These commands are short forms of
 `action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
-`window.tasks.hide`, and `window.sidebar.set-segment segment=projects|status`.
+`window.tasks.hide`, and `window.sidebar.set-segment segment=all|needsYou`
+(the earlier names `projects` and `status` still work).
 
 ```bash
 "$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait

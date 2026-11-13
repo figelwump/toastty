@@ -2,9 +2,11 @@ import CoreState
 import SwiftUI
 
 /// The top of the sidebar while the task system is on: the Tasks row, which
-/// opens the Tasks view and counts the tasks waiting for the user, with the
-/// ＋ that opens quick entry; and the Projects | Status switcher.
+/// opens the Tasks view, with the ＋ that opens quick entry; and the
+/// All | Needs you switcher, which counts the rows that need the user.
 struct SidebarTasksHeader: View {
+    /// Sessions, task spaces and tasks that need the user, as the Needs you
+    /// segment lists them.
     let needsYouCount: Int
     let isTasksViewShown: Bool
     let segment: SidebarSegment
@@ -37,23 +39,15 @@ struct SidebarTasksHeader: View {
                     Text("Tasks")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(ToastyTheme.primaryText)
-                    if needsYouCount > 0 {
-                        Text("\(needsYouCount)")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Color(hex: 0x160F06))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(ToastyTheme.sessionNeedsApprovalText, in: Capsule())
-                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(Self.tasksRowAccessibilityLabel(needsYouCount: needsYouCount))
+            .accessibilityLabel(Self.tasksRowAccessibilityLabel)
             .accessibilityIdentifier("sidebar.tasks.open")
             .background {
-                SidebarSemanticTextBridge(text: Self.tasksRowAccessibilityLabel(needsYouCount: needsYouCount))
+                SidebarSemanticTextBridge(text: Self.tasksRowAccessibilityLabel)
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
             }
@@ -96,24 +90,39 @@ struct SidebarTasksHeader: View {
         HStack(spacing: 0) {
             ForEach(SidebarSegment.allCases, id: \.self) { candidate in
                 let isSelected = candidate == segment
+                let count = candidate == .needsYou ? needsYouCount : 0
                 Button {
                     selectSegment(candidate)
                 } label: {
-                    Text(Self.title(candidate))
-                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.sidebarSessionPathText)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 3)
-                        .background(
-                            isSelected ? Color(hex: 0x3D3D3D) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 5)
-                        )
-                        .contentShape(Rectangle())
+                    HStack(spacing: 5) {
+                        Text(Self.title(candidate))
+                            .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.sidebarSessionPathText)
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color(hex: 0x160F06))
+                                .padding(.horizontal, 5)
+                                .background(ToastyTheme.sessionNeedsApprovalText, in: Capsule())
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 3)
+                    .background(
+                        isSelected ? Color(hex: 0x3D3D3D) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Group the sidebar by \(Self.title(candidate).lowercased())")
+                .accessibilityLabel(Self.segmentAccessibilityLabel(candidate, needsYouCount: count))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityIdentifier("sidebar.segment.\(candidate.rawValue)")
+                .background {
+                    SidebarSemanticTextBridge(text: Self.segmentAccessibilityLabel(candidate, needsYouCount: count))
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .padding(2)
@@ -123,16 +132,17 @@ struct SidebarTasksHeader: View {
 
     static func title(_ segment: SidebarSegment) -> String {
         switch segment {
-        case .projects: "Projects"
-        case .status: "Status"
+        case .all: "All"
+        case .needsYou: "Needs you"
         }
     }
 
-    static func tasksRowAccessibilityLabel(needsYouCount: Int) -> String {
-        switch needsYouCount {
-        case 0: "Tasks"
-        case 1: "Tasks, 1 needs you"
-        default: "Tasks, \(needsYouCount) need you"
+    static let tasksRowAccessibilityLabel = "Tasks"
+
+    static func segmentAccessibilityLabel(_ segment: SidebarSegment, needsYouCount: Int) -> String {
+        switch segment {
+        case .all: "All projects"
+        case .needsYou: needsYouCount > 0 ? "Only what needs you, \(needsYouCount)" : "Only what needs you"
         }
     }
 }
