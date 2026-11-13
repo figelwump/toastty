@@ -664,6 +664,9 @@ struct ToasttyMobileRootView: View {
         case .home, .reconnecting:
             let hasWork = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_WORK"] == "1"
             let hasLongHistory = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_HISTORY"] == "1"
+            if ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_TASK_LINKS"] == "1" {
+                return ToasttyConversationFixture.taskLinkPresentation(for: conversationID)
+            }
             if hasWork || hasLongHistory {
                 return ToasttyConversationFixture.responseEntryPresentation(
                     for: conversationID, hasWork: hasWork, hasLongHistory: hasLongHistory

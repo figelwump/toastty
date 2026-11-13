@@ -527,6 +527,37 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// The coordinator's answer with task links, for the task fixture's
+    /// board: three tasks it lists, a task it does not list, a task space
+    /// with no task record, and another Toastty link. Link text is the title
+    /// at the time of writing; a chip shows the task's current title.
+    static func taskLinkPresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(title)](toastty://task/\(id.uuidString))"
+        }
+        let markdown = """
+        Yes, it waits for \(link("Should the badge count tasks?", ToasttyMobileFixture.questionTaskID)). \
+        \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) has its pull request open, \
+        and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged.
+
+        These stay text: \(link("Removed task", UUID(uuidString: "99999999-9999-4999-8999-999999999999")!)), \
+        \(link("Watched space", ToasttyMobileFixture.workingSubspaceID)) and \
+        [a settings link](toastty://action/open-settings).
+        """
+        return ToasttyConversationPresentationState(
+            rows: [
+                row(conversationID, 1, timestamp, .userMessage(text: "Is the badge task blocked?", origin: .remote)),
+                row(conversationID, 2, timestamp, .assistantMessage(text: markdown, phase: .final)),
+            ],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func toolActivityPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

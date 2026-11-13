@@ -114,6 +114,7 @@ struct ToasttyConversationScreen: View {
     }
 
     var body: some View {
+        let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard)
         Group {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(
@@ -158,7 +159,15 @@ struct ToasttyConversationScreen: View {
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
         }
+        .environment(\.conversationLinkPresenter, taskChips.presenter)
         .environment(\.openURL, OpenURLAction { url in
+            if CoordinatorTaskLink.isToasttyURL(url) {
+                // The text is an agent's: only a task chip opens anything,
+                // and it opens that task's detail.
+                guard let taskID = taskChips.taskID(for: url) else { return .discarded }
+                taskDetail = ToasttyTaskDetailSelection(id: taskID)
+                return .handled
+            }
             guard let reference = ToasttyPreviewURLPolicy.localFileReference(url) else { return .systemAction }
             selectedPreview = ToasttyPreviewSelection(
                 target: .conversationFile(conversationID: RemoteConversationID(rawValue: conversationID), fileReference: reference),

@@ -11,6 +11,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let setupFailedTaskID = "D1000000-0000-0000-0000-000000000003"
     private let startingTaskID = "D1000000-0000-0000-0000-000000000004"
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
+    private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
 
     override func setUp() {
         continueAfterFailure = false
@@ -99,10 +100,53 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
-    private func launchTaskFixture() -> XCUIApplication {
+    func testTaskLinksDrawAsChipsThatOpenTheTask() {
+        let app = launchTaskFixture(taskLinks: true)
+        let segment = app.segmentedControls["toastty-mobile-home-segment"]
+        XCTAssertTrue(segment.waitForExistence(timeout: 10))
+        select("Projects", in: segment)
+        let card = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollTo(card, in: app))
+        card.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+
+        // A chip shows the task's current title and pull request number,
+        // not the link's text.
+        let question = link(containing: "early-session-titles", in: app)
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        XCTAssertTrue(question.label.contains("#45"), question.label)
+        XCTAssertFalse(link(containing: "Should the badge", in: app).exists)
+        XCTAssertTrue(link(containing: "compact-session-rows", in: app).label.contains("#36"))
+        XCTAssertTrue(link(containing: "#259", in: app).exists)
+        // A task the Mac does not list, a task space with no task, and any
+        // other Toastty link are text that a tap cannot open.
+        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
+        XCTAssertTrue(answer.exists)
+        for text in ["Removed task", "Watched space", "a settings link"] {
+            XCTAssertTrue((answer.value as? String)?.contains(text) == true, text)
+            XCTAssertFalse(link(containing: text, in: app).exists, text)
+        }
+        attachScreenshot(named: "task-link-chips", of: app)
+
+        // A tap opens the task's detail.
+        question.tap()
+        let title = app.staticTexts["toastty-task-detail-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "early-session-titles")
+        attachScreenshot(named: "task-link-chip-opens-detail", of: app)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+    }
+
+    private func link(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.links.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    private func launchTaskFixture(taskLinks: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        if taskLinks { app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASK_LINKS"] = "1" }
         app.launch()
         return app
     }
