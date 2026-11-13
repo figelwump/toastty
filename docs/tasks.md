@@ -957,6 +957,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | File | Written by | What it is |
 | --- | --- | --- |
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
+| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator). Your own merge rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
 | `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
 | `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
@@ -965,8 +966,11 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   file at each start and each time its conversation is resumed. So the
   coordinator has its instructions after a restart and after a relaunch,
   and a new version of Toastty brings new instructions to a conversation
-  that began under the old one. Toastty replaces both files whenever their
-  text differs, so do not edit them: put your rules in `policy.md`. An agent
+  that began under the old one. Toastty replaces both files, and the files
+  in `references/`, whenever their text differs, so do not edit them: put
+  your rules in `policy.md`. The instruction file stays under 32 KiB,
+  because an agent program can read no more of it; the reference files hold
+  the rest. An agent
   that reads neither file can load the `toastty-coordinator` skill by name.
   If Toastty cannot write the instructions, it does not start the
   coordinator's agent, and after a relaunch it does not resume it: the row
@@ -978,8 +982,8 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 - **The folder is a git repository.** At the first start, Toastty runs `git
   init` there and commits `policy.md`. The repository has its own identity,
   `Toastty Coordinator`, and does not sign commits, so a commit works without
-  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md` and `.claude/` are
-  kept out through `.git/info/exclude`, so a commit holds a change of the
+  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md`, `.claude/` and
+  `references/` are kept out through `.git/info/exclude`, so a commit holds a change of the
   policy and nothing else. Toastty leaves a folder that already is a
   repository as it is. If git is missing, the coordinator still starts, and
   tells you that a change of the policy cannot be undone.

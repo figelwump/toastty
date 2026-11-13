@@ -877,9 +877,9 @@ class Run:
                 self.instance.kill()
         except Exception:  # noqa: BLE001
             pass
-        for name in ('policy.md', 'ledger.md', 'AGENTS.md', 'CLAUDE.md'):
+        for name in ('policy.md', 'ledger.md', 'AGENTS.md', 'CLAUDE.md', 'references/merging.md'):
             if (self.folder / name).is_file():
-                shutil.copyfile(self.folder / name, self.artifacts / name)
+                shutil.copyfile(self.folder / name, self.artifacts / Path(name).name)
         if (self.folder / '.git').is_dir():
             (self.artifacts / 'git-log.txt').write_text(self.git('log', '--stat', '--format=%h %an %s'))
         for source, name in ((self.bin / 'agent/events.jsonl', 'task-agent-events.jsonl'),
