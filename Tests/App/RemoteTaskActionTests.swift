@@ -292,7 +292,8 @@ struct RemoteTaskActionTests {
         #expect(fixture.record(task.id)?.mergeCancelledAt != nil)
     }
 
-    @Test func aPhoneRequestRunsThroughTheServicesGatewayOnlyWhileTheSwitchIsOn() async throws {
+    @Test(arguments: [false, true])
+    func aPhoneRequestRunsThroughTheServicesGatewayOnlyWhileTheSwitchIsOn(legacyRecord: Bool) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let runtimeHome = "/tmp/toastty-remote-task-actions-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
@@ -300,7 +301,7 @@ struct RemoteTaskActionTests {
             homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
             environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
         )
-        // A phone paired before the service starts, with Task actions on.
+        // Pairing grants Task actions without a separate settings change.
         let devices = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         let offer = try devices.issueNativePairingOffer(gatewayURL: URL(string: "https://test.tailnet.ts.net")!, at: Date())
         guard case .paired(let device, let credential) = try devices.redeemNativePairingOffer(
@@ -310,7 +311,15 @@ struct RemoteTaskActionTests {
             Issue.record("Pairing failed")
             return
         }
-        try devices.setTaskActionsEnabled(true, forDevice: device.id)
+        #expect(device.canActOnTasks)
+        if legacyRecord {
+            // Older versions omitted the field when Task actions was off.
+            var saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: runtimePaths.remoteAccessDevicesFileURL)) as? [String: Any])
+            var records = try #require(saved["devices"] as? [[String: Any]])
+            records[0].removeValue(forKey: "taskActionsEnabled")
+            saved["devices"] = records
+            try JSONSerialization.data(withJSONObject: saved).write(to: runtimePaths.remoteAccessDevicesFileURL)
+        }
 
         let board = TaskBoardStore(
             coordinator: fixture.coordinator,
@@ -382,10 +391,14 @@ struct RemoteTaskActionTests {
 
         // Switched off on the Mac: nothing more runs.
         service.setDeviceTaskActions(false, for: device.id)
+        let disabled = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
+        #expect(disabled.devices.first?.canActOnTasks == false)
         #expect(try await send(.cancelMerge, id: "cancel-1") == .rejected(reason: .permissionDenied, message: nil))
         #expect(fixture.record(task.id)?.mergeRequestedAt == requestedAt)
         // Back on, the same request runs.
         service.setDeviceTaskActions(true, for: device.id)
+        let enabled = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
+        #expect(enabled.devices.first?.canActOnTasks == true)
         #expect(try await send(.cancelMerge, id: "cancel-1") == .performed)
         #expect(fixture.record(task.id)?.mergeRequestedAt == nil)
     }
