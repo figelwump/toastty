@@ -404,6 +404,15 @@ enum TaskBoard {
     }
 }
 
+/// The quick entry shortcut as the task views show it.
+struct NewTaskShortcutHint: Equatable {
+    /// Such as "⌥⇧T".
+    let label: String
+    /// True when macOS delivers the shortcut while another app is active.
+    /// It is false when another app holds the keys.
+    let isGlobal: Bool
+}
+
 /// Keeps the inputs of the board current and tells views when they change:
 /// task records, pull request answers, and tasks.toml. It also asks GitHub
 /// about pending task pull requests every 15 seconds and settled ones every
@@ -434,8 +443,22 @@ final class TaskBoardStore: ObservableObject {
     /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
     /// view's New Task. `nil` hides them.
     var newTask: (@MainActor () -> Void)?
-    /// The quick entry shortcut, such as "⌥⇧T", shown on New Task.
-    var newTaskShortcutLabel: @MainActor () -> String? = { nil }
+    /// The quick entry shortcut, shown on New Task, the sidebar's ＋ and the
+    /// empty Tasks view; nil when it is off. Published so a configuration
+    /// reload redraws them.
+    @Published private(set) var newTaskShortcut: NewTaskShortcutHint?
+
+    /// Shows the quick entry shortcut, and follows it when a configuration
+    /// reload changes it or another app takes its keys.
+    func showShortcut(of quickEntry: QuickEntryController) {
+        quickEntry.$shortcut
+            .combineLatest(quickEntry.$isShortcutGlobal)
+            .map { shortcut, isGlobal in
+                shortcut.map { NewTaskShortcutHint(label: $0.symbolLabel, isGlobal: isGlobal) }
+            }
+            .removeDuplicates()
+            .assign(to: &$newTaskShortcut)
+    }
 
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?

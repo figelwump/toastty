@@ -94,7 +94,7 @@ struct CoordinatorChatView: View {
                 attachments: model.attachmentDraft,
                 reply: model.replyTarget,
                 onCancelReply: { model.cancelReply() },
-                placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcutLabel()),
+                placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcut),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,
                 delivery: model.delivery,
@@ -174,11 +174,12 @@ struct CoordinatorChatView: View {
     }
 
     /// The field's hint also names the quick entry shortcut, which sends to
-    /// the coordinator from any app. Without a shortcut it names none.
-    static func composerPlaceholder(quickEntryShortcut: String?) -> String {
+    /// the coordinator from any app. It names none when the shortcut is off
+    /// or another app holds its keys.
+    static func composerPlaceholder(quickEntryShortcut: NewTaskShortcutHint?) -> String {
         let placeholder = "Message the coordinator…"
-        guard let quickEntryShortcut else { return placeholder }
-        return "\(placeholder)  \(quickEntryShortcut) from anywhere"
+        guard let quickEntryShortcut, quickEntryShortcut.isGlobal else { return placeholder }
+        return "\(placeholder)  \(quickEntryShortcut.label) from anywhere"
     }
 
     static func text(for notice: CoordinatorChatModel.Notice) -> String {
