@@ -126,7 +126,21 @@ def main():
 
     def sidebar_order():
         """The project card's bucket headers and task space rows, top to
-        bottom, from the Accessibility tree: ('header', 'Needs you') or
+        bottom, once two reads half a second apart agree: a row that changes
+        bucket slides to its new place, and a read during the slide puts it
+        in the wrong bucket."""
+        previous = None
+        for _ in range(8):
+            current = sidebar_order_once()
+            if current == previous:
+                return current
+            previous = current
+            time.sleep(0.5)
+        return previous
+
+    def sidebar_order_once():
+        """One read of the bucket headers and task space rows, top to bottom,
+        from the Accessibility tree: ('header', 'Needs you') or
         ('row', workspaceID)."""
         found = []
         for line in run_tool('dump', pid).stdout.splitlines():
