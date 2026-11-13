@@ -2796,7 +2796,7 @@ final class SidebarViewTests: XCTestCase {
 
     /// The rows of a task the user asked to release right after its merge
     /// carry a small mark, before the merge and while the task waits in To
-    /// ship: in the project card, the Status segment and the Tasks view.
+    /// ship: in the project card and the Tasks view.
     func testReleaseAfterMergeMarkShowsOnOpenAndToShipRows() throws {
         let now = Date()
         let toasttyID = UUID()
