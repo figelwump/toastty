@@ -829,6 +829,12 @@ struct CoordinatorChatSendPathTests {
         // As in the app, the session store marks a turn's end in the
         // windows' state.
         fixture.conversations.sessionRuntimeStore.bind(store: fixture.store)
+        // The user works in another workspace, so the coordinator's panel is
+        // not in front: a turn's end marks it unread, also when the test
+        // host is the active app.
+        let window = try #require(fixture.store.state.windows.first)
+        let elsewhere = try #require(window.workspaceIDs.first { $0 != fixture.store.state.coordinatorWorkspaceID })
+        #expect(fixture.store.send(.selectWorkspace(windowID: window.id, workspaceID: elsewhere)))
         // No wake has started a turn: nothing can be quiet.
         #expect(throws: CoordinatorError.self) { try wakes.service.setCoordinatorWake(.clear, quiet: true) }
 
