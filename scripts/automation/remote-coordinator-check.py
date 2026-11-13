@@ -32,7 +32,7 @@ proves that:
   message reaches it;
 - closing the workspace removes the coordinator and keeps its folder.
 A second instance in automation mode, which can render its own window over
-SSH, captures the sidebar with the pinned row in the Projects and the Status
+SSH, captures the sidebar with the pinned row in the All and the Needs you
 segment. A capture that cannot be made is recorded, not failed.
 
 With '--provider claude', the check proves with the real CLI that pasted text
@@ -428,8 +428,8 @@ def capture_sidebar(check, agent):
         cli('coordinator', 'send', 'hold this turn')
         wait_for('the turn to run', lambda: cli('coordinator', 'status').get('status') == 'working')
         capture('coordinator-pinned-working')
-        cli('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        capture('coordinator-pinned-status-segment')
+        cli('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=needsYou')
+        capture('coordinator-pinned-needs-you-segment')
         (agent.parent / 'coordinator/hold').unlink()
         cli('coordinator', 'open')
         wait_for('the turn to end', lambda: cli('coordinator', 'status').get('status') in ('idle', 'ready'))

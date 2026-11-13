@@ -349,15 +349,12 @@ def main():
         require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
         require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
         step('A merged and cleaned up', cleanup=merged['cleanup'])
-        # Both places offer Release for the lane: the Status sidebar and the
-        # Tasks view (mockups 13 B and 14e).
-        action('window.sidebar.set-segment', windowID=window_id, segment='status')
+        # Both places offer Release for the lane: the project card's To ship
+        # line in the sidebar's All segment, and the Tasks view.
+        action('window.sidebar.set-segment', windowID=window_id, segment='all')
         open_tasks_view()
-        # The Status To ship group starts collapsed; its project headers,
-        # with Release, show once it is expanded.
-        press('sidebar.status.toShip')
-        wait_for('the Status sidebar\'s Release button',
-                 lambda: run_tool(helper, 'exists', pid, f'sidebar.status.toShip.{project_title}.release', check=False).returncode == 0,
+        wait_for('the project card\'s Release button',
+                 lambda: run_tool(helper, 'exists', pid, f'sidebar.workspace.finishedTasks.release.{workspace_id}', check=False).returncode == 0,
                  timeout=10, interval=0.5)
         capture('2-to-ship')
 

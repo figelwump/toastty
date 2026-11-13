@@ -15,7 +15,7 @@ real CLI it checks that:
   `finishedThroughChildren`, and its record has no merge or done time;
 - `task watch <parent> --until to-ship --wait` holds at once;
 - once every child is Done, the parent is Done.
-Captures of the Status segment and the Tasks view go to the artifacts
+Captures of the All segment and the Tasks view go to the artifacts
 directory when the app or the screen allows one; a missing capture is
 recorded, not failed.
 """
@@ -185,8 +185,8 @@ def main():
         wait_for('the first child to wait to ship', lambda: stage(children[0]['taskID'])['group'] == 'toShip')
         require(stage(parent_id)['group'] == 'idle', f'One open child should keep the parent idle: {stage(parent_id)}')
         cli_json('action', 'run', 'window.tasks.hide', '--window', window_id, check=False)
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        capture('1-status-one-child-open')
+        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
+        capture('1-all-one-child-open')
 
         # 3. The parent's agent reports, and the last child merges. The
         # unread turn keeps the parent in Needs you.
@@ -201,7 +201,7 @@ def main():
         require(unread.get('attention') == 'agentFinished', f'The unread turn should keep the parent in Needs you: {unread}')
         step('parent waits for its unread turn', stage=unread)
         cli_json('action', 'run', 'window.tasks.hide', '--window', window_id, check=False)
-        capture('2-status-parent-unread')
+        capture('2-all-parent-unread')
 
         # 4. Reading the turn moves the parent to To ship, through its
         # children; nothing is stored on it.
@@ -217,7 +217,7 @@ def main():
         require(watched.returncode == 0, f'The to-ship watch should hold: {watched.stdout} {watched.stderr}')
         step('to-ship watch held', output=watched.stdout.strip())
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
-        capture('3-status-parent-to-ship')
+        capture('3-all-parent-to-ship')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
         cli_json('task', 'list')  # let the view settle
         capture('4-tasks-view-parent-to-ship')

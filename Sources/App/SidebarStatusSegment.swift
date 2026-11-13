@@ -1,10 +1,11 @@
 import CoreState
 import SwiftUI
 
-/// The Status segment's groups: Needs you, Running and Idle as rows, To
-/// ship as one header per project with its latest tasks under it, and Done
-/// as a count. Kept apart from the view so the grouping can be tested
-/// without hosting it.
+/// Tasks by stage: Needs you, Running and Idle as rows, To ship as one
+/// header per project with its latest tasks under it, and Done as a count.
+/// The iPhone's Status list uses these groups, and the Tasks view and the
+/// project cards use its family and Release rules. The Mac sidebar lists
+/// rows in `SidebarBuckets` instead.
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {
         let item: TaskBoardItem
@@ -322,229 +323,9 @@ enum TaskAge {
     }
 }
 
-/// Draws `SidebarStatusSections`. Rows with an open task space come from
-/// the sidebar's own task space row, so they look and act the same as in a
-/// project card; the rest open the Tasks view. To ship starts collapsed to
-/// one line that names each project.
-struct SidebarStatusSegment<RowContent: View>: View {
-    let sections: SidebarStatusSections
-    @Binding var isToShipExpanded: Bool
-    /// Opens the Tasks view at a group.
-    let openTasksGroup: (TaskStage.Group) -> Void
-    var release: (UUID) -> Void = { _ in }
-    /// Opens the Tasks view at To ship with a lane's first hidden task
-    /// selected.
-    var showMoreToShip: (TaskBoardItem.Subject?) -> Void = { _ in }
-    /// Draws a group's rows, and the To ship tasks under each lane.
-    @ViewBuilder let row: (SidebarStatusSections.Entry) -> RowContent
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if sections.isEmpty {
-                Text("No tasks in this window.")
-                    .font(ToastyTheme.fontWorkspaceSessionChip)
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-            }
-            if sections.needsYou.isEmpty == false {
-                header("Needs you", count: sections.count(.needsYou), isHot: true)
-                rows(sections.needsYou)
-            }
-            if sections.running.isEmpty == false {
-                header("Running", count: sections.count(.running))
-                rows(sections.running)
-            }
-            if sections.idle.isEmpty == false {
-                header("Idle", count: sections.count(.idle))
-                rows(sections.idle)
-            }
-            if sections.toShip.isEmpty == false {
-                toShipHeader
-                if isToShipExpanded {
-                    ForEach(sections.toShip) { lane in
-                        laneRow(lane)
-                        laneTasks(lane)
-                    }
-                }
-            }
-            if sections.doneCount > 0 {
-                Button {
-                    openTasksGroup(.done)
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .bold))
-                            .frame(width: 9)
-                        SidebarGroupTitle(title: "Done", count: sections.doneCount)
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .help("Show finished tasks in the Tasks view")
-                .accessibilityLabel(Self.doneLabel(sections.doneCount))
-                .accessibilityIdentifier("sidebar.status.done")
-                .background {
-                    SidebarSemanticTextBridge(text: Self.doneLabel(sections.doneCount))
-                        .frame(width: 0, height: 0)
-                        .allowsHitTesting(false)
-                }
-            }
-        }
-        .padding(.horizontal, 2)
-        .padding(.bottom, 10)
-        // A container's identifier would otherwise replace its rows' and
-        // buttons' own.
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("sidebar.status")
-    }
-
-    static func doneLabel(_ count: Int) -> String {
-        "Done, \(count) \(count == 1 ? "task" : "tasks"), opens the Tasks view"
-    }
-
-    static func laneLabel(_ lane: SidebarStatusSections.Lane, now: Date) -> String {
-        let label = "\(lane.projectTitle), \(lane.count) \(lane.count == 1 ? "task" : "tasks") to ship"
-        let detail = SidebarStatusSections.laneDetail(lane, now: now)
-        return detail.isEmpty ? label : "\(label), \(detail)"
-    }
-
-    /// Each project in violet with its count, as the expanded headers name
-    /// them.
-    static func toShipSummary(_ lanes: [SidebarStatusSections.Lane]) -> Text {
-        lanes.enumerated().reduce(Text(verbatim: "")) { summary, element in
-            let (index, lane) = element
-            let separator = index == 0
-                ? Text(verbatim: "")
-                : Text(verbatim: "  ·  ").foregroundStyle(ToastyTheme.sidebarSubspaceQuietMark)
-            return summary + separator
-                + Text(verbatim: lane.projectTitle).foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                + Text(verbatim: " \(lane.count)")
-                .font(ToastyTheme.fontWorkspaceAgentCount)
-                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-        }
-        .font(.system(size: 10.5, weight: .semibold))
-    }
-
-    private func rows(_ entries: [SidebarStatusSections.Entry]) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(entries) { entry in
-                row(entry)
-                    // Its own stage is in a calmer group; see `Entry.isContext`.
-                    .opacity(entry.isContext ? 0.55 : 1)
-            }
-        }
-    }
-
-    private func header(_ title: String, count: Int, isHot: Bool = false) -> some View {
-        SidebarGroupTitle(title: title, count: count)
-            .foregroundStyle(isHot ? Color(hex: 0xF2C46B) : ToastyTheme.sidebarChildContextText)
-            .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .background {
-                SidebarSemanticTextBridge(text: "\(title), \(count)")
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-            }
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    /// "› TO SHIP 3". Collapsed, it names each project and its count on the
-    /// right.
-    private var toShipHeader: some View {
-        SidebarToShipGroupToggle(
-            count: sections.toShip.reduce(0) { $0 + $1.count },
-            isExpanded: $isToShipExpanded,
-            summary: Self.toShipSummary(sections.toShip),
-            accessibilityText: sections.toShipLabel(isExpanded: isToShipExpanded)
-        )
-        .padding(.horizontal, 8)
-        .padding(.top, 8)
-        .accessibilityIdentifier("sidebar.status.toShip")
-    }
-
-    /// A project's header, drawn as in the Tasks view: its name and count in
-    /// violet, with Release on the right.
-    private func laneRow(_ lane: SidebarStatusSections.Lane) -> some View {
-        HStack(spacing: 8) {
-            laneButton(lane)
-            if let workspaceID = lane.releaseWorkspaceID {
-                TaskReleaseButton(title: "Release") { release(workspaceID) }
-                    .padding(.trailing, 8)
-                    .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle).release")
-            }
-        }
-        .padding(.top, 4)
-    }
-
-    /// The lane's latest tasks, under the lane's title.
-    @ViewBuilder
-    private func laneTasks(_ lane: SidebarStatusSections.Lane) -> some View {
-        if lane.recent.shown.isEmpty == false {
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(lane.recent.shown) { item in
-                    row(SidebarStatusSections.Entry(item: item))
-                }
-                if lane.recent.hidden.isEmpty == false {
-                    SidebarShowMoreToShipButton(count: lane.recent.hidden.count) {
-                        showMoreToShip(lane.recent.hidden.first?.id)
-                    }
-                    // Lines up with the task titles: the row's padding,
-                    // status mark and gap.
-                    .padding(.leading, 26)
-                    .padding(.trailing, 8)
-                    .padding(.vertical, 3)
-                    .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle).more")
-                }
-            }
-        }
-    }
-
-    private func laneButton(_ lane: SidebarStatusSections.Lane) -> some View {
-        let now = Date()
-        let detail = SidebarStatusSections.laneDetail(lane, now: now)
-        return Button {
-            openTasksGroup(.toShip)
-        } label: {
-            Text("\(lane.projectTitle) · \(lane.count) \(lane.count == 1 ? "task" : "tasks")")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, minHeight: 17, alignment: .leading)
-                .padding(.vertical, 2)
-                .padding(.horizontal, 8)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarStatusRowButtonStyle())
-        .help(detail.isEmpty ? "Show To ship in the Tasks view" : "Show To ship in the Tasks view (\(detail))")
-        .accessibilityLabel(Self.laneLabel(lane, now: now))
-        .accessibilityIdentifier("sidebar.status.toShip.\(lane.projectTitle)")
-        .background {
-            SidebarSemanticTextBridge(text: Self.laneLabel(lane, now: now))
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-        }
-    }
-}
-
-private struct SidebarStatusRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                configuration.isPressed ? ToastyTheme.sidebarSessionHoverBackground : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5)
-            )
-    }
-}
-
-/// A Status row for a task with no open task space, such as one whose task
-/// space closed before it finished. It opens the task in the Tasks view.
+/// A sidebar row for a task with no open task space in the window, such as
+/// one whose task space closed before it finished, or one that waits for its
+/// workspace to be picked. It opens the task in the Tasks view.
 struct SidebarTaskRecordRow: View {
     let item: TaskBoardItem
     let open: () -> Void
@@ -620,7 +401,7 @@ struct SidebarGroupTitle: View {
 }
 
 /// "› TO SHIP 3", which expands and collapses a To ship group in place: the
-/// Status segment's group, and the one under each project card. While
+/// one under each project card. While
 /// collapsed, `summary` shows on the right.
 struct SidebarToShipGroupToggle: View {
     let count: Int

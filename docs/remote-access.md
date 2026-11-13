@@ -569,7 +569,8 @@ checkbox. An older phone ignores them and keeps its flat list.
 ### Tasks
 
 When the Mac runs the task system (see [Tasks](tasks.md)), Home's **All |
-Active** switch becomes **Projects | Status**, as in the Mac sidebar.
+Active** switch becomes **Projects | Status**. The Mac sidebar's segments are
+now **All | Needs you**; the phone keeps the earlier grouping.
 
 - **Projects** lists every workspace with its sessions and task spaces, as
   **All** did. A task space shows its task's mark: a question, a review, or
@@ -579,7 +580,7 @@ Active** switch becomes **Projects | Status**, as in the Mac sidebar.
   finished task leaves the list unless an agent in its task space is still
   busy. A line under the project counts the tasks that are To ship and Done;
   tap it to open Status.
-- **Status** lists only tasks, grouped as the Mac's Status segment groups them:
+- **Status** lists only tasks, grouped by stage:
   **Needs you**, **Running** and **Idle**, then **To ship** collapsed to one
   line per project, then the **Done** count. A task that another task started
   lists under it, dimmed when its own stage is calmer. The segment's title
@@ -675,7 +676,7 @@ the task in Needs you for a reason without a task alert.
 
 Tapping a task alert opens the task's session while its task space is open,
 and the task's detail otherwise. The app icon badge counts the tasks that need
-you, as the Mac's Tasks row and the Status segment do, instead of sessions.
+you, as the Tasks view does, instead of sessions.
 
 A merge counts as stopped when Toastty records why its own merge stopped
 (**⚠ merge stopped** on the task's row), or when the merge skill ends its turn

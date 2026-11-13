@@ -531,8 +531,8 @@ Notable action-specific behavior:
     `INVALID_PAYLOAD`.
 - `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
   - take the `windowID` selector. `window.sidebar.set-segment` requires
-    `segment` (`projects` or `status`). All three are listed only when the task
-    system is available.
+    `segment` (`all` or `needsYou`; the earlier names `projects` and `status`
+    still work). All three are listed only when the task system is available.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or

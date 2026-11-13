@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check task stages, the Status sidebar and the Tasks view in a real app.
+"""Check task stages, the sidebar segments and the Tasks view in a real app.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-stages-check.py'. It needs an unlocked
@@ -201,11 +201,11 @@ def main():
         # selected workspace. The + opens quick entry.
         capture('sidebar-projects-review')
         open_and_close_quick_entry('sidebar.tasks.new')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=status')
-        capture('sidebar-status')
+        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=needsYou')
+        capture('sidebar-needs-you')
         cli_json('action', 'run', 'workspace.set-done', '--workspace', task_space)
         require(stage(task_id)['group'] == 'done', f'The done mark should finish the task: {stage(task_id)}')
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=projects')
+        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
         capture('sidebar-projects-done')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)
         capture('tasks-view')
