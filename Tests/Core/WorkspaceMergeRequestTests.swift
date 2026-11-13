@@ -44,6 +44,11 @@ struct WorkspaceMergeRequestTests {
         let held = with(.holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)))
         let savedHold = try JSONEncoder().encode(#require(held.persisted))
         #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedHold) == held)
+        // A cleanup that a quit interrupted after its hold does not wait again.
+        var released = with(.cleaningUp)
+        released.cleanupHoldEnded = true
+        let savedRelease = try JSONEncoder().encode(#require(released.persisted))
+        #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedRelease).cleanupHoldEnded == true)
         // Restarting an adopted task's interrupted cleanup must not permit
         // deletion of a checkout discovered only by its branch name.
         var restricted = with(.cleaningUp)

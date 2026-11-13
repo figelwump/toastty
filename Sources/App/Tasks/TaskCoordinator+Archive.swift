@@ -101,7 +101,10 @@ extension TaskCoordinator {
         // here to the saved archive nothing awaits, and a merge refuses an
         // archived task.
         if let taskSpaceID = record.taskSpaceWorkspaceID, let request = merges?.request(workspaceID: taskSpaceID) {
-            if case .failed = request.phase {} else {
+            switch request.phase {
+            case .failed, .holdingCleanup:
+                break
+            default:
                 throw TaskError("\(record.title) started merging. Cancel the merge first.")
             }
         }

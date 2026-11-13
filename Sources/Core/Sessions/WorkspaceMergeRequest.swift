@@ -81,6 +81,9 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// An adopted task with no saved checkout may close only its empty
     /// task space. A checkout found by branch name must stay untouched.
     public var requiresAbsentWorktree: Bool?
+    /// The cleanup already waited in `.holdingCleanup`, so a retry or a
+    /// relaunch after it cleans up without waiting again.
+    public var cleanupHoldEnded: Bool?
 
     public init(
         pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase,

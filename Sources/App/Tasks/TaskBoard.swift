@@ -520,12 +520,12 @@ final class TaskBoardStore: ObservableObject {
         pullRequests.answerObserver = { [weak self] link, state in
             self?.recordAnswer(link: link, state: state)
         }
-        storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
+        storeObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             self?.syncRecords(state: nextState)
             if Self.stageInputsChanged(from: previousState, to: nextState) {
                 self?.scheduleStateTimesPass()
             }
-            self?.handleClosedTaskSpaces(from: previousState, to: nextState)
+            self?.handleClosedTaskSpaces(after: action, from: previousState, to: nextState)
         }
         reloadConfig()
         syncRecords(state: store.state)
@@ -798,8 +798,13 @@ final class TaskBoardStore: ObservableObject {
 
     /// Tells the coordinator about task spaces that closed, after the other
     /// observers of the same change ran: the merge coordinator drops the
-    /// closed workspace's request first.
-    private func handleClosedTaskSpaces(from previousState: AppState, to nextState: AppState) {
+    /// closed workspace's request first. Only closes count: moving the last
+    /// pane out also removes the workspace, but its terminal lives on.
+    private func handleClosedTaskSpaces(after action: AppAction, from previousState: AppState, to nextState: AppState) {
+        switch action {
+        case .closeWorkspace, .closeWorkspaceTab, .closePanel, .closeWindow: break
+        default: return
+        }
         guard previousState.workspacesByID.count > nextState.workspacesByID.count else { return }
         let closed = previousState.workspacesByID.values
             .filter { $0.taskID != nil && nextState.workspacesByID[$0.id] == nil }

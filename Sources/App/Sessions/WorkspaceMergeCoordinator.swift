@@ -376,8 +376,10 @@ final class WorkspaceMergeCoordinator {
             throw TaskError("The agent is still working. Close the task space once its turn ends.")
         }
         pollTasks.removeValue(forKey: workspaceID)?.cancel()
+        var released = request
+        released.cleanupHoldEnded = true
         Task { [weak self] in
-            await self?.runCleanup(workspaceID: workspaceID, request: request)
+            await self?.runCleanup(workspaceID: workspaceID, request: released)
         }
     }
 
@@ -646,7 +648,8 @@ final class WorkspaceMergeCoordinator {
                 pollTasks[workspaceID] = nil
                 return false
             }
-            if taskSpaceCleanupHold > 0, store?.state.workspacesByID[workspaceID]?.taskID != nil {
+            if taskSpaceCleanupHold > 0, request.cleanupHoldEnded != true,
+               store?.state.workspacesByID[workspaceID]?.taskID != nil {
                 // This poll goes on and starts the cleanup once the time
                 // has passed.
                 var held = request
@@ -703,7 +706,9 @@ final class WorkspaceMergeCoordinator {
             return true
         }
         pollTasks[workspaceID] = nil
-        await runCleanup(workspaceID: workspaceID, request: request)
+        var released = request
+        released.cleanupHoldEnded = true
+        await runCleanup(workspaceID: workspaceID, request: released)
         return false
     }
 
