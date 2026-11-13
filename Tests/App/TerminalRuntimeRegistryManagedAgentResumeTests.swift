@@ -606,6 +606,71 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertNil(resumeRecord(), "A later command in the pane clears the record as before")
     }
 
+    /// After a relaunch the coordinator's agent resumes in its restored
+    /// terminal through a typed command. That command sets the
+    /// coordinator's git ceiling, so the shell's startup files cannot
+    /// replace it. Another restored agent's command does not set it.
+    func testRestoredCoordinatorResumeCommandSetsTheCoordinatorEnvironmentOnly() async throws {
+        for isCoordinator in [true, false] {
+            let fixture = try makeRuntimeResumeFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+            let panelID = UUID()
+            let workspaceID = UUID()
+            let record = ManagedAgentResumeRecord(
+                agent: .claude,
+                nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
+                sessionFilePath: fixture.sessionFileURL.path,
+                cwd: fixture.cwdURL.path,
+                capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            var state = makeRuntimeResumeState(
+                windowID: UUID(),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                resumeRecord: record,
+                profileBinding: nil
+            )
+            if isCoordinator {
+                state.workspacesByID[workspaceID]?.isCoordinator = true
+                state.workspacesByID[workspaceID]?.coordinatorPanelID = panelID
+            }
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let registry = TerminalRuntimeRegistry()
+            let sessionRuntimeStore = SessionRuntimeStore()
+            sessionRuntimeStore.bind(store: store)
+            // The registry holds both weakly.
+            let profileProvider = makeRuntimeResumeProfileProvider()
+            let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+            registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+            registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
+            registry.setCoordinatorLaunchEnvironment(["GIT_CEILING_DIRECTORIES": "/Users/someone/.toastty"])
+            registry.bind(store: store)
+            var submittedCommand: String?
+            registry.setRestoredManagedLaunchSubmitterForTesting { command, _, _ in
+                submittedCommand = command
+                return true
+            }
+
+            _ = registry.surfaceLaunchConfiguration(for: panelID)
+            registry.markInitialSurfaceLaunchCompleted(for: panelID)
+            await Task.yield()
+            await Task.yield()
+
+            let command = try XCTUnwrap(submittedCommand, "isCoordinator: \(isCoordinator)")
+            withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
+            XCTAssertTrue(command.contains("--resume db4f311b-12d0-4f61-ba81-0ae44ed10492"))
+            XCTAssertEqual(
+                command.contains("GIT_CEILING_DIRECTORIES=/Users/someone/.toastty"),
+                isCoordinator,
+                command
+            )
+        }
+    }
+
     func testRestoreNoticeRunsBeforeTheProfileStartupCommand() {
         let configuration = TerminalRuntimeRegistry.addingRestoreNotice(
             "Toastty: /repo/gone no longer exists.",

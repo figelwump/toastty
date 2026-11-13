@@ -37,6 +37,41 @@ struct CoordinatorPanelModeToggle: View {
     }
 }
 
+/// "Policy" in the header of the coordinator's panel: shows `policy.md`,
+/// the user's rules for the coordinator, in the right panel.
+struct CoordinatorPolicyButton: View {
+    let controller: CoordinatorController
+
+    var body: some View {
+        Button {
+            do {
+                try controller.openPolicy()
+            } catch {
+                TaskActions.presentFailure("Unable to Open the Coordinator's Policy", error.localizedDescription)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Policy")
+                    .font(ToastyTheme.fontWorkspaceMergeButton)
+            }
+            .foregroundStyle(ToastyTheme.sidebarDisclosureText)
+            .padding(.horizontal, 7)
+            .frame(height: 16)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(ToastyTheme.sidebarDisclosureBackground)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show policy.md, your rules for the coordinator. You can edit it there.")
+        .accessibilityLabel("Open Policy")
+        .accessibilityIdentifier("coordinator.panel.open-policy")
+    }
+}
+
 /// "Dock" in the header of the coordinator's panel: leaves the full view
 /// for the workspace the user came from, with the chat in the dock.
 struct CoordinatorPanelDockButton: View {

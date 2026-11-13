@@ -62,6 +62,19 @@ struct CoordinatorFolder: Sendable {
     /// holds a change of the policy and nothing else.
     static let repositoryExcludes = ["AGENTS.md", "CLAUDE.md", "ledger.md", ".claude/"]
 
+    /// The environment of the coordinator's agent. Without its own `.git`,
+    /// the folder would use the first repository git finds in a folder
+    /// above it, such as a home folder kept in git for dotfiles, and a
+    /// change of the policy would be committed there. With the folder's
+    /// parent as a ceiling, git stops at the folder and fails instead. The
+    /// ceiling changes nothing for a path outside that parent, such as a
+    /// project's repository. Git looks up from the folder's real location,
+    /// so the parent is taken after links resolve: a folder that links to
+    /// another place gets the ceiling of that place.
+    static func gitEnvironment(for directoryURL: URL) -> [String: String] {
+        ["GIT_CEILING_DIRECTORIES": directoryURL.standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent().path]
+    }
+
     let directoryURL: URL
     /// The coordinator's instructions, or `nil` when Toastty cannot read
     /// them.

@@ -4458,10 +4458,15 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
-        if let coordinatorController, coordinatorController.chatIsAvailable,
-           coordinatorController.location?.panelID == panelID {
-            CoordinatorPanelDockButton(controller: coordinatorController)
-            CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+        if let coordinatorController, coordinatorController.location?.panelID == panelID {
+            // Dock, Policy, then Terminal: the dock and the switch need the chat.
+            if coordinatorController.chatIsAvailable {
+                CoordinatorPanelDockButton(controller: coordinatorController)
+            }
+            CoordinatorPolicyButton(controller: coordinatorController)
+            if coordinatorController.chatIsAvailable {
+                CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+            }
         }
 
         switch resolvedPanelHeaderTrailingAccessory {

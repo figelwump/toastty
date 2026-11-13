@@ -97,6 +97,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
     case coordinatorWake = "coordinator.wake"
+    case coordinatorWatch = "coordinator.watch"
     case webhookAdd = "webhook.add"
     case webhookSet = "webhook.set"
     case webhookRemove = "webhook.remove"
@@ -621,12 +622,25 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set the coordinator's next check: the time when Toastty wakes it if nothing else does. Pass exactly one of inSeconds, at and clear. The time must be at least 1 minute from now. Toastty saves it across a relaunch, and a time that came while Toastty was quit wakes the coordinator once after the relaunch. Every wake that Toastty types, for a task change, an alert or the timer, removes the time: the coordinator sets or clears its next check in the turn that the wake starts. Toastty has no timer of its own: with no time set, only a task change that may need the coordinator, or an alert (a busy agent silent for 30 minutes, failing checks, or checks pending for 30 minutes), wakes it. clear removes the time. Returns the coordinator.get fields. Fails when there is no coordinator.",
+                summary: "Set the coordinator's next check: the time when Toastty wakes it if nothing else does. Pass exactly one of inSeconds, at and clear. The time must be at least 1 minute from now. Toastty saves it across a relaunch, and a time that came while Toastty was quit wakes the coordinator once after the relaunch. Every wake that Toastty types removes the time: the coordinator sets or clears its next check in the turn that the wake starts. Toastty has no timer of its own: with no time set, only a task change that may need the coordinator wakes it: a task that moves into Needs you; an alert (a busy agent silent for 30 minutes, failing checks, checks pending for 30 minutes, or a turn that a quit cut off); a merge that the coordinator watches (coordinator.watch) or that the user asked to release right after; or the end of a task it watches. Other changes wait for the next wake. clear removes the time. With quiet, the coordinator also says that the wake turn it runs now needs nothing from the user: the chat folds the turn under Toastty's line, and its end marks nothing unread and sends no notification. quiet works only for the coordinator's own agent, in a turn that Toastty's last wake started and that no other message came into; otherwise the action fails and changes nothing. Returns the coordinator.get fields. Fails when there is no coordinator.",
                 selectors: [],
                 parameters: [
                     .init(name: "inSeconds", summary: "Wake the coordinator this many seconds from now.", valueType: .integer, required: false),
                     .init(name: "at", summary: "Wake the coordinator at this ISO 8601 time, such as 2026-11-09T18:30:00Z.", valueType: .string, required: false),
                     .init(name: "clear", summary: "Remove the time the coordinator set.", valueType: .boolean, required: false),
+                    .init(name: "quiet", summary: "Mark the wake turn that runs now as one that needs nothing from the user. Defaults to false.", valueType: .boolean, required: false),
+                ]
+            )
+        case .coordinatorWatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Watch a task or a project for the coordinator, or with remove=true stop. Pass exactly one of taskID and workspaceID. A watched task wakes the coordinator once when it merges or ends (Done, archived or deleted); the watch then ends. A watched project, named by its workspace or one of its subspaces, wakes the coordinator at every merge of its tasks, until the watch is removed. Watching again what is watched changes nothing. Up to 100 tasks and 100 projects. Toastty saves the watches with the coordinator's wake state; closing the coordinator's workspace drops them. Returns the coordinator.get fields. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [
+                    .init(name: "taskID", summary: "The task to watch.", valueType: .string, required: false),
+                    .init(name: "workspaceID", summary: "The project to watch: its workspace, or one of its subspaces.", valueType: .string, required: false),
+                    .init(name: "remove", summary: "Stop watching it. Defaults to false.", valueType: .boolean, required: false),
                 ]
             )
         case .taskWatch:
@@ -942,7 +956,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a task that only started running or whose alert cleared, which wakes nothing on its own; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); and lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator.",
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches.",
                 selectors: []
             )
         case .webhookList:

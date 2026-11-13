@@ -27,10 +27,10 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     public var permissionApprovalEnabled: Bool
     /// True when "Task actions" is turned on for this device on the Mac.
     ///
-    /// Opt-in for the same reasons as approving: merging, archiving and
-    /// deleting tasks are writes no device could make before. A stored flag
-    /// rather than a `RemoteDeviceScope`, so older Macs and phones still
-    /// decode the device record. An absent value means not allowed.
+    /// On by default, including for devices paired before this permission
+    /// existed. A stored flag rather than a `RemoteDeviceScope`, so older
+    /// Macs and phones still decode the device record. Both values are saved
+    /// so turning it off survives a restart; an absent value means on.
     public var taskActionsEnabled: Bool
     public var authKind: RemoteDeviceAuthKind
     /// Exact Tailscale identity for a native credential. It is confined to the
@@ -49,7 +49,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         scopes: Set<RemoteDeviceScope> = [.read],
         sessionStartDisabled: Bool = false,
         permissionApprovalEnabled: Bool = false,
-        taskActionsEnabled: Bool = false,
+        taskActionsEnabled: Bool = true,
         authKind: RemoteDeviceAuthKind = .browser,
         tailscaleLogin: String? = nil,
         createdAt: Date,
@@ -87,7 +87,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Acting on a task changes it on the Mac, so it needs the send scope as
-    /// well as the opt-in. Only native clients have the routes.
+    /// well as the device's switch. Only native clients have the routes.
     public var canActOnTasks: Bool {
         isRevoked == false && authKind == .native && scopes.contains(.send) && taskActionsEnabled
     }
@@ -99,7 +99,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         scopes = try container.decode(Set<RemoteDeviceScope>.self, forKey: .scopes)
         sessionStartDisabled = try container.decodeIfPresent(Bool.self, forKey: .sessionStartDisabled) ?? false
         permissionApprovalEnabled = try container.decodeIfPresent(Bool.self, forKey: .permissionApprovalEnabled) ?? false
-        taskActionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .taskActionsEnabled) ?? false
+        taskActionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .taskActionsEnabled) ?? true
         authKind = try container.decodeIfPresent(RemoteDeviceAuthKind.self, forKey: .authKind) ?? .browser
         tailscaleLogin = try container.decodeIfPresent(String.self, forKey: .tailscaleLogin)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -131,7 +131,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         try container.encode(scopes, forKey: .scopes)
         if sessionStartDisabled { try container.encode(true, forKey: .sessionStartDisabled) }
         if permissionApprovalEnabled { try container.encode(true, forKey: .permissionApprovalEnabled) }
-        if taskActionsEnabled { try container.encode(true, forKey: .taskActionsEnabled) }
+        try container.encode(taskActionsEnabled, forKey: .taskActionsEnabled)
         try container.encode(authKind, forKey: .authKind)
         try container.encodeIfPresent(tailscaleLogin, forKey: .tailscaleLogin)
         try container.encode(createdAt, forKey: .createdAt)

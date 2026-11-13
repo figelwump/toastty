@@ -513,7 +513,7 @@ struct RemoteAccessSettingsView: View {
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device allow or deny Claude Code permission requests, including saving Always Allow rules.")
                             // Merging, archiving and deleting tasks change
-                            // them on the Mac. Off until turned on.
+                            // them on the Mac. On by default for paired devices.
                             Toggle("Task actions", isOn: Binding(
                                 get: { device.taskActionsEnabled },
                                 set: { service.setDeviceTaskActions($0, for: device.id) }

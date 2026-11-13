@@ -453,6 +453,7 @@ final class CoordinatorChatModel: ObservableObject {
                 projectionRunID: loaded.projectionRunID,
                 projectionGeneration: loaded.projectionGeneration,
                 isSentFromThisMac: { [weak controller] id in controller?.didType(messageID: id) ?? false },
+                isQuietDigest: { [weak controller] text in controller?.isQuietDigest(text) ?? false },
                 timeText: { $0.formatted(date: .omitted, time: .shortened) }
             )
         } else {

@@ -11,8 +11,11 @@ import Foundation
 /// is typed only at an open prompt, and counts as told only when it was
 /// typed. Until then it waits here and grows.
 ///
-/// A change that wakes nothing on its own, a task that only starts
-/// running, waits without starting a digest.
+/// A change that wakes nothing on its own, such as a task that starts
+/// running, goes idle or is Done, waits without starting a digest; see
+/// `CoordinatorWakeState` for the changes that wake. The coordinator can
+/// watch a task or a project, so that a merge or an end it waits for wakes
+/// it.
 ///
 /// The pass also reads each open task's alerts (`TaskAlert`) with its own
 /// clock, so an alert that only time raises, such as an agent that has
@@ -23,6 +26,11 @@ import Foundation
 /// The coordinator's timer is part of the same state. It runs only for a
 /// time the coordinator set. A timer that came due adds one line to the
 /// digest, or is a digest of its own.
+///
+/// A wake turn that found nothing for the user is marked quiet with the
+/// same command that sets the timer. The mark is saved with the digest it
+/// belongs to, so the chat folds that turn also after a relaunch, and the
+/// end of the turn alerts nobody (`SessionRuntimeStore`).
 extension TaskWebhookService {
     /// The coordinator's next check, as it asks for it.
     enum CoordinatorWakeRequest: Equatable {
@@ -40,6 +48,15 @@ extension TaskWebhookService {
         /// set none: then no timer runs.
         var nextWakeAt: Date?
         var lastWakeAt: Date
+        var watchedTaskIDs: [UUID]
+        var watchedProjectRoots: [String]
+    }
+
+    /// What the coordinator watches.
+    enum CoordinatorWatchTarget: Equatable {
+        case task(UUID)
+        /// A project root, as `TasksConfigFile.normalizedPath` writes it.
+        case project(root: String)
     }
 
     /// Gives the service the app's coordinator. From then on it follows
@@ -48,6 +65,9 @@ extension TaskWebhookService {
         self.coordinator = coordinator
         coordinator.onWorkspaceChange = { [weak self] workspaceID in
             self?.coordinatorWorkspaceChanged(to: workspaceID)
+        }
+        coordinator.isQuietDigest = { [weak self] text in
+            self?.coordinatorWake?.isQuietDigest(text) ?? false
         }
         coordinatorWorkspaceChanged(to: coordinator.location?.workspaceID)
     }
@@ -103,7 +123,7 @@ extension TaskWebhookService {
         guard let coordinator, var wake = coordinatorWake, let digest = wake.digest(now: at) else { return }
         guard let result = try? coordinator.send(digest, queueWhenHeld: false), result.wasTyped else { return }
         let taskCount = wake.changes.count
-        wake.markDelivered(at: at)
+        wake.markDelivered(digest, at: at)
         coordinatorWake = wake
         // Saved at once: after a quit, a digest that was typed is not
         // typed again.
@@ -114,9 +134,12 @@ extension TaskWebhookService {
         ])
     }
 
-    /// Sets, moves or removes the coordinator's next check.
+    /// Sets, moves or removes the coordinator's next check. With `quiet`,
+    /// it also marks the turn that runs now as one that needs nothing from
+    /// the user. That is refused, and nothing changes, unless the last
+    /// digest started this turn and no other message came into it.
     @discardableResult
-    func setCoordinatorWake(_ request: CoordinatorWakeRequest) throws -> CoordinatorWakeStatus {
+    func setCoordinatorWake(_ request: CoordinatorWakeRequest, quiet: Bool = false) throws -> CoordinatorWakeStatus {
         let at = now()
         followCoordinator(at: at)
         guard var wake = coordinatorWake else {
@@ -130,10 +153,54 @@ extension TaskWebhookService {
         if let date, date.timeIntervalSince(at) < CoordinatorWakeState.minimumDelay {
             throw CoordinatorError("The next check must be at least 1 minute from now.")
         }
+        if quiet {
+            guard let digestKey = wake.lastDigestKey,
+                  coordinator?.markQuietTurn(digestKey: digestKey) == true else {
+                throw CoordinatorError(
+                    "Only a turn that Toastty's last wake started, with no other message in it, can be quiet. "
+                        + "Nothing changed. Run the command again without --quiet, and answer as usual."
+                )
+            }
+            wake.markLastDigestQuiet()
+        }
         // Whole seconds, as the digest and the status print the time.
         wake.setRequestedWake(date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)) })
         coordinatorWake = wake
         saveOutbox()
+        if quiet {
+            ToasttyLog.info("Marked a coordinator wake turn quiet", category: .tasks)
+        }
+        return status(of: wake)
+    }
+
+    /// Starts or ends a watch of the coordinator's. A task's merge or end,
+    /// or any merge in a project, then wakes the coordinator; see
+    /// `CoordinatorWakeState`. Watching again what it watches changes
+    /// nothing.
+    @discardableResult
+    func setCoordinatorWatch(_ target: CoordinatorWatchTarget, watching: Bool) throws -> CoordinatorWakeStatus {
+        followCoordinator(at: now())
+        guard var wake = coordinatorWake else {
+            throw CoordinatorError("There is no coordinator. Open it first.")
+        }
+        switch (target, watching) {
+        case (.task(let taskID), true):
+            guard wake.watch(taskID: taskID) else {
+                throw CoordinatorError("The coordinator already watches \(CoordinatorWakeState.maximumWatches) tasks.")
+            }
+        case (.task(let taskID), false):
+            wake.unwatch(taskID: taskID)
+        case (.project(let root), true):
+            guard wake.watch(projectRoot: root) else {
+                throw CoordinatorError("The coordinator already watches \(CoordinatorWakeState.maximumWatches) projects.")
+            }
+        case (.project(let root), false):
+            wake.unwatch(projectRoot: root)
+        }
+        if wake != coordinatorWake {
+            coordinatorWake = wake
+            saveOutbox()
+        }
         return status(of: wake)
     }
 
@@ -147,7 +214,9 @@ extension TaskWebhookService {
         CoordinatorWakeStatus(
             pendingTaskCount: wake.changes.count,
             nextWakeAt: wake.requestedWakeAt,
-            lastWakeAt: wake.lastWakeAt
+            lastWakeAt: wake.lastWakeAt,
+            watchedTaskIDs: wake.watchedTaskIDs,
+            watchedProjectRoots: wake.watchedProjectRoots
         )
     }
 }

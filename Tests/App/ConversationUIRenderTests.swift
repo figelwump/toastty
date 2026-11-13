@@ -198,6 +198,111 @@ final class ConversationUIRenderTests: XCTestCase {
         try Self.writeEvidence(png, name: name)
     }
 
+    /// A wake turn the coordinator marked quiet folds whole under the
+    /// host's line: its work and its answer show only when the line is open.
+    /// The next wake, which is not quiet, shows its answer as usual.
+    func testAQuietWakeFoldsItsWholeTurnUnderTheHostsLine() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let header = "[Toastty] Wake: this message is from Toastty, not from the user."
+        let footer = "Read `toastty task list` for details."
+        let quietDigest = [header, "- [Fix the login redirect](toastty://task/1): needsYou (agentFinished) at 2026-11-12T18:39:14Z", footer]
+            .joined(separator: "\n")
+        let nextDigest = [header, "- [Fix the unread dot](toastty://task/2): needsYou (review) at 2026-11-12T18:52:03Z", footer]
+            .joined(separator: "\n")
+        let rows = [
+            Self.row(1, .hostMessage(.init(summary: "Toastty · 1 update · 10:39 AM", text: quietDigest, foldsTurn: true))),
+            Self.row(2, .toolStarted(callID: "quiet-1", name: "Bash", detail: "toastty task list")),
+            Self.row(3, .toolFinished(callID: "quiet-1", name: "Bash", outcome: .succeeded, detail: nil)),
+            Self.row(4, .toolStarted(callID: "quiet-2", name: "Bash", detail: "toastty coordinator wake --clear --quiet")),
+            Self.row(5, .toolFinished(callID: "quiet-2", name: "Bash", outcome: .succeeded, detail: nil)),
+            Self.row(6, .assistantMessage(text: "Nothing needs you.", phase: .final)),
+            Self.row(7, .hostMessage(.init(summary: "Toastty · 1 update · 10:52 AM", text: nextDigest))),
+            Self.row(8, .toolStarted(callID: "next-1", name: "Bash", detail: "toastty task list")),
+            Self.row(9, .toolFinished(callID: "next-1", name: "Bash", outcome: .succeeded, detail: nil)),
+            Self.row(10, .assistantMessage(text: "Fix the unread dot is ready for your review.", phase: .final)),
+        ]
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        let quietTurn = try XCTUnwrap(state.turns.first)
+        XCTAssertTrue(quietTurn.foldsWholeTurn)
+        XCTAssertEqual(quietTurn.toolCallCount, 2)
+        XCTAssertTrue(quietTurn.workBlockIDs.contains { $0.rowID.sequence == 6 }, "The quiet turn's answer folds with its work")
+        XCTAssertFalse(state.turns[1].foldsWholeTurn)
+        XCTAssertFalse(state.turns[1].workBlockIDs.contains { $0.rowID.sequence == 10 }, "A normal turn's answer stays out of the fold")
+
+        let size = CGSize(width: 560, height: 520)
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false
+        )
+        let (hostingView, window) = Self.host(transcript, size: size)
+        defer { window.close() }
+        // A click reaches SwiftUI only in a window that is on screen. Off the
+        // visible screen, so the real pointer never moves over it.
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        func shownTexts() -> [String] {
+            Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string)
+        }
+        XCTAssertFalse(shownTexts().contains { $0.contains("Nothing needs you.") }, "The quiet answer shows while folded")
+        XCTAssertTrue(shownTexts().contains { $0.contains("ready for your review") }, "The next wake's answer is hidden")
+        let folded = try Self.snapshot(hostingView)
+        try keep(folded, name: "coordinator-quiet-wake-folded")
+
+        // The quiet turn's line is the topmost thing drawn. A click on it
+        // opens the digest, the work and the answer.
+        let lineY = try XCTUnwrap(Self.firstDrawnRow(in: folded, scale: hostingView.window?.backingScaleFactor ?? 2),
+                                  "Nothing is drawn")
+        let point = CGPoint(x: size.width / 2, y: lineY + 6)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: hostingView.convert(CGPoint(x: point.x, y: hostingView.isFlipped ? point.y : size.height - point.y), to: nil),
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0
+            ))
+            window.sendEvent(event)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, shownTexts().contains(where: { $0.contains("Nothing needs you.") }) == false {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        // Let the opening animation end before the image.
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(shownTexts().contains { $0.contains("Nothing needs you.") }, "A click on the line does not open the quiet turn")
+        XCTAssertTrue(shownTexts().contains { $0.contains("needsYou (agentFinished)") }, "The open line does not show the digest")
+        XCTAssertTrue(shownTexts().contains { $0.contains("ready for your review") })
+        try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-wake-open")
+    }
+
+    /// The top of the first pixel row, in points, that differs from the
+    /// top-left pixel's color.
+    private static func firstDrawnRow(in bitmap: NSBitmapImageRep, scale: CGFloat) -> CGFloat? {
+        guard let background = bitmap.colorAt(x: 0, y: 0) else { return nil }
+        for y in 0 ..< bitmap.pixelsHigh {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                let difference = abs(color.redComponent - background.redComponent)
+                    + abs(color.greenComponent - background.greenComponent)
+                    + abs(color.blueComponent - background.blueComponent)
+                if difference > 0.08 { return CGFloat(y) / scale }
+            }
+        }
+        return nil
+    }
+
     /// A response's paragraphs, list items and quote share one text view, so
     /// one drag selects across them and Copy gives plain text. The code block
     /// keeps its own view.

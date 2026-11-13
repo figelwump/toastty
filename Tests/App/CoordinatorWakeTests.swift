@@ -166,9 +166,11 @@ struct CoordinatorWakeTests {
         service.pass()
         let otherChangedAt = clock.now.addingTimeInterval(10)
         clock.advance(10)
-        current.value[other] = state("idle", title: "Other task")
+        current.value[other] = state("needsYou", "awaitingReply", title: "Other task")
         service.pass()
         clock.advance(10)
+        // The user merged the first task: that waits too, but would wake
+        // nothing on its own.
         current.value[task] = state("toShip", merged: true)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
@@ -187,7 +189,7 @@ struct CoordinatorWakeTests {
         await fixture.settle()
         service.pass()
         #expect(fixture.typedTexts == [digest(
-            line(other, "Other task", "idle", at: otherChangedAt),
+            line(other, "Other task", "needsYou (awaitingReply)", at: otherChangedAt),
             line(task, "Wake design", "toShip, merged", at: clock.now)
         )])
 
@@ -237,14 +239,14 @@ struct CoordinatorWakeTests {
         service.pass()
         #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
         #expect(fixture.typedTexts.isEmpty)
-        current.value[task] = state("idle")
+        current.value[task] = state("needsYou", "review")
         service.pass()
         clock.advance(2.5)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
         clock.advance(1)
         service.pass()
-        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "idle", at: clock.now))])
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "needsYou (review)", at: clock.now))])
     }
 
     @Test func theUsersDraftAndWaitingMessagesGoBeforeTheDigest() async throws {
@@ -294,7 +296,7 @@ struct CoordinatorWakeTests {
         // The text went in but the terminal did not confirm Return. Typing
         // it again would put it in the composer twice.
         fixture.nextSubmitIsUnconfirmed = true
-        current.value[task] = state("idle")
+        current.value[task] = state("needsYou", "review")
         service.pass()
         #expect(fixture.typedTexts.count == 1)
         #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
@@ -812,7 +814,7 @@ struct CoordinatorWakeTests {
         clock.advance(5)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
-        current.value[task] = state("idle")
+        current.value[task] = state("needsYou", "awaitingReply")
         service.pass()
         #expect(fixture.typedTexts.count == 1)
         try await runTurn(fixture)
@@ -835,10 +837,10 @@ struct CoordinatorWakeTests {
         #expect(service.isPolling)
         service.pass()
         clock.advance(7200)
-        current.value[task] = state("done")
+        current.value[task] = state("needsYou", "agentFinished")
         service.pass()
         #expect(fixture.typedTexts.count == 2)
-        #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "done", at: clock.now)))
+        #expect(fixture.typedTexts[1] == digest(line(task, "Wake design", "needsYou (agentFinished)", at: clock.now)))
     }
 
     // MARK: - With webhooks
@@ -871,9 +873,9 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts[0].contains("needsYou (review)"))
         try await runTurn(fixture)
 
-        // The webhook gets its default events. The coordinator gets every
-        // change, also Idle, which has no default event; a task that only
-        // starts running waits for the next digest.
+        // The webhook gets its default events. The coordinator is told
+        // every change, also Idle, which has no default event; running,
+        // idle and a merge nothing waits for wait for the next wake.
         clock.advance(10)
         current.value[task] = state("running")
         service.pass()
@@ -882,14 +884,16 @@ struct CoordinatorWakeTests {
         clock.advance(10)
         current.value[task] = state("idle")
         service.pass()
-        #expect(fixture.typedTexts.count == 2)
-        #expect(fixture.typedTexts[1].contains("): idle at "))
-        try await runTurn(fixture)
+        #expect(fixture.typedTexts.count == 1)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        // The coordinator watches the task: its merge wakes it.
+        try service.setCoordinatorWatch(.task(task), watching: true)
         clock.advance(10)
         current.value[task] = state("done", merged: true)
         service.pass()
-        #expect(fixture.typedTexts.count == 3)
-        #expect(fixture.typedTexts[2].contains("): done, merged at "))
+        #expect(fixture.typedTexts.count == 2)
+        #expect(fixture.typedTexts[1].contains("): done, merged at "))
+        #expect(service.coordinatorWakeStatus?.watchedTaskIDs == [])
         await fixture.waitUntil("the webhook gets its events") { Set(transport.types).isSuperset(of: ["task.merged", "task.done"]) }
         #expect(transport.types.contains("task.running") == false)
         #expect(transport.types.contains("task.idle") == false)
@@ -927,7 +931,8 @@ struct CoordinatorWakeTests {
         #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
 
         // From here on it is told, also a change with no webhook event: a
-        // release moves the task from To ship to Done.
+        // release moves the watched task from To ship to Done.
+        try service.setCoordinatorWatch(.task(task), watching: true)
         clock.advance(60)
         current.value[task] = state("done", merged: true)
         service.pass()
@@ -974,6 +979,8 @@ struct CoordinatorWakeTests {
             "pendingTaskCount": .int(0),
             "nextWakeAt": .null,
             "lastWakeAt": iso(startedAt),
+            "watchedTaskIDs": .array([]),
+            "watchedProjectRoots": .array([]),
         ]))
 
         clock.advance(100)
@@ -981,6 +988,8 @@ struct CoordinatorWakeTests {
             "pendingTaskCount": .int(0),
             "nextWakeAt": iso(clock.now.addingTimeInterval(1200)),
             "lastWakeAt": iso(startedAt),
+            "watchedTaskIDs": .array([]),
+            "watchedProjectRoots": .array([]),
         ]))
         // `action run coordinator.wake inSeconds=600` sends text.
         guard case .object(let asText)? = try wake(["inSeconds": .string("600")]) else {
@@ -1020,6 +1029,78 @@ struct CoordinatorWakeTests {
             return
         }
         #expect(waiting["pendingTaskCount"] == .int(1))
+    }
+
+    @Test func watchesAreSetThroughAppControlAndOnlyTheCoordinatorsWakeTurnCanBeQuiet() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let service = makeService(fixture, clock: clock) { [:] }
+        fixture.tasks.coordinator.webhooks = service
+        let executor = TaskAppControlTests().makeExecutor(fixture.tasks, coordinator: fixture.tasks.coordinator)
+        func context(_ caller: String? = nil) -> AutomationRequestContext {
+            AutomationRequestContext(callerSessionID: caller, commandName: "app_control.run_action")
+        }
+        func run(_ id: String, _ args: [String: AutomationJSONValue], caller: String? = nil) throws -> [String: AutomationJSONValue] {
+            guard case .object(let wake)? = try executor.runAction(id: id, args: args, context: context(caller)).result?["wake"] else {
+                Issue.record("no wake in the answer")
+                return [:]
+            }
+            return wake
+        }
+        func refused(_ mention: String, _ id: String, _ args: [String: AutomationJSONValue], caller: String? = nil,
+                     sourceLocation: SourceLocation = #_sourceLocation) {
+            do {
+                _ = try executor.runAction(id: id, args: args, context: context(caller))
+                Issue.record("expected invalidPayload containing \(mention)", sourceLocation: sourceLocation)
+            } catch AutomationSocketError.invalidPayload(let actual) {
+                #expect(actual.contains(mention), "\(actual)", sourceLocation: sourceLocation)
+            } catch {
+                Issue.record("unexpected error \(error)", sourceLocation: sourceLocation)
+            }
+        }
+        #expect(executor.listActionDescriptors().map(\.id).contains("coordinator.watch"))
+        refused("no coordinator", "coordinator.watch", ["taskID": .string(task.uuidString)])
+
+        try await fixture.openAtPrompt()
+        service.pass()
+        let created = try await fixture.tasks.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.tasks.workspaceID, agent: "codex"
+        ))
+        await fixture.tasks.waitForSetup(created.id)
+
+        // A task, then its project by its workspace. Both are saved.
+        #expect(try run("coordinator.watch", ["taskID": .string(created.id.uuidString)])["watchedTaskIDs"]
+            == .array([.string(created.id.uuidString)]))
+        let root = try fixture.tasks.coordinator.resolvedProjectRoot(workspaceID: fixture.tasks.workspaceID).path
+        let normalized = TasksConfigFile.normalizedPath(root, homeDirectoryPath: fixture.tasks.coordinator.homeDirectoryPath)
+        #expect(try run("coordinator.watch", ["workspaceID": .string(fixture.tasks.workspaceID.uuidString)])["watchedProjectRoots"]
+            == .array([.string(normalized)]))
+        // Watching again changes nothing; remove ends each.
+        #expect(try run("coordinator.watch", ["taskID": .string(created.id.uuidString)])["watchedTaskIDs"]
+            == .array([.string(created.id.uuidString)]))
+        #expect(try run("coordinator.watch", ["taskID": .string(created.id.uuidString), "remove": .bool(true)])["watchedTaskIDs"]
+            == .array([]))
+        #expect(try run("coordinator.watch", ["workspaceID": .string(fixture.tasks.workspaceID.uuidString), "remove": .bool(true)])["watchedProjectRoots"]
+            == .array([]))
+        refused("No task has ID", "coordinator.watch", ["taskID": .string(UUID().uuidString)])
+        refused("a task ID", "coordinator.watch", ["taskID": .string("soon")])
+        refused("exactly one", "coordinator.watch", [:])
+        refused("exactly one", "coordinator.watch", [
+            "taskID": .string(created.id.uuidString), "workspaceID": .string(fixture.tasks.workspaceID.uuidString),
+        ])
+
+        // Quiet: no wake started a turn yet, so it is refused, also for the
+        // coordinator's own agent, and the time stays as it was.
+        _ = try run("coordinator.wake", ["inSeconds": .int(600)])
+        let coordinatorSession = try #require(fixture.controller.session?.sessionID)
+        refused("Only a turn", "coordinator.wake", ["clear": .bool(true), "quiet": .bool(true)], caller: coordinatorSession)
+        #expect(service.coordinatorWakeStatus?.nextWakeAt != nil)
+        // Another agent, or a command outside an agent, cannot mark the
+        // coordinator's turn.
+        let taskSession = try #require(fixture.tasks.record(created.id)?.operation.agentLaunch?.sessionID)
+        refused("only the coordinator's agent", "coordinator.wake", ["clear": .bool(true), "quiet": .bool(true)], caller: taskSession)
+        refused("only the coordinator's agent", "coordinator.wake", ["clear": .bool(true), "quiet": .bool(true)])
+        #expect(service.coordinatorWakeStatus?.nextWakeAt != nil)
     }
 
     // MARK: - Real tasks
@@ -1077,7 +1158,9 @@ struct CoordinatorWakeTests {
         clock.advance(5)
         service.pass()
         #expect(fixture.typedTexts.isEmpty)
-        fixture.sessions.updateStatus(sessionID: taskSession, status: SessionStatus(kind: .idle, summary: "Done"), at: Date())
+        // Its turn ends unread: the task waits for the user, which wakes
+        // the coordinator.
+        fixture.sessions.updateStatus(sessionID: taskSession, status: SessionStatus(kind: .ready, summary: "Done"), at: Date())
         clock.advance(5)
         service.pass()
         #expect(fixture.typedTexts.count == 1)

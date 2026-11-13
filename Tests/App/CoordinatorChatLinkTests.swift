@@ -10,18 +10,31 @@ import Testing
 struct CoordinatorChatLinkTests {
     private let taskID = UUID(uuidString: "8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F")!
     private let taskSpaceID = UUID()
+    /// A done or archived task: its space closed.
+    private let closedTaskID = UUID(uuidString: "74C9F5EA-8F2F-4014-A078-3AB97213BC34")!
 
     private func action(_ text: String) throws -> CoordinatorChatLinks.Action {
         let url = try #require(URL(string: text))
-        return CoordinatorChatLinks.action(for: url) { $0 == taskID ? taskSpaceID : nil }
+        return CoordinatorChatLinks.action(for: url) { id in
+            switch id {
+            case taskID: .taskSpace(workspaceID: taskSpaceID)
+            case closedTaskID: .tasksView
+            default: nil
+            }
+        }
     }
 
     @Test func aLinkToATaskWithAnOpenSpaceOpensThatSpace() throws {
         #expect(try action("toastty://task/\(taskID.uuidString)") == .openTaskSpace(workspaceID: taskSpaceID))
     }
 
+    @Test func aLinkToATaskWhoseSpaceClosedShowsItInTheTasksView() throws {
+        #expect(try action("toastty://task/\(closedTaskID.uuidString)") == .showInTasksView(taskID: closedTaskID))
+        #expect(try action("toastty://task/\(closedTaskID.uuidString.lowercased())") == .showInTasksView(taskID: closedTaskID))
+    }
+
     @Test(arguments: [
-        // A task that does not exist, or has no open space.
+        // A task that does not exist.
         "toastty://task/99999999-9999-4999-8999-999999999999",
         // Toastty's own pages and actions.
         "toastty://action/open-settings",

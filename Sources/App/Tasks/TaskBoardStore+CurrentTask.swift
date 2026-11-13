@@ -13,6 +13,33 @@ extension TaskBoardStore {
         return TasksViewSections.make(items).all.first?.item
     }
 
+    /// Shows a window's Tasks view. `subject`, when given, becomes its
+    /// selected row, and a selected task in the collapsed Done or Archived
+    /// group opens that group. `group`, when given, is the group the view
+    /// expands and scrolls to instead.
+    func showTasksView(
+        windowID: UUID,
+        selecting subject: TaskBoardItem.Subject?,
+        revealing group: TaskStage.Group? = nil,
+        store: AppStore,
+        source: AppActionSource
+    ) {
+        if let subject {
+            selectionByWindowID[windowID] = subject
+        }
+        let subjectGroup = subject.flatMap { subject in items().first { $0.id == subject }?.stage.group }
+        let collapsedGroup = subjectGroup == .done || subjectGroup == .archived ? subjectGroup : nil
+        if let reveal = group ?? collapsedGroup {
+            revealGroupByWindowID[windowID] = reveal
+            if group == nil {
+                revealsSelectedRowWindowIDs.insert(windowID)
+            } else {
+                revealsSelectedRowWindowIDs.remove(windowID)
+            }
+        }
+        _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: source)
+    }
+
     /// Keeps a window's Tasks view selection in the list it shows. When the
     /// selected row leaves it, for example once archived or marked done into
     /// the collapsed Done group, its neighbour takes the selection. A view

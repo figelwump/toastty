@@ -976,8 +976,8 @@ public enum ToasttyCLI {
         }
         let parsed = try parseCommandArguments(
             Array(arguments.dropFirst()),
-            valueOptions: ["--window", "--text", "--text-file", "--in", "--at"],
-            flagOptions: ["--no-select", "--clear"]
+            valueOptions: ["--window", "--text", "--text-file", "--in", "--at", "--task", "--workspace"],
+            flagOptions: ["--no-select", "--clear", "--quiet", "--remove"]
         )
         func windowArgs() throws -> [String: AutomationJSONValue] {
             guard let window = parsed.singleValue("--window") else { return [:] }
@@ -986,9 +986,15 @@ public enum ToasttyCLI {
             }
             return ["windowID": .string(window)]
         }
-        let hasWakeOption = parsed.singleValue("--in") != nil || parsed.singleValue("--at") != nil || parsed.hasFlag("--clear")
+        let hasWakeOption = parsed.singleValue("--in") != nil || parsed.singleValue("--at") != nil
+            || parsed.hasFlag("--clear") || parsed.hasFlag("--quiet")
         guard verb == "wake" || hasWakeOption == false else {
-            throw ToasttyCLIError.usage("--in, --at and --clear belong to coordinator wake\n\n\(usage)")
+            throw ToasttyCLIError.usage("--in, --at, --clear and --quiet belong to coordinator wake\n\n\(usage)")
+        }
+        let hasWatchOption = parsed.singleValue("--task") != nil || parsed.singleValue("--workspace") != nil
+            || parsed.hasFlag("--remove")
+        guard verb == "watch" || hasWatchOption == false else {
+            throw ToasttyCLIError.usage("--task, --workspace and --remove belong to coordinator watch\n\n\(usage)")
         }
         switch verb {
         case "open":
@@ -1026,7 +1032,7 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string(text)]))
 
         case "wake":
-            let wakeUsage = "usage: toastty coordinator wake (--in <duration> | --at <ISO time> | --clear)"
+            let wakeUsage = "usage: toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]"
             let chosen = [parsed.singleValue("--in") != nil, parsed.singleValue("--at") != nil, parsed.hasFlag("--clear")].filter { $0 }.count
             guard parsed.positionals.isEmpty, chosen == 1 else {
                 throw ToasttyCLIError.usage("\(wakeUsage)\n\n\(usage)")
@@ -1042,7 +1048,30 @@ public enum ToasttyCLI {
             } else {
                 args["clear"] = .bool(true)
             }
+            if parsed.hasFlag("--quiet") { args["quiet"] = .bool(true) }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.wake", args: args))
+
+        case "watch":
+            let watchUsage = "usage: toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]"
+            let task = parsed.singleValue("--task")
+            let workspace = parsed.singleValue("--workspace")
+            guard parsed.positionals.isEmpty, (task == nil) != (workspace == nil) else {
+                throw ToasttyCLIError.usage("\(watchUsage)\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let task {
+                guard UUID(uuidString: task) != nil else {
+                    throw ToasttyCLIError.usage("--task must be a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(task)
+            } else if let workspace {
+                guard UUID(uuidString: workspace) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
+                }
+                args["workspaceID"] = .string(workspace)
+            }
+            if parsed.hasFlag("--remove") { args["remove"] = .bool(true) }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.watch", args: args))
 
         default:
             throw ToasttyCLIError.usage("unknown coordinator subcommand: \(verb)\n\n\(usage)")
@@ -1111,7 +1140,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator restart [--window <id>]
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>)
-      toastty [--json] [--socket-path <path>] coordinator wake (--in <duration> | --at <ISO time> | --clear)
+      toastty [--json] [--socket-path <path>] coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
+      toastty [--json] [--socket-path <path>] coordinator watch (--task <task-id> | --workspace <id>) [--remove]
       toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
       toastty [--json] [--socket-path <path>] webhook rotate-secret <name> --secret-stdin

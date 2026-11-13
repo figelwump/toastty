@@ -14,6 +14,7 @@ protocol CoordinatorAgentLaunching: AnyObject {
         workspaceID: UUID,
         panelID: UUID,
         cwd: String,
+        environment: [String: String],
         model: String?,
         reasoningEffort: String?
     ) async throws -> AgentLaunchResult
@@ -25,6 +26,7 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
         workspaceID: UUID,
         panelID: UUID,
         cwd: String,
+        environment: [String: String],
         model: String?,
         reasoningEffort: String?
     ) async throws -> AgentLaunchResult {
@@ -33,6 +35,7 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
             workspaceID: workspaceID,
             panelID: panelID,
             cwd: cwd,
+            environment: environment,
             model: model,
             reasoningEffort: reasoningEffort,
             focusPolicy: .preserveFirstResponder
@@ -620,6 +623,43 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
+    // MARK: - Policy
+
+    /// Shows `policy.md` in the coordinator's workspace, in the right panel
+    /// of the tab that holds the coordinator's terminal, so the chat stays
+    /// in view; the user can read and edit it there. The workspace and that
+    /// tab become the selected ones, and a panel that already shows the
+    /// file is used again. A missing policy is created first, as at a start.
+    func openPolicy() throws {
+        guard let location else {
+            throw CoordinatorError("There is no coordinator. Open Coordinator first.")
+        }
+        let directory = try preparedDirectory()
+        let path = URL(filePath: directory, directoryHint: .isDirectory)
+            .appending(path: CoordinatorFolder.policyFileName, directoryHint: .notDirectory)
+            .path
+        _ = store.selectWorkspace(
+            windowID: location.windowID,
+            workspaceID: location.workspaceID,
+            preferringUnreadSessionPanelIn: nil
+        )
+        // Each tab has its own right panel.
+        if let panelID = location.panelID,
+           let tabID = store.state.workspacesByID[location.workspaceID]?.tabID(containingPanelID: panelID) {
+            _ = store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: tabID))
+        }
+        guard store.createLocalDocumentPanel(
+            workspaceID: location.workspaceID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: path,
+                placementOverride: .rightPanel,
+                formatOverride: .markdown
+            )
+        ) else {
+            throw CoordinatorError("Toastty could not open \(path).")
+        }
+    }
+
     private func createWorkspaceIfNeeded(windowID requestedWindowID: UUID?) throws -> Bool {
         guard store.state.coordinator == nil else { return false }
         guard let windowID = requestedWindowID ?? store.state.selectedWindowID ?? store.state.windows.first?.id,
@@ -706,6 +746,9 @@ final class CoordinatorController: ObservableObject {
                     workspaceID: location.workspaceID,
                     panelID: terminal.panelID,
                     cwd: directory,
+                    // Also for a new terminal that is not the coordinator's
+                    // yet, whose shell lacks it.
+                    environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
                     model: config.model,
                     reasoningEffort: config.effort
                 )
@@ -1081,6 +1124,71 @@ final class CoordinatorController: ObservableObject {
         typedMessageIDs.contains(messageID)
     }
 
+    // MARK: - Quiet turns
+
+    /// Whether the message is a digest whose turn the coordinator marked
+    /// quiet. The service that keeps the wake state sets it.
+    var isQuietDigest: (String) -> Bool = { _ in false }
+
+    /// The newest text this controller typed into the agent, from any
+    /// sender, as `CoordinatorWakeState.digestKey`, and when.
+    private var lastTyped: (key: String, at: Date)?
+    /// The wake turn that the coordinator marked quiet: its session and the
+    /// key of the digest that started it.
+    private var quietTurn: (sessionID: String, digestKey: String)?
+
+    /// The events read to find the newest message to the agent.
+    private static let quietTurnEventLimit = 200
+
+    /// The text of the newest message to the agent among its newest events,
+    /// also one typed in its terminal, which does not pass through this
+    /// controller. `nil` when no message is among them.
+    private func newestMessageToTheAgent(_ subscription: any LocalConversationSubscription) -> String? {
+        guard case .page(let page) = subscription.events(before: nil, limit: Self.quietTurnEventLimit) else { return nil }
+        for event in page.events.reversed() {
+            if case .userMessage(let payload) = event.payload { return payload.text }
+        }
+        return nil
+    }
+
+    /// Whether the turn that the digest with this key started still has no
+    /// other message in it: this controller typed nothing after the digest,
+    /// nobody typed in the terminal since, and the conversation shows no
+    /// newer message. Each check covers what the others can miss: the
+    /// conversation reads the transcript with a delay, and keys typed in
+    /// the terminal do not pass through this controller.
+    private func onlyTheDigestReached(_ digestKey: String, subscription: any LocalConversationSubscription) -> Bool {
+        guard let lastTyped, lastTyped.key == digestKey else { return false }
+        if let panelID = location?.panelID, let typedAt = sessionRuntimeStore.lastUserInputAt(panelID: panelID),
+           typedAt > lastTyped.at {
+            return false
+        }
+        // A turn with more events than the page holds started with the
+        // digest that this controller typed last.
+        guard let newest = newestMessageToTheAgent(subscription) else { return true }
+        return CoordinatorWakeState.digestKey(newest) == digestKey
+    }
+
+    /// Marks the turn that runs now as quiet, when the digest with this key
+    /// started it and no other message came into it. `false` changes
+    /// nothing.
+    func markQuietTurn(digestKey: String) -> Bool {
+        guard let session,
+              let subscription = syncConversationSubscription(),
+              subscription.snapshot(at: now())?.summary.state == .working,
+              onlyTheDigestReached(digestKey, subscription: subscription) else { return false }
+        quietTurn = (session.sessionID, digestKey)
+        return true
+    }
+
+    /// Whether the turn of this session that ends now is the quiet one, and
+    /// no message came into it after the mark.
+    func turnEndsQuietly(sessionID: String) -> Bool {
+        guard let quietTurn, quietTurn.sessionID == sessionID,
+              let subscription = syncConversationSubscription() else { return false }
+        return onlyTheDigestReached(quietTurn.digestKey, subscription: subscription)
+    }
+
     /// Types the first queued entry when the prompt is open. Returns that
     /// delivery's result, or `nil` when nothing was typed.
     @discardableResult
@@ -1282,6 +1390,7 @@ final class CoordinatorController: ObservableObject {
         if typedMessageIDs.count > Self.rememberedTypedMessages {
             typedMessageIDs.removeFirst(typedMessageIDs.count - Self.rememberedTypedMessages)
         }
+        lastTyped = (CoordinatorWakeState.digestKey(entry.text), now())
         ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
             "session_id": session.sessionID,
             "submit_confirmed": result == .delivered ? "true" : "false",

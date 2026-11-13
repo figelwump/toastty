@@ -994,7 +994,8 @@ toastty coordinator open [--window <id>] [--no-select]
 toastty coordinator restart [--window <id>]
 toastty coordinator status
 toastty coordinator send (<text> | --text-file <path>)
-toastty coordinator wake (--in <duration> | --at <ISO time> | --clear)
+toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
+toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]
 ```
 
 The coordinator is one long-lived agent session in its own pinned workspace;
@@ -1018,8 +1019,10 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   after a start that did not work, and `queuedCount` and `hold` for messages
   that wait. `wake` holds what Toastty will type on its own:
   `pendingTaskCount`, the tasks whose stage changes or alerts wait for the
-  next digest, also a task that only started running; `nextWakeAt`, the time that `wake`
-  set (`null` when no time is set: then no timer runs); and `lastWakeAt`.
+  next digest, also the changes that wake nothing on their own, such as a
+  task that only started running; `nextWakeAt`, the time that `wake`
+  set (`null` when no time is set: then no timer runs); `lastWakeAt`; and
+  `watchedTaskIDs` and `watchedProjectRoots`, what `watch` watches.
 - `send` puts a first line before the message that names the sender, which
   Toastty takes from the caller and not from the text: the task whose space
   the calling session is in, else that session, else "a terminal command".
@@ -1040,17 +1043,30 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   time set, only a task change that may need the coordinator, or an alert,
   wakes it. Every
   digest that Toastty types removes the time, so the coordinator sets or
-  clears it in each turn that a digest starts. It returns the `status` fields and fails when there is no
-  coordinator. See
-  [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
+  clears it in each turn that a digest starts. `--quiet` also marks the wake
+  turn that runs now as one that needs nothing from you: the chat folds it
+  under Toastty's line, and its end marks nothing unread and sends no
+  notification. Only the coordinator's own agent can pass `--quiet`, in a
+  turn that Toastty's last digest started and that no other message came
+  into; otherwise the command fails and changes nothing. It returns the
+  `status` fields and fails when there is no coordinator. See
+  [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator)
+  and [Quiet turns](tasks.md#quiet-turns).
+- `watch` makes a merge wake the coordinator. With `--task`, the task's merge,
+  or its end without a merge (Done, archived or deleted), wakes it once, and
+  the watch ends. With `--workspace`, every merge in that project wakes it,
+  until `--remove`. `--remove` ends a watch. It returns the `status` fields
+  and fails when there is no coordinator. See
+  [The coordinator's watches](tasks.md#the-coordinators-watches).
 
 A workspace-scoped session can use these commands only when the coordinator's
 workspace is in its scope, and it cannot create the coordinator.
 
 These commands are short forms of
-`action run coordinator.open|coordinator.restart|coordinator.send|coordinator.wake`
+`action run coordinator.open|coordinator.restart|coordinator.send|coordinator.wake|coordinator.watch`
 and `query run coordinator.get`. `coordinator.wake` takes exactly one of
-`inSeconds`, `at` and `clear`.
+`inSeconds`, `at` and `clear`, and optional `quiet`. `coordinator.watch`
+takes exactly one of `taskID` and `workspaceID`, and optional `remove`.
 
 ### `webhook`
 

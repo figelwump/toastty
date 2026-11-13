@@ -775,6 +775,11 @@ under it. On macOS 14 the panel shows the terminal.
   cannot tell those keys from a draft, so choose **Send Anyway**.
 - **Digests.** A message that Toastty typed (see below) shows as one muted
   line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
+- **Quiet wakes.** When a wake found nothing for you, the coordinator marks
+  its turn quiet (see [quiet turns](#quiet-turns)). The chat then shows only
+  Toastty's line for that wake: a click opens the digest, the coordinator's
+  work and its answer. The end of a quiet turn marks nothing unread and
+  sends no notification to the Mac or the phone.
 - **Messages from agents.** A message that `coordinator send` brought shows
   as one muted line that names its sender, such as "From task Fix the unread
   dot · 14:07". A click opens the full text. It never shows as your message.
@@ -782,7 +787,9 @@ under it. On macOS 14 the panel shows the terminal.
   text shows as a chip with the task's stage color, its current title and its
   pull request number. A click opens the task's space, with the chat beside
   it in [the dock](#the-coordinators-dock): from the full view, the chat
-  moves into the dock. A link to a task that does not exist, and any other
+  moves into the dock. A task whose space is closed, such as a done or
+  archived one, opens in the Tasks view with the task selected, beside the
+  dock. A link to a task that does not exist, and any other
   `toastty:` link, is plain text. Other links open only `http` and `https`
   pages, in your browser.
 
@@ -891,8 +898,9 @@ How it works with your tasks:
 - It does not use `task watch --notify` for a task that waits for another
   one. Toastty types a watch's notice whatever the agent does at that
   moment, also at a permission prompt. The coordinator notes the dependency
-  in its ledger, hears of the merge in a digest, and then tells the task
-  under its own rules.
+  in its ledger, asks Toastty to wake it at that task's merge
+  (`coordinator watch`), and then tells the waiting task under its own
+  rules.
 
 What it may do alone, what it asks first, and what it never does:
 
@@ -954,12 +962,28 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   policy and nothing else. Toastty leaves a folder that already is a
   repository as it is. If git is missing, the coordinator still starts, and
   tells you that a change of the policy cannot be undone.
+- **Git stops at the folder.** The command that starts the coordinator's
+  agent, and the command that resumes it after a relaunch, set
+  `GIT_CEILING_DIRECTORIES` to the folder that holds the coordinator's
+  folder, `~/.toastty`. If the coordinator's folder is a link, the ceiling
+  is the folder that holds the link's target. If the folder has no `.git`,
+  its git commands then fail, and do not use a repository in a folder above
+  it, such as a home folder kept in git for dotfiles. Git in a project
+  outside that folder works as before.
 
 ### The policy file
 
 `policy.md` holds your choices. A rule there wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
-reads it on each wake. The coordinator writes most of it by asking you:
+reads it on each wake. **Policy**, in the header of the coordinator's panel,
+and **Open Policy**, in the Coordinator row's context menu, show the file in
+the right panel of the coordinator's workspace, beside the chat, where you
+can read and edit it. They select the tab that holds the coordinator's
+terminal, and use a panel that already shows the file. A policy that is
+missing is first created with its headings. The next
+time the coordinator changes the policy, it first commits your edit as
+"Edited outside the coordinator". The coordinator writes most of the policy
+by asking you:
 
 ```markdown
 # Coordinator policy
@@ -1030,26 +1054,31 @@ change is then a commit of its own.
 ### When Toastty wakes the coordinator
 
 The coordinator does not poll and keeps no watch command running. Toastty
-types a short message, a digest, into it for three reasons:
+types a short message, a digest, into it only when something may need it:
 
-- **A task's stage changed in a way that may need the coordinator.** Each
-  task whose `stage.group` or `stage.attention` changed, whose pull request
-  merged, or that was deleted gets one line. The changes come from the
-  detector behind the [webhook events](#webhooks-for-task-events): a stage
-  that comes from an agent's status counts after it holds for 3 seconds, so
-  a status that flickers wakes nothing. The coordinator gets the changes of
-  every task, with Idle, and also a change that has no webhook event, such
-  as To ship to Done after a release. It needs no approval, because nothing
-  leaves the Mac.
+- **A task moves into Needs you**, for any reason.
 - **A task got an alert.** See [alerts](#alerts).
+- **A task merged, and something waits for that merge:** the coordinator
+  watches the task or its project (see [watches](#the-coordinators-watches)),
+  or you asked for a release right after the task merges
+  (`task set-release --after-merge`).
+- **A task that the coordinator watches ended:** Done, archived or deleted.
 - **The time that the coordinator set for its next check came.** See
   [the timer](#the-coordinators-timer).
 
-**A task that only starts running wakes nothing.** A change into Running
-with no `stage.attention`, no merge and no deletion needs nothing from the
-coordinator. Toastty records it and lists it in the next digest that
-another change or the timer starts. A later change of the same task
-replaces its line, as for every task.
+Every other change waits: a task that starts running, goes idle, or is Done
+or To ship after you merged it, a task you archived, and a merge nothing
+waits for. Toastty records each such change and lists it in the next digest
+that something else starts. A later change of the same task replaces its
+line, as for every task. So your own merges, and the tasks you finish, do
+not wake the coordinator to tell it what you just did.
+
+The changes come from the detector behind the
+[webhook events](#webhooks-for-task-events): a stage that comes from an
+agent's status counts after it holds for 3 seconds, so a status that
+flickers wakes nothing. The coordinator is told the changes of every task,
+with Idle, and also a change that has no webhook event, such as To ship to
+Done after a release. It needs no approval, because nothing leaves the Mac.
 
 Beyond the [alerts](#alerts), Toastty has no rule about a task that is
 stuck, and a digest holds no judgment. It says which tasks changed; the
@@ -1077,7 +1106,8 @@ Read `toastty task list` for details.
   the digest was typed has its newest stage only. A title is cut after 80
   characters, and control characters in it are not typed.
 - A digest lists up to 40 tasks and counts the rest in one line. It also
-  lists a task that only started running, when something else started the
+  lists the changes that wake nothing on their own, such as a task that
+  started running or that you merged, when something else started the
   digest.
 - The `Scheduled check` line is there when the time the coordinator set
   came.
@@ -1167,9 +1197,60 @@ toastty coordinator wake --clear
   coordinator set.
 
 `toastty coordinator status` shows `wake.nextWakeAt`, the time the
-coordinator set (`null` when it set none), `wake.lastWakeAt`, and
+coordinator set (`null` when it set none), `wake.lastWakeAt`,
 `wake.pendingTaskCount`, the number of tasks whose changes wait for the next
-digest, with a task that only started running.
+digest, also the changes that wake nothing on their own, and
+`wake.watchedTaskIDs` and `wake.watchedProjectRoots`, its
+[watches](#the-coordinators-watches).
+
+### Quiet turns
+
+A wake can find nothing for you: for example, a task ended a turn and only
+waits for its checks. Before it ends such a turn, the coordinator adds
+`--quiet` to the `coordinator wake` call that every wake turn ends with:
+
+```bash
+toastty coordinator wake --clear --quiet
+```
+
+- Toastty accepts `--quiet` only from the coordinator's own agent, in a turn
+  that Toastty's last digest started, while no other message has come into
+  that turn. Otherwise the command fails and changes nothing, not even the
+  time. So a turn that answers you is never quiet.
+- The chat folds a quiet turn under Toastty's line for its digest. A click
+  on the line opens the digest, the coordinator's work and its answer. A
+  question or an approval prompt in the turn stays visible.
+- The end of a quiet turn does not mark the coordinator unread and sends no
+  notification to the Mac and no push to a phone. If you send a message into
+  the turn after the mark, or type in the coordinator's terminal, its end
+  alerts as usual. Toastty keeps that part of the mark in memory: after a
+  relaunch in the middle of a quiet turn, its end alerts as usual, and the
+  chat still folds it.
+- Toastty saves the mark with the digest it belongs to, so the chat still
+  folds the turn after a relaunch. It keeps the newest 200 marks.
+
+### The coordinator's watches
+
+Most merges need nothing from the coordinator, so they do not wake it. When
+something waits for one, the coordinator asks Toastty to watch:
+
+```bash
+toastty coordinator watch --task <task-id>
+toastty coordinator watch --workspace <project-workspace-id>
+toastty coordinator watch --task <task-id> --remove
+```
+
+- A watched task wakes the coordinator once when it merges, or when it ends
+  without a merge: Done, archived or deleted. Then its watch ends. The
+  coordinator uses it for a task that another task waits for.
+- A watched project wakes the coordinator at every merge of its tasks,
+  until the coordinator removes the watch. It uses it for a project whose
+  release rule in `policy.md` is "on merge". A subspace's workspace names its
+  project.
+- A task with `releaseAfterMerge` wakes the coordinator at its merge with no
+  watch.
+- Up to 100 tasks and 100 projects. Toastty saves the watches with the
+  wake state; closing the coordinator's workspace drops them.
 
 ## Webhooks for task events
 
@@ -1291,9 +1372,16 @@ marked done without a merge, do not finish a parent alone; it stays Idle, and
 you decide.
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
-asks `gh` about it every two minutes while the task is open, when an agent's
-turn ends in the task space, and when the Tasks view opens, and copies the
-link and the merge onto the task record. Without `gh`, a linked pull request
+asks `gh` about open tasks at launch, when an agent's turn ends in the task
+space, and when the Tasks view opens. It checks for updates every 15 seconds:
+pending checks, unknown readiness and failed requests are retried after 15
+seconds; settled results are refreshed after two minutes. It copies the link
+and the merge onto the task record. The Merge button can keep the previous
+readiness for up to 30 seconds while GitHub returns unknown readiness or
+requests fail, only for the same head commit. A new commit never inherits the
+previous commit's readiness. Task status and alerts still keep the last
+reported checks for the same commit when a reply omits check fields; that
+reply does not prove that checks cleared. Without `gh`, a linked pull request
 with no agent working counts as waiting for review. A merge made on GitHub
 also cleans up the task space when that is safe; see
 [Merge a task](#merge-a-task).

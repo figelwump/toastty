@@ -130,6 +130,7 @@ struct SidebarCoordinatorRow: View {
     let select: () -> Void
     let openFullView: () -> Void
     let toggleDock: () -> Void
+    let openPolicy: () -> Void
     let restart: () -> Void
     let close: () -> Void
 
@@ -208,6 +209,7 @@ struct SidebarCoordinatorRow: View {
                     )
                 Divider()
             }
+            Button("Open Policy", action: openPolicy)
             Button("Restart Coordinator", action: restart)
             Button("Close Coordinator", role: .destructive, action: close)
         }

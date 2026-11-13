@@ -596,7 +596,9 @@ public struct ToasttyTranscriptView: View {
         var items: [ToasttyTranscriptDisplayItem] = []
         items.reserveCapacity(state.blocks.count + state.turns.count)
         for block in state.blocks {
-            if let turn = turnAtFirstWorkBlock[block.id] {
+            // A turn that folds whole has no strip: its host message's own
+            // line opens it.
+            if let turn = turnAtFirstWorkBlock[block.id], turn.foldsWholeTurn == false {
                 items.append(.workStrip(turn))
             }
             if let turnID = turnForWorkBlock[block.id] {
@@ -735,6 +737,14 @@ public struct ToasttyTranscriptView: View {
         }
     }
 
+    /// The row is a host message whose line folds its whole turn. Its
+    /// disclosure is the turn's fold, so one line opens the message, the
+    /// work and the answer.
+    private func foldsTurn(_ row: ToasttyTranscriptRow) -> Bool {
+        if case .hostMessage(let message) = row.content { return message.foldsTurn }
+        return false
+    }
+
     @ViewBuilder
     private func blockView(_ block: ToasttyTranscriptBlock, demoted: Bool = false) -> some View {
         switch block.content {
@@ -742,8 +752,18 @@ public struct ToasttyTranscriptView: View {
             ToasttyTranscriptRowView(
                 row: row,
                 isDemoted: demoted,
-                subagentIsExpanded: expandedSubagentIDs.contains(row.id),
-                toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) },
+                subagentIsExpanded: foldsTurn(row)
+                    ? turnFold.isExpanded(row.id)
+                    : expandedSubagentIDs.contains(row.id),
+                toggleSubagentExpansion: {
+                    if foldsTurn(row) {
+                        withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
+                            turnFold.toggle(row.id)
+                        }
+                    } else {
+                        toggle(row.id, in: &expandedSubagentIDs)
+                    }
+                },
                 interactionAnswerStates: interactionAnswerStates,
                 editInteractionAnswer: editInteractionAnswer,
                 submitInteractionAnswer: submitInteractionAnswer,

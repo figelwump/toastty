@@ -33,11 +33,15 @@ struct CoordinatorFolderTests {
     }
 
     @discardableResult
-    private func git(_ arguments: String..., in directory: URL) throws -> String {
+    private func git(
+        _ arguments: String...,
+        in directory: URL,
+        environment: [String: String] = CoordinatorFolderTests.gitEnvironment
+    ) throws -> String {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/env")
         process.arguments = ["git", "-C", directory.path] + arguments
-        process.environment = Self.gitEnvironment
+        process.environment = environment
         let output = Pipe()
         let errors = Pipe()
         process.standardOutput = output
@@ -222,6 +226,64 @@ struct CoordinatorFolderTests {
         // The files Toastty added are there, and the agent still starts.
         #expect(try read("AGENTS.md", in: directory).contains("version 1"))
         #expect(try fixture.status().agentState == .running)
+    }
+
+    /// A home folder kept in git, as for dotfiles, with the coordinator's
+    /// folder below it. Without its own `.git`, the folder must not use
+    /// that repository: a policy commit would land in the user's home.
+    @Test func gitInTheAgentsEnvironmentNeverUsesARepositoryAboveTheFolder() async throws {
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let directory = fixture.directory
+        // The temporary folder is behind a link (/var is /private/var), as
+        // a home folder can be.
+        let home = fixture.tasks.root
+        try git("init", "-q", in: home)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let agentEnvironment = Self.gitEnvironment.merging(
+            CoordinatorFolder.gitEnvironment(for: directory),
+            uniquingKeysWith: { _, new in new }
+        )
+        // Git prints the real path; Foundation's resolution would drop
+        // the /private prefix.
+        func realPath(_ url: URL) -> String? {
+            guard let resolved = realpath(url.path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        let homeTopLevel = try #require(realPath(home))
+
+        // Plain git finds the home repository; the agent's git finds none.
+        #expect(try git("rev-parse", "--show-toplevel", in: directory) == homeTopLevel)
+        #expect(throws: TaskError.self) {
+            try git("rev-parse", "--show-toplevel", in: directory, environment: agentEnvironment)
+        }
+        // A project outside the coordinator's parent folder is unaffected.
+        #expect(try git("rev-parse", "--show-toplevel", in: home, environment: agentEnvironment) == homeTopLevel)
+
+        // Once Toastty made the folder's own repository, a commit lands there.
+        try await fixture.controller.open()
+        #expect(try git("rev-parse", "--show-toplevel", in: directory, environment: agentEnvironment)
+            == realPath(directory))
+        try write("# Coordinator policy\n\n## Talking\n- Be brief.\n", to: "policy.md", in: directory)
+        try git("commit", "-q", "-m", "Policy: change Talking", "--", "policy.md", in: directory, environment: agentEnvironment)
+        #expect(try git("log", "--format=%s", in: directory) == "Policy: change Talking\nStart the coordinator's policy")
+        #expect(try git("rev-list", "--all", "--count", in: home) == "0")
+
+        // A coordinator folder that links to a place in the repository gets
+        // the ceiling of that place: git looks up from where the folder is.
+        let linkedTarget = home.appending(path: "elsewhere/coordinator", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: linkedTarget, withIntermediateDirectories: true)
+        let link = home.appending(path: "linked-home/coordinator", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: linkedTarget)
+        let linkedEnvironment = Self.gitEnvironment.merging(
+            CoordinatorFolder.gitEnvironment(for: link),
+            uniquingKeysWith: { _, new in new }
+        )
+        #expect(try git("rev-parse", "--show-toplevel", in: link) == homeTopLevel)
+        #expect(throws: TaskError.self) {
+            try git("rev-parse", "--show-toplevel", in: link, environment: linkedEnvironment)
+        }
     }
 
     // MARK: - The shipped text

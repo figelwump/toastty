@@ -37,10 +37,16 @@ public struct ToasttyHostMessagePresentation: Equatable, Sendable {
     public var summary: String
     /// The text that was typed.
     public var text: String
+    /// The host knows that the turn this message started needs no reader.
+    /// The line then also folds the whole turn: its work and its answer
+    /// show only when the line is open. Questions and approvals stay
+    /// visible.
+    public var foldsTurn: Bool
 
-    public init(summary: String, text: String) {
+    public init(summary: String, text: String, foldsTurn: Bool = false) {
         self.summary = summary
         self.text = text
+        self.foldsTurn = foldsTurn
     }
 }
 

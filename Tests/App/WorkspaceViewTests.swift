@@ -1909,9 +1909,9 @@ final class WorkspaceViewTests: XCTestCase {
         var mergeRequests: [UUID] = []
         var openedURLs: [URL] = []
         let pullRequestURL = "https://github.com/example/toastty/pull/59"
-        let cache = PullRequestStateCache(runner: OfflinePullRequestRunner())
-        let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
         var observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let cache = PullRequestStateCache(runner: OfflinePullRequestRunner(), now: { observedAt })
+        let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
         func answer(_ state: TaskPullRequestState) {
             observedAt = observedAt.addingTimeInterval(1)
             cache.store(state, for: link, observedAt: observedAt)
@@ -1947,7 +1947,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [])
 
         answer(TaskPullRequestState(
-            state: .open,
+            state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
         ))
         try writeTopBarEvidence(harness, name: "topbar-open-pr-checks-failing")
@@ -1956,18 +1956,25 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [])
 
         // GitHub still working it out keeps the last known state.
-        answer(TaskPullRequestState(state: .open, mergeability: PullRequestMergeability(mergeState: .unknown)))
+        answer(TaskPullRequestState(state: .open, headSHA: "head1", mergeability: PullRequestMergeability(mergeState: .unknown)))
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(openedURLs.count, 3)
         XCTAssertEqual(mergeRequests, [])
 
+        // Repeated unknown replies cannot keep Open PR indefinitely.
+        observedAt = observedAt.addingTimeInterval(30)
+        answer(TaskPullRequestState(state: .open, headSHA: "head1", mergeability: PullRequestMergeability(mergeState: .unknown)))
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+        XCTAssertEqual(openedURLs.count, 3)
+
         answer(TaskPullRequestState(
-            state: .open,
+            state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
         ))
         try writeTopBarEvidence(harness, name: "topbar-merge-ready-clean")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+        XCTAssertEqual(mergeRequests, [harness.workspaceID, harness.workspaceID])
         XCTAssertEqual(openedURLs.count, 3)
     }
 

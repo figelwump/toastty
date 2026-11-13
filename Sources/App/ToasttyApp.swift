@@ -942,6 +942,9 @@ struct ToasttyApp: App {
             restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
         )
         terminalRuntimeRegistry.setAgentCatalogProvider(agentCatalogStore)
+        terminalRuntimeRegistry.setCoordinatorLaunchEnvironment(
+            CoordinatorFolder.gitEnvironment(for: runtimePaths.coordinatorDirectoryURL)
+        )
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
@@ -1427,6 +1430,11 @@ struct ToasttyApp: App {
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {
             taskWebhooks.attach(coordinator: coordinatorController)
+            // A wake turn the coordinator marked quiet ends without an
+            // unread mark, a notification or a push.
+            sessionRuntimeStore.isQuietTurnEnd = { [weak coordinatorController] sessionID in
+                coordinatorController?.turnEndsQuietly(sessionID: sessionID) ?? false
+            }
         }
         // While a coordinator exists, quick entry sends to it.
         quickEntryController.coordinatorController = taskCoordinator.coordinatorController
