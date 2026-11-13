@@ -279,8 +279,12 @@ final class TaskSteerSender {
             // not show the turn yet.
             return .undecided(holdAtDeadline: true)
         case (.unavailable(reason: .working), .busy):
-            guard isHeld == false, let control = summary.inputControl, control.canSteer,
-                  let turnEpoch = control.turnEpoch else { return .hold }
+            guard isHeld == false, let control = summary.inputControl else { return .hold }
+            // The conversation does not show the running turn yet.
+            guard let turnEpoch = control.turnEpoch else { return .undecided(holdAtDeadline: true) }
+            // The agent cannot read during a turn, or someone typed in
+            // this turn's terminal.
+            guard control.canSteer else { return .hold }
             switch request(.steer, turnEpoch) {
             case .accepted, .duplicate: return .typed(.steered)
             case .uncertain: return .failed(.uncertain)
@@ -290,11 +294,14 @@ final class TaskSteerSender {
             }
         case (.unavailable(reason: .working), .idle),
              (.unavailable(reason: .interrupted), .idle),
-             (.unavailable(reason: .interrupted), .busy),
-             (.localDraft, .idle),
+             (.localDraft, .idle):
+            // The hooks say that the agent is at its prompt. The
+            // conversation is behind, as while it first reads its
+            // transcript, and the prompt opens in a moment; or the prompt
+            // holds text that someone typed, and stays closed.
+            return .undecided(holdAtDeadline: true)
+        case (.unavailable(reason: .interrupted), .busy),
              (.localDraft, .busy):
-            // The prompt is about to open, or holds text that someone
-            // typed in the terminal.
             return .hold
         default:
             // The agent starts, ended or failed, or Toastty does not follow

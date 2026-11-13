@@ -118,6 +118,23 @@ struct TaskSteerSenderTests {
     }
 
     @MainActor
+    @Test func anIdleAgentGetsTheMessageAlsoWhenKeysReachedItsTerminalBeforeItsFirstTurn() async throws {
+        let harness = try Harness()
+        defer { harness.tearDown() }
+        // Keys reached the terminal before the agent started, such as the
+        // answer to its folder trust prompt. A conversation that is first
+        // followed opens as a draft for them, until it reads the finished
+        // turn in the transcript.
+        harness.fixture.sessionRuntimeStore.noteLocalInputForActiveSession(panelID: harness.fixture.panelID)
+        try harness.startTurn()
+        try harness.endTurn()
+
+        #expect(await harness.send("Use 300 ms") == .success(.sent))
+        #expect(harness.typed.texts == ["Use 300 ms"])
+        #expect(harness.waiting().isEmpty)
+    }
+
+    @MainActor
     @Test func aBusyAgentGetsTheMessageInItsRunningTurn() async throws {
         let harness = try Harness()
         defer { harness.tearDown() }

@@ -172,9 +172,35 @@ def main():
             panel = get()['agentState']['panelID']
             return instance.query('terminal.visible-text', panelID=panel, tail=60).get('text', '')
 
+        answered = []
+
+        def answer_dialogs():
+            """Answers Codex's folder trust prompt, and skips an update
+            prompt, as a person would: each once."""
+            for panel in panel_ids(snapshot()):
+                try:
+                    text = instance.query('terminal.visible-text', panelID=panel, tail=40).get('text', '')
+                except AssertionError:
+                    continue
+                trust, update = text.rfind('Trust this folder?'), text.rfind('Update available')
+                if trust >= 0 and trust > update and 'Trust and continue' in text[trust:]:
+                    choice, kind = '1', 'trust'
+                elif update >= 0 and update > trust and 'Skip' in text[update:]:
+                    choice, kind = '3', 'update'
+                else:
+                    continue
+                if (panel, kind) not in answered:
+                    answered.append((panel, kind))
+                    instance.request('app_control.run_action', dict(
+                        id='terminal.send-text', args=dict(panelID=panel, text=choice, submit=True)))
+
         def reply(marker, timeout=300):
-            text = wait_for(f'{marker} on screen', lambda: visible_text_with(instance, snapshot(), marker),
-                            timeout=timeout, interval=2)
+            def shown():
+                if provider == 'codex':
+                    answer_dialogs()
+                return visible_text_with(instance, snapshot(), marker)
+
+            text = wait_for(f'{marker} on screen', shown, timeout=timeout, interval=2)
             evidence['screens'][marker] = text[-3000:]
             return text
 
@@ -196,8 +222,11 @@ def main():
         cli_result('task', 'send', task_id, HOLD_TEXT)
         wait_for('the agent in a turn', lambda: agent_state() == 'busy', interval=0.5)
         wait_for('the held command on screen', lambda: f'{HOLD_SCRIPT} 40' in screen(), interval=1)
-        time.sleep(8)
-        require(agent_state() == 'busy', 'The agent did not stay in its turn')
+        states = []
+        for _ in range(8):
+            time.sleep(1)
+            states.append(agent_state())
+        require(states[-1] == 'busy', f'The agent did not stay in its turn; its states were {states}')
         steered = steer(STEER_TEXT)
         require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
         reply('STEERED-OK')
