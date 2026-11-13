@@ -363,9 +363,19 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
 
     private static let minimumMagnification: Double = 1
 
+    /// Keeps the center of the view in place. WebKit ignores the center
+    /// point of `setMagnification(_:centeredAt:)` here and keeps the
+    /// top-left page point, so the page then scrolls by half the change in
+    /// visible size. Each step's scroll is relative, so fast repeated steps
+    /// add up in order.
     private func setMagnification(_ value: Double) {
-        let bounds = webView.bounds
-        webView.setMagnification(CGFloat(value), centeredAt: NSPoint(x: bounds.midX, y: bounds.midY))
+        let previous = magnification
+        let size = webView.bounds.size
+        webView.setMagnification(CGFloat(value), centeredAt: .zero)
+        let deltaX = (Double(size.width) / previous - Double(size.width) / value) / 2
+        let deltaY = (Double(size.height) / previous - Double(size.height) / value) / 2
+        guard deltaX.isFinite, deltaY.isFinite else { return }
+        webView.evaluateJavaScript("window.scrollBy(\(deltaX), \(deltaY));", completionHandler: nil)
     }
 
     private func setMagnificationLocked(_ isLocked: Bool) {
