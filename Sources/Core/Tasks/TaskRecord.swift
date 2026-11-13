@@ -81,6 +81,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// commit is what a release tag must contain for the task to ship.
     public var mergedAt: Date?
     public var mergeCommit: String?
+    /// The actual PR destination and the repository release branch, saved at merge.
+    /// Older records are refreshed from GitHub before this is known.
+    public var mergeTarget: TaskMergeTarget?
     /// When a release tag first contained `mergeCommit`, and that tag.
     public var shippedAt: Date?
     public var releaseTag: String?
@@ -839,4 +842,18 @@ public extension TaskRecord {
             number += 1
         }
     }
+}
+
+/// A merged PR's destination, independent of the checkout or worktree base.
+/// Releases start from the repository's default branch.
+public struct TaskMergeTarget: Codable, Equatable, Sendable {
+    public var baseBranch: String
+    public var releaseBranch: String
+
+    public init(baseBranch: String, releaseBranch: String) {
+        self.baseBranch = baseBranch
+        self.releaseBranch = releaseBranch
+    }
+
+    public var waitsForRelease: Bool { baseBranch == releaseBranch }
 }

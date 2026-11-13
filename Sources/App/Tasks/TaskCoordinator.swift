@@ -950,8 +950,14 @@ final class TaskCoordinator {
         }
         for record in records.records {
             let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+            // Until the repository has been identified, do not use the
+            // previous directory-only rule to delete files.
+            if record.mergedAt != nil && record.doneAt == nil && record.shippedAt == nil && record.archivedAt == nil {
+                if let root = record.projectRoot, board != nil,
+                   record.operation.worktree == nil, board?.repositoryRoots[root] == nil { continue }
+            }
             let releaseTagsConfigured = record.projectRoot.flatMap {
-                config.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
+                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.releaseTags
             } != nil
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
             let hasFiles = fileManager.fileExists(atPath: directoryURL.path)

@@ -13,9 +13,10 @@ triage.
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
 out, and a task without a workspace waits in Needs you until you pick one.
-The agent's first message is the task text, followed by the attached files
-and one line that tells the agent to run `toastty task needs-reply` before it
-ends a turn with a question.
+The agent's first message includes the task text and attached files. The
+start skill, or fallback instructions for a custom skill, tells it how to
+ask the coordinator and to run `toastty task needs-reply` before it ends a
+turn with a question for you.
 
 ## Quick entry
 
@@ -203,7 +204,8 @@ directory, one per root directory.
    selected, so your focus stays where it is.
 3. It starts the agent in that terminal. The agent's first message is the first
    prompt, then the task text exactly as written, then the paths of the
-   attached files, then the `task needs-reply` line. With `--fork`, the agent starts as a fork of the calling
+   attached files, then the coordinator-message and `task needs-reply`
+   guidance when the start skill does not supply it. With `--fork`, the agent starts as a fork of the calling
    session's conversation instead (see
    [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks)).
    The agent session is not workspace-scoped, so it can read
@@ -413,8 +415,8 @@ Watch conditions:
 The stage conditions follow the [stages](#stages), in the order
 `ready-for-review`, `merged`, `to-ship`, `done`. A condition still holds after
 the task moves past it, so a watch fires even when the task skips a stage. For
-example, a merged task also meets `ready-for-review`, and a merge in a project
-without `release_tags`, which goes straight to Done, also meets `to-ship`. A
+example, a merged task also meets `ready-for-review`. A feature-branch merge,
+or a merge without release tracking, goes straight to Done and also meets `to-ship`. A
 task marked done by hand meets only `ready-for-review` and `done`. A task
 that finishes through its child tasks counts as merged with them: in To ship it
 meets `ready-for-review`, `merged` and `to-ship`, and in Done all four. The message
@@ -536,8 +538,9 @@ prompts can be answered only in Toastty or Toastty Mobile.
 
 ## The coordinator
 
-The coordinator is one long-lived agent session that follows your tasks. It
-runs in its own workspace, named **Coordinator**, with a terminal in
+The coordinator is one long-lived agent session that follows your tasks. Its
+name is **Toasty**, after the toast in its icon: it introduces itself by that
+name in its first answer. It runs in its own workspace, named **Coordinator**, with a terminal in
 `~/.toastty/coordinator/`. A runtime-isolated dev run uses
 `<runtime-home>/coordinator/` instead. The coordinator acts through the
 `toastty task` commands, as any agent can. Its job is described in
@@ -553,10 +556,15 @@ it are in [the policy file](#the-policy-file).
   the workspace on first use, selects it and starts the agent. Later it
   selects the workspace, and starts the agent only when none runs there.
 - The sidebar pins one **Coordinator** row at the top, above the Tasks row, in
-  both the All and the Needs you segment. The row shows the agent's state
-  (a spinner while it works, an approval or error badge, a dot for unread
-  output) and says **Not running** when no agent runs. It is not a project
-  card: it has no number, does not reorder, and its name does not change.
+  both the All and the Needs you segment. Its icon is Toasty, the toast,
+  which shows the agent's state: steam while it works, and a dot for unread
+  output, an approval or an error. An approval or error badge shows at the
+  row's right end, and the row says **Not running** when no agent runs. It is
+  not a project card: it has no number, does not reorder, and its name does
+  not change. A click on the row opens [the dock](#the-coordinators-dock)
+  with the keyboard in its field. The full view, the coordinator's own
+  workspace, opens from the row's hover button and context menu (**Open Full
+  View**), and from **Open Coordinator**.
 - **Restart Coordinator**, in the **Agent** menu, the command palette, the
   row's context menu and the workspace header, starts a fresh agent session
   in the same workspace. The menu offers it while the coordinator is open. An
@@ -708,8 +716,8 @@ you when it is not sure, and creates the task.
   both. In a list, `Option+Cmd+Return` chooses the row and then creates the
   task, as `Cmd+Return` chooses it and then sends.
 - **In the chat** a quick entry message shows your text, and under it your
-  choices and the names of the files. The terminal shows the message as
-  typed.
+  choices and the files: an image as a thumbnail, another file as its name.
+  The terminal shows the message as typed.
 
 A message looks like this in the coordinator's terminal:
 
@@ -728,7 +736,10 @@ selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)`.
 
 On macOS 15 and later, the coordinator's panel shows the agent's conversation
 as a chat, with the same message views as Toastty Mobile. The terminal runs
-under it. On macOS 14 the panel shows the terminal.
+under it. On macOS 14 the panel shows the terminal. While a conversation
+that Toastty started has no message, as for a new coordinator or after
+Restart, the chat shows Toasty and a short introduction. A conversation that a
+relaunch resumes does not show it.
 
 - **Send.** Type in the field under the conversation and press Return.
   Shift-Return or Option-Return starts a new line. At an open prompt the
@@ -769,8 +780,9 @@ under it. On macOS 14 the panel shows the terminal.
   JPEG. When you send, Toastty copies the files to
   `~/.toastty/coordinator/attachments/<message ID>/` and the message ends
   with their paths, as a message from the quick entry panel does. The chat
-  shows your text and the names of the files, also on a waiting message,
-  which counts its files. **Edit** puts a waiting message's files back above
+  shows your text and the files under it: an image as a thumbnail, another
+  file, or an image that is gone, as its name. A waiting message shows the
+  names of its files and counts them. **Edit** puts a waiting message's files back above
   the field; they stay in their folder until the message that names them is
   sent and expires, or is removed.
 - **Stop.** While a turn runs and the field is empty, the button stops the
@@ -778,8 +790,8 @@ under it. On macOS 14 the panel shows the terminal.
   then **Paused**, so none starts a new turn right after the stop. **Send
   next** lets them go again. A digest from Toastty does not wait for paused
   messages.
-- **Terminal.** The **Terminal** button in the panel's header shows the
-  terminal in place of the chat, and **Chat** switches back. Use the terminal
+- **Terminal.** The **Terminal** button in the full view's panel header
+  shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
   for a login, a folder-trust or a permission prompt, and to answer a
   question: the chat shows such a prompt but cannot answer it, and it says so
   above the field. The choice is not saved: a relaunch shows the chat.
@@ -805,14 +817,54 @@ under it. On macOS 14 the panel shows the terminal.
   work and its answer. The end of a quiet turn marks nothing unread and
   sends no notification to the Mac or the phone.
 - **Messages from agents.** A message that `coordinator send` brought shows
-  as one muted line that names its sender, such as "From task Fix the unread
-  dot · 14:07". A click opens the full text. It never shows as your message.
+  in a neutral card with its sender, time and message text. A long message
+  shows its opening text and **Show full message**; **Show less** returns to
+  the opening. The coordinator's answer stays in the transcript outside
+  the card. It never shows as your message. Wake digests keep their folded
+  line.
 - **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
   text shows as a chip with the task's stage color, its current title and its
-  pull request number. A click opens the task's space, and that space's
-  header then shows **← Coordinator** until you are back. A link to a task
-  that does not exist, and any other `toastty:` link, is plain text. Other
-  links open only `http` and `https` pages, in your browser.
+  pull request number. A click opens the task's space, with the chat beside
+  it in [the dock](#the-coordinators-dock): from the full view, the chat
+  moves into the dock. A task whose space is closed, such as a done or
+  archived one, opens in the Tasks view with the task selected, beside the
+  dock. A link to a task that does not exist, and any other
+  `toastty:` link, is plain text. Other links open only `http` and `https`
+  pages, in your browser.
+
+### The coordinator's dock
+
+The dock shows the coordinator's chat in a column between the sidebar and
+the workspace, so it stays open while you move between tasks. It is the same
+chat as the full view, with the same transcript, field and waiting messages.
+It needs the chat, so it is on macOS 15 and later.
+
+- **Open and hide it** with the toast button in the window's toolbar, after
+  the sidebar button, with `Cmd+Shift+K`, with **View > Show Coordinator
+  Dock**, the command palette, or a click on the **Coordinator** row. The
+  dock's header has **Open Full View** and **Hide Dock**.
+- **Only in the coordinator's window.** The dock and its toolbar button show
+  in the window that holds the Coordinator workspace.
+- **The full view.** While the Coordinator workspace is selected, the dock
+  steps aside, because the full view shows the same chat. **Dock** in the
+  coordinator panel's header goes back to the workspace you were in before,
+  or else the first workspace in the sidebar, with the chat in the dock.
+- **The terminal stays in the full view.** When the chat says that the
+  coordinator waits in its terminal, **Show Terminal** in the dock opens the
+  full view with the terminal.
+- **The toolbar button** shows Toasty golden while the chat is on screen, in
+  the dock or the full view, and as a gray outline while it is not. Steam
+  rises while the coordinator works. While the chat is out of sight, a dot on
+  the toast shows unread output, an approval or an error.
+- **Read.** Output that the dock shows counts as read, as a focused panel's
+  does.
+- **Width.** Drag the dock's right edge to set its width, from 300 to 480
+  points. The width and whether the dock is open are saved for the window
+  and restored after a relaunch.
+- **The Tasks view** covers the workspace to the right of the dock.
+- **The keyboard.** While the dock's field has the keyboard, `Cmd+=`,
+  `Cmd+-` and `Cmd+0` change the chat's text size, and a click on a panel
+  gives that panel the keyboard.
 
 Toastty reads the coordinator's conversation while the coordinator's
 workspace is open, also with Remote Access off, because it must see what
@@ -1340,8 +1392,8 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | --- | --- |
 | Needs you | the cleanup after its merge, archive or release stopped: "Merged · clean up?" |
 | Archived | the task was closed without finishing |
-| Done | it was marked done or shipped; or it merged and its project has no `release_tags` |
-| To ship | it merged, and its project has `release_tags` |
+| Done | it was marked done or shipped; or it merged into a feature branch; or its repository has no `release_tags` |
+| To ship | it merged into the repository's default branch, and release tracking is configured |
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
 | Running | an agent that works or waits on its sub-agents; an agent that ended its turn to wait on another task through `task watch`, shown as "waiting for <task>"; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
@@ -1567,8 +1619,9 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 4. Toastty records the merge on the task first. Once the agent's turn ends, it
    closes the task space, removes the worktree and deletes the branch, the same
    way as the Merge button does for any task space. In a project with
-   `release_tags`, the cleanup runs the same way, and the task then waits in
-   To ship until a release tag contains its merge; see [Release](#release).
+   `release_tags`, the cleanup runs the same way. A merge into the repository's
+   default branch waits in To ship until a release tag contains its merge.
+   A merge into a feature branch is Done for that branch; see [Release](#release).
 
 Saying "merge it" to the task's agent runs the same skill. From outside the
 task, `toastty task request-merge <task-id>` does what Merge does, and always
@@ -1661,8 +1714,21 @@ archived.
 
 ## Release
 
-With `release_tags` set, a merged task waits in To ship until a release tag
-contains its merge commit. A project can release from Toastty when
+With `release_tags` set, a task merged into the repository's default branch
+waits in To ship until a release tag contains its merge commit. A merge into
+a feature branch is Done for that branch, which does not mean it shipped.
+The task that later merges the feature into the default branch owns the
+release wait. The actual PR destination decides, not the branch the task
+started from. Older merged records are refreshed from GitHub once to learn
+their destination; until it is known, an existing release wait stays in place.
+
+Related Git worktrees inherit `release_tags`, `release_skill` and
+`release_prompt` from the repository's main checkout. An explicit value for
+the worktree takes precedence. Other task settings do not inherit this way.
+A release includes eligible merges from related project directories, and only
+one release of that repository can be under way at a time.
+
+A project can release from Toastty when
 `tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release…** on
 its To ship line makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
@@ -1741,17 +1807,20 @@ release_prompt = "Wait for my approval before any production change."  # optiona
 - The shipped `toastty-task-start` takes a task from your request to your
   review. Its agent clarifies the request, moves implementation into its own
   worktree, verifies the work, publishes the pull request and a Scratchpad
-  report, and sets the task's status. The repository's own instructions, such
-  as `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
+  report, and sets the task's status. When it suggests a UI, design, or UX
+  change, it shows a mockup in a Scratchpad, with a few directions when the
+  best one is unclear. The repository's own instructions, such as
+  `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
   line.
 - `start_prompt` is text the first message gives after the skill line, for
   rules that apply only to tasks. It adds to the start skill and does not
   replace it. Rules for all agent work, such as code review, belong in your
   global agent instructions (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`),
   which the agent reads already.
-- A first message that does not name the shipped start skill ends with one
-  line that tells the agent to run `task needs-reply` before it ends a turn
-  with a question. The shipped skill already says this.
+- A first message that does not name the shipped start skill includes the
+  direct `coordinator send` command, where its answer appears, and a line
+  that tells the agent to run `task needs-reply` before it ends a turn with
+  a question. The shipped skill already says this.
 - `start_skill` also starts a first message that triage or `--prompt` wrote,
   and the first message of a fresh session that continues a moved task in its
   worktree. A forked session already has the conversation, so it gets no
@@ -1824,9 +1893,11 @@ branch_prefix = "feat"
   project directory). It may take up to 30 minutes. If it exits non-zero, the
   move fails with its last lines of output.
 - `branch_prefix` is the default first part of worktree branch names.
-- `release_tags` turns on the To ship stage for the project: a merged task
-  waits there until a tag matching this pattern, such as `"v*"`, contains its
-  merge commit, instead of going straight to Done. See [Release](#release).
+- `release_tags` turns on To ship for merges into the repository's default
+  branch. The task waits until a tag matching this pattern, such as `"v*"`,
+  contains its merge commit. Feature-branch merges go to Done. Related Git
+  worktrees share release settings from the main checkout unless they set
+  their own values. See [Release](#release).
 - `release_prompt` is text a release task's agent gets after the release
   skill line, such as `"Wait for my approval before any production change."`.
   A project with `release_skill`, `release_prompt` or both shows a Release

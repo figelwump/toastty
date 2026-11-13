@@ -130,6 +130,10 @@ final class CoordinatorController: ObservableObject {
     /// gets its own start.
     @Published private var startingWorkspaceID: UUID?
     @Published private var failedStart: FailedStart?
+    /// The agent session that Toastty last started for the coordinator in
+    /// this run. Its conversation is new, unlike one that a relaunch
+    /// resumes.
+    @Published private(set) var startedSessionID: String?
     @Published private(set) var queuedCount = 0
     @Published private(set) var hold: CoordinatorSendHold?
     /// The turn whose host refused a steer, for example because the
@@ -288,6 +292,10 @@ final class CoordinatorController: ObservableObject {
     /// replaced, with the workspace it is now.
     var onWorkspaceChange: ((UUID?) -> Void)?
 
+    /// The workspace the coordinator's window showed before the full view
+    /// opened, so that the dock can go back to it.
+    private var workspaceBeforeFullView: UUID?
+
     /// `deliverText` types text plus Return into a terminal panel as
     /// programmatic input, which is not the user's own. `folder` defaults to
     /// `directoryURL` with the instructions Toastty ships.
@@ -325,14 +333,13 @@ final class CoordinatorController: ObservableObject {
                 Task { @MainActor [weak self] in self?.drain() }
             }
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
-            // Back in the coordinator, by any way: a task space no longer
-            // needs to offer the way back.
+            // The full view opened: the dock's way out of it goes back to
+            // the workspace the user came from.
             if let coordinator = nextState.coordinator,
                nextState.selectedWorkspaceID(in: coordinator.windowID) == coordinator.workspaceID,
-               previousState.selectedWorkspaceID(in: coordinator.windowID) != coordinator.workspaceID {
-                if self?.store.coordinatorReturnWorkspaceID != nil {
-                    self?.store.coordinatorReturnWorkspaceID = nil
-                }
+               let previousWorkspaceID = previousState.selectedWorkspaceID(in: coordinator.windowID),
+               previousWorkspaceID != coordinator.workspaceID {
+                self?.workspaceBeforeFullView = previousWorkspaceID
             }
             if previousState.coordinator != nextState.coordinator {
                 self?.syncConversationSubscription()
@@ -433,10 +440,128 @@ final class CoordinatorController: ObservableObject {
     /// conversation to resume, no session and no surface. A second start in
     /// that time would type into the same shell as the resume.
     private func awaitsRestore(_ location: CoordinatorLocation) -> Bool {
-        guard let panelID = location.panelID,
-              case .terminal(let terminal)? = store.state.workspacesByID[location.workspaceID]?.panelState(for: panelID),
-              terminal.resumeRecord != nil else { return false }
+        guard let panelID = location.panelID, hasSavedConversation(location) else { return false }
         return promptState(panelID) == .unavailable
+    }
+
+    /// The coordinator's agent conversation is new, so it has no history:
+    /// Toastty starts its agent or started it in this run, or no agent runs
+    /// and the terminal has no conversation saved to resume. A conversation
+    /// that a relaunch resumes is not new.
+    var hasNewConversation: Bool {
+        guard let location else { return false }
+        guard let session else {
+            return isStarting || hasSavedConversation(location) == false
+        }
+        // While Toastty starts it, the session may show before the start
+        // returns its ID.
+        return session.sessionID == startedSessionID || isStarting
+    }
+
+    /// The terminal has an agent conversation that Toastty saved to resume.
+    private func hasSavedConversation(_ location: CoordinatorLocation) -> Bool {
+        guard let panelID = location.panelID,
+              case .terminal(let terminal)? = store.state.workspacesByID[location.workspaceID]?.panelState(for: panelID)
+        else { return false }
+        return terminal.resumeRecord != nil
+    }
+
+    /// Notes the agent session that Toastty started, whose conversation is
+    /// new.
+    func noteStartedSession(_ sessionID: String) {
+        startedSessionID = sessionID
+    }
+
+    // MARK: - The dock
+
+    /// The chat can show, in the full view or in the dock.
+    var chatIsAvailable: Bool {
+        supportsChat && chat != nil
+    }
+
+    /// Whether the dock shows in `windowID` now.
+    func dockShows(in windowID: UUID) -> Bool {
+        guard let window = store.window(id: windowID) else { return false }
+        return CoordinatorDockPresentation.showsDock(window: window, coordinator: location, chatAvailable: chatIsAvailable)
+    }
+
+    /// Opens the dock in the coordinator's window. From the full view, the
+    /// window goes back to the workspace it showed before, or else to the
+    /// first workspace in the sidebar. `focusComposer` gives the dock's
+    /// field the keyboard. Returns whether the dock shows.
+    @discardableResult
+    func showDock(focusComposer: Bool) -> Bool {
+        guard chatIsAvailable, let location, let window = store.window(id: location.windowID) else { return false }
+        if window.selectedWorkspaceID == location.workspaceID {
+            guard let workspaceID = CoordinatorDockPresentation.workspaceLeavingFullView(
+                state: store.state,
+                coordinator: location,
+                previousWorkspaceID: workspaceBeforeFullView
+            ) else { return false }
+            _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: true))
+            _ = store.selectWorkspace(
+                windowID: location.windowID,
+                workspaceID: workspaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        } else {
+            _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: true))
+        }
+        if focusComposer {
+            chat?.requestComposerFocus(host: .dock)
+        }
+        ToasttyLog.info("Showed the coordinator's dock", category: .tasks)
+        return dockShows(in: location.windowID)
+    }
+
+    /// The dock's field has the keyboard in `windowID`.
+    func dockHasKeyboard(in windowID: UUID) -> Bool {
+        dockShows(in: windowID) && chat?.composerHasKeyboard(host: .dock) == true
+    }
+
+    func hideDock() {
+        guard let location else { return }
+        _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: false))
+    }
+
+    /// The dock's toolbar button and shortcut: hides a dock that shows, and
+    /// otherwise shows it with the keyboard in its field.
+    func toggleDock() {
+        guard let location else { return }
+        if dockShows(in: location.windowID) {
+            hideDock()
+        } else {
+            showDock(focusComposer: true)
+        }
+    }
+
+    /// Opens the coordinator's workspace, where the chat shows in full.
+    /// `showingTerminal` shows its terminal in place of the chat, for an
+    /// answer that only the terminal takes.
+    func openFullView(showingTerminal: Bool = false) {
+        guard let location else { return }
+        if showingTerminal {
+            showsTerminal = true
+        }
+        _ = store.selectWorkspace(
+            windowID: location.windowID,
+            workspaceID: location.workspaceID,
+            preferringUnreadSessionPanelIn: sessionRuntimeStore
+        )
+    }
+
+    /// A click on a task's chip in the chat: the task's space opens, and
+    /// the chat stays beside it in the dock.
+    func openTaskSpaceFromChat(workspaceID: UUID, fallbackWindowID: UUID) {
+        if let location {
+            _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: true))
+        }
+        TaskActions.openTaskSpace(
+            workspaceID: workspaceID,
+            fallbackWindowID: fallbackWindowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     // MARK: - Open and restart
@@ -663,6 +788,7 @@ final class CoordinatorController: ObservableObject {
             throw error
         }
         adoptReplacement(terminal, workspaceID: location.workspaceID)
+        noteStartedSession(result.sessionID)
         ToasttyLog.info("Started the coordinator's agent", category: .tasks, metadata: [
             "session_id": result.sessionID,
             "panel_id": terminal.panelID.uuidString,

@@ -45,19 +45,23 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     /// The agent's message that this message answers, as its row will
     /// show it.
     public let quote: ToasttyMessageQuote?
+    /// The local files sent with the message, as its row will show them.
+    public let attachments: [URL]
 
     public init(
         clientRequestID: String,
         text: String,
         content: Content,
         sentCaption: String? = nil,
-        quote: ToasttyMessageQuote? = nil
+        quote: ToasttyMessageQuote? = nil,
+        attachments: [URL] = []
     ) {
         self.clientRequestID = clientRequestID
         self.text = text
         self.content = content
         self.sentCaption = sentCaption
         self.quote = quote
+        self.attachments = attachments
     }
 
     public var isQueued: Bool {

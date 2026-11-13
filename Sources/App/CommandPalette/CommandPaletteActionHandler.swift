@@ -41,7 +41,7 @@ protocol CommandPaletteActionHandling: AnyObject {
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask?
     func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption]
     /// `nil` when this Toastty has no coordinator to open.
-    func coordinatorOption() -> PaletteCoordinatorOption?
+    func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption?
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
@@ -388,8 +388,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         taskActions.releaseOptions(originWindowID: originWindowID)
     }
 
-    func coordinatorOption() -> PaletteCoordinatorOption? {
-        taskActions.coordinatorOption()
+    func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption? {
+        taskActions.coordinatorOption(originWindowID: originWindowID)
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {

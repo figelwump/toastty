@@ -20,10 +20,10 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     public var sessionStartDisabled: Bool
     /// True when "Approve requests" is turned on for this device on the Mac.
     ///
-    /// Unlike starting sessions, this is opt-in: approving lets the device
-    /// allow tool use and save Claude permission rules, which no device could
-    /// do before. An absent value, including on records written before the
-    /// permission existed, means not allowed.
+    /// New native pairings enable this permission. An absent stored value
+    /// still means not allowed, preserving existing devices and explicit
+    /// opt-outs. Approving lets the device allow tool use and save Claude
+    /// permission rules.
     public var permissionApprovalEnabled: Bool
     /// True when "Task actions" is turned on for this device on the Mac.
     ///
@@ -81,7 +81,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Answering a permission request sends a decision to the agent, so it
-    /// needs the send scope as well as the opt-in. Only native clients have it.
+    /// needs the send scope and approval permission. Only native clients have it.
     public var canApprovePermissions: Bool {
         isRevoked == false && authKind == .native && scopes.contains(.send) && permissionApprovalEnabled
     }

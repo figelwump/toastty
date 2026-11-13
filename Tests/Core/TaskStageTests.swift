@@ -64,6 +64,20 @@ struct TaskStageTests {
         #expect(stage(started(), seen, releaseTags: true) == .toShip)
     }
 
+    @Test(arguments: ["main", "feature/integration"])
+    func mergeDestinationDecidesWhetherAMergeWaitsForRelease(base: String) {
+        let target = TaskMergeTarget(baseBranch: base, releaseBranch: "main")
+        var recorded = started(mergedAt: date)
+        recorded.mergeTarget = target
+        let expected: TaskStage = base == "main" ? .toShip : .done
+        #expect(stage(recorded, releaseTags: true) == expected)
+        let seen = TaskLiveFacts(taskSpaceOpen: false, pullRequest: TaskPullRequestState(state: .merged, mergeTarget: target))
+        #expect(stage(started(), seen, releaseTags: true) == expected)
+        #expect(stage(recorded) == .done)
+        // A field-limited answer cannot undo the saved destination after restore.
+        #expect(stage(recorded, TaskLiveFacts(taskSpaceOpen: false, pullRequest: mergedPR), releaseTags: true) == expected)
+    }
+
     // MARK: - Before the task space
 
     @Test

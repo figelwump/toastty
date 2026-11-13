@@ -15,14 +15,21 @@ public enum TaskPrompt {
         + "`toastty task needs-reply --question \"<the question in a few words>\"`, "
         + "so the task waits in Needs you until the user answers."
 
+    /// Custom start skills also need the direct route to the coordinator.
+    /// The shipped skill carries the same guidance.
+    public static let coordinatorLine = "To ask the coordinator, run "
+        + #"`"$TOASTTY_CLI_PATH" coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
+        + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
+        + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`."
+
     /// The skill a task's first message names when tasks.toml sets no
     /// `start_skill`.
     public static let defaultStartSkill = "toastty-task-start"
 
     /// The skill line, when there is a skill, then the worktree,
     /// `start_prompt`, the first prompt, the task text exactly as written,
-    /// the attached files, and `replyLine` unless the skill is the shipped
-    /// start skill.
+    /// the attached files, and the coordinator and reply guidance unless
+    /// the skill is the shipped start skill.
     /// Toastty adds the text and files itself, so nothing that writes the
     /// first prompt can drop or reword them. The text keeps its own spacing
     /// and indentation.
@@ -53,7 +60,7 @@ public enum TaskPrompt {
     }
 
     /// `start_prompt`, the first prompt, the task text, the attached files
-    /// and `replyLine`: the part of a first message that follows what
+    /// and fallback guidance: the part of a first message that follows what
     /// Toastty says about where the agent is.
     private static func taskSections(
         skill: String?,
@@ -80,6 +87,7 @@ public enum TaskPrompt {
             )
         }
         if skill != defaultStartSkill {
+            sections.append(coordinatorLine)
             sections.append(replyLine)
         }
         return sections

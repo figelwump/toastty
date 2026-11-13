@@ -7,7 +7,9 @@ import SwiftUI
 /// iPhone draws, a composer, and one line above the composer when the chat
 /// cannot do what the user needs.
 ///
-/// It covers the coordinator's terminal, which keeps running under it.
+/// It shows in two places: over the coordinator's terminal, which keeps
+/// running under it (the full view), and in the dock beside another
+/// workspace.
 @available(macOS 15.0, *)
 struct CoordinatorChatView: View {
     @ObservedObject var model: CoordinatorChatModel
@@ -23,6 +25,8 @@ struct CoordinatorChatView: View {
     let isOnScreen: Bool
     /// The coordinator's terminal is the panel that has the keyboard.
     let hasPanelFocus: Bool
+    /// Where this view of the chat is.
+    var host: CoordinatorChatModel.Host = .panel
 
     /// The size of the notice's text before the text scale: the caption
     /// style's size on macOS.
@@ -52,6 +56,11 @@ struct CoordinatorChatView: View {
                 options: Self.transcriptOptions,
                 replyToMessage: { model.reply(to: $0) }
             )
+            .overlay {
+                if model.showsIntroduction {
+                    introduction
+                }
+            }
             composerArea
         }
         // Files and images dropped anywhere on the chat are attached to the
@@ -69,19 +78,45 @@ struct CoordinatorChatView: View {
         // Read the conversation only while the chat is on screen.
         .onChange(of: isOnScreen, initial: true) { _, onScreen in
             if onScreen {
-                model.show(panelID: panelID)
+                model.show(panelID: panelID, host: host)
             } else {
-                model.hide(panelID: panelID)
+                model.hide(panelID: panelID, host: host)
             }
         }
         .onChange(of: panelID) { previous, panelID in
-            model.hide(panelID: previous)
-            if isOnScreen { model.show(panelID: panelID) }
+            model.hide(panelID: previous, host: host)
+            if isOnScreen { model.show(panelID: panelID, host: host) }
         }
-        .onDisappear { model.hide(panelID: panelID) }
+        .onDisappear { model.hide(panelID: panelID, host: host) }
         .onChange(of: isOnScreen && hasPanelFocus, initial: true) { _, takesKeyboard in
             if takesKeyboard { model.requestComposerFocus() }
         }
+    }
+
+    static let introductionTitle = "Hi, I'm Toasty."
+    static let introductionText = "I follow your tasks, keep them moving, and tell you what needs you. Say hi to get started."
+
+    /// Toasty introduces itself while the conversation has no message. It
+    /// covers the empty transcript, also while that loads.
+    private var introduction: some View {
+        let scale = model.textScale
+        return VStack(spacing: 10 * scale) {
+            ToastyIcon(style: .golden, size: 52 * scale, badgeRingColor: ConversationDesignTokens.background)
+            Text(Self.introductionTitle)
+                .font(.system(size: 17 * scale, weight: .semibold))
+                .foregroundStyle(ConversationDesignTokens.primaryText)
+            Text(Self.introductionText)
+                .font(.system(size: 13 * scale))
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300 * scale)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ConversationDesignTokens.background)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("coordinator.chat.introduction")
     }
 
     private var composerArea: some View {
@@ -94,7 +129,10 @@ struct CoordinatorChatView: View {
                 attachments: model.attachmentDraft,
                 reply: model.replyTarget,
                 onCancelReply: { model.cancelReply() },
-                placeholder: Self.composerPlaceholder(quickEntryShortcut: board.newTaskShortcutLabel()),
+                // The dock is narrow: its hint leaves out the shortcut.
+                placeholder: Self.composerPlaceholder(
+                    quickEntryShortcut: host == .panel ? board.newTaskShortcutLabel() : nil
+                ),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,
                 delivery: model.delivery,
@@ -106,7 +144,7 @@ struct CoordinatorChatView: View {
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
                 dropTarget: model.attachmentDropTarget,
-                onTextView: { model.composerTextView = $0 }
+                onTextView: { [host] in model.setComposerTextView($0, host: host) }
             )
         }
         .frame(maxWidth: Self.maximumContentWidth)
@@ -153,9 +191,14 @@ struct CoordinatorChatView: View {
         .accessibilityIdentifier("coordinator.chat.notice")
     }
 
+    /// The terminal cannot move into the dock: there, Show Terminal opens
+    /// the full view with its terminal.
     private var showTerminalButton: some View {
         noticeButton("Show Terminal", identifier: "coordinator.chat.notice.show-terminal") {
-            controller.showsTerminal = true
+            switch host {
+            case .panel: controller.showsTerminal = true
+            case .dock: controller.openFullView(showingTerminal: true)
+            }
         }
     }
 
@@ -176,7 +219,7 @@ struct CoordinatorChatView: View {
     /// The field's hint also names the quick entry shortcut, which sends to
     /// the coordinator from any app. Without a shortcut it names none.
     static func composerPlaceholder(quickEntryShortcut: String?) -> String {
-        let placeholder = "Message the coordinator…"
+        let placeholder = "Message Toasty…"
         guard let quickEntryShortcut else { return placeholder }
         return "\(placeholder)  \(quickEntryShortcut) from anywhere"
     }
@@ -215,14 +258,8 @@ struct CoordinatorChatView: View {
             return .tasksView
         }) {
         case .openTaskSpace(let workspaceID):
-            TaskActions.openTaskSpace(
-                workspaceID: workspaceID,
-                fallbackWindowID: windowID,
-                store: store,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-            // The task space's header then offers the way back.
-            store.coordinatorReturnWorkspaceID = workspaceID
+            // The chat stays beside the task, in the dock.
+            controller.openTaskSpaceFromChat(workspaceID: workspaceID, fallbackWindowID: windowID)
             return .handled
         case .showInTasksView(let taskID):
             // The Tasks view covers this window's workspace; Esc returns to
