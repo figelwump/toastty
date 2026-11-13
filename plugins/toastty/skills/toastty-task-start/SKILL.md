@@ -34,6 +34,16 @@ the skill line and the task. The repository has its own instructions, such as
 requests. Both take precedence over this skill where they differ. This skill
 gives the defaults and Toastty's own rules.
 
+## Show suggested UI changes as mockups
+
+When you suggest a change to a UI, a design, or a user experience, at any step
+of the task, include a mockup of it in the same answer. Publish it in a
+Scratchpad in this task workspace, as `toastty-scratchpad` describes, and keep
+it separate from the verification report. Do not describe the change only in
+words. Show the current UI next to the change when that makes the difference
+clear. If you are not sure which direction is best, mock up a few directions
+next to each other and recommend one.
+
 ## 1. Read the request and check the location
 
 The text after the skill line, or after "The task, as written:", is the user's

@@ -1700,8 +1700,10 @@ release_prompt = "Wait for my approval before any production change."  # optiona
 - The shipped `toastty-task-start` takes a task from your request to your
   review. Its agent clarifies the request, moves implementation into its own
   worktree, verifies the work, publishes the pull request and a Scratchpad
-  report, and sets the task's status. The repository's own instructions, such
-  as `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
+  report, and sets the task's status. When it suggests a UI, design, or UX
+  change, it shows a mockup in a Scratchpad, with a few directions when the
+  best one is unclear. The repository's own instructions, such as
+  `AGENTS.md`, win where they differ. `start_skill = "none"` sends no skill
   line.
 - `start_prompt` is text the first message gives after the skill line, for
   rules that apply only to tasks. It adds to the start skill and does not
