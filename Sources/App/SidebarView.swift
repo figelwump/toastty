@@ -64,7 +64,7 @@ private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
 /// Reports a child's intrinsic width until it reaches either the configured
 /// cap or a tighter parent proposal. Unlike `fixedSize`, the layout stays
 /// compressible so narrow sidebars can truncate chip content normally.
-private struct SidebarCappedIntrinsicWidthLayout: Layout {
+struct SidebarCappedIntrinsicWidthLayout: Layout {
     let maximumWidth: CGFloat
 
     func sizeThatFits(
@@ -1153,6 +1153,8 @@ struct SidebarView: View {
         let sessionStatuses: [WorkspaceSessionStatus]
         /// The card's task space rows, before the spawner filter.
         let subspaceRows: [SidebarSubspacePresentation.Row]
+        /// Task spaces the card's sessions started under other cards.
+        let otherCardSpawns: [String: OtherCardSubspaceSpawn]
         let counts: [SidebarBucket: Int]
         var layout = SidebarBuckets.Layout<CardRow>()
         var needsYou = SidebarBuckets.NeedsYouList<CardRow>()
@@ -1214,18 +1216,32 @@ struct SidebarView: View {
         func parentItem(ofTaskID taskID: UUID?) -> TaskBoardItem? {
             taskID.flatMap { itemsByTaskID[$0]?.parentTaskID }.flatMap { itemsByTaskID[$0] }
         }
-        // Tasks that list by their own row: no task space row in this
-        // window, and a stage the buckets list.
-        let recordItems = taskBoardSnapshot.windowItems.filter { item in
-            item.taskSpaceWorkspaceID.map(windowWorkspaceIDs.contains) != true
-                && SidebarBucket(item.stage.group) != nil
+        // Each card's sessions and task space rows, read once for the pass.
+        var cardInputs: [(workspace: WorkspaceState, sessionStatuses: [WorkspaceSessionStatus], subspaceRows: [SidebarSubspacePresentation.Row])] = []
+        for workspaceID in topLevelWorkspaceIDs {
+            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+            let sessionStatuses = sidebarSessionStatuses(for: workspaceID)
+            cardInputs.append((workspace, sessionStatuses, subspaceRows(for: workspaceID, parentSessionStatuses: sessionStatuses)))
         }
+        let nestedTaskSpaceIDs = Set(cardInputs.flatMap { $0.subspaceRows.map(\.id) })
+        // Tasks that list by a row of their own: no task space row under a
+        // card, and a stage the buckets list. A task space that became a
+        // top-level workspace, such as when its project closed, lists here
+        // too, so its task's stage still shows. Rows keep the order the
+        // sidebar lists tasks in, not their latest activity.
+        let recordItems = SidebarStatusSections.sidebarOrder(
+            taskBoardSnapshot.windowItems.filter { item in
+                item.taskSpaceWorkspaceID.map(nestedTaskSpaceIDs.contains) != true
+                    && SidebarBucket(item.stage.group) != nil
+            },
+            workspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+        )
         func recordCandidates(_ items: [TaskBoardItem]) -> [SidebarBucketCandidate<CardRow>] {
             items.compactMap { item in
                 guard let bucket = SidebarBucket(item.stage.group) else { return nil }
                 let parent = parentItem(ofTaskID: item.taskID)
                 return SidebarBucketCandidate(
-                    key: .task(item.id), bucket: bucket, parent: parent.map(rowKey),
+                    key: rowKey(item), bucket: bucket, parent: parent.map(rowKey),
                     payload: CardRow(kind: .task(item), parentTaskTitle: parent?.title)
                 )
             }
@@ -1239,12 +1255,13 @@ struct SidebarView: View {
             title: String,
             sessionStatuses: [WorkspaceSessionStatus] = [],
             subspaceRows: [SidebarSubspacePresentation.Row] = [],
+            otherCardSpawns: [String: OtherCardSubspaceSpawn] = [:],
             candidates: [SidebarBucketCandidate<CardRow>],
             shown: [SidebarBucketCandidate<CardRow>]
         ) -> BucketedCard {
             var card = BucketedCard(
                 workspaceID: workspaceID, title: title, sessionStatuses: sessionStatuses,
-                subspaceRows: subspaceRows, counts: SidebarBuckets.counts(candidates)
+                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns, counts: SidebarBuckets.counts(candidates)
             )
             switch segment {
             case .all:
@@ -1261,19 +1278,21 @@ struct SidebarView: View {
         }
 
         var result = BucketedSidebar()
-        for workspaceID in topLevelWorkspaceIDs {
-            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
-            let sessionStatuses = sidebarSessionStatuses(for: workspaceID)
-            let subspaceRows = subspaceRows(for: workspaceID, parentSessionStatuses: sessionStatuses)
-            let subspaceIDs = Set(subspaceRows.map(\.id))
+        for (workspace, sessionStatuses, subspaceRows) in cardInputs {
+            let workspaceID = workspace.id
+            let otherCardSpawns = otherCardSubspaceSpawns(cardWorkspaceID: workspaceID, sessionStatuses: sessionStatuses)
             var candidates = terminalStatusRows(sessionStatuses, workspace: workspace).map { row in
                 let bucket: SidebarBucket = switch row {
                 case .session(let status):
+                    // As the row draws it: without children a task space
+                    // row shows.
                     .session(
                         kind: status.status.kind,
                         isUnread: showsUnreadSessionAccent(for: status.panelID, in: workspace),
                         childNeedsAttention: SidebarSessionPresentation.sessionChildRowsNeedAttention(
-                            hidingSubspaceChildren(status, subspaceIDs: subspaceIDs).children
+                            hidingSubspaceChildren(status, subspaceIDs: childWorkspaceIDsShownElsewhere(
+                                sessionID: status.sessionID, subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns
+                            )).children
                         )
                     )
                 case .program(let program):
@@ -1299,7 +1318,7 @@ struct SidebarView: View {
             }
             result.cards[workspaceID] = card(
                 workspaceID: workspaceID, title: workspace.title, sessionStatuses: sessionStatuses,
-                subspaceRows: subspaceRows, candidates: candidates, shown: shown
+                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns, candidates: candidates, shown: shown
             )
         }
 
@@ -1325,9 +1344,6 @@ struct SidebarView: View {
     /// A card's buckets in the All segment: Needs you, Running and Idle,
     /// each with its header. Empty buckets do not show.
     private func bucketedCardBody(_ card: BucketedCard, workspace: WorkspaceState?) -> some View {
-        let otherCardSpawns = workspace.map {
-            otherCardSubspaceSpawns(cardWorkspaceID: $0.id, sessionStatuses: card.sessionStatuses)
-        } ?? [:]
         let filterSessionID = workspace.flatMap { subspaceFilterSessionIDByParentID[$0.id] }
         let filteredRows = SidebarSubspacePresentation.filteredRows(card.subspaceRows, spawningSessionID: filterSessionID)
         let attentionRowIDs = Set(card.subspaceRows.filter { $0.status.needsAttention }.map(\.id))
@@ -1346,7 +1362,7 @@ struct SidebarView: View {
                     bucketHeader(bucket, count: card.counts[bucket] ?? 0)
                     VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
                         ForEach(entries) { entry in
-                            bucketRow(entry, card: card, workspace: workspace, otherCardSpawns: otherCardSpawns)
+                            bucketRow(entry, card: card, workspace: workspace)
                         }
                     }
                 }
@@ -1404,14 +1420,13 @@ struct SidebarView: View {
     private func bucketRow(
         _ entry: SidebarBucketEntry<CardRow>,
         card: BucketedCard,
-        workspace: WorkspaceState?,
-        otherCardSpawns: [String: OtherCardSubspaceSpawn] = [:]
+        workspace: WorkspaceState?
     ) -> some View {
         Group {
             switch entry.payload.kind {
             case .terminal(let row):
                 if let workspace {
-                    terminalStatusRowView(row, workspace: workspace, subspaceRows: card.subspaceRows, otherCardSpawns: otherCardSpawns)
+                    terminalStatusRowView(row, workspace: workspace, subspaceRows: card.subspaceRows, otherCardSpawns: card.otherCardSpawns)
                 }
             case .subspace(let row):
                 let parentWorkspaceID = card.workspaceID ?? row.id
@@ -1425,10 +1440,23 @@ struct SidebarView: View {
                     )
                 )
             case .task(let item):
-                SidebarTaskRecordRow(item: item) { openTasksView(selecting: item.id) }
-                    .contextMenu {
-                        TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
-                    }
+                if let taskSpaceID = item.taskSpaceWorkspaceID,
+                   store.window(id: windowID)?.workspaceIDs.contains(taskSpaceID) == true,
+                   let taskSpace = store.state.workspacesByID[taskSpaceID] {
+                    // Its task space is open as a workspace of its own.
+                    let row = subspaceRowModel(workspace: taskSpace, spawner: nil, projectTag: card.workspaceID == nil ? item.projectTitle : nil)
+                    subspaceRow(Self.bucketedSubspaceRow(row, entry: entry), parentWorkspaceID: taskSpaceID, showsSpawnerTag: false)
+                } else {
+                    SidebarTaskRecordRow(
+                        item: item,
+                        showsProject: card.workspaceID == nil,
+                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
+                    ) { openTasksView(selecting: item.id) }
+                        .padding(.leading, entry.isLinkedChild ? Self.linkedChildIndent : 0)
+                        .contextMenu {
+                            TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
+                        }
+                }
             }
         }
         // Its own state is in a calmer bucket; see `SidebarBucketEntry.isContext`.
@@ -2585,8 +2613,9 @@ struct SidebarView: View {
             // The card's own group wins; a session that nested its
             // subspaces only under other cards points at that card's group.
             let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
-            let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
-                .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
+            let hiddenChildWorkspaceIDs = childWorkspaceIDsShownElsewhere(
+                sessionID: sessionID, subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns
+            )
             SidebarHoverRegion(id: workspaceSessionStatus.panelID, selection: hoverState.panel) { isHovered in
                 sessionStatusContent(
                     hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
@@ -2604,6 +2633,20 @@ struct SidebarView: View {
                 )
             }
         }
+    }
+
+    /// The workspaces whose sessions a session row leaves out of its
+    /// children, because a task space row shows them: the card's task
+    /// spaces, and, for a session that started task spaces only under another
+    /// card, that card's ones.
+    private func childWorkspaceIDsShownElsewhere(
+        sessionID: String,
+        subspaceRows: [SidebarSubspacePresentation.Row],
+        otherCardSpawns: [String: OtherCardSubspaceSpawn]
+    ) -> Set<UUID> {
+        let startedHere = subspaceRows.contains { $0.spawningSessionID == sessionID }
+        let elsewhere = startedHere ? nil : otherCardSpawns[sessionID]
+        return Set(subspaceRows.map(\.id)).union(elsewhere?.spawnedRows.map(\.id) ?? [])
     }
 
     private func selectionSubtitle(for workspace: WorkspaceState) -> String? {

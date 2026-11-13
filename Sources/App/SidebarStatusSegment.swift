@@ -328,12 +328,21 @@ enum TaskAge {
 /// workspace to be picked. It opens the task in the Tasks view.
 struct SidebarTaskRecordRow: View {
     let item: TaskBoardItem
+    /// Names the project on the row: a project card already names it.
+    var showsProject = true
+    /// The task that started this one, named with a ↖ when the list shows
+    /// the row without that task.
+    var parentTaskTitle: String? = nil
     let open: () -> Void
 
     @State private var isHovered = false
 
     private var label: String {
-        TaskBoardPresentation.addingReleaseAfterMerge(to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item)
+        var label = TaskBoardPresentation.addingReleaseAfterMerge(to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item)
+        if let parentTaskTitle {
+            label += ", started by \(parentTaskTitle)"
+        }
+        return label
     }
 
     var body: some View {
@@ -358,8 +367,20 @@ struct SidebarTaskRecordRow: View {
                         .foregroundStyle(ToastyTheme.sidebarSummaryText)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if let project = item.projectTitle {
+                    if showsProject, let project = item.projectTitle {
                         SidebarView.sidebarTaskTag(project)
+                    }
+                    if let parentTaskTitle {
+                        SidebarCappedIntrinsicWidthLayout(maximumWidth: 90) {
+                            Text(SidebarSubspacePresentation.spawnerTagLabel(parentTaskTitle))
+                                .font(ToastyTheme.fontWorkspaceSessionChip)
+                                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+                        }
                     }
                 }
             }

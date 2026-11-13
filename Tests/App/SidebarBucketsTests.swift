@@ -120,6 +120,25 @@ struct SidebarBucketsTests {
         #expect(layout.pin == SidebarBucketPin(key: key("Deploy"), bucket: .needsYou))
     }
 
+    @Test func aSelectedParentFollowsItsFamilyWhileItWorks() {
+        var candidates = [row("Parent", .needsYou), row("Child", .needsYou, parent: "Parent")]
+        var layout = SidebarBuckets.layout(candidates, pin: nil)
+        var pin = SidebarBuckets.pin(previous: nil, selected: key("Parent"), displayed: layout.displayed)
+
+        // The selected parent starts work; its child still needs the user.
+        candidates[0] = row("Parent", .running)
+        layout = SidebarBuckets.layout(candidates, pin: pin)
+        #expect(names(layout.entries(.needsYou)) == ["Parent (dimmed)", "  Child"])
+
+        // The child calms while the parent stays selected: the family moves
+        // to Running with the working parent.
+        pin = SidebarBuckets.pin(previous: layout.pin, selected: key("Parent"), displayed: layout.displayed)
+        candidates[1] = row("Child", .idle, parent: "Parent")
+        layout = SidebarBuckets.layout(candidates, pin: pin)
+        #expect(names(layout.entries(.running)) == ["Parent", "  Child (dimmed)"])
+        #expect(layout.entries(.needsYou).isEmpty)
+    }
+
     @Test func needsYouListsOnlyRowsThatNeedTheUser() {
         let candidates = [
             row("Calm parent", .running),

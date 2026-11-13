@@ -2540,6 +2540,104 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(harness.store.window(id: windowID)?.collapsedSidebarWorkspaceIDs, [])
     }
 
+    /// Tasks without a task space under a card list by their own rows: in
+    /// their project's order, not by their latest activity; a child names its
+    /// parent when it lists alone; and a task space left at top level, such
+    /// as when its project closed, still shows its task's stage.
+    func testTaskRowsKeepTheirOrderAndNameTheirParent() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        func record(
+            _ title: String, minutesAgo: Double, project projectID: UUID?, parent: UUID? = nil,
+            taskSpace: (workspaceID: UUID, panelID: UUID)? = nil, question: String? = nil
+        ) -> TaskRecord {
+            var record = TaskRecord(
+                id: UUID(), createdAt: now.addingTimeInterval(-minutesAgo * 60), text: title, title: title,
+                slug: TaskRecord.sanitizedSlug(title) ?? "task", source: .cli, resolved: TaskFields(agent: "codex"),
+                workspaceID: projectID, setup: .started, parentTaskID: parent,
+                // A task space that is not open: the task space closed.
+                operation: TaskOperation(taskSpace: .init(
+                    workspaceID: taskSpace?.workspaceID ?? UUID(), panelID: taskSpace?.panelID ?? UUID()
+                ))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            return record
+        }
+        let older = record("Older closed task", minutesAgo: 30, project: project.id)
+        var newer = record("Newer closed task", minutesAgo: 20, project: project.id)
+        // The newer task changed last, which used to list it first.
+        newer.readyForReviewAt = now
+        let parentSpace = UUID(), parentPanel = UUID()
+        let parent = record("Parent runs", minutesAgo: 10, project: project.id, taskSpace: (parentSpace, parentPanel))
+        let child = record("Child asks", minutesAgo: 5, project: project.id, parent: parent.id)
+        let promotedSpace = UUID(), promotedPanel = UUID()
+        // Its project is not open, and its task space is a top-level workspace.
+        let promoted = record(
+            "Promoted question", minutesAgo: 1, project: UUID(), taskSpace: (promotedSpace, promotedPanel), question: "Keep it?"
+        )
+        var parentWorkspace = WorkspaceState(
+            id: parentSpace, title: "parent-runs", layoutTree: .slot(slotID: UUID(), panelID: parentPanel),
+            panels: [parentPanel: .terminal(TerminalPanelState(title: "Parent runs", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: parentPanel, parentWorkspaceID: project.id
+        )
+        parentWorkspace.taskID = parent.id
+        var promotedWorkspace = WorkspaceState(
+            id: promotedSpace, title: "promoted-question", layoutTree: .slot(slotID: UUID(), panelID: promotedPanel),
+            panels: [promotedPanel: .terminal(TerminalPanelState(title: "Promoted", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: promotedPanel
+        )
+        promotedWorkspace.taskID = promoted.id
+        workspaces += [parentWorkspace, promotedWorkspace]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state, windowID: windowID, taskRecords: [older, newer, parent, child, promoted], withTaskBoard: true
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "parent-agent", agent: .codex, panelID: parentPanel, windowID: windowID, workspaceID: parentSpace,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: "Parent runs", cwd: "/repo", repoRoot: "/repo", at: now
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "parent-agent", status: SessionStatus(kind: .working, summary: "Working"), at: now
+        )
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+
+        // All: the closed tasks list in the order they were created.
+        let first = try semanticTextFrame(in: root, prefix: "Older closed task, ")
+        let second = try semanticTextFrame(in: root, prefix: "Newer closed task, ")
+        XCTAssertTrue(root.isFlipped ? first.midY < second.midY : first.midY > second.midY, "creation order: \(first) \(second)")
+        var textValues = renderedTextValues(in: root)
+        // The promoted task space lists with Other tasks, with its question.
+        XCTAssertTrue(textValues.contains(SidebarView.otherTasksCardTitle), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-all")
+        try attachSidebarRender(root, name: "task-rows-all")
+
+        // Needs you: the child lists without its running parent and names it.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        let childRow = try XCTUnwrap(textValues.first { $0.hasPrefix("Child asks, ") }, "\(textValues)")
+        XCTAssertTrue(childRow.hasSuffix("started by Parent runs"), childRow)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Parent runs, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-needs-you")
+        try attachSidebarRender(root, name: "task-rows-needs-you")
+    }
+
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
         let pickWorkspace = TaskRecord(
             createdAt: Date(),
