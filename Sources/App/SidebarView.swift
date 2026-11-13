@@ -2952,7 +2952,10 @@ struct SidebarView: View {
             }
             .background(sessionRowFrameMeasurement(rowID: sessionRowID))
 
-            if workspaceSessionStatus.children.isEmpty == false && childRowsExpanded && isCompact == false {
+            // A compact row has no sub-agent control, so it shows its
+            // sub-agents when one of them is why the row needs the user.
+            if workspaceSessionStatus.children.isEmpty == false
+                && (isCompact ? childRowsNeedAttention : childRowsExpanded) {
                 sessionChildRowsContainer(
                     workspaceSessionStatus.children,
                     parentWorkspaceID: workspace.id,
@@ -3125,12 +3128,22 @@ struct SidebarView: View {
         )
 
         return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-            sessionStatusRail(railState, marker: railMarker)
+            // A compact row has one line, so a standing mark such as the
+            // later flag sits after the name instead of under the status.
+            sessionStatusRail(railState, marker: isCompact ? nil : railMarker)
 
             VStack(alignment: .leading, spacing: 1) {
                 sessionRowStateLine(accessories) {
-                    Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    if isCompact, let railMarker {
+                        HStack(spacing: 4) {
+                            Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                            sessionStatusRailMarkerSlot(railMarker)
+                        }
+                    } else {
+                        Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                            .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    }
                 }
                 // Reserved even without a summary yet, so every row keeps one
                 // height and the list does not reflow as summaries or names

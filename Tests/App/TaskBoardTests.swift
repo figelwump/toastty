@@ -1437,6 +1437,22 @@ struct TaskBoardTests {
         )
     }
 
+    /// The Tasks view splits Needs you as the sidebar does, and keeps a
+    /// family together in its most urgent section.
+    @Test func tasksViewListsReviewsApartAndKeepsFamiliesTogether() {
+        let parentID = UUID()
+        let parent = statusItem("review-parent", taskID: parentID, stage: .needsYou(.review))
+        let child = statusItem("asking-child", parent: parentID, stage: .needsYou(.awaitingReply))
+        let marked = statusItem("marked-ready", stage: .needsYou(.readyForReview))
+        let failed = statusItem("setup-failed", stage: .needsYou(.setupFailed(reason: "x")))
+        let view = TasksViewSections.make([parent, child, marked, failed])
+        #expect(view.needsYou.map(\.item.title) == ["review-parent", "asking-child", "setup-failed"])
+        #expect(view.needsYou.map(\.isLinkedChild) == [false, true, false])
+        #expect(view.readyToReview.map(\.item.title) == ["marked-ready"])
+        // Needs you, then Ready to review, in the list and for arrow keys.
+        #expect(view.all.map(\.item.title) == ["review-parent", "asking-child", "setup-failed", "marked-ready"])
+    }
+
     /// Status lists tasks in the order of the project cards: by project,
     /// then by task space in window order, whatever the board's activity
     /// order. Tasks with no task space follow their project's, oldest first.

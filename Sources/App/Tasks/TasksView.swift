@@ -32,9 +32,26 @@ struct TasksViewSections: Equatable {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
         var sections = Self()
-        let needsYou = items.filter { $0.stage.group == .needsYou }
-        sections.needsYou = SidebarStatusSections.grouped(needsYou.filter { SidebarBucket($0.stage) == .needsYou })
-        sections.readyToReview = SidebarStatusSections.grouped(needsYou.filter { SidebarBucket($0.stage) == .readyToReview })
+        // A family lists in Needs you when any member blocks an agent, else
+        // in Ready to review; a member whose own state is calmer is dimmed.
+        var family: [SidebarStatusSections.Entry] = []
+        func placeFamily() {
+            guard family.isEmpty == false else { return }
+            let buckets = family.compactMap { SidebarBucket($0.item.stage) }
+            let bucket = buckets.min() ?? .needsYou
+            let placed = family.map { entry in
+                var entry = entry
+                entry.isContext = SidebarBucket(entry.item.stage) != bucket
+                return entry
+            }
+            if bucket == .readyToReview { sections.readyToReview += placed } else { sections.needsYou += placed }
+            family = []
+        }
+        for entry in entries(.needsYou) {
+            if entry.isLinkedChild == false { placeFamily() }
+            family.append(entry)
+        }
+        placeFamily()
         sections.running = entries(.running)
         sections.idle = entries(.idle)
         sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
