@@ -933,6 +933,13 @@ commit it reviewed, and tells you when they differ: `request-merge` names no
 commit, so a push between its check and the merge is possible. Its ledger
 keeps a `merged` line for 30 days, so you can ask it what it merged.
 
+The permission rules of the coordinator's agent program still apply to
+`toastty task request-merge`. An agent that asks before it runs a command
+asks you first. Claude Code in auto mode can refuse the command as a
+destructive action. The coordinator then tells you, uses no other route, and
+the task waits for you as for any review. To let the coordinator ask for
+merges without you, allow that command in the agent's own settings.
+
 These limits are instructions to the agent. Toastty itself refuses only
 `toastty task merge` from the coordinator, because that command runs only in
 the task's own task space. It does not check a Merging rule. The coordinator runs as you, so keep its agent's

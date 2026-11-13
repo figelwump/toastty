@@ -475,9 +475,12 @@ tell the user that the task waits at a prompt. Otherwise:
 1. Run `"$TOASTTY_CLI_PATH" coordinator watch --task <task-id>` first, so
    that the merge, or the task's end without one, wakes you. A watch that
    starts after the merge wakes nothing.
-2. Run `task request-merge`. If it refuses, remove the watch with
-   `coordinator watch --task <task-id> --remove`, tell the user why, and use
-   no other route.
+2. Run `task request-merge`. If Toastty refuses it, or your agent program's
+   permission check denies it, remove the watch with
+   `coordinator watch --task <task-id> --remove` and use no other route. Tell
+   the user why, and bring the task to the user as Review says. After a
+   denial, say that a permission rule for this command in your agent program
+   lets you ask next time.
 3. Write a `merging` line in the ledger, with the head commit and with the
    rule, or with "the user asked".
 4. Tell the user in one or two sentences. For a rule: the task as a link,

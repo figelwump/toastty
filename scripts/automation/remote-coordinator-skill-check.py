@@ -13,9 +13,12 @@ production app. Only the `user-typed` scenario moves focus: it presses one
 key in its own instance, which needs an unlocked screen.
 
 - **The coordinator** is real Claude Code in <runtime home>/coordinator, with
-  the instruction files that this build writes there. It may use Bash and the
-  file tools without a prompt, so nothing but its instructions stops a merge
-  that no scenario expects.
+  the instruction files that this build writes there. It runs in Claude
+  Code's default permission mode with Bash and the file tools allowed, so it
+  runs every command without a prompt, and nothing but its instructions stops
+  a merge that no scenario expects. In auto mode (`--permission-mode auto`)
+  Claude Code's own classifier also judges each command, and can refuse
+  `toastty task request-merge`.
 - **Each task's agent** is a fake `claude`: it reports its start as Claude's
   SessionStart hook does, records every message it reads, and does nothing
   else. The check sets its status, its last reply and its question through
@@ -131,7 +134,7 @@ case "$1" in
 esac
 if [ "$(pwd -P)" = "__COORDINATOR__" ]; then
   export PATH="__BIN__:$PATH"
-  exec "__CLAUDE__" --setting-sources=project --strict-mcp-config \
+  exec "__CLAUDE__" --setting-sources=project --strict-mcp-config __PERMISSION_MODE__ \
     --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite" "$@"
 fi
 exec "__PYTHON__" "__BIN__/fake-agent.py" "$@"
@@ -453,8 +456,11 @@ class Run:
         python = sys.executable
         (self.bin / 'fake-agent.py').write_text(FAKE_AGENT.replace('__PYTHON__', python))
         dispatcher = self.bin / 'claude'
+        # A check that reuses this class and names no mode keeps the CLI's own default.
+        mode = getattr(self.options, 'permission_mode', None)
         dispatcher.write_text(DISPATCHER.replace('__CLAUDE__', self.claude).replace('__PYTHON__', python)
-                              .replace('__COORDINATOR__', str(self.folder)).replace('__BIN__', str(self.bin)))
+                              .replace('__COORDINATOR__', str(self.folder)).replace('__BIN__', str(self.bin))
+                              .replace('__PERMISSION_MODE__', f'--permission-mode {mode}' if mode else ''))
         gh = self.bin / 'gh'
         gh.write_text(FAKE_GH.replace('__PYTHON__', python))
         for tool in (dispatcher, gh):
@@ -1719,6 +1725,8 @@ def main():
     parser.add_argument('--jobs', type=int, default=1, help='scenarios that run at the same time')
     parser.add_argument('--model', default='claude-opus-5-5', help='the [coordinator] model; empty for the profile default')
     parser.add_argument('--effort', default='high', help='the [coordinator] effort; empty for the profile default')
+    parser.add_argument('--permission-mode', default='default', choices=('default', 'auto'),
+                        help="the coordinator's Claude Code permission mode; in auto mode its classifier judges each command")
     parser.add_argument('--gui-session', action='store_true',
                         help='rerun through Terminal in the GUI session, where the Claude login is readable')
     options = parser.parse_args()
@@ -1745,7 +1753,8 @@ def main():
 
     plan = [(name, index) for name in names
             for index in range(1, (options.repeat_judgment if options.repeat_judgment and name in JUDGMENT else options.repeat) + 1)]
-    say('plan', json.dumps(dict(runs=len(plan), jobs=options.jobs, claude=version, model=options.model, effort=options.effort)))
+    say('plan', json.dumps(dict(runs=len(plan), jobs=options.jobs, claude=version, model=options.model, effort=options.effort,
+                                permissionMode=options.permission_mode)))
     started = datetime.now(timezone.utc).isoformat()
     with ThreadPoolExecutor(max_workers=max(1, options.jobs)) as pool:
         results = list(pool.map(lambda item: run_scenario(item[0], item[1], options, artifacts, bundle, claude), plan))
@@ -1760,7 +1769,8 @@ def main():
             entry['failed'].append(dict(run=result['run'], failure=(result['failure'] or '')[:400],
                                         checks=[c['check'] for c in result['checks'] if c['required'] and not c['passed']]))
     evidence = dict(startedAt=started, finishedAt=datetime.now(timezone.utc).isoformat(), cliVersion=version,
-                    model=options.model, effort=options.effort, summary=summary, runs=results)
+                    model=options.model, effort=options.effort, permissionMode=options.permission_mode,
+                    summary=summary, runs=results)
     (artifacts / 'remote-coordinator-skill-check.json').write_text(json.dumps(evidence, indent=2, default=str))
     for name, entry in summary.items():
         say('summary', f"{name}: {entry['passed']}/{entry['runs']} passed"

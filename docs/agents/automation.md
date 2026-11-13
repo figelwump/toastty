@@ -503,8 +503,11 @@ session, where the Claude login is readable.
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.
-- The coordinator may run Bash and the file tools without a prompt, so only
-  its instructions stop a merge.
+- The coordinator runs in Claude Code's default permission mode with Bash
+  and the file tools allowed, so it runs every command without a prompt, and
+  only its instructions stop a merge. `--permission-mode auto` runs it in
+  auto mode, where Claude Code's classifier also judges each command and can
+  refuse `toastty task request-merge`.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
