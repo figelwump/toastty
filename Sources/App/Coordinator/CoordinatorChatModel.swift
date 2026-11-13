@@ -13,11 +13,24 @@ import RemoteProtocol
 /// is the one sender into the coordinator.
 ///
 /// The model reads the conversation only while the chat shows:
-/// `show(panelID:)` takes a subscription and `hide()` ends it. The rows
-/// stay, so the chat does not blink when it shows again. The controller
-/// holds its own subscription, for sending.
+/// `show(panelID:host:)` takes a subscription and the last `hide` ends it.
+/// The rows stay, so the chat does not blink when it shows again. The
+/// controller holds its own subscription, for sending.
+///
+/// Two views can show the chat: the cover over the coordinator's terminal
+/// and the dock beside the workspace. Only one is on screen at a time, but
+/// while the window switches between them both can be, so each says which
+/// one it is.
 @MainActor
 final class CoordinatorChatModel: ObservableObject {
+    /// Where a view of the chat is.
+    enum Host: Hashable {
+        /// Over the coordinator's terminal, in its workspace: the full view.
+        case panel
+        /// In the dock beside the selected workspace.
+        case dock
+    }
+
     /// A message that was typed and is not in the conversation yet.
     private struct PendingSend: Equatable {
         let id: String
@@ -88,9 +101,24 @@ final class CoordinatorChatModel: ObservableObject {
     /// survives a relaunch. See `changeTextScale`.
     @Published private(set) var textScale: Double
 
-    /// The composer's text view, so that keyboard focus meant for the
-    /// terminal under the chat can go to it.
-    weak var composerTextView: NSTextView?
+    /// The composer's text view of the view that showed last, so that
+    /// keyboard focus meant for the terminal under the chat can go to it.
+    var composerTextView: NSTextView? {
+        get {
+            if let activeHost, let view = composerTextViews[activeHost]?.view { return view }
+            return composerTextViews.values.lazy.compactMap(\.view).first
+        }
+        set { setComposerTextView(newValue, host: .panel) }
+    }
+
+    /// Each view's composer text view, held weakly.
+    private var composerTextViews: [Host: WeakTextView] = [:]
+    /// The views on screen now, with the panel each reads.
+    private var viewers: [Host: UUID] = [:]
+    /// The view that showed last. Its composer takes the keyboard.
+    private(set) var activeHost: Host?
+    /// The view whose composer takes the keyboard when it shows.
+    private var focusOnShow: Host?
 
     static let pageSize = 200
 
@@ -191,10 +219,60 @@ final class CoordinatorChatModel: ObservableObject {
     var shownPanelID: UUID? { subscription?.panelID }
 
     /// Starts to read the conversation in `panelID`, the coordinator's
-    /// terminal. Call it while the chat is on screen.
-    func show(panelID: UUID) {
+    /// terminal, for the view at `host`. Call it while that view is on
+    /// screen.
+    func show(panelID: UUID, host: Host = .panel) {
+        viewers[host] = panelID
+        activeHost = host
+        subscribe(to: panelID)
+        if let focusOnShow {
+            self.focusOnShow = nil
+            if focusOnShow == host { requestComposerFocus() }
+        }
+    }
+
+    /// Stops reading the conversation in `panelID` for the view at `host`.
+    /// After a restart the coordinator has a new terminal, and the view of
+    /// the old one goes away after the view of the new one showed: it must
+    /// not end the new view's reading. While another view shows, the model
+    /// reads on for that view.
+    func hide(panelID: UUID, host: Host = .panel) {
+        guard viewers[host] == panelID else { return }
+        viewers[host] = nil
+        if activeHost == host {
+            activeHost = viewers.keys.first
+        }
+        if let activeHost, let shownPanelID = viewers[activeHost] {
+            subscribe(to: shownPanelID)
+        } else {
+            endSubscription()
+        }
+    }
+
+    /// Stops reading, for every view. The rows stay as they are, and so do
+    /// the messages that wait for their echo: the next `show` reads on from
+    /// here.
+    func hide() {
+        viewers.removeAll()
+        activeHost = nil
+        endSubscription()
+    }
+
+    /// The composer's text view of the view at `host`.
+    func setComposerTextView(_ textView: NSTextView?, host: Host) {
+        composerTextViews[host] = textView.map(WeakTextView.init)
+    }
+
+    /// Whether the composer of the view at `host` has the keyboard in its
+    /// window.
+    func composerHasKeyboard(host: Host) -> Bool {
+        guard let view = composerTextViews[host]?.view, let window = view.window else { return false }
+        return window.firstResponder === view
+    }
+
+    private func subscribe(to panelID: UUID) {
         guard subscription?.panelID != panelID else { return }
-        hide()
+        endSubscription()
         let subscription = access.subscribeToConversation(inPanel: panelID)
         self.subscription = subscription
         let changes = subscription.changes
@@ -210,18 +288,7 @@ final class CoordinatorChatModel: ObservableObject {
         refresh()
     }
 
-    /// Stops reading the conversation in `panelID`, for the view of that
-    /// panel. After a restart the coordinator has a new terminal, and the
-    /// view of the old one goes away after the view of the new one showed:
-    /// it must not end the new view's reading.
-    func hide(panelID: UUID) {
-        guard subscription?.panelID == panelID else { return }
-        hide()
-    }
-
-    /// Stops reading. The rows stay as they are, and so do the messages
-    /// that wait for their echo: the next `show` reads on from here.
-    func hide() {
+    private func endSubscription() {
         observer?.cancel()
         observer = nil
         settleTask?.cancel()
@@ -874,6 +941,17 @@ final class CoordinatorChatModel: ObservableObject {
         composerFocusRequest += 1
     }
 
+    /// Gives the keyboard to the composer of the view at `host`. A view
+    /// that is not on screen yet takes it when it shows.
+    func requestComposerFocus(host: Host) {
+        if viewers[host] != nil {
+            focusOnShow = nil
+            requestComposerFocus()
+        } else {
+            focusOnShow = host
+        }
+    }
+
     /// A waiting message's text without its list of files, and the files,
     /// for Edit. `nil` when the files cannot come back as attachments: a
     /// file that is not a copy in the coordinator's folder anymore, or more
@@ -974,6 +1052,12 @@ final class CoordinatorChatModel: ObservableObject {
             )
         })
     }
+}
+
+/// A text view held weakly, so a view that goes away takes its composer
+/// with it.
+private struct WeakTextView {
+    weak var view: NSTextView?
 }
 
 private extension CoordinatorChatModel.LoadedPage {
