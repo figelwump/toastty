@@ -511,12 +511,14 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
-`no-merge-rule`, `merge-simple`, `merge-outside-rule`, `merge-release`, `release`, `user-typed`, `busy-silent`,
+`no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `release`, `user-typed`, `busy-silent`,
 `new-task`, `dependency`, `quiet-wake` and `interrupted`. `dependency` also checks that the coordinator
-asks Toastty to watch the task it waits for. The four merge scenarios cover
+asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
-asks for one when the user says "merge it"; with a Merging rule it asks for
+asks for one when the user says "merge it"; asked to merge simple changes
+itself, it proposes a rule and writes it to Merging only after the user's
+yes; with a Merging rule it asks for
 the merge of a small documentation change and reports it; it asks for none
 when the change is source code, a CI workflow, over the rule's size, or into
 a release branch; and a change that it merged starts no release before the

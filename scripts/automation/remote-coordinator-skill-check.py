@@ -1035,16 +1035,17 @@ def first_run_request(run):
 
 
 def first_run_upgrade(run):
-    """A policy from before Talking: it asks only about Talking, adds the heading, and follows the answer."""
+    """A policy from before Talking and Merging: it asks only about Talking, adds the heading, and follows the answer."""
     run.create_task('Fix the unread dot in the sidebar', done=True)
-    run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '').format(
+    run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '')
+                    .replace('## Merging\n{merging}\n', '').format(
         reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
     run.open_coordinator()
     said = run.said(run.tell('Hi.'))
     lower = said.lower()
     run.check('it asks how it should answer', re.search(r'talking|answer|questions', lower), said, required=False)
-    run.check('it does not ask about the sections that hold rules', not re.search(r'which model|routing table', lower),
-              said, required=False)
+    run.check('it does not ask about the sections that hold rules, or about Merging',
+              not re.search(r'which model|routing table|merging', lower), said, required=False)
     run.tell('Answer short questions about code yourself, and make a task for the rest. Otherwise your defaults.')
     run.check('the policy has a Talking section with a rule', '## Talking' in run.policy() and run.section('Talking'),
               run.policy())
@@ -1338,6 +1339,34 @@ def no_merge_rule(run):
     run.check("the task's agent got Toastty's merge prompt", len(prompts) == 1, [m['text'] for m in run.messages(task)])
     run.check('it tells the user that it asked for the merge', re.search(r'merg', run.said(asked).lower()), run.said(asked),
               required=False)
+
+
+def merge_rule_setup(run):
+    """The user asks for merges of simple changes: it proposes a rule, and writes it to Merging only after the yes."""
+    run.create_task('Fix the unread dot in the sidebar', done=True)
+    # A policy from before the Merging section, as every policy is at first.
+    run.seed_policy(text=POLICY.replace('## Merging\n{merging}\n', '').format(
+        reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
+    run.open_coordinator()
+    before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
+    asked = run.tell('From now on, merge simple changes in the app project yourself, and tell me afterwards.')
+    said = run.said(asked)
+    run.check('it writes no rule before the user agrees to its words',
+              run.policy() == before and int(run.git('rev-list', '--count', 'HEAD') or 0) == commits, run.policy())
+    run.check('it proposes a rule that names kinds of change, and asks', '?' in said
+              and re.search(r'documentation|docs|comments|copy', said.lower()), said, required=False)
+    answered = run.tell('Yes, use that rule.')
+    rules = run.section('Merging')
+    run.check('after the yes, the policy has a Merging section with a rule for the app project',
+              '## Merging' in run.policy() and bool(rules) and any(re.search(r'\bapp\b', line.lower()) for line in rules),
+              run.policy())
+    run.check('Merging comes before Notes', '## Merging' in run.policy()
+              and run.policy().index('## Merging') < run.policy().index('## Notes'), run.policy())
+    run.check('it commits the rule, and only the policy',
+              int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
+              and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md'
+              and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--stat', '--format=%h %s'))
+    run.check('it shows the rule and offers undo', 'undo' in run.said(answered).lower(), run.said(answered), required=False)
 
 
 def docs_task(run, title, number, proof=DOCS_PROOF, report=DOCS_REPORT, **pull_request):
@@ -1680,6 +1709,7 @@ SCENARIOS = {
     'weak-proof': weak_proof,
     'good-proof': good_proof,
     'no-merge-rule': no_merge_rule,
+    'merge-rule-setup': merge_rule_setup,
     'merge-simple': merge_simple,
     'merge-outside-rule': merge_outside_rule,
     'merge-release': merge_release,
@@ -1691,8 +1721,8 @@ SCENARIOS = {
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
-            'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-simple',
-            'merge-outside-rule', 'merge-release', 'new-task', 'release')
+            'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
+            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):
