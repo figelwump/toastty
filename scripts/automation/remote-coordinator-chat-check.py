@@ -117,11 +117,18 @@ class UI:
 
     def run(self, *arguments, check=True):
         arguments = [str(self.pid), *arguments]
-        if self.broker:
-            code, output = broker_request(Path(self.broker), arguments)
-        else:
-            completed = subprocess.run([str(self.binary), *arguments], capture_output=True, text=True, timeout=60)
-            code, output = completed.returncode, completed.stdout + completed.stderr
+        # ax-drive refuses a click that another app's window covers (exit
+        # 5). A notification banner passes in a few seconds: wait for it.
+        deadline = time.monotonic() + 20
+        while True:
+            if self.broker:
+                code, output = broker_request(Path(self.broker), arguments)
+            else:
+                completed = subprocess.run([str(self.binary), *arguments], capture_output=True, text=True, timeout=60)
+                code, output = completed.returncode, completed.stdout + completed.stderr
+            if code != 5 or 'COVERED' not in output or time.monotonic() > deadline:
+                break
+            time.sleep(1)
         if check:
             require(code == 0, f'ax-drive {" ".join(arguments[1:])} failed ({code}): {output}')
         return code, output.strip()
