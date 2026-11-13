@@ -169,6 +169,16 @@ final class CoordinatorComposerMentionTests: XCTestCase {
         XCTAssertEqual(draft.sends, 1)
     }
 
+    /// Caps Lock does not take the list's keys away: Return still chooses.
+    func testReturnChoosesWithCapsLockOn() throws {
+        type("@dock")
+        try press(36, "\r", modifiers: [.capsLock])
+        XCTAssertEqual(draft.text, "\(Self.dockLink) ")
+        XCTAssertEqual(draft.sends, 0)
+        try press(36, "\r", modifiers: [.capsLock])
+        XCTAssertEqual(draft.sends, 1, "Return sends with Caps Lock on")
+    }
+
     /// `#` and a number find the task by its pull request.
     func testAPullRequestNumberFindsTheTask() throws {
         type("@#33")
@@ -237,6 +247,17 @@ final class CoordinatorComposerMentionTests: XCTestCase {
         pump()
         XCTAssertEqual(textView.string, "Edit: \u{FFFC} and \(unknown)")
         XCTAssertEqual(textView.draft, draft.text)
+
+        // A link written before the task was renamed keeps its text: the
+        // field does not rewrite the draft, and typing goes on at the caret.
+        let renamed = "[Old name of the dot](toastty://task/\(Self.dotID.uuidString))"
+        draft.text = "Was \(renamed) fixed"
+        pump()
+        XCTAssertEqual(textView.string, "Was \u{FFFC} fixed")
+        XCTAssertEqual(textView.draft, draft.text)
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(" it")
+        XCTAssertEqual(draft.text, "Was it \(renamed) fixed")
         // Sending clears it.
         draft.text = ""
         pump()

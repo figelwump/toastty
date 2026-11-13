@@ -496,9 +496,10 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         guard let textView = context.coordinator.textView else { return }
         context.coordinator.text = $text
         let fontChanged = configure(textView, picker: mentionPicker)
-        // A chip is drawn at the font's size, so a new size draws it again.
+        // A chip is drawn at the font's size, so a new size draws it again,
+        // with the selection kept.
         if textView.draft != text || (fontChanged && textView.containsMention) {
-            textView.setDraft(text)
+            textView.setDraft(text, keepingSelection: textView.draft == text)
             textView.needsDisplay = true
             // Not while SwiftUI updates the view: the picker publishes.
             DispatchQueue.main.async { [weak textView] in
@@ -610,7 +611,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
         // task and Return or Tab puts it in. While an input method
         // composes, its keys belong to it.
         if hasMarkedText() == false,
-           modifiers.subtracting([.numericPad, .function]).isEmpty,
+           modifiers.subtracting([.numericPad, .function, .capsLock]).isEmpty,
            let key = Self.mentionKey(event),
            mentionPicker?.handle(key) == true {
             return
@@ -619,7 +620,8 @@ final class CoordinatorComposerTextView: AttachmentTextView {
         // starts a new line. While an input method composes, Return belongs
         // to it.
         if Self.isReturn(event), hasMarkedText() == false {
-            let keys = modifiers.subtracting([.numericPad, .function])
+            // Caps Lock changes nothing here.
+            let keys = modifiers.subtracting([.numericPad, .function, .capsLock])
             if keys.isEmpty {
                 onSubmit()
                 return
@@ -695,15 +697,22 @@ final class CoordinatorComposerTextView: AttachmentTextView {
     }
 
     /// Shows the draft: a link to a task the picker lists is a chip.
-    func setDraft(_ text: String) {
+    /// `keepingSelection` is for the same text drawn again, at a new size.
+    func setDraft(_ text: String, keepingSelection: Bool = false) {
         isSettingDraft = true
         defer { isSettingDraft = false }
+        let selection = selectedRanges
         let attributes = textAttributes
         if let attributed = CoordinatorMentionText.attributed(text, candidates: mentionCandidatesByID, attributes: attributes) {
             textStorage?.setAttributedString(attributed)
             setSelectedRange(NSRange(location: attributed.length, length: 0))
         } else {
             string = text
+        }
+        if keepingSelection {
+            let length = (string as NSString).length
+            let kept = selection.map(\.rangeValue).filter { NSMaxRange($0) <= length }
+            if kept.isEmpty == false { selectedRanges = kept.map { NSValue(range: $0) } }
         }
         typingAttributes = attributes
     }

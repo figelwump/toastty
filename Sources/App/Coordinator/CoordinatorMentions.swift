@@ -289,12 +289,24 @@ final class CoordinatorMentionPicker: ObservableObject {
 final class CoordinatorMentionAttachment: NSTextAttachment {
     let taskID: UUID
     let title: String
+    /// The task's link as the draft holds it. A chip made from a link that
+    /// is already in the text keeps that text, also when the task's title
+    /// changed since, so the field and the draft stay the same text.
+    let markdown: String
 
     static let maximumTitleLength = 40
 
-    init(taskID: UUID, title: String, pullRequestNumber: Int?, markColor: ConversationChipColor, font: NSFont) {
+    init(
+        taskID: UUID,
+        title: String,
+        pullRequestNumber: Int?,
+        markColor: ConversationChipColor,
+        font: NSFont,
+        markdown: String? = nil
+    ) {
         self.taskID = taskID
         self.title = title
+        self.markdown = markdown ?? CoordinatorTaskLink.markdown(taskID: taskID, title: title)
         super.init(data: nil, ofType: nil)
         let label = Self.label(title: title)
         let detail = pullRequestNumber.map { " · #\($0)" }
@@ -304,23 +316,20 @@ final class CoordinatorMentionAttachment: NSTextAttachment {
         image?.accessibilityDescription = pullRequestNumber.map { "Task \(label), pull request \($0)" } ?? "Task \(label)"
     }
 
-    convenience init(candidate: CoordinatorMentionCandidate, font: NSFont) {
+    convenience init(candidate: CoordinatorMentionCandidate, font: NSFont, markdown: String? = nil) {
         self.init(
             taskID: candidate.taskID,
             title: candidate.title,
             pullRequestNumber: candidate.pullRequestNumber,
             markColor: candidate.markColor,
-            font: font
+            font: font,
+            markdown: markdown
         )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    var markdown: String {
-        CoordinatorTaskLink.markdown(taskID: taskID, title: title)
     }
 
     static func label(title: String) -> String {
@@ -413,7 +422,8 @@ enum CoordinatorMentionText {
         var position = text.startIndex
         for (range, candidate) in links {
             result.append(NSAttributedString(string: String(text[position..<range.lowerBound]), attributes: attributes))
-            result.append(chip(candidate, font: font, attributes: attributes))
+            // The chip shows the task's title now and keeps the link as typed.
+            result.append(chip(candidate, font: font, attributes: attributes, markdown: String(text[range])))
             position = range.upperBound
         }
         result.append(NSAttributedString(string: String(text[position...]), attributes: attributes))
@@ -423,9 +433,12 @@ enum CoordinatorMentionText {
     static func chip(
         _ candidate: CoordinatorMentionCandidate,
         font: NSFont,
-        attributes: [NSAttributedString.Key: Any]
+        attributes: [NSAttributedString.Key: Any],
+        markdown: String? = nil
     ) -> NSAttributedString {
-        let chip = NSMutableAttributedString(attachment: CoordinatorMentionAttachment(candidate: candidate, font: font))
+        let chip = NSMutableAttributedString(attachment: CoordinatorMentionAttachment(
+            candidate: candidate, font: font, markdown: markdown
+        ))
         chip.addAttributes(attributes, range: NSRange(location: 0, length: chip.length))
         return chip
     }
