@@ -350,8 +350,8 @@ def main():
         require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
         step('A merged and cleaned up', cleanup=merged['cleanup'])
         # Both places offer Release for the lane: the project card's To ship
-        # line in the sidebar's All segment, and the Tasks view.
-        action('window.sidebar.set-segment', windowID=window_id, segment='all')
+        # line in the sidebar's All segment, where the sidebar opens, and the
+        # Tasks view.
         open_tasks_view()
         wait_for('the project card\'s Release button',
                  lambda: run_tool(helper, 'exists', pid, f'sidebar.workspace.finishedTasks.release.{workspace_id}', check=False).returncode == 0,

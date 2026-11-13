@@ -178,7 +178,7 @@ def main():
     try:
         workspaces = instance.wait_until_ready()
         workspace_id, window_id = workspaces[0]['workspaceID'], workspaces[0]['windowID']
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
+        # The sidebar opens on All, which shows the card's buckets.
         step('booted', workspaceID=workspace_id)
 
         # 1. A question waits for the user's reply, read or not.

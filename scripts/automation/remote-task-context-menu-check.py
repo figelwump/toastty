@@ -216,8 +216,7 @@ def main():
         cli_json('action', 'run', 'workspace.select', '--workspace', workspace_id)
 
         # 2. The project card's row for a task whose task space closed, and
-        # the same task in the Needs you segment.
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
+        # the same task in the Needs you segment. The sidebar is still on All.
         items = menu('all-closed-task-space', '*', 'Close the stale task space,')
         require(items == ['Archive…', 'Delete Task'], f'Unexpected menu for a closed task space: {items}')
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=needsYou')

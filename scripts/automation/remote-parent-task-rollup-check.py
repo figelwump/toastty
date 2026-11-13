@@ -184,8 +184,8 @@ def main():
         refresh_pull_requests()
         wait_for('the first child to wait to ship', lambda: stage(children[0]['taskID'])['group'] == 'toShip')
         require(stage(parent_id)['group'] == 'idle', f'One open child should keep the parent idle: {stage(parent_id)}')
+        # The sidebar opens on All, which shows the card's buckets.
         cli_json('action', 'run', 'window.tasks.hide', '--window', window_id, check=False)
-        cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
         capture('1-all-one-child-open')
 
         # 3. The parent's agent reports, and the last child merges. The
