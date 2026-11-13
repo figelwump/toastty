@@ -193,7 +193,8 @@ extension TaskAppControlTests {
         let fixture = try TaskCoordinatorTests.Fixture()
         fixture.clock = Self.t0
         func at(_ seconds: TimeInterval) -> Date { Self.t0.addingTimeInterval(seconds) }
-        var gitHub = PullRequestStateCache(runner: OfflineGitHub())
+        let heldGitHub = TaskBoardTests.FakeGitHub()
+        var gitHub = PullRequestStateCache(runner: heldGitHub)
         var board: TaskBoardStore? = makeBoard(fixture, coordinator: fixture.coordinator, pullRequests: gitHub)
         var executor = makeExecutor(fixture, coordinator: fixture.coordinator)
         let task = try await startTask(fixture)
@@ -213,6 +214,15 @@ extension TaskAppControlTests {
         _ = fixture.coordinator.records.update(id: task.id) { $0.pullRequestURL = url }
         #expect(try stage()["attention"] == .string("review"))
         #expect(try stage()["changedAt"] == .null)
+        // Starting the launch-time request must not turn this guess into a
+        // confirmed review while GitHub is still answering.
+        heldGitHub.answer(url, state: "OPEN", isDraft: true)
+        heldGitHub.holdsAnswers = true
+        let request = gitHub.refresh(link)
+        await fixture.waitUntil("GitHub request is held") { heldGitHub.heldCount == 1 }
+        #expect(try stage()["changedAt"] == .null)
+        heldGitHub.release()
+        await request.value
         gitHub.store(draft, for: link, observedAt: at(100))
         #expect(try stage()["group"] == .string("idle"))
         #expect(date(try stage()["changedAt"]) == at(0))
@@ -587,10 +597,9 @@ extension TaskAppControlTests {
         #expect(object(try pullRequest())["mergeStateStatus"] == .string("CLEAN"))
 
         // After the next push GitHub has not worked out the merge state yet.
-        // The Merge button keeps the last known answer; the report gives the
-        // new commit's checks.
+        // A new commit never borrows the old commit's readiness or checks.
         answer(checks: .running, head: "ccc", mergeState: .unknown, at: at(1300))
-        #expect(gitHub.state(for: link)?.mergeability?.checks == .passing)
+        #expect(gitHub.state(for: link)?.mergeability?.checks == .running)
         #expect(object(try pullRequest())["checks"] == .string("pending"))
         #expect(object(try pullRequest())["mergeStateStatus"] == .string("UNKNOWN"))
         #expect(date(object(try pullRequest())["checksPendingSince"]) == at(1300))
@@ -651,7 +660,14 @@ extension TaskAppControlTests {
         #expect(try facts().checks == .pending(since: nil))
         fixture.coordinator.recordStateTimes()
         #expect(try facts().checks == .pending(since: at(1000)))
+        // A field-limited answer for this head must not clear checksSlow or
+        // reset pending-since, even beyond the Merge button's grace period.
+        gitHub.store(TaskPullRequestState(state: .open, headSHA: "bbb"), for: link, observedAt: at(1050))
+        fixture.coordinator.recordStateTimes()
+        #expect(try facts().checks == .pending(since: at(1000)))
         answer(.failing, head: "bbb", at: at(1100))
+        #expect(try facts().checks == .failing)
+        gitHub.store(TaskPullRequestState(state: .open, headSHA: "bbb"), for: link, observedAt: at(1150))
         #expect(try facts().checks == .failing)
         answer(.passing, head: "bbb", at: at(1200))
         #expect(try facts().checks == .passing)

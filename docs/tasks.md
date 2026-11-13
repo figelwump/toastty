@@ -1267,9 +1267,16 @@ marked done without a merge, do not finish a parent alone; it stays Idle, and
 you decide.
 
 The pull request comes from the task space's `github-pr` annotation. Toastty
-asks `gh` about it every two minutes while the task is open, when an agent's
-turn ends in the task space, and when the Tasks view opens, and copies the
-link and the merge onto the task record. Without `gh`, a linked pull request
+asks `gh` about open tasks at launch, when an agent's turn ends in the task
+space, and when the Tasks view opens. It checks for updates every 15 seconds:
+pending checks, unknown readiness and failed requests are retried after 15
+seconds; settled results are refreshed after two minutes. It copies the link
+and the merge onto the task record. The Merge button can keep the previous
+readiness for up to 30 seconds while GitHub returns unknown readiness or
+requests fail, only for the same head commit. A new commit never inherits the
+previous commit's readiness. Task status and alerts still keep the last
+reported checks for the same commit when a reply omits check fields; that
+reply does not prove that checks cleared. Without `gh`, a linked pull request
 with no agent working counts as waiting for review. A merge made on GitHub
 also cleans up the task space when that is safe; see
 [Merge a task](#merge-a-task).

@@ -406,12 +406,12 @@ enum TaskBoard {
 
 /// Keeps the inputs of the board current and tells views when they change:
 /// task records, pull request answers, and tasks.toml. It also asks GitHub
-/// about open task pull requests every two minutes, when an agent's turn
-/// ends in a task space, and when the Tasks view opens, and copies what it
-/// learns onto the records: the pull request link, and the merge.
+/// about pending task pull requests every 15 seconds and settled ones every
+/// two minutes, at launch, when an agent's turn ends, and when the Tasks view
+/// opens, and copies the pull request link and merge onto the records.
 @MainActor
 final class TaskBoardStore: ObservableObject {
-    static let pullRequestRefreshInterval: Duration = .seconds(120)
+    static let pullRequestRefreshInterval: Duration = .seconds(15)
 
     let coordinator: TaskCoordinator?
     let pullRequests: PullRequestStateCache?
@@ -512,12 +512,14 @@ final class TaskBoardStore: ObservableObject {
         scheduleStateTimesPass()
         coordinator.removeExpiredAttachments()
         if let refreshInterval {
+            refreshOpenPullRequests()
             refreshLoop = Task { [weak self] in
                 while Task.isCancelled == false {
-                    try? await Task.sleep(for: refreshInterval)
+                    do { try await Task.sleep(for: refreshInterval) }
+                    catch { return }
                     guard let self else { return }
                     self.reloadConfig()
-                    self.refreshOpenPullRequests()
+                    self.refreshOpenPullRequests(onlyIfDue: true)
                 }
             }
         }
@@ -611,13 +613,17 @@ final class TaskBoardStore: ObservableObject {
     }
 
     /// Asks GitHub about every pull request whose task is not finished.
-    func refreshOpenPullRequests() {
+    func refreshOpenPullRequests(onlyIfDue: Bool = false) {
         guard let pullRequests else { return }
         for item in items() where item.stage.isFinished == false {
             // A closed pull request can be reopened, so only a merge stops
             // the checks.
             guard let link = item.pullRequest, item.pullRequestState?.state != .merged else { continue }
-            pullRequests.refresh(link)
+            if onlyIfDue {
+                pullRequests.refreshIfNeeded(link)
+            } else {
+                pullRequests.refresh(link)
+            }
         }
     }
 
