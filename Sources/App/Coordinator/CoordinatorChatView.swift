@@ -254,7 +254,13 @@ struct CoordinatorChatView: View {
             // full view, the coordinator's own; beside the dock, that
             // workspace's), unless the user's settings send web links to
             // the system browser.
-            AppURLRouter.open(url, preferredWindowID: windowID, appStore: store)
+            let result = AppURLRouter.openResult(url, preferredWindowID: windowID, appStore: store)
+            // Focus mode gives the right panel no width, so it ends, as
+            // for a link in a terminal.
+            if result.openedRightPanelInToastty,
+               let workspaceID = store.state.workspaceSelection(in: windowID)?.workspaceID {
+                store.send(.exitFocusedPanelMode(workspaceID: workspaceID))
+            }
             return .handled
         case .openWebPageInSystemBrowser:
             return .systemAction
