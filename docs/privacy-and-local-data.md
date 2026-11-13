@@ -359,7 +359,8 @@ running on your Mac.
 ## Permissions and platform integrations
 
 - Toastty requests macOS notification permission the first time it attempts to deliver a desktop notification.
-- Apps launched inside Toastty can trigger macOS camera and microphone permission prompts. Toastty declares those permissions so terminal-hosted child processes can ask for access, but Toastty itself does not capture audio or video on its own.
+- Apps launched inside Toastty can trigger macOS camera and microphone permission prompts. Toastty declares those permissions so terminal-hosted child processes can ask for access. Toastty itself captures no video, and captures audio only for dictation in quick entry.
+- Dictation in the quick entry panel (macOS 26 and later) uses the microphone only while the panel listens: while you hold the quick entry shortcut, or from the panel's opening or a click on its microphone until you stop it or the panel closes. macOS asks for microphone access the first time. Apple's on-device speech recognition turns the audio into text on the Mac. Toastty sends no audio anywhere and keeps no recording; only the text goes into the panel. macOS can download Apple's speech model for your language the first time. The setting **on open** is kept in Toastty's preferences. The app log records that dictation started, with the language, and any error, never the words.
 - The `shortcut-trace.sh` automation script requires Accessibility and Automation permissions because it drives keyboard shortcuts through `osascript`.
 - Sparkle checks `https://updates.toastty.dev/appcast.xml` for available updates. No usage data or telemetry is sent with the request.
 - Agent-authored Scratchpad content can load HTTPS font files when the document declares them. Other Scratchpad-generated network access remains blocked by content security policy.

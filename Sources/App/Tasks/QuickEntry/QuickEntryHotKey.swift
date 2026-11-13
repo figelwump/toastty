@@ -24,14 +24,16 @@ final class QuickEntryHotKey {
     private static let identifier: UInt32 = 1
 
     private let onPress: @MainActor () -> Void
+    private let onRelease: @MainActor () -> Void
     // Released in deinit, which is not main-actor isolated. Carbon
     // references are plain pointers that any thread may release.
     nonisolated(unsafe) private var hotKeyRef: EventHotKeyRef?
     nonisolated(unsafe) private var handlerRef: EventHandlerRef?
     private(set) var registration: Registration = .off
 
-    init(onPress: @escaping @MainActor () -> Void) {
+    init(onPress: @escaping @MainActor () -> Void, onRelease: @escaping @MainActor () -> Void = {}) {
         self.onPress = onPress
+        self.onRelease = onRelease
     }
 
     deinit {
@@ -84,7 +86,11 @@ final class QuickEntryHotKey {
 
     private func installHandlerIfNeeded() -> OSStatus {
         guard handlerRef == nil else { return noErr }
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        // The release ends push to talk.
+        let eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         return InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
@@ -106,13 +112,18 @@ final class QuickEntryHotKey {
                 }
                 // Carbon delivers application events on the main thread.
                 let hotKey = Unmanaged<QuickEntryHotKey>.fromOpaque(userData).takeUnretainedValue()
+                let isRelease = GetEventKind(event) == UInt32(kEventHotKeyReleased)
                 MainActor.assumeIsolated {
-                    hotKey.onPress()
+                    if isRelease {
+                        hotKey.onRelease()
+                    } else {
+                        hotKey.onPress()
+                    }
                 }
                 return noErr
             },
-            1,
-            &eventType,
+            eventTypes.count,
+            eventTypes,
             Unmanaged.passUnretained(self).toOpaque(),
             &handlerRef
         )

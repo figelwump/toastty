@@ -44,6 +44,7 @@
 //                                       buttons as JSON, or {}
 //   dialog-press <pid> <button-title>   presses a dialog window's button
 
+import AVFoundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
@@ -202,6 +203,25 @@ case "frontmost":
 case "key":
     guard arguments.count >= 2, let code = CGKeyCode(arguments[1]) else { fail("key <virtual-key> [modifiers]") }
     post(key: code, flags: flags(arguments.count > 2 ? arguments[2] : nil))
+
+case "key-hold":
+    // A key that stays down: key down, the wait, then key up.
+    guard arguments.count == 4, let code = CGKeyCode(arguments[1]), let milliseconds = UInt32(arguments[3]) else {
+        fail("key-hold <virtual-key> <modifiers> <milliseconds>")
+    }
+    let source = CGEventSource(stateID: .hidSystemState)
+    for down in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
+            fail("could not make a key event")
+        }
+        event.flags = flags(arguments[2])
+        event.post(tap: .cghidEventTap)
+        if down { usleep(milliseconds * 1000) }
+    }
+
+case "has-microphone":
+    // Whether this Mac has an audio input, as dictation looks for one.
+    print(AVCaptureDevice.default(for: .audio) == nil ? "0" : "1")
 
 case "type":
     guard arguments.count == 2 else { fail("type <text>") }

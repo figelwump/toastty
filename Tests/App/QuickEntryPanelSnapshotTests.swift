@@ -39,6 +39,8 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
     /// The agent pill starts on this preset until one is used twice.
     private var config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
     private var presetUsage: QuickEntryPresetUsage!
+    /// Set before the panel opens, for a panel on a Mac that can dictate.
+    private var dictationEngine: FakeDictationEngine?
 
     override func setUp() async throws {
         store = AppStore(persistTerminalFontPreference: false)
@@ -55,7 +57,8 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
             configLoader: { [unowned self] in config },
             stagingRootURL: stagingRoot,
             registersGlobalHotKey: false,
-            frontmostApplication: { nil }
+            frontmostApplication: { nil },
+            makeDictationEngine: { [unowned self] in dictationEngine }
         )
     }
 
@@ -217,6 +220,72 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         }
         controller.coordinatorController = coordinator
         return coordinator
+    }
+
+    // MARK: - Dictation
+
+    /// The microphone and "on open" in the Attach row, and the line that shows
+    /// the words in progress while dictation runs. The line takes one row
+    /// for the whole session, so the panel does not jump with each word.
+    func testDictationShowsItsControlAndTheWordsInProgress() throws {
+        let engine = FakeDictationEngine()
+        dictationEngine = engine
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        XCTAssertTrue(model.canDictate)
+        let idle = try render("quick-entry-dictation-idle")
+
+        model.toggleDictation()
+        engine.send(.listening)
+        let listening = try render("quick-entry-dictation-listening")
+        XCTAssertGreaterThan(listening.size.height, idle.size.height, "The status line adds a row")
+
+        engine.send(.final("The unread dot stays on after I read the session on the phone."))
+        engine.send(.volatile(" Check whether the coordinator dock counts"))
+        let words = try render("quick-entry-dictation-words")
+        XCTAssertEqual(words.size.height, listening.size.height)
+        // A long sentence in progress stays on its one row.
+        engine.send(.volatile(" Check whether the coordinator dock counts it as read when the chat is on screen and the window is behind another app or on another display"))
+        let long = try render("quick-entry-dictation-long-sentence")
+        XCTAssertEqual(long.size.height, listening.size.height)
+
+        model.dictatesOnOpen = true
+        engine.send(.final(" Check whether the coordinator dock counts it as read."))
+        model.toggleDictation()
+        let done = try render("quick-entry-dictation-done-on-open")
+        XCTAssertEqual(done.size.height, idle.size.height, "The row goes when dictation ends")
+        XCTAssertEqual(
+            model.text,
+            "The unread dot stays on after I read the session on the phone. Check whether the coordinator dock counts it as read."
+        )
+    }
+
+    /// With a coordinator the footer also holds Create and Send. The
+    /// dictation control is not in it, so usual names still show whole.
+    func testDictationControlLeavesTheCoordinatorFooterItsRoom() throws {
+        let engine = FakeDictationEngine()
+        dictationEngine = engine
+        let coordinator = try makeCoordinator(running: true)
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        XCTAssertTrue(model.sendsToCoordinator)
+        let auto = try render("quick-entry-dictation-coordinator-auto")
+
+        let usual = try XCTUnwrap(store.state.workspacesByID.values.first { $0.isCoordinator == false })
+        _ = store.send(.renameWorkspace(workspaceID: usual.id, title: "docs-site"))
+        model.workspaceOptions = [QuickEntryModel.Option(id: usual.id.uuidString, title: "docs-site")]
+        model.chooseWorkspace(usual.id)
+        model.choosePreset(QuickEntryPreset(agent: "claude", model: "claude-sonnet-5-5", effort: "high"))
+        model.dictatesOnOpen = true
+        model.toggleDictation()
+        engine.send(.listening)
+        engine.send(.volatile("What is the state of the dock pull request"))
+        try render("quick-entry-dictation-coordinator-listening")
+
+        model.toggleDictation()
+        let chosen = try render("quick-entry-dictation-coordinator-usual-names")
+        XCTAssertEqual(chosen.size.height, auto.size.height, "The footer stays one row")
+        withExtendedLifetime(coordinator) {}
     }
 
     /// "Coordinator design" revision 15, section 4: quick entry is a

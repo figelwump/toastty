@@ -34,7 +34,14 @@ compete with the wrapper's own instance, which holds the default, and has no
 - a file, a file promise and PNG data dragged from another process attach,
   dropped on the text or on the footer, and dragged text joins the text;
   the drop highlight is gone after each drop;
-- Command+V pastes text, with Finder in front and with Toastty in front.
+- Command+V pastes text, with Finder in front and with Toastty in front;
+- dictation's shortcut handling, on a Mac without a microphone, where
+  dictation ends at once with "Toastty found no microphone." and macOS asks
+  nothing: a short press of the shortcut opens the panel and starts no
+  dictation, holding the shortcut starts it with the panel open and closed,
+  and with "on open" set a short press starts it. On a Mac with a
+  microphone these steps are skipped, so that no permission question stays
+  on a shared screen. `--only-dictation` runs only these steps.
 """
 
 import json
@@ -43,6 +50,7 @@ import select
 import shutil
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -169,6 +177,76 @@ def main():
             return None
         return wait_for('the typed text', read, timeout=10, interval=1)
 
+    def dictation_cases():
+        """The shortcut's press and release, as dictation reads them."""
+        NO_MICROPHONE = 'Toastty found no microphone.'
+        if drive('has-microphone') != '0':
+            step('dictation skipped: this Mac has a microphone')
+            return
+
+        def read(identifier):
+            result = subprocess.run([str(driver), 'value', str(pid), identifier],
+                                    capture_output=True, text=True, timeout=60)
+            return result.stdout.strip() if result.returncode == 0 else None
+
+        def close_panel():
+            drive('key', KEY_ESCAPE)
+            wait_for('the panel to close', panel_closed, timeout=10)
+
+        def press_on_open(expected):
+            x, y, width, height = map(float, drive('frame', pid, 'quick-entry.dictate-on-open').split())
+            drive('click', x + width / 2, y + height / 2)
+            wait_for_value('quick-entry.dictate-on-open', expected)
+
+        # A short press opens the panel for typing. Its release reaches
+        # Toastty: without it, the press would count as held and dictation
+        # would start.
+        open_panel_from_finder()
+        require(read('quick-entry.dictate') is not None, 'The panel shows no microphone button')
+        require(read('quick-entry.dictate-on-open') == 'off', 'Dictate on open does not start off')
+        time.sleep(1.5)
+        tapped = dict(error=read('quick-entry.error'), status=read('quick-entry.dictation-status'))
+        require(tapped == dict(error=None, status=None), f'A short press started dictation: {tapped}')
+        step('a short press opens the panel and starts no dictation', **tapped)
+
+        # Held with the panel open: dictation starts.
+        drive('key-hold', KEY_T, 'ctrl,opt,shift', 1200)
+        wait_for('dictation to report the missing microphone',
+                 lambda: read('quick-entry.error') == NO_MICROPHONE, timeout=10, interval=0.5)
+        require(len(panel_windows()) == 1 and drive('frontmost') == FINDER, 'The hold changed the panel or the app in front')
+        step('holding the shortcut with the panel open starts dictation', error=read('quick-entry.error'))
+        close_panel()
+
+        # Held with the panel closed: one gesture opens it and dictates.
+        drive('key-hold', KEY_T, 'ctrl,opt,shift', 1200)
+        wait_for('the quick entry panel', panel_windows, timeout=15)
+        wait_for('dictation to report the missing microphone',
+                 lambda: read('quick-entry.error') == NO_MICROPHONE, timeout=10, interval=0.5)
+        step('holding the shortcut with the panel closed opens it and starts dictation',
+             error=read('quick-entry.error'), frontmost=drive('frontmost'))
+        close_panel()
+
+        # "on open": the next panel dictates at once, from a short press.
+        open_panel_from_finder()
+        press_on_open('on')
+        close_panel()
+        drive('key', KEY_T, 'ctrl,opt,shift')
+        wait_for('the quick entry panel', panel_windows, timeout=15)
+        wait_for('dictation to report the missing microphone',
+                 lambda: read('quick-entry.error') == NO_MICROPHONE, timeout=10, interval=0.5)
+        require(read('quick-entry.dictate-on-open') == 'on', 'The next panel lost the setting')
+        step('with on open set, a short press opens the panel and starts dictation',
+             error=read('quick-entry.error'), setting=read('quick-entry.dictate-on-open'))
+        # Off again: the cases after this one type and paste.
+        press_on_open('off')
+        close_panel()
+        open_panel_from_finder()
+        time.sleep(1.5)
+        after = dict(error=read('quick-entry.error'), setting=read('quick-entry.dictate-on-open'))
+        require(after == dict(error=None, setting='off'), f'Turning on open off did not hold: {after}')
+        step('with on open off again, a short press starts no dictation', **after)
+        close_panel()
+
     def open_panel_from_finder():
         drive('activate', FINDER)
         wait_for('Finder in front', lambda: drive('frontmost') == FINDER, timeout=15)
@@ -186,6 +264,12 @@ def main():
             os.path.realpath(cwd) for w in instance.query('workspace.list')['workspaces']
             if w['workspaceID'] == workspace['workspaceID'] for cwd in w['terminalCwds']], interval=1)
         step('booted', workspaceID=workspace['workspaceID'], title=workspace['title'])
+
+        if '--only-dictation' in sys.argv[1:]:
+            dictation_cases()
+            evidence['status'] = 'passed'
+            print('[quick-entry-check] passed (dictation only)', flush=True)
+            return
 
         # 1. Create a task from the panel, picking the workspace and the
         # agent preset from the keyboard.
@@ -472,6 +556,8 @@ def main():
 
         failed = {name: outcome for name, outcome in outcomes.items() if not outcome['ok']}
         require(not failed, f'Cases failed: {json.dumps(failed, default=str)}')
+
+        dictation_cases()
 
         evidence['status'] = 'passed'
     finally:

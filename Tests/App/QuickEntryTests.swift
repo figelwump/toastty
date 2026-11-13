@@ -21,7 +21,10 @@ struct QuickEntryTests {
             fixture existing: TaskCoordinatorTests.Fixture? = nil,
             create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
             recordsPresetUsage: Bool = false,
-            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil
+            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil,
+            dictationEngine: (any QuickEntryDictationEngine)? = nil,
+            dictationDefaults: UserDefaults? = nil,
+            dictationHoldDuration: Duration = QuickEntryDictation.holdDuration
         ) throws {
             let fixture = try existing ?? TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
@@ -45,7 +48,10 @@ struct QuickEntryTests {
                 registersGlobalHotKey: false,
                 toastDuration: .milliseconds(50),
                 // Opened over Toastty, whatever app the test host is behind.
-                frontmostApplication: { nil }
+                frontmostApplication: { nil },
+                makeDictationEngine: { dictationEngine },
+                dictationDefaults: dictationDefaults,
+                dictationHoldDuration: dictationHoldDuration
             )
         }
 
@@ -392,7 +398,8 @@ struct QuickEntryTests {
         let panel = harness.controller.panel
         try harness.type("Draft")
 
-        harness.controller.handleHotKey()
+        harness.controller.handleHotKeyPress()
+        harness.controller.handleHotKeyRelease()
 
         #expect(harness.controller.panel === panel)
         #expect(harness.controller.model?.text == "Draft")

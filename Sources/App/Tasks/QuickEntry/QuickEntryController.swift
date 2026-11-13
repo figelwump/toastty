@@ -26,6 +26,21 @@ final class QuickEntryController: ObservableObject {
     private let registersGlobalHotKey: Bool
     private let toastDuration: Duration
     private let frontmostApplication: @MainActor () -> NSRunningApplication?
+    /// Makes a panel's dictation, or `nil` where this Mac cannot dictate.
+    private let makeDictationEngine: @MainActor () -> (any QuickEntryDictationEngine)?
+    /// Where "Dictate on open" is kept; `nil` keeps it for this run only.
+    private let dictationDefaults: UserDefaults?
+    private let dictationHoldDuration: Duration
+    /// The setting "Dictate on open": a new panel listens at once, and the
+    /// shortcut stops and starts dictation. With it off, holding the
+    /// shortcut is push to talk.
+    private(set) var dictatesOnOpen: Bool
+    private var hotKeyIsDown = false
+    private var lastHotKeyPress: ContinuousClock.Instant?
+    /// Waits out the time after which a press counts as held.
+    private var hotKeyHold: Task<Void, Never>?
+    /// The held shortcut started dictation, so its release stops it.
+    private var hotKeyHoldStartedDictation = false
     private var hotKey: QuickEntryHotKey?
 
     private(set) var panel: QuickEntryPanel?
@@ -80,7 +95,10 @@ final class QuickEntryController: ObservableObject {
             .appending(path: "toastty-quick-entry", directoryHint: .isDirectory),
         registersGlobalHotKey: Bool,
         toastDuration: Duration = .milliseconds(1600),
-        frontmostApplication: @escaping @MainActor () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
+        frontmostApplication: @escaping @MainActor () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication },
+        makeDictationEngine: @escaping @MainActor () -> (any QuickEntryDictationEngine)? = { nil },
+        dictationDefaults: UserDefaults? = nil,
+        dictationHoldDuration: Duration = QuickEntryDictation.holdDuration
     ) {
         self.store = store
         self.agentProfiles = agentProfiles
@@ -91,6 +109,10 @@ final class QuickEntryController: ObservableObject {
         self.registersGlobalHotKey = registersGlobalHotKey
         self.toastDuration = toastDuration
         self.frontmostApplication = frontmostApplication
+        self.makeDictationEngine = makeDictationEngine
+        self.dictationDefaults = dictationDefaults
+        self.dictationHoldDuration = dictationHoldDuration
+        dictatesOnOpen = dictationDefaults?.bool(forKey: QuickEntryDictation.dictatesOnOpenDefaultsKey) ?? false
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -144,9 +166,10 @@ final class QuickEntryController: ObservableObject {
         shortcut = configured
         guard registersGlobalHotKey else { return message }
 
-        let hotKey = self.hotKey ?? QuickEntryHotKey { [weak self] in
-            self?.handleHotKey()
-        }
+        let hotKey = self.hotKey ?? QuickEntryHotKey(
+            onPress: { [weak self] in self?.handleHotKeyPress() },
+            onRelease: { [weak self] in self?.handleHotKeyRelease() }
+        )
         self.hotKey = hotKey
         let registration = hotKey.register(configured)
         switch registration {
@@ -166,8 +189,54 @@ final class QuickEntryController: ObservableObject {
         return message
     }
 
-    func handleHotKey() {
+    /// The shortcut went down: opens the panel. What it does with
+    /// dictation depends on "Dictate on open". With the setting on, a new
+    /// panel listens at once, and a press with the panel open stops or
+    /// starts dictation. With it off, a press that lasts is push to talk.
+    func handleHotKeyPress() {
+        let now = ContinuousClock.now
+        // A key that is held can repeat. A press that comes later with no
+        // release in between is a new press: the release was lost.
+        if hotKeyIsDown, let lastHotKeyPress, now - lastHotKeyPress < .seconds(1) {
+            self.lastHotKeyPress = now
+            return
+        }
+        hotKeyIsDown = true
+        lastHotKeyPress = now
+        let wasPresented = isPresented
         present(prefill: .empty)
+        guard let model, model.canDictate else { return }
+        if dictatesOnOpen {
+            if wasPresented { model.toggleDictation() }
+            return
+        }
+        hotKeyHold?.cancel()
+        hotKeyHold = Task { [weak self, dictationHoldDuration] in
+            try? await Task.sleep(for: dictationHoldDuration)
+            guard Task.isCancelled == false, let self, hotKeyIsDown, let model = self.model else { return }
+            // Dictation that the microphone button started stays the
+            // button's to stop. Dictation that an earlier hold started,
+            // whose release was lost, stays this key's to stop.
+            guard model.isDictating == false else { return }
+            hotKeyHoldStartedDictation = true
+            model.startDictation()
+        }
+    }
+
+    /// The shortcut came up: ends push to talk.
+    func handleHotKeyRelease() {
+        hotKeyIsDown = false
+        hotKeyHold?.cancel()
+        hotKeyHold = nil
+        if hotKeyHoldStartedDictation {
+            hotKeyHoldStartedDictation = false
+            model?.stopDictation()
+        }
+    }
+
+    private func setDictatesOnOpen(_ dictatesOnOpen: Bool) {
+        self.dictatesOnOpen = dictatesOnOpen
+        dictationDefaults?.set(dictatesOnOpen, forKey: QuickEntryDictation.dictatesOnOpenDefaultsKey)
     }
 
     // MARK: - Present
@@ -221,6 +290,9 @@ final class QuickEntryController: ObservableObject {
             frequentPresets: frequent,
             stagingDirectoryURL: stagingDirectoryURL,
             coordinator: coordinator,
+            dictationEngine: makeDictationEngine(),
+            dictatesOnOpen: dictatesOnOpen,
+            saveDictatesOnOpen: { [weak self] in self?.setDictatesOnOpen($0) },
             create: create,
             onCreated: { [weak self] record in
                 self?.finish(created: record)
@@ -282,6 +354,9 @@ final class QuickEntryController: ObservableObject {
         panel.orderFrontRegardless()
         panel.makeKey()
         model.requestFocus()
+        if dictatesOnOpen {
+            model.startDictation()
+        }
         refreshCodexModels()
         ToasttyLog.info("Opened the quick entry panel", category: .tasks, metadata: [
             "sends_to": coordinator == nil ? "task" : "coordinator",

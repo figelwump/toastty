@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import SwiftUI
 
@@ -17,6 +18,8 @@ struct QuickEntryTextEditor: NSViewRepresentable {
     /// Returns true when it took the pasteboard as attachments.
     let onPasteAttachments: (NSPasteboard) -> Bool
     let dropTarget: AttachmentDropTarget
+    /// Words that dictation finished. They go in at the caret.
+    var dictatedWords: PassthroughSubject<String, Never>?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -55,6 +58,9 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        context.coordinator.dictatedWords = dictatedWords?.sink { [weak textView] words in
+            textView?.insertDictated(words)
+        }
         configure(textView)
         return scrollView
     }
@@ -114,6 +120,7 @@ struct QuickEntryTextEditor: NSViewRepresentable {
         var text: Binding<String>
         weak var textView: QuickEntryNSTextView?
         var lastFocusRequestID: Int?
+        var dictatedWords: AnyCancellable?
 
         init(text: Binding<String>) {
             self.text = text
@@ -162,6 +169,21 @@ final class QuickEntryNSTextView: AttachmentTextView {
                 "is_key_window": String(window.isKeyWindow),
             ])
         }
+    }
+
+    /// Puts dictated words at the caret, or in place of the selection,
+    /// with the spaces they need next to the text around them.
+    func insertDictated(_ words: String) {
+        guard isEditable else { return }
+        let selection = selectedRange()
+        guard let range = Range(selection, in: string) else { return }
+        let insertion = QuickEntryDictation.insertion(
+            of: words,
+            before: string[..<range.lowerBound].last,
+            after: string[range.upperBound...].first
+        )
+        guard insertion.isEmpty == false else { return }
+        insertText(insertion, replacementRange: selection)
     }
 
     override func keyDown(with event: NSEvent) {

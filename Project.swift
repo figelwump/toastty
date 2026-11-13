@@ -495,7 +495,7 @@ let project = Project(
                 "LSMinimumSystemVersion": .string("14.0"),
                 "NSCameraUsageDescription": .string("A program running within Toastty would like to use the camera."),
                 "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
-                "NSMicrophoneUsageDescription": .string("A program running within Toastty would like to use your microphone."),
+                "NSMicrophoneUsageDescription": .string("Toastty uses the microphone for dictation in quick entry, and a program running within Toastty can use it."),
                 "ToasttyPushRelayURL": .string(pushRelayURL),
                 "ToasttyPushRelayID": .string(pushRelayID),
                 "ToasttyPushAPNsEnvironment": .string(pushAPNsEnvironment),
