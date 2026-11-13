@@ -15,7 +15,9 @@ It checks that `task send --steer`:
 - types the message at an idle agent's open prompt (`sent`);
 - types it into a running turn (`steered`), and the agent reads it in that
   turn: it answers as the message says, and not as the turn's first message
-  said;
+  said. When Toastty reports a Codex agent in a turn as idle, as it does
+  without Codex's hooks, the message must instead be held (`queued`) and
+  typed after the turn;
 - with Claude, while a permission prompt is on screen: types nothing and
   holds the message (`queued`). The prompt stays unanswered and its command
   does not run. After the check answers the prompt and the turn ends,
@@ -221,21 +223,36 @@ def main():
         # 2. A running turn: typed into the turn, and the agent follows it.
         cli_result('task', 'send', task_id, HOLD_TEXT)
         wait_for('the agent in a turn', lambda: agent_state() == 'busy', interval=0.5)
-        wait_for('the held command on screen', lambda: f'{HOLD_SCRIPT} 40' in screen(), interval=1)
+        # The command runs for 40 seconds. Codex does not always show it,
+        # so the check waits a fixed time for it to start.
         states = []
-        for _ in range(8):
+        for _ in range(12):
             time.sleep(1)
             states.append(agent_state())
-        require(states[-1] == 'busy', f'The agent did not stay in its turn; its states were {states}')
-        steered = steer(STEER_TEXT)
-        require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
-        reply('STEERED-OK')
-        # An agent that read the message only after its turn would have
-        # ended that turn with the first message's answer.
-        require(visible_text_with(instance, snapshot(), 'HOLD-DONE') is None,
-                'The agent answered the first message before it read the steered one')
-        wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
-        step('busy agent: steered and read in the turn', result=steered)
+        if states[-1] == 'busy':
+            steered = steer(STEER_TEXT)
+            require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
+            reply('STEERED-OK')
+            # An agent that read the message only after its turn would have
+            # ended that turn with the first message's answer.
+            require(visible_text_with(instance, snapshot(), 'HOLD-DONE') is None,
+                    'The agent answered the first message before it read the steered one')
+            wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
+            step('busy agent: steered and read in the turn', result=steered)
+        else:
+            # Without Codex's hooks, Toastty follows a Codex agent's state
+            # from its session log, and reports it as idle during a long
+            # command. The conversation still shows the turn. The two
+            # disagree, so Toastty must type nothing until the turn ends.
+            require(provider == 'codex', f'The agent did not stay in its turn; its states were {states}')
+            held = steer(STEER_TEXT)
+            require(held.get('delivery') == 'queued' and held.get('delivered') is False,
+                    f'Not held while the hooks and the conversation disagreed: {held}')
+            require(STEER_TEXT[:40] not in screen(), 'The held message was typed during the turn')
+            reply('HOLD-DONE')
+            reply('STEERED-OK')
+            wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
+            step('turn that Toastty reports as idle: held, typed after the turn', result=held, states=states)
 
         if provider == 'claude':
             # 3. A permission prompt on screen: nothing is typed.

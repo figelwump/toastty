@@ -214,7 +214,9 @@ before the first send.
 The check makes one task with a real agent and sends to it with
 `task send --steer`: at its open prompt (`sent`), and in a turn that a script
 of the run holds for 40 seconds (`steered`, and the agent must answer as that
-message says, not as the turn's first message said). With
+message says, not as the turn's first message said). A host without Codex's
+hooks reports a Codex agent in a long command as idle; the check then requires
+`queued`, nothing typed during the turn, and the message after the turn. With
 Claude it also sends while a permission prompt is on screen: the result must be
 `queued`, the prompt must stay unanswered, and its command must not run. The
 check then answers the prompt, and the held message must arrive after the turn
