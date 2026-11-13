@@ -64,7 +64,8 @@ struct ToasttySelectableText: NSViewRepresentable {
         // TextKit 1, so the separate sizing stack below measures the same
         // layout that the view draws.
         let view = ToasttyTranscriptTextView(usingTextLayoutManager: false)
-        // Draws the outline of a chip behind its text, and a quote's bar.
+        // Draws a quote's bar and a chip's spinner. The view draws the
+        // outline of a chip behind its text.
         view.textContainer?.replaceLayoutManager(ToasttyChipLayoutManager())
         view.isEditable = false
         view.isSelectable = true
@@ -118,7 +119,9 @@ struct ToasttySelectableText: NSViewRepresentable {
                 view.selectedRanges = kept
             }
         }
+        view.chipRoomAbove = context.coordinator.sizingLayoutManager.chipRoom(in: rendered)?.above ?? 0
         view.invalidateIntrinsicContentSize()
+        view.updateChipSpinners()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ToasttyTranscriptTextView,
@@ -157,13 +160,18 @@ struct ToasttySelectableText: NSViewRepresentable {
         let layout = context.coordinator.sizingLayoutManager
         container.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
-        let size = CGSize(width: width, height: ceil(layout.usedRect(for: container).height))
+        // Room for a chip's outline above the first line and below the
+        // last, where TextKit adds no line spacing.
+        let room = layout.chipRoom(in: context.coordinator.renderedText)
+        let size = CGSize(width: width, height: ceil(layout.usedRect(for: container).height
+                                                     + (room?.above ?? 0) + (room?.below ?? 0)))
         context.coordinator.measuredSizes[width] = size
         return size
     }
 
     static func dismantleNSView(_ view: ToasttyTranscriptTextView, coordinator: Coordinator) {
         view.delegate = nil
+        view.stopChipSpinners()
     }
 
     private func attributedText() -> NSAttributedString {
@@ -233,6 +241,12 @@ struct ToasttySelectableText: NSViewRepresentable {
             if let color = run.backgroundColor { attributes[.backgroundColor] = NSColor(color) }
             if let link = run.link { attributes[.link] = link }
             if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = true }
+            if run[ConversationChipSpinnerAttribute.self] == true {
+                // The dot keeps its place in the line, drawn clear. The
+                // layout manager draws a spinner in its color there.
+                attributes[.toasttyChipSpinner] = attributes[.foregroundColor]
+                attributes[.foregroundColor] = NSColor.clear
+            }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             var characters = String(text[run.range].characters)
             if keepsLineBreaksInsideParagraphs {
@@ -243,6 +257,7 @@ struct ToasttySelectableText: NSViewRepresentable {
         }
         last[.link] = nil
         last[.toasttyChip] = nil
+        last[.toasttyChipSpinner] = nil
         last[.backgroundColor] = nil
         return last
     }
@@ -345,10 +360,119 @@ struct ToasttySelectableText: NSViewRepresentable {
 /// Public so a host can tell that a reader is selecting transcript text.
 @MainActor
 public final class ToasttyTranscriptTextView: NSTextView {
+    /// Turns the chip spinners while the view is in a window.
+    private var chipSpinnerTimer: Timer?
+
+    /// Room above the first line for a chip's outline. `sizeThatFits`
+    /// adds the same room.
+    var chipRoomAbove: CGFloat = 0 {
+        didSet {
+            guard chipRoomAbove != oldValue else { return }
+            invalidateTextContainerOrigin()
+            needsDisplay = true
+        }
+    }
+
+    override public var textContainerOrigin: NSPoint {
+        let origin = super.textContainerOrigin
+        return NSPoint(x: origin.x, y: origin.y + chipRoomAbove)
+    }
+
+    /// The layout manager's drawing is clipped to the text container, and a
+    /// chip's outline reaches above and below its line, so the view draws
+    /// the outlines.
+    override public func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let manager = layoutManager as? ToasttyChipLayoutManager, let textContainer else { return }
+        let origin = textContainerOrigin
+        // Also the lines next to the rect: an outline reaches a few points
+        // past its line.
+        let lines = rect.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: 0, dy: -8)
+        let glyphs = manager.glyphRange(forBoundingRect: lines, in: textContainer)
+        manager.drawChipOutlines(forGlyphRange: glyphs, at: origin)
+    }
+
     override public func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         textContainer?.containerSize = CGSize(width: newSize.width,
                                              height: CGFloat.greatestFiniteMagnitude)
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        let center = NSWorkspace.shared.notificationCenter
+        let name = NSWorkspace.accessibilityDisplayOptionsDidChangeNotification
+        center.removeObserver(self, name: name, object: nil)
+        if window != nil {
+            // The spinners turn again when Reduce Motion goes off.
+            center.addObserver(self, selector: #selector(displayOptionsDidChange), name: name, object: nil)
+        }
+        updateChipSpinners()
+    }
+
+    @objc private func displayOptionsDidChange(_ notification: Notification) {
+        updateChipSpinners()
+    }
+
+    /// Starts the spinner timer when the view shows a chip spinner, and
+    /// stops it when it does not. With Reduce Motion on, a spinner is a
+    /// still arc.
+    func updateChipSpinners() {
+        let animates = window != nil
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            && !chipSpinnerRects().isEmpty
+        guard animates else {
+            stopChipSpinners()
+            return
+        }
+        guard chipSpinnerTimer == nil else { return }
+        // The rate of the app's other spinners.
+        let timer = Timer(timeInterval: 1.0 / 24.0, repeats: true) { [weak self] timer in
+            // A view that went away without leaving its window stops here.
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { self.turnChipSpinners() }
+        }
+        // `.common`, so the spinners also turn while the transcript scrolls.
+        RunLoop.main.add(timer, forMode: .common)
+        chipSpinnerTimer = timer
+    }
+
+    func stopChipSpinners() {
+        chipSpinnerTimer?.invalidate()
+        chipSpinnerTimer = nil
+    }
+
+    private func turnChipSpinners() {
+        guard let manager = layoutManager as? ToasttyChipLayoutManager else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            manager.chipSpinnerAngle = 0
+            stopChipSpinners()
+        } else {
+            manager.chipSpinnerAngle = ToasttyChipLayoutManager.chipSpinnerAngle(at: Date())
+        }
+        let visible = visibleRect
+        for rect in chipSpinnerRects() where rect.intersects(visible) {
+            setNeedsDisplay(rect.insetBy(dx: -1, dy: -1))
+        }
+    }
+
+    /// Where each chip spinner is drawn, in the view's coordinates.
+    func chipSpinnerRects() -> [NSRect] {
+        guard let manager = layoutManager as? ToasttyChipLayoutManager, let textStorage,
+              textStorage.length > 0 else { return [] }
+        let origin = textContainerOrigin
+        var rects: [NSRect] = []
+        textStorage.enumerateAttribute(
+            .toasttyChipSpinner, in: NSRange(location: 0, length: textStorage.length)
+        ) { value, range, _ in
+            guard value != nil else { return }
+            rects += manager.chipSpinnerRects(forCharacterRange: range)
+                .map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+        }
+        return rects
     }
 
     override public func copy(_ sender: Any?) {
@@ -386,6 +510,9 @@ public final class ToasttyTranscriptTextView: NSTextView {
 extension NSAttributedString.Key {
     /// Marks the characters of a chip. See `ConversationChipAttribute`.
     static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
+    /// A chip's dot drawn as a spinner. The value is the spinner's color.
+    /// See `ConversationChipSpinnerAttribute`.
+    static let toasttyChipSpinner = NSAttributedString.Key("toastty.conversationChipSpinner")
     /// The characters of a block quote, which draw a bar before them.
     static let toasttyQuote = NSAttributedString.Key("toastty.conversationQuote")
     /// Replaces the characters in a copy, such as a list marker's tab stops.
@@ -393,9 +520,13 @@ extension NSAttributedString.Key {
 }
 
 /// Draws a rounded outline behind each run of chip text, and keeps a chip on
-/// one line where the line allows it. Also draws the bar before a block
-/// quote. The text itself, its colors and its link are ordinary attributes.
+/// one line where the line allows it. Also draws a chip's spinner and the
+/// bar before a block quote. The text itself, its colors and its link are
+/// ordinary attributes.
 final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
+    /// The turn of every chip spinner, in radians. The text view advances it.
+    var chipSpinnerAngle: CGFloat = 0
+
     override init() {
         super.init()
         delegate = self
@@ -411,6 +542,12 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let textStorage else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         drawQuoteBars(in: characters, textStorage: textStorage, at: origin)
+    }
+
+    /// Draws the outline of each chip in the range behind its text.
+    func drawChipOutlines(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard let textStorage, glyphsToShow.length > 0 else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
             guard value != nil else { return }
             // The whole chip, also when only a part of it is drawn now.
@@ -419,7 +556,7 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                                       longestEffectiveRange: &chipRange,
                                       in: NSRange(location: 0, length: textStorage.length))
             for rect in chipOutlineRects(forCharacterRange: chipRange) {
-                let outline = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.5, dy: 1.5)
+                let outline = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.5, dy: 0.5)
                 let path = NSBezierPath(roundedRect: outline, xRadius: outline.height / 2, yRadius: outline.height / 2)
                 NSColor.white.withAlphaComponent(0.08).setFill()
                 path.fill()
@@ -430,29 +567,131 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         }
     }
 
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        guard let textStorage else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        textStorage.enumerateAttribute(.toasttyChipSpinner, in: characters) { value, range, _ in
+            guard let color = value as? NSColor else { return }
+            for rect in chipSpinnerRects(forCharacterRange: range) {
+                drawChipSpinner(in: rect.offsetBy(dx: origin.x, dy: origin.y), color: color)
+            }
+        }
+    }
+
+    /// The spinner of `ToasttySpinner`: an arc that turns once every 0.9
+    /// seconds.
+    static func chipSpinnerAngle(at date: Date) -> CGFloat {
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+        return CGFloat(phase) * 2 * .pi
+    }
+
+    private func drawChipSpinner(in rect: NSRect, color: NSColor) {
+        let lineWidth = max(1, rect.width * 0.16)
+        let radius = (rect.width - lineWidth) / 2
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        // The arc of `ToasttySpinner`: from 16% to 90% of a turn, clockwise
+        // on screen from the right. The text view is flipped.
+        let start = chipSpinnerAngle + 0.16 * 2 * .pi
+        let end = chipSpinnerAngle + 0.9 * 2 * .pi
+        let path = NSBezierPath()
+        path.appendArc(withCenter: center, radius: radius,
+                       startAngle: start * 180 / .pi, endAngle: end * 180 / .pi, clockwise: false)
+        path.lineWidth = lineWidth
+        path.lineCapStyle = .round
+        color.setStroke()
+        path.stroke()
+    }
+
+    /// A square over the ink of each dot in the range, in the text
+    /// container's coordinates. The spinner has the dot's size.
+    func chipSpinnerRects(forCharacterRange range: NSRange) -> [NSRect] {
+        guard let textStorage else { return [] }
+        let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rects: [NSRect] = []
+        for glyphIndex in glyphs.location..<NSMaxRange(glyphs) where isValidGlyphIndex(glyphIndex) {
+            let characterIndex = characterIndexForGlyph(at: glyphIndex)
+            guard characterIndex < textStorage.length,
+                  let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
+            else { continue }
+            let line = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            let baseline = location(forGlyphAt: glyphIndex)
+            // The glyph's ink, with y up from the baseline.
+            let ink = font.boundingRect(forCGGlyph: cgGlyph(at: glyphIndex))
+            guard ink.width > 0, ink.height > 0 else { continue }
+            let side = min(ink.width, ink.height)
+            let center = NSPoint(x: line.minX + baseline.x + ink.midX,
+                                 y: Self.chipTextMiddle(baseline: line.minY + baseline.y, font: font))
+            rects.append(NSRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side))
+        }
+        return rects
+    }
+
+    /// How far the outline of a chip reaches above its line's text and
+    /// below it, in whole points. `nil` when the text has no chip.
+    func chipRoom(in text: NSAttributedString) -> (above: CGFloat, below: CGFloat)? {
+        var font: NSFont?
+        text.enumerateAttribute(.toasttyChip, in: NSRange(location: 0, length: text.length)) { value, range, stop in
+            guard value != nil else { return }
+            font = text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+            stop.pointee = true
+        }
+        guard let font else { return nil }
+        let lineHeight = defaultLineHeight(for: font)
+        let middle = defaultBaselineOffset(for: font) - font.capHeight / 2
+        let half = Self.chipOutlineHeight(lineHeight: lineHeight) / 2
+        return (ceil(max(0, half - middle)), ceil(max(0, middle + half - lineHeight)))
+    }
+
+    /// The outline is three points taller than a line of the chip's text,
+    /// and is drawn half a point inside this height.
+    private static func chipOutlineHeight(lineHeight: CGFloat) -> CGFloat {
+        lineHeight + 4
+    }
+
     /// One rect for each line the chip is on, around that line's part of the
     /// chip. Enclosing rects of the whole range would run to the container's
-    /// edge on every line but the last.
+    /// edge on every line but the last. The outline is drawn half a point
+    /// inside the rect.
     func chipOutlineRects(forCharacterRange chipRange: NSRange) -> [NSRect] {
-        guard let container = textContainers.first else { return [] }
+        guard let container = textContainers.first, let textStorage else { return [] }
         let glyphs = glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
-        var rects: [NSRect] = []
+        var outlines: [NSRect] = []
         var lineStart = glyphs.location
         while lineStart < NSMaxRange(glyphs) {
             var lineGlyphs = NSRange()
-            _ = lineFragmentRect(forGlyphAt: lineStart, effectiveRange: &lineGlyphs)
+            let line = lineFragmentRect(forGlyphAt: lineStart, effectiveRange: &lineGlyphs)
             guard lineGlyphs.length > 0 else { break }
             let piece = NSIntersectionRange(glyphs, lineGlyphs)
+            let characterIndex = characterIndexForGlyph(at: piece.location)
+            let font = characterIndex < textStorage.length
+                ? textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
+                : nil
+            let baseline = line.minY + location(forGlyphAt: piece.location).y
             enumerateEnclosingRects(
                 forGlyphRange: piece,
                 withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
                 in: container
             ) { rect, _ in
-                rects.append(rect)
+                // The rect also covers the line spacing below the text,
+                // except on the last line. The outline centers on the
+                // text and has the same height on every line.
+                var outline = rect
+                if let font {
+                    outline.size.height = Self.chipOutlineHeight(lineHeight: self.defaultLineHeight(for: font))
+                    outline.origin.y = Self.chipTextMiddle(baseline: baseline, font: font) - outline.size.height / 2
+                }
+                outlines.append(outline)
             }
             lineStart = NSMaxRange(lineGlyphs)
         }
-        return rects
+        return outlines
+    }
+
+    /// The middle of a chip's capitals, in flipped coordinates. The chip's
+    /// outline and spinner center on it, as the text and the dot do.
+    static func chipTextMiddle(baseline: CGFloat, font: NSFont) -> CGFloat {
+        baseline - font.capHeight / 2
     }
 
     /// No line break inside a chip, such as after a hyphen in its title. A
