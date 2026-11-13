@@ -346,6 +346,13 @@ struct AppWindowView: View {
         .onChange(of: slotFocusSignature) { _, _ in
             handleSlotFocusSignatureChange()
         }
+        .onChange(of: dockShows) { _, shows in
+            // A hidden dock takes its field, and maybe the keyboard, with
+            // it: the keyboard goes back to the workspace's panel.
+            if shows == false {
+                scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
+            }
+        }
         .onChange(of: showsTasksView) { _, isShown in
             // While shown, the Tasks view holds focus in this window and
             // focus restores skip the covered terminals.

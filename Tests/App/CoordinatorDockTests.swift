@@ -80,7 +80,7 @@ struct CoordinatorDockTests {
         #expect(dockCommand(PaletteCoordinatorOption(isOpen: true)) == nil)
         let show = try #require(dockCommand(PaletteCoordinatorOption(isOpen: true, dockShows: false)))
         #expect(show.title == "Show Coordinator Dock")
-        #expect(show.shortcut?.symbolLabel == "⌘⇧K")
+        #expect(show.shortcut?.symbolLabel == "⇧⌘K")
         #expect(show.invocation == .task(.toggleCoordinatorDock))
         #expect(dockCommand(PaletteCoordinatorOption(isOpen: true, dockShows: true))?.title == "Hide Coordinator Dock")
     }
@@ -164,14 +164,12 @@ struct CoordinatorDockTests {
         #expect(chat.activeHost == .panel)
         chat.hide(panelID: panelID, host: .panel)
         #expect(chat.shownPanelID == nil)
-        #expect(fixture.isReadingConversations == false)
+        #expect(chat.activeHost == nil)
 
         // A row click opens the dock: its field takes the keyboard when it
         // shows, not before, and only once.
         let before = chat.composerFocusRequest
         chat.requestComposerFocus(host: .dock)
-        #expect(chat.composerFocusRequest == before)
-        chat.show(panelID: panelID, host: .panel)
         #expect(chat.composerFocusRequest == before)
         chat.show(panelID: panelID, host: .dock)
         #expect(chat.composerFocusRequest == before + 1)
@@ -180,6 +178,15 @@ struct CoordinatorDockTests {
         #expect(chat.composerFocusRequest == before + 1)
         // While the dock shows, the request goes to it at once.
         chat.requestComposerFocus(host: .dock)
+        #expect(chat.composerFocusRequest == before + 2)
+        chat.hide(panelID: panelID, host: .dock)
+
+        // The full view opened before the dock could: the dock does not
+        // take the keyboard later, when it shows by another way.
+        chat.requestComposerFocus(host: .dock)
+        chat.show(panelID: panelID, host: .panel)
+        chat.hide(panelID: panelID, host: .panel)
+        chat.show(panelID: panelID, host: .dock)
         #expect(chat.composerFocusRequest == before + 2)
     }
 

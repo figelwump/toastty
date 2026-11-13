@@ -32,9 +32,11 @@ that:
   is read; Open Full View and the full view's Dock button move the chat
   between the dock and the full view; the toolbar button and Cmd+Shift+K
   hide and show it, Cmd+Shift+K with the keyboard in its field, where
-  Cmd+= changes the chat's text size; with the sidebar hidden it is at the
-  window's left edge; while it is hidden, a reply leaves the coordinator's
-  row unread, and showing the dock reads it;
+  Cmd+= changes the chat's text size and Cmd+W closes nothing; a drag on
+  its edge sets its width up to 480 points; with the sidebar hidden it is
+  at the window's left edge; while it is hidden, a reply leaves the
+  coordinator's row unread, and showing the dock reads it; after the
+  relaunch it shows again at its width;
 - the header's switch shows the terminal and the chat again;
 - after the app is killed and relaunched, the chat shows the same
   conversation and takes a message;
@@ -504,8 +506,28 @@ def run(check):
         ui.run('key', 'cmd-0')
         wait_for('the text size again', lambda: composer_height() == before_scale, timeout=10)
         require(selected_workspace() == task_space, 'The shortcut left the task')
-        step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat',
+        # Cmd+W in the dock's field closes neither the task's panel nor the window.
+        task_terminals = lambda: [w for w in instance.query('workspace.list')['workspaces']
+                                  if w['workspaceID'] == task_space][0]['terminalCwds']
+        terminals_before = task_terminals()
+        ui.run('focus', 'coordinator.chat.composer')
+        ui.run('key', 'cmd-w')
+        time.sleep(1.5)
+        require(task_terminals() == terminals_before and ui.exists('coordinator.dock'),
+                'Cmd+W in the dock\'s field closed something')
+        step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat; Cmd+W closed nothing',
              composerHeight=before_scale)
+
+        # A drag on the dock's edge sets its width, up to 480 points.
+        dock_frame = lambda: [int(value) for value in ui.run('frame', 'coordinator.dock')[1].split()]
+        x, y, width, height = dock_frame()
+        ui.run('drag', str(x + width), str(y + height // 2), str(x + width + 60), str(y + height // 2))
+        wait_for('a wider dock', lambda: dock_frame()[2] >= width + 50, timeout=10)
+        x, y, wider, height = dock_frame()
+        ui.run('drag', str(x + wider), str(y + height // 2), str(x + wider + 400), str(y + height // 2))
+        wait_for('the widest dock', lambda: dock_frame()[2] == 480, timeout=10)
+        capture('dock-widest')
+        step('a drag on the dock\'s edge set its width', default=width, wider=wider, widest=dock_frame()[2])
 
         # 10. With the sidebar hidden, the dock is at the window's left edge.
         ui.run('key', 'cmd-b')
@@ -550,7 +572,8 @@ def run(check):
 
         # 13. Kill and relaunch with the chat open, now with Remote Access on.
         before = status()
-        coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
+        coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"',
+                                          '"coordinatorDockWidthPointsOverride"')
         instance.kill()
         port = steer.free_port()
         gateway = steer.Gateway(port)
@@ -566,6 +589,14 @@ def run(check):
                  lambda: all(marker in ui.texts() for marker in ('CHAT-ONE', 'CHAT-FIVE', chip_title)), timeout=120)
         wait_for('the resumed prompt', at_prompt, timeout=180)
         capture('relaunched')
+        # The dock comes back beside the task, at its width.
+        instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=task_space)))
+        wait_for('the dock after the relaunch', lambda: ui.exists('coordinator.dock')
+                 and int(ui.run('frame', 'coordinator.dock')[1].split()[2]) == 480, timeout=30)
+        capture('relaunched-dock')
+        instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=coordinator_id)))
+        wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id
+                 and not ui.exists('coordinator.dock'), timeout=30)
         ui.send('Reply with exactly this one word and nothing else: CHAT-SIX')
         wait_for_reply('CHAT-SIX')
         wait_for('the prompt to open again', at_prompt, timeout=120)

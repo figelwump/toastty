@@ -450,6 +450,7 @@ case "key":
     case "cmd-b": press(keyCode: 11, flags: .maskCommand)
     case "cmd-equal": press(keyCode: 24, flags: .maskCommand)
     case "cmd-0": press(keyCode: 29, flags: .maskCommand)
+    case "cmd-w": press(keyCode: 13, flags: .maskCommand)
     default:
         print("unknown key \(argument)")
         exit(64)

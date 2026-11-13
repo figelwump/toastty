@@ -2290,7 +2290,12 @@ public struct AppReducer {
 
         if window.selectedWorkspaceID == workspaceID {
             let nextIndex = min(workspaceIndex, window.workspaceIDs.count - 1)
-            window.selectedWorkspaceID = window.workspaceIDs[nextIndex]
+            // The neighbor after, else before. The coordinator's workspace
+            // is selected only when no other is left: its chat shows in the
+            // dock beside the others.
+            let neighbors = window.workspaceIDs[nextIndex...] + window.workspaceIDs[..<nextIndex].reversed()
+            let coordinatorWorkspaceID = state.coordinatorWorkspaceID
+            window.selectedWorkspaceID = neighbors.first { $0 != coordinatorWorkspaceID } ?? window.workspaceIDs[nextIndex]
         }
 
         state.windows[windowIndex] = window
