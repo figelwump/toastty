@@ -2316,9 +2316,14 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(afterDone.contains("unread"), afterDone)
         XCTAssertTrue(afterDone.contains("working"), afterDone)
         scroll(to: 0)
-        pumpMainRunLoop(duration: 0.2)
-        XCTAssertEqual(pill("above"), initialAbove)
-        XCTAssertNotNil(pill("below"))
+        // Preference updates publish scroll geometry after layout. Wait for
+        // the top-of-list state before using those frames for the drag below.
+        let topText = waitForRenderedText(in: root) { text in
+            text.first { $0.contains("hidden above") } == initialAbove &&
+                text.contains { $0.contains("hidden below") }
+        }
+        XCTAssertEqual(topText.first { $0.contains("hidden above") }, initialAbove)
+        XCTAssertTrue(topText.contains { $0.contains("hidden below") })
 
         // Drag must use the latest measured frames after scrolling back.
         let source = try sessionPointerInteractionView(in: root, sessionID: "spawner")
