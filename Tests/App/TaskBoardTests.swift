@@ -1374,6 +1374,12 @@ struct TaskBoardTests {
         #expect(alone.toShip.map(\.count) == [1])
         #expect(alone.toShip.first?.releaseWorkspaceID == nil)
         #expect(TasksViewSections.make([parent], releasable: { _ in true }).toShip.first?.releaseWorkspaceID == nil)
+        // In the Tasks view, a child lists under its parent in the parent's
+        // lane, and apart from it in another project's lane.
+        let elsewhere = statusItem("toastty-copy", parent: parentID, stage: .toShip, project: "toastty")
+        let lanes = TasksViewSections.make([parent, child, elsewhere]).toShip
+        #expect(lanes.map(\.projectTitle) == ["emptyos", "toastty"])
+        #expect(lanes.map { $0.entries.map(\.isLinkedChild) } == [[false, true], [false]])
     }
 
     @Test func childrenListUnderTheTaskThatStartedThem() {
