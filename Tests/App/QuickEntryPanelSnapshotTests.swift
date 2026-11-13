@@ -258,6 +258,12 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
             model.text,
             "The unread dot stays on after I read the session on the phone. Check whether the coordinator dock counts it as read."
         )
+
+        // With a file the row is as tall as a thumbnail. The microphone
+        // stays at the row's trailing edge, level with Attach.
+        model.attachImageData(try Self.screenshotData(), named: "Screenshot 1.png")
+        let withFile = try render("quick-entry-dictation-with-file")
+        XCTAssertGreaterThan(withFile.size.height, done.size.height)
     }
 
     /// With a coordinator the footer also holds Create and Send. The

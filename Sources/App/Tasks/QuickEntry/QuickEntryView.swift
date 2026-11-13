@@ -62,8 +62,10 @@ struct QuickEntryView: View {
 
             // The ways to fill the draft other than typing share a row.
             // The footer keeps its room for the pills and the buttons.
-            HStack(spacing: 10) {
+            // The microphone stays at the trailing edge, level with Attach.
+            HStack(alignment: .bottom, spacing: 10) {
                 attachmentsRow
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if model.canDictate {
                     dictationControl
                 }
