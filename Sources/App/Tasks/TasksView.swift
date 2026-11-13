@@ -358,19 +358,20 @@ struct TasksView: View {
     /// Shows the group that the sidebar or a task link asked for, once.
     private func revealRequestedGroup(using proxy: ScrollViewProxy) {
         guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
+        let revealsSelectedRow = board.revealsSelectedRowWindowIDs.remove(windowID) != nil
         switch group {
         case .done: isDoneExpanded = true
         case .archived: isArchivedExpanded = true
         case .needsYou, .running, .idle, .toShip: break
         }
         // After the expanded rows lay out, so the group's top lands at the
-        // top of the list. A selected task in the group then scrolls its row
+        // top of the list. A task selected to reveal it then scrolls its row
         // into view, as an arrow key does, since a long group can put it
         // below the fold. The lazy list knows a Done or Archived row only
         // once its group is on screen, so the group comes first.
         Task { @MainActor in
             proxy.scrollTo(group, anchor: .top)
-            if let selected = board.tasksViewSelection(windowID: windowID), selected.stage.group == group {
+            if revealsSelectedRow, let selected = board.tasksViewSelection(windowID: windowID), selected.stage.group == group {
                 keyboardSelection = selected.id
             }
         }

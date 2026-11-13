@@ -208,9 +208,8 @@ struct CoordinatorChatView: View {
     /// browser. Nothing else is opened and nothing is run.
     private func open(_ url: URL, chips: CoordinatorTaskChips) -> OpenURLAction.Result {
         switch CoordinatorChatLinks.action(for: url, taskTarget: { taskID in
-            guard chips.chips[taskID] != nil else { return nil }
-            if let workspaceID = board.coordinator?.records.record(id: taskID)?.taskSpaceWorkspaceID,
-               store.state.workspacesByID[workspaceID] != nil {
+            guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
+            if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
                 return .taskSpace(workspaceID: workspaceID)
             }
             return .tasksView

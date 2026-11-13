@@ -31,6 +31,11 @@ extension TaskBoardStore {
         let collapsedGroup = subjectGroup == .done || subjectGroup == .archived ? subjectGroup : nil
         if let reveal = group ?? collapsedGroup {
             revealGroupByWindowID[windowID] = reveal
+            if group == nil {
+                revealsSelectedRowWindowIDs.insert(windowID)
+            } else {
+                revealsSelectedRowWindowIDs.remove(windowID)
+            }
         }
         _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: source)
     }

@@ -426,9 +426,11 @@ final class TaskBoardStore: ObservableObject {
     /// A group each window's Tasks view should show next, set by the
     /// sidebar's To ship and Done counts, and by `showTasksView` for a
     /// selected done or archived task. The view expands Done or Archived,
-    /// scrolls to the group and then to its selected row, and clears the
-    /// request.
+    /// scrolls to the group, and clears the request.
     @Published var revealGroupByWindowID: [UUID: TaskStage.Group] = [:]
+    /// Windows whose reveal request came from selecting a task in the
+    /// group: the view then also scrolls that task's row into view.
+    var revealsSelectedRowWindowIDs: Set<UUID> = []
     /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
     /// view's New Task. `nil` hides them.
     var newTask: (@MainActor () -> Void)?
