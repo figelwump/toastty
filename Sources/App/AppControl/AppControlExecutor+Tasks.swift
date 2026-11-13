@@ -183,6 +183,7 @@ extension AppControlExecutor {
                 "sessionID": .string(session.sessionID),
                 "panelID": .string(session.panelID.uuidString),
                 "delivery": .string(delivery.name),
+                "message": .string(delivery.message),
                 // False for a message that waits: nothing was typed yet.
                 "delivered": .bool(true),
             ]

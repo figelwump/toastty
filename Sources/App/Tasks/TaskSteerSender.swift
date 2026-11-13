@@ -20,6 +20,15 @@ enum TaskSteerDelivery: Equatable {
         case .queued: "queued"
         }
     }
+
+    /// What `task.send` tells its caller, who may pass it on to a person.
+    var message: String {
+        switch self {
+        case .sent: "The agent was at its prompt. Toastty typed the message there."
+        case .steered: "The agent was in a turn. Toastty typed the message into that turn."
+        case .queued: "Toastty holds the message and types it when the agent's turn ends. Nothing is typed until then."
+        }
+    }
 }
 
 /// Why `task send --steer` gave the agent nothing, or cannot say that it did.

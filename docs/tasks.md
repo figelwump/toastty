@@ -368,7 +368,8 @@ worktree.
   again.
 - `toastty task send <task-id> "<message>" --steer` checks the agent first, so
   that the message can go to a busy agent. Toastty types nothing into a
-  permission prompt or a question. The result's `delivery` says what it did:
+  permission prompt or a question. The result's `delivery` says what it did,
+  and `message` says it in a sentence:
 
   | `delivery` | What Toastty did |
   | --- | --- |

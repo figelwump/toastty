@@ -419,7 +419,7 @@ Notable action-specific behavior:
     `submit=true` does; a busy agent queues it as typed input.
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
-    `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
+    `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
     running turn of a Claude Code or Codex agent) or `queued` (held for the
     agent's next open prompt, with `queuePosition` and `delivered` false).
     Send it through `app_control.run_action`: it can wait up to 5 seconds for
