@@ -184,6 +184,10 @@ public enum AppAction: Equatable, Sendable {
     /// Shows or hides the Tasks view. Selecting a workspace hides it.
     case setTasksViewShown(windowID: UUID, shown: Bool)
     case setSidebarWidth(windowID: UUID, width: Double, defaultWidth: Double)
+    /// Opens or hides the coordinator's dock in a window.
+    case setCoordinatorDockVisible(windowID: UUID, visible: Bool)
+    /// Sets the dock's width. It is kept within the dock's limits.
+    case setCoordinatorDockWidth(windowID: UUID, width: Double)
 }
 
 public extension AppAction {
@@ -351,6 +355,10 @@ public extension AppAction {
             return "setSidebarWorkspaceCollapsed"
         case .setTasksViewShown:
             return "setTasksViewShown"
+        case .setCoordinatorDockVisible:
+            return "setCoordinatorDockVisible"
+        case .setCoordinatorDockWidth:
+            return "setCoordinatorDockWidth"
         case .setSidebarWidth:
             return "setSidebarWidth"
         }

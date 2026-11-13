@@ -7,8 +7,9 @@ import RemoteProtocol
 /// transcript draws.
 ///
 /// The iPhone has its own adapter, over the events it decodes from the
-/// gateway. This one differs in four ways: a digest that Toastty typed,
-/// and a message that `coordinator send` brought, become one folded line;
+/// gateway. This one differs in five ways: a digest that Toastty typed
+/// becomes one folded line; a message that `coordinator send` brought shows
+/// its sender and body in a card;
 /// a digest whose turn the coordinator marked quiet folds the whole turn
 /// under that line; a quick entry message shows without Toastty's first
 /// line; and a message this Mac sent is not marked as sent from another
@@ -108,7 +109,6 @@ enum CoordinatorChatTranscript {
     ) -> ToasttyTranscriptRow.Content {
         // Toastty's first line says whose message it is. The line is the
         // only thing read here: text after it cannot change the answer.
-        let text: String
         var quote: ToasttyMessageQuote?
         switch CoordinatorMessageHeader.kind(of: payload.text) {
         case .digest(let updateCount):
@@ -118,28 +118,38 @@ enum CoordinatorChatTranscript {
                 foldsTurn: isQuietDigest(payload.text)
             ))
         case .fromSender(let sender):
-            // Not the user's words: one muted line that names the sender
-            // and opens to the text.
+            // Only Toastty's first line identifies the sender. The body
+            // stays third-party text, even when it imitates another header.
+            let body = payload.text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                .dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             return .hostMessage(ToasttyHostMessagePresentation(
                 summary: "From \(sender) · \(timeText(timestamp))",
-                text: payload.text
+                text: body,
+                style: .sender(name: sender, timeText: timeText(timestamp))
             ))
         case .reply(let quoted, let time, _, _):
-            text = CoordinatorMessageHeader.displayText(of: payload.text)
             let source = time.flatMap { quotedRowID(QuotedMessage(text: quoted, time: $0)) }
             quote = ToasttyMessageQuote(text: quoted, timeText: time, sourceRowID: source)
         case .quickEntry, .plain:
-            text = CoordinatorMessageHeader.displayText(of: payload.text)
+            break
         }
+        // The bubble shows each attached file by itself, an image as a
+        // thumbnail, rather than its name in the text.
+        let parts = CoordinatorMessageHeader.displayParts(of: payload.text)
+        let text = parts.text
+        let attachments = parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
         // The conversation records every message that Toastty typed as
         // sent from another device. For a message from this Mac that is
         // not so, and the chat says only that it steered a running turn.
         if let clientRequestID = payload.clientRequestID, isSentFromThisMac(clientRequestID) {
             return .userMessage(
-                text: text, origin: .local, deliveryMode: payload.deliveryMode == .steer ? .steer : nil, quote: quote
+                text: text, origin: .local, deliveryMode: payload.deliveryMode == .steer ? .steer : nil, quote: quote,
+                attachments: attachments
             )
         }
-        return .userMessage(text: text, origin: payload.origin, deliveryMode: payload.deliveryMode, quote: quote)
+        return .userMessage(
+            text: text, origin: payload.origin, deliveryMode: payload.deliveryMode, quote: quote, attachments: attachments
+        )
     }
 
     /// The last resolution of each interaction. A later event without

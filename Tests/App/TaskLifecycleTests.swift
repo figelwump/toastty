@@ -407,6 +407,39 @@ struct TaskLifecycleTests {
         #expect(launch.prompt.contains("Ask for a review first.") == false)
     }
 
+    @Test func relatedWorktreeReleasesShareSettingsAndExcludeFeatureBranchMerges() async throws {
+        let fixture = try Fixture()
+        let tip = try fixture.repository.pushToRemote("release work")
+        var child = try releasingProject(fixture, mergeCommit: tip)
+        child.mergeTarget = TaskMergeTarget(baseBranch: "main", releaseBranch: "main")
+        fixture.coordinator.records.update(id: child.id) { $0 = child }
+        let related = fixture.repository.root.appendingPathComponent("coordinator").path
+        try git(["worktree", "add", "--quiet", "-b", "feature/coordinator", related], in: fixture.repository.project)
+        var feature = TaskRecord(createdAt: Date(), text: "Feature", title: "Feature", slug: "feature", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: related, setup: .started)
+        feature.mergedAt = Date()
+        feature.mergeCommit = tip
+        feature.mergeTarget = TaskMergeTarget(baseBranch: "feature/coordinator", releaseBranch: "main")
+        feature.operation.worktree = TaskOperation.Worktree(path: related, branch: "feature/coordinator", checkoutRoot: fixture.repository.project, added: true)
+        try fixture.coordinator.records.insert(feature)
+        fixture.store.send(.setWorkspaceRootDirectory(workspaceID: fixture.workspaceID, rootDirectory: related))
+        #expect(fixture.coordinator.toShipTasks(projectRoot: related).map(\.id) == [child.id])
+        let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
+        #expect(release.release?.childTaskIDs == [child.id])
+        #expect(fixture.coordinator.releaseUnderWay(projectRoot: fixture.repository.project)?.id == release.id)
+        await fixture.waitUntil("release setup ends") { fixture.record(release.id)?.setup != .settingUp }
+        #expect(fixture.record(release.id)?.setup == .started)
+        #expect(fixture.record(release.id)?.operation.base?.sha == tip)
+        #expect(fixture.launcher.calls.last?.prompt.contains("Use toastty-release.") == true)
+        #expect(fixture.launcher.calls.last?.prompt.contains("- Feature") == false)
+        try git(["tag", "v1.2", tip], in: fixture.repository.seed)
+        try git(["push", "--quiet", "origin", "v1.2"], in: fixture.repository.seed)
+        await fixture.coordinator.checkReleases()
+        #expect(fixture.record(child.id)?.releaseTag == "v1.2")
+        #expect(fixture.record(release.id)?.releaseTag == "v1.2")
+        #expect(fixture.record(feature.id)?.shippedAt == nil)
+    }
+
     @Test func onlyATagTheRemoteHasShipsATaskAndItsRelease() async throws {
         let fixture = try Fixture()
         let tip = try fixture.repository.pushToRemote("released")

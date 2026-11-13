@@ -73,6 +73,7 @@ enum TaskBoard {
         var config: TasksConfig?
         var homeDirectory: String = NSHomeDirectory()
         var sessionRegistry = SessionRegistry()
+        var repositoryRoots: [String: String] = [:]
         /// The merge Toastty runs for a task space, if any.
         var mergeRequest: (UUID) -> WorkspaceMergeRequest? = { _ in nil }
     }
@@ -256,6 +257,11 @@ enum TaskBoard {
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
+        if record.readyForReviewAt != nil {
+            facts.newestChildCreatedAt = inputs.records
+                .filter { $0.parentTaskID == record.id && $0.id != record.id }
+                .map(\.createdAt).max()
+        }
         let request = taskSpaceID.flatMap(inputs.mergeRequest)
         // While the task space is open, its done mark is the live answer;
         // the record keeps a copy for after it closes. A merge sets the mark
@@ -285,7 +291,7 @@ enum TaskBoard {
                 cleanupProblem: cleanupProblem,
                 waitsOnTask: waitingOn != nil
             ),
-            releaseTagsConfigured: releaseTagsConfigured(root: root, inputs: inputs),
+            releaseTagsConfigured: releaseTagsConfigured(root: root, repositoryRoot: record.operation.worktree?.checkoutRoot, inputs: inputs),
             children: children
         )
         let dates = [
@@ -398,9 +404,9 @@ enum TaskBoard {
         WorkspacePullRequestLink(annotationURL: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.url)
     }
 
-    private static func releaseTagsConfigured(root: String?, inputs: Inputs) -> Bool {
+    private static func releaseTagsConfigured(root: String?, repositoryRoot: String? = nil, inputs: Inputs) -> Bool {
         guard let root, let config = inputs.config else { return false }
-        return config.workspace(forProjectRoot: root, homeDirectoryPath: inputs.homeDirectory)?.releaseTags != nil
+        return config.releaseWorkspace(forProjectRoot: root, repositoryRoot: repositoryRoot ?? inputs.repositoryRoots[root], homeDirectoryPath: inputs.homeDirectory)?.releaseTags != nil
     }
 }
 
@@ -425,6 +431,9 @@ final class TaskBoardStore: ObservableObject {
     let coordinator: TaskCoordinator?
     let pullRequests: PullRequestStateCache?
     @Published private(set) var config: TasksConfig?
+    /// Main checkouts found by Git, never by directory-name matching.
+    @Published private(set) var repositoryRoots: [String: String] = [:]
+    private var repositoryRootRefresh: Task<Void, Never>?
     /// Why tasks.toml could not be read; shown in the Tasks view.
     @Published private(set) var configError: String?
     /// The task each window's Tasks view shows in its detail pane.
@@ -564,6 +573,7 @@ final class TaskBoardStore: ObservableObject {
     deinit {
         refreshLoop?.cancel()
         releaseLoop?.cancel()
+        repositoryRootRefresh?.cancel()
     }
 
     /// Every item, or those a window's sidebar shows.
@@ -578,6 +588,7 @@ final class TaskBoardStore: ObservableObject {
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
+            repositoryRoots: repositoryRoots,
             mergeRequest: { [weak sessionRuntimeStore] workspaceID in
                 sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
             }
@@ -602,6 +613,7 @@ final class TaskBoardStore: ObservableObject {
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
+            repositoryRoots: repositoryRoots,
             mergeRequest: { [weak sessionRuntimeStore] workspaceID in
                 sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
             }
@@ -624,11 +636,12 @@ final class TaskBoardStore: ObservableObject {
         guard item.projectWorkspaceID != nil,
               let root = item.record?.projectRoot,
               let config else { return false }
-        return config.canRelease(projectRoot: root)
+        return config.canRelease(projectRoot: root, repositoryRoot: item.record?.operation.worktree?.checkoutRoot ?? repositoryRoots[root])
     }
 
     func reloadConfig() {
         guard let coordinator else { return }
+        refreshRepositoryRoots()
         do {
             let loaded = try coordinator.configLoader()
             if config != loaded { config = loaded }
@@ -639,13 +652,37 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
+    /// Resolve new project directories off the main actor through the existing
+    /// checkout discovery. Stages read the resulting cache only.
+    func refreshRepositoryRoots() {
+        guard repositoryRootRefresh == nil, let coordinator, let store else { return }
+        let roots = Set(coordinator.records.records.compactMap(\.projectRoot)
+            + store.state.workspacesByID.values.compactMap(\.rootDirectory))
+            .filter { repositoryRoots[$0] == nil }
+        guard roots.isEmpty == false else { return }
+        repositoryRootRefresh = Task { [weak self] in
+            defer { self?.repositoryRootRefresh = nil }
+            for root in roots {
+                guard Task.isCancelled == false else { return }
+                if let checkout = try? await coordinator.worktreeCreator.checkout(for: root) {
+                    self?.repositoryRoots[root] = checkout.root
+                    self?.scheduleStateTimesPass()
+                }
+            }
+        }
+    }
+
     /// Asks GitHub about every pull request whose task is not finished.
     func refreshOpenPullRequests(onlyIfDue: Bool = false) {
         guard let pullRequests else { return }
-        for item in items() where item.stage.isFinished == false {
+        for item in items() {
             // A closed pull request can be reopened, so only a merge stops
             // the checks.
-            guard let link = item.pullRequest, item.pullRequestState?.state != .merged else { continue }
+            let needsDestination = item.record?.mergedAt != nil && item.record?.mergeTarget == nil
+                && item.record?.archivedAt == nil && item.record?.doneAt == nil && item.record?.shippedAt == nil
+            guard item.stage.isFinished == false || needsDestination,
+                  let link = item.pullRequest,
+                  item.pullRequestState?.state != .merged || needsDestination else { continue }
             if onlyIfDue {
                 pullRequests.refreshIfNeeded(link)
             } else {
@@ -747,6 +784,7 @@ final class TaskBoardStore: ObservableObject {
                     next.pullRequestURL = link.url
                     next.mergedAt = nil
                     next.mergeCommit = nil
+                    next.mergeTarget = nil
                     next.mergeRequestedAt = nil
                     next.mergeFailure = nil
                 }
@@ -761,6 +799,11 @@ final class TaskBoardStore: ObservableObject {
                 next.mergedAt = now()
                 next.mergeCommit = answer.mergeCommit
                 next.mergeFailure = nil
+            }
+            if let link = WorkspacePullRequestLink(annotationURL: next.pullRequestURL),
+               let answer = pullRequests?.state(for: link), answer.state == .merged,
+               let target = answer.mergeTarget {
+                next.mergeTarget = target
             }
             if next != record {
                 _ = records.update(id: record.id) { $0 = next }

@@ -961,8 +961,11 @@ support conversations; update Toastty on the Mac to enable previews.
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
 - Answering a Claude permission request needs a native paired device with send
-  access and the **Approve requests** switch on, which is off by default. The
-  phone sends only the identifier of one decision the Mac offered. Claude's
+  access and the **Approve requests** switch on. Newly paired native devices
+  have this switch on by default. Existing devices keep their saved setting;
+  if approval is off, turn it on under **Remote Access → Paired Devices** on
+  the Mac. The phone sends only the identifier of one decision the Mac offered.
+  Each request still needs a decision from the user. Claude's
   suggested permission changes stay in the hook process on the Mac; **Always
   allow** applies the chosen suggestion unchanged, which can save a rule in
   Claude's settings files. Accepted and refused decisions are recorded in the

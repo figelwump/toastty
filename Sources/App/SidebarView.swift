@@ -1084,19 +1084,40 @@ struct SidebarView: View {
            let workspace = store.state.workspacesByID[location.workspaceID] {
             let isSelected = selectedWorkspaceID == location.workspaceID
                 && store.window(id: windowID)?.showsTasksView != true
+            let dockShows = controller.dockShows(in: windowID)
             SidebarCoordinatorRow(
                 workspace: workspace,
                 isSelected: isSelected,
-                selectedPanelID: workspace.focusedPanelID,
+                // The full view's panel, or the dock's chat, is read.
+                readPanelID: isSelected ? workspace.focusedPanelID : (dockShows ? location.panelID : nil),
+                offersDock: controller.chatIsAvailable,
+                dockShows: dockShows,
                 controller: controller,
                 sessionRuntimeStore: sessionRuntimeStore,
                 select: {
                     cancelWorkspaceRename()
-                    _ = store.selectWorkspace(
-                        windowID: windowID,
-                        workspaceID: location.workspaceID,
-                        preferringUnreadSessionPanelIn: sessionRuntimeStore
-                    )
+                    // Where the chat can show, a click opens the dock with
+                    // the keyboard in its field. In the full view, the
+                    // field there takes the keyboard.
+                    if controller.chatIsAvailable, isSelected == false {
+                        controller.showDock(focusComposer: true)
+                    } else if controller.chatIsAvailable {
+                        controller.chat?.requestComposerFocus(host: .panel)
+                    } else {
+                        _ = store.selectWorkspace(
+                            windowID: windowID,
+                            workspaceID: location.workspaceID,
+                            preferringUnreadSessionPanelIn: sessionRuntimeStore
+                        )
+                    }
+                },
+                openFullView: {
+                    cancelWorkspaceRename()
+                    controller.openFullView()
+                },
+                toggleDock: {
+                    cancelWorkspaceRename()
+                    controller.toggleDock()
                 },
                 openPolicy: {
                     cancelWorkspaceRename()

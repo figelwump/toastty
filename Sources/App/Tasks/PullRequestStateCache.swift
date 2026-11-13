@@ -31,7 +31,7 @@ final class PullRequestStateCache: ObservableObject {
     static let settledRefreshInterval: TimeInterval = 120
     static let pendingRefreshInterval: TimeInterval = 15
     static let mergeabilityGracePeriod: TimeInterval = 30
-    nonisolated static let viewFields = "state,isDraft,headRefOid,mergeCommit"
+    nonisolated static let viewFields = "state,isDraft,headRefOid,mergeCommit,baseRefName"
     /// Also whether the pull request is ready to merge, for the Merge
     /// button. `statusCheckRollup` only tells failing checks from running
     /// ones, but a token that cannot read checks fails the whole request, so
@@ -130,8 +130,23 @@ final class PullRequestStateCache: ObservableObject {
                 )
             }
             guard let self else { return }
-            self.inFlight[link.url] = nil
-            if let state = Self.state(from: result) {
+            defer { self.inFlight[link.url] = nil }
+            if var state = Self.state(from: result) {
+                if state.state == .merged,
+                   let object = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
+                   let base = object["baseRefName"] as? String, base.isEmpty == false {
+                    let repository = await runner.run(
+                        arguments: ["gh", "repo", "view", link.repository, "--json", "defaultBranchRef"],
+                        directory: directory,
+                        timeout: Self.requestTimeout
+                    )
+                    if repository.exitCode == 0,
+                       let info = try? JSONSerialization.jsonObject(with: Data(repository.stdout.utf8)) as? [String: Any],
+                       let branch = (info["defaultBranchRef"] as? [String: Any])?["name"] as? String,
+                       branch.isEmpty == false {
+                        state.mergeTarget = TaskMergeTarget(baseBranch: base, releaseBranch: branch)
+                    }
+                }
                 self.store(state, for: link, observedAt: startedAt)
             } else {
                 var entry = self.entries[link.url] ?? Entry()
@@ -154,6 +169,9 @@ final class PullRequestStateCache: ObservableObject {
             return
         }
         var answer = state
+        if answer.state == .merged, answer.mergeTarget == nil, entry.answer?.state == .merged {
+            answer.mergeTarget = entry.answer?.mergeTarget
+        }
         if answer.mergeability == nil, let head = answer.headSHA,
            let last = entry.answer, last.headSHA == head {
             answer.mergeability = last.mergeability

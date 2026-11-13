@@ -31,22 +31,29 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
 
 /// A message that the host typed for the agent, such as a digest of events.
 /// It starts a turn as a user message does. The transcript shows it as one
-/// muted line that opens to the full text.
+/// muted line that opens to the full text, or as a sender-labelled card.
 public struct ToasttyHostMessagePresentation: Equatable, Sendable {
+    public enum Style: Equatable, Sendable {
+        case disclosure
+        case sender(name: String, timeText: String)
+    }
+
     /// The one line, for example "Toastty · 2 updates · 14:05".
     public var summary: String
-    /// The text that was typed.
+    /// The full text, without the sender header for a sender card.
     public var text: String
+    public var style: Style
     /// The host knows that the turn this message started needs no reader.
     /// The line then also folds the whole turn: its work and its answer
     /// show only when the line is open. Questions and approvals stay
     /// visible.
     public var foldsTurn: Bool
 
-    public init(summary: String, text: String, foldsTurn: Bool = false) {
+    public init(summary: String, text: String, foldsTurn: Bool = false, style: Style = .disclosure) {
         self.summary = summary
         self.text = text
         self.foldsTurn = foldsTurn
+        self.style = style
     }
 }
 

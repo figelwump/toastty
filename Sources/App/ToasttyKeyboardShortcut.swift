@@ -224,6 +224,13 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    /// Shows or hides the coordinator's dock. Ghostty binds Cmd+K, not
+    /// Cmd+Shift+K.
+    static let toggleCoordinatorDock = ToasttyKeyboardShortcut(
+        "k",
+        modifiers: [.command, .shift]
+    )
+
     /// Shows or hides the Tasks view; it pairs with Option+Shift+T, the
     /// default quick entry shortcut. Toastty has no Reopen Closed Tab, which
     /// browsers put here.

@@ -3286,7 +3286,7 @@ final class WorkspaceViewTests: XCTestCase {
                 windowID: windowID,
                 runtimeRegistry: registry
             ),
-            sidebarVisible: true,
+            leftColumnVisible: true,
             requestWorkspaceMerge: requestWorkspaceMerge,
             openPullRequestURL: openPullRequestURL
         )

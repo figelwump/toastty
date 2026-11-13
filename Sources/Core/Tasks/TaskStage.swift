@@ -139,7 +139,9 @@ public enum TaskStage: Equatable, Sendable {
     /// waits for a release, Done once every child that is not archived is
     /// Done. Only a task that would otherwise be Idle moves this way, so a
     /// task whose agent works, waits for the user, or marked it ready for
-    /// review stays where it is. `children` is asked only for such a task.
+    /// review stays where it is. A ready mark from before the newest child
+    /// task was created is about earlier work, so it does not hold a
+    /// finished parent back. `children` is asked only for such a task.
     public static func derivation(
         _ facts: TaskStageFacts,
         live: TaskLiveFacts,
@@ -151,18 +153,23 @@ public enum TaskStage: Equatable, Sendable {
             return (own, false)
         }
         switch own {
-        case .idle:
+        case .idle, .needsYou(.taskSpaceClosed), .needsYou(.readyForReview):
             break
-        case .needsYou(.taskSpaceClosed):
-            // Closing the task space is how the user puts a conversation
-            // away, so it does not hold a finished task back. What the task
-            // still waits for, such as a reply, does.
-            var open = live
-            open.taskSpaceOpen = true
-            guard ownStage(facts, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
-                return (own, false)
-            }
         case .starting, .needsYou, .running, .toShip, .done, .archived:
+            return (own, false)
+        }
+        // Closing the task space is how the user puts a conversation away,
+        // so it does not hold a finished task back. A ready mark the agent
+        // set before it started its newest child is about earlier work, so
+        // it does not either. What the task still waits for, such as a
+        // reply or a ready mark set after its children, does.
+        var open = live
+        open.taskSpaceOpen = true
+        var current = facts
+        if let mark = facts.readyForReviewAt, let newestChild = facts.newestChildCreatedAt, mark < newestChild {
+            current.readyForReviewAt = nil
+        }
+        guard ownStage(current, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
             return (own, false)
         }
         guard let outcome = children() else { return (own, false) }
@@ -182,7 +189,10 @@ public enum TaskStage: Equatable, Sendable {
             return .done
         }
         if facts.mergedAt != nil || live.pullRequest?.state == .merged {
-            return releaseTagsConfigured ? .toShip : .done
+            let target = live.pullRequest?.mergeTarget ?? facts.mergeTarget
+            // Keep the previous release wait until an older record's destination
+            // is known. Never infer it from the branch the work started from.
+            return releaseTagsConfigured && target?.waitsForRelease != false ? .toShip : .done
         }
         switch facts.setup {
         case .needsWorkspace(let reason):
@@ -264,11 +274,15 @@ public struct TaskStageFacts: Equatable, Sendable {
     /// When the agent marked that it waits for the user's reply.
     public var replyRequestedAt: Date?
     public var mergedAt: Date?
+    public var mergeTarget: TaskMergeTarget?
     public var shippedAt: Date?
     public var archivedAt: Date?
     public var doneAt: Date?
     /// Why the record's cleanup stopped, if it did.
     public var cleanupProblem: String?
+    /// When the newest of the task's child tasks was created. The board
+    /// fills it only for a task marked ready for review.
+    public var newestChildCreatedAt: Date?
 
     public init(
         setup: TaskSetupState,
@@ -278,10 +292,12 @@ public struct TaskStageFacts: Equatable, Sendable {
         readyForReviewAt: Date? = nil,
         replyRequestedAt: Date? = nil,
         mergedAt: Date? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
         shippedAt: Date? = nil,
         archivedAt: Date? = nil,
         doneAt: Date? = nil,
-        cleanupProblem: String? = nil
+        cleanupProblem: String? = nil,
+        newestChildCreatedAt: Date? = nil
     ) {
         self.setup = setup
         self.startWork = startWork
@@ -290,10 +306,12 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.readyForReviewAt = readyForReviewAt
         self.replyRequestedAt = replyRequestedAt
         self.mergedAt = mergedAt
+        self.mergeTarget = mergeTarget
         self.shippedAt = shippedAt
         self.archivedAt = archivedAt
         self.doneAt = doneAt
         self.cleanupProblem = cleanupProblem
+        self.newestChildCreatedAt = newestChildCreatedAt
     }
 
     public init(record: TaskRecord) {
@@ -305,6 +323,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             readyForReviewAt: record.readyForReviewAt,
             replyRequestedAt: record.replyRequest?.askedAt,
             mergedAt: record.mergedAt,
+            mergeTarget: record.mergeTarget,
             shippedAt: record.shippedAt,
             archivedAt: record.archivedAt,
             doneAt: record.doneAt,
@@ -358,6 +377,7 @@ public struct TaskPullRequestState: Equatable, Sendable {
     public var isDraft: Bool
     public var headSHA: String?
     public var mergeCommit: String?
+    public var mergeTarget: TaskMergeTarget?
     /// Whether GitHub would merge it now, and why not. `nil` when the
     /// answer did not say.
     public var mergeability: PullRequestMergeability?
@@ -367,12 +387,14 @@ public struct TaskPullRequestState: Equatable, Sendable {
         isDraft: Bool = false,
         headSHA: String? = nil,
         mergeCommit: String? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
         mergeability: PullRequestMergeability? = nil
     ) {
         self.state = state
         self.isDraft = isDraft
         self.headSHA = headSHA
         self.mergeCommit = mergeCommit
+        self.mergeTarget = mergeTarget
         self.mergeability = mergeability
     }
 }

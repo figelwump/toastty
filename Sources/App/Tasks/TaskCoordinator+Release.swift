@@ -26,11 +26,11 @@ extension TaskCoordinator {
         } catch {
             throw TaskError(error.localizedDescription)
         }
-        guard config.canRelease(projectRoot: root, homeDirectoryPath: homeDirectoryPath) else {
+        guard config.canRelease(projectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath) else {
             throw TaskError("Set release_skill or release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.")
         }
-        let releaseSkill = config.releaseSkill(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)
-        let releasePrompt = config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releasePrompt
+        let releaseSkill = config.releaseSkill(forProjectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)
+        let releasePrompt = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)?.releasePrompt
         if let running = releaseUnderWay(projectRoot: root) {
             throw TaskError("A release of \(project.title) is already under way: \(running.title).")
         }
@@ -123,15 +123,26 @@ extension TaskCoordinator {
         return records.record(id: taskID)!
     }
 
+    /// Reuse saved checkout identity even after merge cleanup removed a worktree.
+    /// A board also discovers projects whose tasks never made a worktree.
+    func releaseRepositoryRoot(projectRoot root: String, record: TaskRecord? = nil) -> String {
+        if let checkout = record?.operation.worktree?.checkoutRoot ?? board?.repositoryRoots[root] { return checkout }
+        let normalized = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+        return records.records.first {
+            $0.projectRoot.map { TasksConfigFile.normalizedPath($0, homeDirectoryPath: homeDirectoryPath) == normalized } == true
+                && $0.operation.worktree != nil
+        }?.operation.worktree?.checkoutRoot ?? root
+    }
+
     /// The project's release task that has not shipped or ended, if any.
     /// A project has one release at a time, whichever spelling of its path
     /// the release was made with.
     func releaseUnderWay(projectRoot root: String) -> TaskRecord? {
-        let target = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+        let target = TasksConfigFile.normalizedPath(releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)
         return records.records.first { record in
             guard record.release != nil, record.shippedAt == nil, record.archivedAt == nil, record.doneAt == nil,
                   let projectRoot = record.projectRoot else { return false }
-            return TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: homeDirectoryPath) == target
+            return TasksConfigFile.normalizedPath(releaseRepositoryRoot(projectRoot: projectRoot, record: record), homeDirectoryPath: homeDirectoryPath) == target
         }
     }
 
@@ -139,14 +150,19 @@ extension TaskCoordinator {
     /// that is To ship only because its child tasks are has no merge of its
     /// own, so its children stand for it.
     func toShipTasks(projectRoot root: String) -> [TaskRecord] {
+        let repository = TasksConfigFile.normalizedPath(releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)
+        func sameRepository(_ record: TaskRecord) -> Bool {
+            guard let project = record.projectRoot else { return false }
+            return TasksConfigFile.normalizedPath(releaseRepositoryRoot(projectRoot: project, record: record), homeDirectoryPath: homeDirectoryPath) == repository
+        }
         if let board {
             return board.items()
                 .filter { $0.stage == .toShip && $0.finishedThroughChildren == false }
                 .compactMap(\.record)
-                .filter { $0.projectRoot == root && $0.release == nil }
+                .filter { sameRepository($0) && $0.release == nil }
         }
         return records.records.filter {
-            $0.projectRoot == root && $0.release == nil && $0.mergedAt != nil
+            sameRepository($0) && $0.release == nil && $0.mergedAt != nil && $0.mergeTarget?.waitsForRelease != false
                 && $0.shippedAt == nil && $0.archivedAt == nil && $0.doneAt == nil
         }
     }
@@ -170,17 +186,18 @@ extension TaskCoordinator {
             if record.release != nil {
                 return record.setup.isStarted && record.operation.base != nil
             }
-            return record.mergedAt != nil && record.mergeCommit != nil
+            return record.mergedAt != nil && record.mergeCommit != nil && record.mergeTarget?.waitsForRelease != false
         }
         for (root, tasks) in Dictionary(grouping: candidates, by: { $0.projectRoot! }) {
-            guard let pattern = config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.releaseTags else { continue }
-            await checkReleases(root: root, pattern: pattern, tasks: tasks)
+            await checkReleases(root: root, config: config, tasks: tasks)
         }
         cleanUpShippedReleases()
     }
 
-    private func checkReleases(root: String, pattern: String, tasks: [TaskRecord]) async {
-        guard let checkout = try? await worktreeCreator.checkout(for: root), let remote = checkout.remote,
+    private func checkReleases(root: String, config: TasksConfig, tasks: [TaskRecord]) async {
+        guard let checkout = try? await worktreeCreator.checkout(for: root),
+              let pattern = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: checkout.root, homeDirectoryPath: homeDirectoryPath)?.releaseTags else { return }
+        guard let remote = checkout.remote,
               let listed = try? await worktreeCreator.git(["ls-remote", "--tags", remote], in: checkout.root, allowFailure: true),
               listed.succeeded else {
             ToasttyLog.info("Release check skipped a project its remote did not answer for", category: .tasks, metadata: ["project_root": root])

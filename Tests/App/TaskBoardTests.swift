@@ -20,6 +20,7 @@ struct TaskBoardTests {
         /// cannot read checks.
         var rejectsReadinessFields = false
         var failsRequests = false
+        var defaultBranch: String? = "main"
 
         /// `checks` is the `statusCheckRollup` array as JSON.
         func answer(
@@ -27,6 +28,7 @@ struct TaskBoardTests {
             state: String,
             isDraft: Bool = false,
             mergeCommit: String? = nil,
+            baseBranch: String? = nil,
             mergeStateStatus: String? = nil,
             reviewDecision: String = "",
             checks: String = "[]"
@@ -35,8 +37,9 @@ struct TaskBoardTests {
             let mergeability = mergeStateStatus.map {
                 #","mergeStateStatus":"\#($0)","reviewDecision":"\#(reviewDecision)","statusCheckRollup":\#(checks)"#
             } ?? ""
+            let base = baseBranch.map { #","baseRefName":"\#($0)""# } ?? ""
             lock.withLock {
-                answersByURL[url] = #"{"state":"\#(state)","isDraft":\#(isDraft),"headRefOid":"head1","mergeCommit":\#(commit)\#(mergeability)}"#
+                answersByURL[url] = #"{"state":"\#(state)","isDraft":\#(isDraft),"headRefOid":"head1","mergeCommit":\#(commit)\#(mergeability)\#(base)}"#
             }
         }
 
@@ -66,6 +69,12 @@ struct TaskBoardTests {
             }
             if lock.withLock({ rejectsReadinessFields }), arguments.last == PullRequestStateCache.readinessViewFields {
                 return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "checks: forbidden", failure: nil)
+            }
+            if arguments.prefix(3) == ["gh", "repo", "view"] {
+                guard let defaultBranch else {
+                    return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "repository unavailable", failure: nil)
+                }
+                return WorkspaceMergeCommandResult(exitCode: 0, stdout: #"{"defaultBranchRef":{"name":"\#(defaultBranch)"}}"#, stderr: "", failure: nil)
             }
             guard let stdout = lock.withLock({ answersByURL[url] }) else {
                 return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: not found", failure: nil)
@@ -640,6 +649,74 @@ struct TaskBoardTests {
         #expect(gitHub.calls.allSatisfy { $0.suffix(2) == ["--json", PullRequestStateCache.readinessViewFields] })
     }
 
+    @Test(arguments: ["main", "feature/coordinator"])
+    func oldMergedTasksUseTheActualDestinationAcrossWorktreesAndRestore(base: String) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*", releasePrompt: "Release.")])
+        var task = TaskRecord(createdAt: Date(), text: "Merged", title: "Merged", slug: "merged", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot + "-coordinator", setup: .started)
+        task.pullRequestURL = pullRequestURL
+        task.mergedAt = Date()
+        task.mergeCommit = "merged"
+        // The source branch does not decide the final PR destination.
+        task.operation.base = TaskOperation.Base(sha: "old", ref: "origin/another-feature", fetched: true)
+        task.operation.worktree = TaskOperation.Worktree(path: "/removed/worktree", branch: "fix/task", checkoutRoot: fixture.projectRoot, added: true)
+        task.cleanup = TaskCleanup(kind: .merge, finishedAt: Date())
+        try fixture.coordinator.records.insert(task)
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "merged", baseBranch: base)
+        gitHub.defaultBranch = nil
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        // Missing metadata keeps the existing release wait; the saved start base is no substitute.
+        await board.pullRequests?.refresh(link).value
+        #expect(fixture.record(task.id)?.mergeTarget == nil)
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .toShip)
+        gitHub.defaultBranch = "main"
+        board.refreshOpenPullRequests()
+        await waitUntil { fixture.record(task.id)?.mergeTarget != nil }
+        let expected: TaskStage = base == "main" ? .toShip : .done
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.stage == expected)
+        #expect(board.canRelease(item))
+        #expect(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id) == (base == "main" ? [task.id] : []))
+        // The same board drives task.get, not only the sidebar.
+        let executor = TaskAppControlTests().makeExecutor(fixture, coordinator: fixture.coordinator)
+        let result = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+        guard case .object(let stage)? = result["stage"] else { Issue.record("missing stage"); return }
+        #expect(stage["group"] == .string(base == "main" ? "toShip" : "done"))
+        fixture.coordinator.records.flushForTesting()
+        let restored = try #require(fixture.savedRecord(task.id))
+        #expect(restored.mergeTarget == TaskMergeTarget(baseBranch: base, releaseBranch: "main"))
+        let restoredItems = TaskBoard.items(TaskBoard.Inputs(state: fixture.store.state, records: [restored],
+            statuses: { _ in [] }, pullRequestState: { _ in nil }, config: fixture.config))
+        #expect(restoredItems.first?.stage == expected)
+        #expect(restored.shippedAt == nil)
+        let calls = gitHub.calls.count
+        board.refreshOpenPullRequests()
+        #expect(gitHub.calls.count == calls, "a migrated merged record does not need another GitHub request")
+    }
+
+    @Test func aProjectWithoutSavedWorktreeMetadataDiscoversItsRepositoryForReleaseSettings() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let repository = try TaskGitTestRepository()
+        let related = repository.root.appendingPathComponent("coordinator").path
+        try TaskGitTestRepository.git(["worktree", "add", "--quiet", "-b", "feature/coordinator", related], in: repository.project)
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: repository.project, releaseTags: "v*", releasePrompt: "Release.")])
+        var task = TaskRecord(createdAt: Date(), text: "Merged", title: "Merged", slug: "merged", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: related, setup: .started)
+        task.mergedAt = Date()
+        task.mergeTarget = TaskMergeTarget(baseBranch: "main", releaseBranch: "main")
+        try fixture.coordinator.records.insert(task)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        await waitUntil { board.repositoryRoots[related] != nil }
+        #expect(board.repositoryRoots[related] == repository.project)
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.stage == .toShip)
+        #expect(board.canRelease(item))
+    }
+
     @Test func theRecordKeepsTheDoneMarkAndTheRightPullRequestsMerge() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let gitHub = FakeGitHub()
@@ -1212,6 +1289,29 @@ struct TaskBoardTests {
         // Needs you.
         _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpace))
         #expect(try item(parent.id).stage == .done)
+    }
+
+    /// The observed case: the parent's agent marked its first answer ready
+    /// for review, then started a child task when the user replied. The old
+    /// mark kept the parent open after the child merged.
+    @Test func aReadyMarkFromBeforeTheChildrenDoesNotKeepAFinishedParentOpen() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func stage(_ id: UUID) -> TaskStage? { board.items().first { $0.id == .task(id) }?.stage }
+        let marked = Date()
+        let parent = try insertTask(fixture, "rebuild-ios-workspace") { $0.readyForReviewAt = marked }
+        let fix = try insertTask(fixture, "fix-destination-check", parent: parent.id) {
+            $0.createdAt = marked.addingTimeInterval(60)
+        }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
+
+        _ = fixture.coordinator.records.update(id: fix.id, Self.merge)
+        #expect(stage(parent.id) == .done)
+        #expect(board.items().first { $0.id == .task(parent.id) }?.finishedThroughChildren == true)
+
+        // Marked ready again after its child, the parent still owns work.
+        _ = fixture.coordinator.records.update(id: parent.id) { $0.readyForReviewAt = marked.addingTimeInterval(120) }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
     }
 
     @Test func onlyMergedWorkFinishesAParentAndNestedParentsFollow() throws {

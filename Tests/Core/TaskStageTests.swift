@@ -64,6 +64,20 @@ struct TaskStageTests {
         #expect(stage(started(), seen, releaseTags: true) == .toShip)
     }
 
+    @Test(arguments: ["main", "feature/integration"])
+    func mergeDestinationDecidesWhetherAMergeWaitsForRelease(base: String) {
+        let target = TaskMergeTarget(baseBranch: base, releaseBranch: "main")
+        var recorded = started(mergedAt: date)
+        recorded.mergeTarget = target
+        let expected: TaskStage = base == "main" ? .toShip : .done
+        #expect(stage(recorded, releaseTags: true) == expected)
+        let seen = TaskLiveFacts(taskSpaceOpen: false, pullRequest: TaskPullRequestState(state: .merged, mergeTarget: target))
+        #expect(stage(started(), seen, releaseTags: true) == expected)
+        #expect(stage(recorded) == .done)
+        // A field-limited answer cannot undo the saved destination after restore.
+        #expect(stage(recorded, TaskLiveFacts(taskSpaceOpen: false, pullRequest: mergedPR), releaseTags: true) == expected)
+    }
+
     // MARK: - Before the task space
 
     @Test
@@ -270,6 +284,27 @@ struct TaskStageTests {
         var done = started()
         done.doneAt = date
         #expect(parent([child(.toShip)], facts: done) == (.done, false))
+    }
+
+    @Test
+    func aReadyMarkFromBeforeTheNewestChildDoesNotHoldAFinishedParentBack() {
+        var stale = started(readyForReviewAt: date)
+        stale.newestChildCreatedAt = date.addingTimeInterval(60)
+        #expect(parent([child(.done)], facts: stale) == (.done, true))
+        #expect(parent([child(.toShip)], facts: stale) == (.toShip, true))
+        #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: false), facts: stale) == (.done, true))
+        // Until the children finish, the parent keeps showing its mark.
+        #expect(parent([child(.done), child(.running)], facts: stale) == (.needsYou(.readyForReview), false))
+        // Anything else the parent waits for still holds it: an unread
+        // last turn, under the mark it shows, or a question.
+        #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: true, agent: .finished), facts: stale) == (.needsYou(.readyForReview), false))
+        var asked = stale
+        asked.replyRequestedAt = date.addingTimeInterval(120)
+        #expect(parent([child(.done)], facts: asked) == (.needsYou(.awaitingReply), false))
+        // A mark set after the newest child says the parent still owns work.
+        var current = started(readyForReviewAt: date.addingTimeInterval(120))
+        current.newestChildCreatedAt = date.addingTimeInterval(60)
+        #expect(parent([child(.done)], facts: current) == (.needsYou(.readyForReview), false))
     }
 
     @Test
