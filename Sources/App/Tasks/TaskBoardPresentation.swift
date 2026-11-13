@@ -449,6 +449,20 @@ struct TaskReleaseAfterMergeMark: View {
     }
 }
 
+/// The ↳ mark to the left of a task's status mark when the task is drawn
+/// under the task that started it, in the sidebar and in the Tasks view.
+struct TaskChildArrowMark: View {
+    var size: CGFloat = 9
+
+    var body: some View {
+        Image(systemName: "arrow.turn.down.right")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(ToastyTheme.sidebarChildContextText.opacity(0.8))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 /// A task's square mark: the same family as the sidebar's task space marks.
 struct TaskStageMark: View {
     let item: TaskBoardItem

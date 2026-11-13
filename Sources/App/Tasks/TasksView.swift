@@ -31,9 +31,13 @@ struct TasksViewSections: Equatable {
         sections.needsYou = entries(.needsYou)
         sections.running = entries(.running)
         sections.idle = entries(.idle)
-        sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
-            .map { key, entries in
-                Lane(
+        // Lanes first, then families in each lane: a child in another
+        // project's lane lists apart from its parent.
+        let toShipItems = items.filter { $0.stage.group == .toShip }
+        sections.toShip = Dictionary(grouping: toShipItems, by: SidebarStatusSections.laneKey)
+            .map { key, items in
+                let entries = SidebarStatusSections.grouped(items)
+                return Lane(
                     id: key,
                     projectTitle: entries.first?.item.projectTitle ?? "Other",
                     entries: entries,
@@ -502,6 +506,16 @@ private struct TasksViewRow: View {
         .padding(.leading, entry.isLinkedChild ? 36 : 18)
         .padding(.trailing, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A task an agent split off lists under the task that started it,
+        // indented, with a ↳ mark left of its status mark.
+        .overlay(alignment: .topLeading) {
+            if entry.isLinkedChild {
+                TaskChildArrowMark(size: 10)
+                    .frame(width: 18, height: 16)
+                    .padding(.leading, 18)
+                    .padding(.top, 9)
+            }
+        }
         .background(isSelected ? Color(hex: 0x1C1C1C) : (isHovered ? Color(hex: 0x161616) : Color.clear))
         .overlay(alignment: .leading) {
             if isSelected {
