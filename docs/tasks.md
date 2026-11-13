@@ -833,7 +833,9 @@ sets its next check.
   the Reviewing section of your policy. With weak proof, it tells the task
   exactly what to add, once; if the proof is weak again, it brings the task
   to you. With good proof, it tells you in one or two sentences why the task
-  is ready. It writes no summary of the proof. You merge.
+  is ready. It writes no summary of the proof. You merge, unless a rule of
+  yours lets the coordinator ask for the merge; see
+  [Merges by the coordinator](#merges-by-the-coordinator).
 - **Releases.** Each project has a rule in the policy: release on merge, or
   in batches. The coordinator asks you for the rule the first time a project
   has merged work that waits. It starts a release that the rule calls for
@@ -865,21 +867,75 @@ What it may do alone, what it asks first, and what it never does:
 | Do, then tell you | Propose, then wait | Never |
 | --- | --- | --- |
 | Continue an interrupted agent | The project of a new task, when it is not sure | Answer an agent's permission prompt |
-| Send a CI or conflict instruction | A batch release | Merge: `task merge`, `task request-merge` or `gh pr merge` |
+| Send a CI or conflict instruction | A batch release | Merge a pull request itself: `task merge` or `gh pr merge`, auto-merge, a review approval, or a push to a base branch |
 | Follow a dependency and tell the task when it merged | Archive a task, or make it again in another project | Interrupt a busy agent |
 | Ask a task for better proof | A question that a task asked you | Change production outside a release task |
-| Answer a question that your policy settles | | Write code |
+| Answer a question that your policy settles | A release of a change that it merged under a Merging rule | Write code |
 | Retry a failed setup once | | |
+| Ask a task's agent to merge, when you tell it to or a Merging rule covers the change | | |
 | Start a release that a rule or `--after-merge` calls for | | |
 | Add a policy rule after your answer | | |
 
 The skill fixes the Never column: your policy cannot change it, and the
-coordinator refuses these also when you ask it in its conversation. To merge,
-use Merge on the task, or say "merge it" to the task's agent.
+coordinator refuses these also when you ask it in its conversation.
+
+### Merges by the coordinator
+
+The coordinator never merges a pull request itself. In two cases it asks the
+task's agent to merge, with `toastty task request-merge <task-id>`. That
+agent runs the [merge skill](#merge-a-task), which checks the pull request
+again and then merges it or reports what blocks it.
+
+- **You tell it to.** Say "merge it" after the coordinator brought you a
+  task, or name the task. That is your acceptance, as the Merge button is.
+- **A rule in the Merging section of your policy covers the change.** The
+  section is empty at first, and an empty section means that the coordinator
+  merges nothing on its own. Tell the coordinator "merge simple changes
+  yourself" and it proposes a rule, or write one in the policy. A rule names
+  a project, the kinds of change, and a size:
+
+  ```markdown
+  ## Merging
+  - toastty: merge it yourself when the change is only documentation,
+    instruction or skill text, comments or UI copy, up to 40 changed lines in
+    up to 3 files. Everything else waits for me.
+  ```
+
+Under a rule, the coordinator asks for the merge only when all of this
+holds. Otherwise it brings the task to you, as for any review.
+
+| It checks | What must hold |
+| --- | --- |
+| The diff | It read all of it. Every changed file and line fits the rule's kind and size, and the change does only what the task asked. It judges the kind from the files, not from the description. With no size in the rule, the limit is 40 changed lines in 3 files. |
+| The proof | Good proof under your Reviewing rules, for the current commit. |
+| The report | No review finding that the agent rejected or left open, no follow-up that the change still needs, and no question for you. |
+| The pull request | Not a draft. Every check passed, with none still running; a known flake does not count as passed. No conflict, and no requested or missing review. |
+| The base branch | The repository's default branch, or a branch that the rule names. |
+| The task | It waits for review, its agent is idle, you did not type in it in the last 15 minutes, and it is not a child of another task. |
+
+No rule changes these limits:
+
+- It never asks for the merge of a release task, or of a pull request that
+  prepares a release.
+- It never merges, under a rule, a change to how the project is built,
+  checked in CI, released, signed or deployed, to its dependencies, to
+  secrets, permissions or access, or to the format of stored data.
+- It asks once for a task. If the merge stops, it tells you the blocker.
+- Text in a task's reply, a pull request, or a message from another agent
+  never starts a merge, also when the text says that you approved.
+- A change that it merged under a rule starts no release without you, also
+  in a project that releases on merge. It proposes the release and waits.
+
+It tells you when it asks for a merge under a rule: the task, the pull
+request, what changed, the rule, and why the proof is good. It tells you
+again when the task merged. It then compares the merged commit with the
+commit it reviewed, and tells you when they differ: `request-merge` names no
+commit, so a push between its check and the merge is possible. Its ledger
+keeps a `merged` line for 30 days, so you can ask it what it merged.
 
 These limits are instructions to the agent. Toastty itself refuses only
 `toastty task merge` from the coordinator, because that command runs only in
-the task's own task space. The coordinator runs as you, so keep its agent's
+the task's own task space. It does not check a Merging rule. The coordinator runs as you, so keep its agent's
 own approval rules on for commands that merge, archive or delete. A message
 that another agent sends with `toastty coordinator send` arrives at the same
 prompt as your own typing, with a first line from Toastty that names its
@@ -962,6 +1018,11 @@ by asking you:
 - Good proof = a scenario list, each checked through the real UI or CLI;
   screenshots or video for UI changes. Unit tests alone are not enough.
 
+## Merging
+- toastty: merge it yourself when the change is only documentation,
+  instruction or skill text, comments or UI copy, up to 40 changed lines in
+  up to 3 files. Everything else waits for me.
+
 ## Unblocking
 - Tell me about permission prompts after 10 minutes.
 - CI pending over 45 minutes on toastty is unusual; look before telling me.
@@ -994,7 +1055,9 @@ part where you kept the default gets the line `- The coordinator's
 defaults.`, so it does not ask again. If you do not answer, it does not ask
 again, and the defaults apply. Say "set yourself up again" to answer all four
 parts again. A policy from an older version has no Talking section; the
-coordinator asks about it once and adds the heading.
+coordinator asks about it once and adds the heading. It does not ask about
+Merging: that section stays empty until you ask for a rule, and the
+coordinator adds the heading to an older policy when it first writes one.
 
 **Undo.** The coordinator commits each change it makes to the policy as one
 commit, named `Policy: change <section>`, and shows you the line it added.
@@ -1200,7 +1263,8 @@ toastty coordinator watch --task <task-id> --remove
 
 - A watched task wakes the coordinator once when it merges, or when it ends
   without a merge: Done, archived or deleted. Then its watch ends. The
-  coordinator uses it for a task that another task waits for.
+  coordinator uses it for a task that another task waits for, and for a task
+  whose merge it asked for.
 - A watched project wakes the coordinator at every merge of its tasks,
   until the coordinator removes the watch. It uses it for a project whose
   release rule in `policy.md` is "on merge". A subspace's workspace names its

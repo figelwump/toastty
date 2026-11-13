@@ -44,6 +44,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Reviewing
 
+    ## Merging
+
     ## Unblocking
 
     ## Releases

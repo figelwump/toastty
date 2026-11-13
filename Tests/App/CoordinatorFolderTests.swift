@@ -95,8 +95,8 @@ struct CoordinatorFolderTests {
         // The policy holds the section headings and no rule.
         let policy = try read("policy.md", in: directory)
         #expect(policy.split(separator: "\n").filter { $0.isEmpty == false } == [
-            "# Coordinator policy", "## Projects", "## Agents", "## Talking", "## Reviewing", "## Unblocking",
-            "## Releases", "## Notes (kept by the coordinator)",
+            "# Coordinator policy", "## Projects", "## Agents", "## Talking", "## Reviewing", "## Merging",
+            "## Unblocking", "## Releases", "## Notes (kept by the coordinator)",
         ])
         #expect(try read("ledger.md", in: directory).hasPrefix("# Coordinator ledger"))
 
