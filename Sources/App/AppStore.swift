@@ -95,10 +95,6 @@ final class AppStore: ObservableObject {
     /// user sets it for a login, a folder-trust or a permission prompt. It
     /// is not saved: a relaunch shows the chat again.
     @Published var coordinatorShowsTerminal = false
-    /// The task space that a chip in the coordinator's chat opened last.
-    /// Its header offers the way back until the user is in the
-    /// coordinator again. Not saved.
-    @Published var coordinatorReturnWorkspaceID: UUID?
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -519,13 +515,19 @@ final class AppStore: ObservableObject {
 
     /// `coordinatorChatCovers` says whether the coordinator's chat covers a
     /// terminal panel. Text size commands then change the chat's text, not
-    /// the hidden terminal's font.
+    /// the hidden terminal's font. `coordinatorDockHasKeyboard` says whether
+    /// the field of the coordinator's dock has a window's keyboard: the
+    /// commands then change the chat's text, not the focused panel's.
     func focusedScaleCommandTarget(
         preferredWindowID: UUID?,
-        coordinatorChatCovers: (UUID) -> Bool = { _ in false }
+        coordinatorChatCovers: (UUID) -> Bool = { _ in false },
+        coordinatorDockHasKeyboard: (UUID) -> Bool = { _ in false }
     ) -> FocusedScaleCommandTarget? {
-        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
-              let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return nil }
+        if coordinatorDockHasKeyboard(selection.windowID) {
+            return .coordinatorChat(windowID: selection.windowID)
+        }
+        guard let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
             return nil
         }
 
@@ -2377,9 +2379,11 @@ final class AppStore: ObservableObject {
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingWrapped)
         })
 
+        // The coordinator is not a jump target, also when it has the focus.
         if entries.isEmpty == false,
            let focusedPanelID = anchor.focusedPanelID,
-           seenPanelIDs.contains(focusedPanelID) == false {
+           seenPanelIDs.contains(focusedPanelID) == false,
+           anchor.workspaceID != state.coordinatorWorkspaceID {
             if actionRequiredPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .actionRequired))
             } else if reviewPanelIDs.contains(focusedPanelID) {

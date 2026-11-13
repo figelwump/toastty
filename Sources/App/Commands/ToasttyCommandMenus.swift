@@ -229,7 +229,8 @@ struct ToasttyCommandMenus: Commands {
     private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
         store.focusedScaleCommandTarget(
             preferredWindowID: preferredCommandWindowID,
-            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true }
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true },
+            coordinatorDockHasKeyboard: { coordinatorController?.dockHasKeyboard(in: $0) == true }
         )
     }
 
@@ -561,6 +562,15 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.modifiers
             )
             .disabled(commandSelection == nil || sessionRuntimeStore.taskCoordinator?.board?.isEnabled != true)
+
+            Button(CoordinatorDockPresentation.toggleTitle(dockShows: commandWindowDockShows)) {
+                coordinatorController?.toggleDock()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.toggleCoordinatorDock.key,
+                modifiers: ToasttyKeyboardShortcuts.toggleCoordinatorDock.modifiers
+            )
+            .disabled(canToggleCoordinatorDock == false)
         }
 
         CommandMenu("Workspace") {
@@ -851,6 +861,22 @@ struct ToasttyCommandMenus: Commands {
     /// `nil` when this Toastty has no task system.
     private var coordinatorController: CoordinatorController? {
         sessionRuntimeStore.taskCoordinator?.coordinatorController
+    }
+
+    /// The dock opens and hides from the window that holds the
+    /// coordinator's workspace, where it shows.
+    private var canToggleCoordinatorDock: Bool {
+        guard let coordinatorController, let windowID = commandSelection?.windowID else { return false }
+        return CoordinatorDockPresentation.showsToggle(
+            windowID: windowID,
+            coordinator: coordinatorController.location,
+            chatAvailable: coordinatorController.chatIsAvailable
+        )
+    }
+
+    private var commandWindowDockShows: Bool {
+        guard let coordinatorController, let windowID = commandSelection?.windowID else { return false }
+        return coordinatorController.dockShows(in: windowID)
     }
 
     /// Restart is for a coordinator that is open, as in the command palette.

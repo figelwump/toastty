@@ -1276,6 +1276,20 @@ public struct AppReducer {
 
         case .setSidebarWidth(let windowID, let width, let defaultWidth):
             return setSidebarWidth(windowID: windowID, width: width, defaultWidth: defaultWidth, state: &state)
+
+        case .setCoordinatorDockVisible(let windowID, let visible):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].coordinatorDockVisible != visible else { return false }
+            state.windows[windowIndex].coordinatorDockVisible = visible
+            return true
+
+        case .setCoordinatorDockWidth(let windowID, let width):
+            guard width.isFinite,
+                  let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            let override = WindowState.normalizedCoordinatorDockWidthOverride(width)
+            guard state.windows[windowIndex].coordinatorDockWidthPointsOverride != override else { return false }
+            state.windows[windowIndex].coordinatorDockWidthPointsOverride = override
+            return true
         }
     }
 
@@ -2287,7 +2301,12 @@ public struct AppReducer {
 
         if window.selectedWorkspaceID == workspaceID {
             let nextIndex = min(workspaceIndex, window.workspaceIDs.count - 1)
-            window.selectedWorkspaceID = window.workspaceIDs[nextIndex]
+            // The neighbor after, else before. The coordinator's workspace
+            // is selected only when no other is left: its chat shows in the
+            // dock beside the others.
+            let neighbors = window.workspaceIDs[nextIndex...] + window.workspaceIDs[..<nextIndex].reversed()
+            let coordinatorWorkspaceID = state.coordinatorWorkspaceID
+            window.selectedWorkspaceID = neighbors.first { $0 != coordinatorWorkspaceID } ?? window.workspaceIDs[nextIndex]
         }
 
         state.windows[windowIndex] = window
