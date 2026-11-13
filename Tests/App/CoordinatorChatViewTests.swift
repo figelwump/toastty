@@ -340,6 +340,17 @@ final class CoordinatorChatViewTests: XCTestCase {
                            "At width \(width) the text must keep its line height")
             XCTAssertEqual(spinning.textView.chipSpinnerRects().count, 1)
             XCTAssertTrue(plain.textView.chipSpinnerRects().isEmpty)
+            // The spinner sits in the middle of the chip's outline, and the
+            // whole outline is inside the view, which clips its drawing.
+            let origin = spinning.textView.textContainerOrigin
+            let outlines = spinning.outlines.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+            let spinner = try XCTUnwrap(spinning.textView.chipSpinnerRects().first)
+            let outline = try XCTUnwrap(outlines.first { $0.minX <= spinner.midX && spinner.midX <= $0.maxX })
+            XCTAssertEqual(outline.midY, spinner.midY, accuracy: 0.5, "At width \(width)")
+            for outline in outlines {
+                XCTAssertTrue(spinning.textView.bounds.contains(outline),
+                              "At width \(width) the outline \(outline) must be inside \(spinning.textView.bounds)")
+            }
         }
 
         let spinning = try render(working, width: 600)
