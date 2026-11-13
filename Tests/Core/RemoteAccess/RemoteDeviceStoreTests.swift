@@ -23,6 +23,7 @@ struct RemoteDeviceStoreTests {
             return
         }
         #expect(device.scopes == [.read, .send])
+        #expect(device.canApprovePermissions == false)
         #expect(device.name == "Vishal's phone")
         #expect(token.count >= 40)
 
@@ -338,7 +339,8 @@ struct RemoteDeviceStoreTests {
         #expect(device.authKind == .native)
     }
 
-    @Test func nativeCredentialIsReturnedOnceHashOnlyAndIdentityBoundAcrossReload() throws {
+    @Test(arguments: [false, true])
+    func nativeCredentialIsReturnedOnceHashOnlyAndIdentityBoundAcrossReload(usesFallbackCode: Bool) throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-native-credential-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -347,7 +349,7 @@ struct RemoteDeviceStoreTests {
         let offer = try store.issueNativePairingOffer(gatewayURL: Self.gatewayURL, at: Self.now)
 
         guard case .paired(let device, let token) = try store.redeemNativePairingOffer(
-            using: .qr(offerID: offer.id, secret: offer.qrPayload.secret),
+            using: usesFallbackCode ? .fallbackCode(offer.fallbackCode) : .qr(offerID: offer.id, secret: offer.qrPayload.secret),
             deviceName: "Native phone",
             tailscaleLogin: Self.tailscaleLogin,
             at: Self.now.addingTimeInterval(1)
@@ -356,6 +358,7 @@ struct RemoteDeviceStoreTests {
             return
         }
         #expect(device.authKind == .native)
+        #expect(device.canApprovePermissions)
         #expect(device.tailscaleLogin == Self.tailscaleLogin)
         #expect(device.canActOnTasks)
         #expect(token.count == 43)
@@ -383,7 +386,47 @@ struct RemoteDeviceStoreTests {
         }
         #expect(authenticated.id == device.id)
         #expect(authenticated.canActOnTasks)
+        #expect(authenticated.canApprovePermissions)
         #expect(reloaded.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(4)) == nil)
+    }
+
+    @Test func nativeApprovalSettingsAndSendScopeSurviveReload() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-native-approval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("remote-devices.json")
+        let store = RemoteDeviceStore(fileURL: fileURL)
+        let offer = try store.issueNativePairingOffer(gatewayURL: Self.gatewayURL, at: Self.now)
+        guard case .paired(let device, let token) = try store.redeemNativePairingOffer(
+            using: .qr(offerID: offer.id, secret: offer.qrPayload.secret),
+            deviceName: "Phone",
+            tailscaleLogin: Self.tailscaleLogin,
+            at: Self.now
+        ) else {
+            Issue.record("Expected native pairing")
+            return
+        }
+
+        #expect(try store.setPermissionApprovalEnabled(false, forDevice: device.id))
+        let disabled = RemoteDeviceStore(fileURL: fileURL)
+        #expect(disabled.devices.first?.permissionApprovalEnabled == false)
+        #expect(disabled.devices.first?.canApprovePermissions == false)
+        #expect(try disabled.setPermissionApprovalEnabled(true, forDevice: device.id))
+
+        let enabled = RemoteDeviceStore(fileURL: fileURL)
+        #expect(enabled.devices.first?.canApprovePermissions == true)
+        #expect(try enabled.setScopes([.read], forDevice: device.id))
+        let readOnly = RemoteDeviceStore(fileURL: fileURL)
+        #expect(readOnly.devices.first?.permissionApprovalEnabled == true)
+        #expect(readOnly.devices.first?.canApprovePermissions == false)
+        #expect(try readOnly.setScopes([.read, .send], forDevice: device.id))
+        #expect(readOnly.devices.first?.canApprovePermissions == true)
+        #expect(try readOnly.revokeDevice(device.id, at: Self.now.addingTimeInterval(1)))
+        let revoked = RemoteDeviceStore(fileURL: fileURL)
+        #expect(revoked.devices.first?.canApprovePermissions == false)
+        #expect(revoked.authenticateNativeBearer(
+            token, tailscaleLogin: Self.tailscaleLogin, at: Self.now.addingTimeInterval(2)
+        ) == .invalidCredential)
     }
 
     @Test func nativeIdentityComparisonDoesNotUnicodeNormalize() throws {
@@ -592,6 +635,7 @@ struct RemoteDeviceStoreTests {
         #expect(store.devices.first?.authKind == .browser)
         #expect(store.devices.first?.canActOnTasks == false)
         #expect(store.devices[1].canActOnTasks)
+        #expect(store.devices.allSatisfy { $0.canApprovePermissions == false })
         #expect(store.authenticateBrowserCredential(legacyToken, at: Self.now)?.id == legacyID)
         #expect(store.authenticateNativeBearer(
             nativeToken,
@@ -605,6 +649,7 @@ struct RemoteDeviceStoreTests {
         #expect(rewritten.contains(#""authKind" : "native""#))
         #expect(rewritten.contains("futureTopLevelField"))
         let restarted = RemoteDeviceStore(fileURL: fileURL)
+        #expect(restarted.devices.allSatisfy { $0.canApprovePermissions == false })
         #expect(restarted.authenticateBrowserCredential(
             legacyToken,
             at: Self.now.addingTimeInterval(61)

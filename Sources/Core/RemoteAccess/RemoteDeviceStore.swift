@@ -228,6 +228,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
             let device = RemoteDeviceRecord(
                 name: normalizedName,
                 scopes: [.read, .send],
+                permissionApprovalEnabled: true,
                 authKind: .native,
                 tailscaleLogin: tailscaleLogin,
                 createdAt: date,

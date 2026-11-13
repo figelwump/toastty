@@ -503,7 +503,7 @@ struct RemoteAccessSettingsView: View {
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device start new agent sessions in your workspaces.")
                             // Approving sends a decision to the agent, so it
-                            // also needs send access. Off until turned on.
+                            // also needs send access. New pairings enable it.
                             Toggle("Approve requests", isOn: Binding(
                                 get: { device.permissionApprovalEnabled },
                                 set: { service.setDevicePermissionApproval($0, for: device.id) }

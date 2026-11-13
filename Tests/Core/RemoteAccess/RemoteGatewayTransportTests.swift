@@ -776,6 +776,7 @@ struct RemoteGatewayRequestHandlerTests {
         let identity = "owner@example.com"
         let (handler, store, _) = Self.makeHandler()
         let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        #expect(store.devices.first(where: { $0.id == native.device.id })?.canApprovePermissions == true)
 
         guard case .respond(let allowed) = handler.handle(
             Self.request(
