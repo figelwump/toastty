@@ -20,11 +20,14 @@ public struct ToasttyTranscriptRowID: Hashable, Sendable {
 public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     public enum Content: Equatable, Sendable {
         /// `quote` is the agent's message that this message answers.
+        /// `attachments` are the local files sent with the message, which
+        /// the bubble shows apart from `text`: an image as a thumbnail.
         case userMessage(
             text: String,
             origin: ConversationMessageOrigin,
             deliveryMode: RemoteMessageDeliveryMode? = nil,
-            quote: ToasttyMessageQuote? = nil
+            quote: ToasttyMessageQuote? = nil,
+            attachments: [URL] = []
         )
         /// A message the host typed for the agent. It starts a turn as a
         /// user message does.

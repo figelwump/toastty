@@ -424,16 +424,18 @@ final class CoordinatorChatModel: ObservableObject {
         // A waiting message shows as its row will: a quick entry message
         // without Toastty's first line.
         var items = pendingSends.map { pending in
-            ToasttySendPresentationItem(
+            let parts = CoordinatorMessageHeader.displayParts(of: pending.text)
+            return ToasttySendPresentationItem(
                 clientRequestID: pending.id,
-                text: CoordinatorMessageHeader.displayText(of: pending.text),
+                text: parts.text,
                 content: .optimistic(response: .accepted),
                 // The caption its row will show, so the bubble keeps its
                 // size when the row replaces it.
                 sentCaption: pending.steered
                     ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
                     : nil,
-                quote: Self.quote(of: pending.text)
+                quote: Self.quote(of: pending.text),
+                attachments: parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
             )
         }
         guard let controller else { return items }

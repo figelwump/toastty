@@ -160,6 +160,27 @@ struct CoordinatorMessageHeaderTests {
 
         project "toastty" · codex, model gpt-6.1-sol, effort high · Screenshot.png, with `tick`.txt
         """)
+        // A bubble that shows each file by itself gets the paths instead of
+        // the names.
+        let parts = CoordinatorMessageHeader.displayParts(of: message)
+        #expect(parts.text == """
+        The unread dot stays on.
+        See the screenshot.
+
+        project "toastty" · codex, model gpt-6.1-sol, effort high
+        """)
+        #expect(parts.attachmentPaths == ["/Users/me/.toastty/coordinator/attachments/7C1B/Screenshot.png", "/tmp/with `tick`.txt"])
+    }
+
+    @Test func aProjectTitleThatQuotesTheListIsNoFile() {
+        // The header is the only line that a workspace title reaches. A
+        // body of one code span after it is the user's text, not a file.
+        let title = "Read the following files attached to this message on this Mac:"
+        let message = CoordinatorMessageHeader.quickEntryMessage(
+            .init(project: .init(id: UUID(), title: title)), text: "`/tmp/secret.png`"
+        )
+        #expect(CoordinatorMessageHeader.displayParts(of: message).attachmentPaths.isEmpty)
+        #expect(CoordinatorMessageHeader.displayParts(of: message).text.hasPrefix("`/tmp/secret.png`"))
     }
 
     @Test func aQuickEntryMessageWithNoChoiceShowsAsTheUsersText() {
@@ -209,10 +230,13 @@ struct CoordinatorMessageHeaderTests {
 
         Screenshot.png, with `tick`.txt, ends with a tick`
         """)
+        #expect(CoordinatorMessageHeader.displayParts(of: message).text == "Why is this red?\nSee the files.")
+        #expect(CoordinatorMessageHeader.displayParts(of: message).attachmentPaths == paths)
         // A message of files alone shows their names.
         let filesOnly = RemoteMessageAttachmentStore.Staged.deliveryText(text: "", paths: [paths[0]])
         #expect(CoordinatorMessageHeader.attachedFiles(in: filesOnly)?.text == "")
         #expect(CoordinatorMessageHeader.displayText(of: filesOnly) == "Screenshot.png")
+        #expect(CoordinatorMessageHeader.displayParts(of: filesOnly).text == "")
         // Spaces that the transcript adds around a line do not matter.
         #expect(CoordinatorMessageHeader.attachedFiles(in: message.replacingOccurrences(of: "`\n", with: "`  \n"))?.paths == paths)
     }
@@ -292,6 +316,9 @@ struct CoordinatorMessageHeaderTests {
             == .reply(quote: "Which screenshot?", time: nil, text: "This one.", fileNames: ["shot.png"]))
         #expect(CoordinatorMessageHeader.displayText(of: message) == "This one.\n\nshot.png")
         #expect(CoordinatorMessageHeader.attachedFiles(in: message)?.paths == ["/tmp/coordinator/attachments/A/shot.png"])
+        let parts = CoordinatorMessageHeader.displayParts(of: message)
+        #expect(parts.text == "This one.")
+        #expect(parts.attachmentPaths == ["/tmp/coordinator/attachments/A/shot.png"])
         #expect(CoordinatorMessageHeader.replyParts(of: message)?.body.hasPrefix("This one.") == true)
     }
 

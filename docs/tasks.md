@@ -679,8 +679,8 @@ you when it is not sure, and creates the task.
   both. In a list, `Option+Cmd+Return` chooses the row and then creates the
   task, as `Cmd+Return` chooses it and then sends.
 - **In the chat** a quick entry message shows your text, and under it your
-  choices and the names of the files. The terminal shows the message as
-  typed.
+  choices and the files: an image as a thumbnail, another file as its name.
+  The terminal shows the message as typed.
 
 A message looks like this in the coordinator's terminal:
 
@@ -740,8 +740,9 @@ under it. On macOS 14 the panel shows the terminal.
   JPEG. When you send, Toastty copies the files to
   `~/.toastty/coordinator/attachments/<message ID>/` and the message ends
   with their paths, as a message from the quick entry panel does. The chat
-  shows your text and the names of the files, also on a waiting message,
-  which counts its files. **Edit** puts a waiting message's files back above
+  shows your text and the files under it: an image as a thumbnail, another
+  file, or an image that is gone, as its name. A waiting message shows the
+  names of its files and counts them. **Edit** puts a waiting message's files back above
   the field; they stay in their folder until the message that names them is
   sent and expires, or is removed.
 - **Stop.** While a turn runs and the field is empty, the button stops the
