@@ -3918,8 +3918,10 @@ final class SidebarViewTests: XCTestCase {
 
     func testCoordinatorRowShowsTheAgentsStateAndSelectsItsWorkspace() throws {
         let fixture = try makeCoordinatorSidebarState()
+        var coordinatorPromptState = TerminalPromptState.idleAtPrompt
         let harness = try makeSidebarHarness(
-            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true
+            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true,
+            coordinatorPromptState: { _ in coordinatorPromptState }
         )
         defer { harness.window.orderOut(nil) }
         harness.sessionRuntimeStore.bind(store: harness.store)
@@ -3936,6 +3938,20 @@ final class SidebarViewTests: XCTestCase {
             )
         }
         XCTAssertEqual(coordinatorLabels(), ["Coordinator, not running"])
+        try attachSidebarRender(root, name: "coordinator-row-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-not-running")
+
+        // A restored agent that has not come back yet is starting.
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .claude, nativeSessionID: UUID().uuidString, sessionFilePath: "/Users/tester/.claude/session.jsonl",
+            cwd: "/Users/tester/.toastty/coordinator", capturedAt: Date()
+        )
+        XCTAssertTrue(harness.store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord)))
+        coordinatorPromptState = .unavailable
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, starting"])
+        try attachSidebarRender(root, name: "coordinator-row-starting")
+        try writeSidebarEvidence(root, name: "coordinator-row-starting")
+        coordinatorPromptState = .idleAtPrompt
 
         // The agent starts: a quiet row while it is at rest.
         harness.sessionRuntimeStore.startSession(
@@ -3972,8 +3988,12 @@ final class SidebarViewTests: XCTestCase {
         try clickSemanticText(prefix: "Coordinator", in: root)
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: fixture.windowID), fixture.coordinator.workspaceID)
         XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
-        try attachSidebarRender(root, name: "coordinator-row-selected")
-        try writeSidebarEvidence(root, name: "coordinator-row-selected")
+        // A notification for the workspace itself stays unread while it is
+        // selected: the dot's ring takes the selected row's fill.
+        XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: fixture.coordinator.workspaceID, panelID: nil)))
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, unread, selected"])
+        try attachSidebarRender(root, name: "coordinator-row-selected-unread")
+        try writeSidebarEvidence(root, name: "coordinator-row-selected-unread")
 
         // The agent exits: the row says so.
         XCTAssertTrue(harness.sessionRuntimeStore.handleCommandFinished(panelID: panelID, exitCode: 0, at: Date()))
@@ -4491,7 +4511,8 @@ final class SidebarViewTests: XCTestCase {
         taskRecords: [TaskRecord]? = nil,
         withTaskBoard: Bool = false,
         tasksConfig: TasksConfig = .empty,
-        withCoordinator: Bool = false
+        withCoordinator: Bool = false,
+        coordinatorPromptState: @escaping (UUID) -> TerminalPromptState = { _ in .idleAtPrompt }
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -4532,7 +4553,7 @@ final class SidebarViewTests: XCTestCase {
                 .appending(path: "toastty-sidebar-coordinator-\(UUID().uuidString)", directoryHint: .isDirectory),
             configLoader: { tasksConfig },
             deliverText: { _, _ in .unavailable },
-            promptState: { _ in .idleAtPrompt }
+            promptState: coordinatorPromptState
         ) : nil
         taskCoordinator?.coordinatorController = coordinatorController
 
