@@ -363,12 +363,15 @@ def run_fake(check):
         step('the next stage gave one digest', digest=needs_you['text'])
 
         # 2b. A task that the user finished wakes nothing: its line waits.
+        finished_id, _ = create('Finished by the user')
+        wait_for('the digest for the task to finish', lambda: told_at_rest(finished_id))
         wait_for('the coordinator at its prompt', at_prompt)
+        time.sleep(SETTLE + 3)
         seen = len(digests())
-        cli('task', 'mark-done', early_id)
+        cli('task', 'mark-done', finished_id)
         wait_for('the finished task to wait', lambda: status()['wake']['pendingTaskCount'] == 1)
         quiet(seen, SETTLE + 6, 'for a task the user finished')
-        require(saved_changes() == [(early_id, 'done', False)], f'The finished task is not saved as quiet: {saved_changes()}')
+        require(saved_changes() == [(finished_id, 'done', False)], f'The finished task is not saved as quiet: {saved_changes()}')
         step('a task the user finished typed no digest', saved=read_outbox(runtime_home)['coordinator'])
 
         # 3. A busy coordinator gets nothing typed; several changes then
@@ -377,7 +380,7 @@ def run_fake(check):
         wait_for('the digest for the second task', lambda: told_at_rest(task_b))
         # The finished task's line waited for this digest.
         carried = next(d for d in digests() if task_b in d['tasks'])
-        require(carried['tasks'].get(early_id, {}).get('stage') == 'done',
+        require(carried['tasks'].get(finished_id, {}).get('stage') == 'done',
                 f"The finished task's line did not go with the next digest: {carried}")
         wait_for('the coordinator at its prompt', at_prompt)
         time.sleep(SETTLE + 3)

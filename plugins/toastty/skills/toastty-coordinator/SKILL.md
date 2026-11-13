@@ -179,10 +179,11 @@ COORDINATOR_MESSAGE_END
    wakes you only when something may need you: a task moves into Needs
    you; a task gets an alert (its agent is busy and has written nothing for
    30 minutes, its pull request's checks fail or have been pending for 30
-   minutes, or a restart cut off its turn and its agent waits at its prompt); a task you watch
-   merges or ends; a task with `releaseAfterMerge` merges. A task that
-   starts running, goes idle, or that the user merged or finished wakes
-   nothing: it shows in the next digest. Toastty has no timer of its own.
+   minutes, or a restart cut off its turn and its agent waits at its
+   prompt); a task you watch merges or ends; a task with
+   `releaseAfterMerge` merges. A task that starts running, goes idle, or
+   that the user merged or finished wakes nothing: it shows in the next
+   digest. Toastty has no timer of its own.
    Your check catches the rest: a wait that reaches its limit, such as a
    permission prompt, and a batch release time. Set it only for a deadline
    in this table, with
