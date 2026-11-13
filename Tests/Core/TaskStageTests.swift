@@ -273,6 +273,27 @@ struct TaskStageTests {
     }
 
     @Test
+    func aReadyMarkFromBeforeTheNewestChildDoesNotHoldAFinishedParentBack() {
+        var stale = started(readyForReviewAt: date)
+        stale.newestChildCreatedAt = date.addingTimeInterval(60)
+        #expect(parent([child(.done)], facts: stale) == (.done, true))
+        #expect(parent([child(.toShip)], facts: stale) == (.toShip, true))
+        #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: false), facts: stale) == (.done, true))
+        // Until the children finish, the parent keeps showing its mark.
+        #expect(parent([child(.done), child(.running)], facts: stale) == (.needsYou(.readyForReview), false))
+        // Anything else the parent waits for still holds it: an unread
+        // last turn, under the mark it shows, or a question.
+        #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: true, agent: .finished), facts: stale) == (.needsYou(.readyForReview), false))
+        var asked = stale
+        asked.replyRequestedAt = date.addingTimeInterval(120)
+        #expect(parent([child(.done)], facts: asked) == (.needsYou(.awaitingReply), false))
+        // A mark set after the newest child says the parent still owns work.
+        var current = started(readyForReviewAt: date.addingTimeInterval(120))
+        current.newestChildCreatedAt = date.addingTimeInterval(60)
+        #expect(parent([child(.done)], facts: current) == (.needsYou(.readyForReview), false))
+    }
+
+    @Test
     func aParentWithItsOwnPullRequestOrWorktreeKeepsTheUsualRules() {
         let finished = [child(.toShip)]
         // Its own pull request decides: open waits for review, a draft or a

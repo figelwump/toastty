@@ -180,9 +180,10 @@ task's status. Point to the evidence in this task's Scratchpad.
   and do not mark the task Done.
 - **Work in child tasks:** do not mark this task ready for review or Done.
   Toastty finishes it when its children finish and at least one of them
-  merged; a ready-for-review mark never clears and keeps it open. If this task
-  still owns work after they merge, use `task needs-reply` or
-  `task ready-for-review` to keep it open.
+  merged. A ready-for-review mark from before the newest child task does not
+  keep it open. If this task still owns work after they merge, use
+  `task needs-reply` or `task ready-for-review` after you create the child
+  tasks, to keep it open.
 - **Done:** mark a task Done only when the user explicitly accepts the result
   and asks to finish it. Answering the question, finishing a turn, or having
   no file changes is not acceptance. Use `task mark-done <task-id>`.

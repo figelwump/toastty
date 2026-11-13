@@ -1214,6 +1214,29 @@ struct TaskBoardTests {
         #expect(try item(parent.id).stage == .done)
     }
 
+    /// The observed case: the parent's agent marked its first answer ready
+    /// for review, then started a child task when the user replied. The old
+    /// mark kept the parent open after the child merged.
+    @Test func aReadyMarkFromBeforeTheChildrenDoesNotKeepAFinishedParentOpen() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func stage(_ id: UUID) -> TaskStage? { board.items().first { $0.id == .task(id) }?.stage }
+        let marked = Date()
+        let parent = try insertTask(fixture, "rebuild-ios-workspace") { $0.readyForReviewAt = marked }
+        let fix = try insertTask(fixture, "fix-destination-check", parent: parent.id) {
+            $0.createdAt = marked.addingTimeInterval(60)
+        }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
+
+        _ = fixture.coordinator.records.update(id: fix.id, Self.merge)
+        #expect(stage(parent.id) == .done)
+        #expect(board.items().first { $0.id == .task(parent.id) }?.finishedThroughChildren == true)
+
+        // Marked ready again after its child, the parent still owns work.
+        _ = fixture.coordinator.records.update(id: parent.id) { $0.readyForReviewAt = marked.addingTimeInterval(120) }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
+    }
+
     @Test func onlyMergedWorkFinishesAParentAndNestedParentsFollow() throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = makeBoard(fixture, gitHub: FakeGitHub())
