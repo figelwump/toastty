@@ -256,6 +256,11 @@ enum TaskBoard {
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
+        if record.readyForReviewAt != nil {
+            facts.newestChildCreatedAt = inputs.records
+                .filter { $0.parentTaskID == record.id && $0.id != record.id }
+                .map(\.createdAt).max()
+        }
         let request = taskSpaceID.flatMap(inputs.mergeRequest)
         // While the task space is open, its done mark is the live answer;
         // the record keeps a copy for after it closes. A merge sets the mark

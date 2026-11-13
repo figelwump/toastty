@@ -139,7 +139,9 @@ public enum TaskStage: Equatable, Sendable {
     /// waits for a release, Done once every child that is not archived is
     /// Done. Only a task that would otherwise be Idle moves this way, so a
     /// task whose agent works, waits for the user, or marked it ready for
-    /// review stays where it is. `children` is asked only for such a task.
+    /// review stays where it is. A ready mark from before the newest child
+    /// task was created is about earlier work, so it does not hold a
+    /// finished parent back. `children` is asked only for such a task.
     public static func derivation(
         _ facts: TaskStageFacts,
         live: TaskLiveFacts,
@@ -151,18 +153,23 @@ public enum TaskStage: Equatable, Sendable {
             return (own, false)
         }
         switch own {
-        case .idle:
+        case .idle, .needsYou(.taskSpaceClosed), .needsYou(.readyForReview):
             break
-        case .needsYou(.taskSpaceClosed):
-            // Closing the task space is how the user puts a conversation
-            // away, so it does not hold a finished task back. What the task
-            // still waits for, such as a reply, does.
-            var open = live
-            open.taskSpaceOpen = true
-            guard ownStage(facts, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
-                return (own, false)
-            }
         case .starting, .needsYou, .running, .toShip, .done, .archived:
+            return (own, false)
+        }
+        // Closing the task space is how the user puts a conversation away,
+        // so it does not hold a finished task back. A ready mark the agent
+        // set before it started its newest child is about earlier work, so
+        // it does not either. What the task still waits for, such as a
+        // reply or a ready mark set after its children, does.
+        var open = live
+        open.taskSpaceOpen = true
+        var current = facts
+        if let mark = facts.readyForReviewAt, let newestChild = facts.newestChildCreatedAt, mark < newestChild {
+            current.readyForReviewAt = nil
+        }
+        guard ownStage(current, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
             return (own, false)
         }
         guard let outcome = children() else { return (own, false) }
@@ -269,6 +276,9 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var doneAt: Date?
     /// Why the record's cleanup stopped, if it did.
     public var cleanupProblem: String?
+    /// When the newest of the task's child tasks was created. The board
+    /// fills it only for a task marked ready for review.
+    public var newestChildCreatedAt: Date?
 
     public init(
         setup: TaskSetupState,
@@ -281,7 +291,8 @@ public struct TaskStageFacts: Equatable, Sendable {
         shippedAt: Date? = nil,
         archivedAt: Date? = nil,
         doneAt: Date? = nil,
-        cleanupProblem: String? = nil
+        cleanupProblem: String? = nil,
+        newestChildCreatedAt: Date? = nil
     ) {
         self.setup = setup
         self.startWork = startWork
@@ -294,6 +305,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.archivedAt = archivedAt
         self.doneAt = doneAt
         self.cleanupProblem = cleanupProblem
+        self.newestChildCreatedAt = newestChildCreatedAt
     }
 
     public init(record: TaskRecord) {
