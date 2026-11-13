@@ -433,10 +433,22 @@ final class CoordinatorController: ObservableObject {
     /// conversation to resume, no session and no surface. A second start in
     /// that time would type into the same shell as the resume.
     private func awaitsRestore(_ location: CoordinatorLocation) -> Bool {
-        guard let panelID = location.panelID,
-              case .terminal(let terminal)? = store.state.workspacesByID[location.workspaceID]?.panelState(for: panelID),
-              terminal.resumeRecord != nil else { return false }
+        guard let panelID = location.panelID, hasSavedConversation(location) else { return false }
         return promptState(panelID) == .unavailable
+    }
+
+    /// The coordinator's terminal has an agent conversation that Toastty
+    /// saved to resume: a conversation from before a relaunch, or one that
+    /// the running agent already wrote.
+    var hasSavedConversation: Bool {
+        location.map(hasSavedConversation) ?? false
+    }
+
+    private func hasSavedConversation(_ location: CoordinatorLocation) -> Bool {
+        guard let panelID = location.panelID,
+              case .terminal(let terminal)? = store.state.workspacesByID[location.workspaceID]?.panelState(for: panelID)
+        else { return false }
+        return terminal.resumeRecord != nil
     }
 
     // MARK: - Open and restart

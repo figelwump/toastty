@@ -507,8 +507,9 @@ prompts can be answered only in Toastty or Toastty Mobile.
 
 ## The coordinator
 
-The coordinator is one long-lived agent session that follows your tasks. It
-runs in its own workspace, named **Coordinator**, with a terminal in
+The coordinator is one long-lived agent session that follows your tasks. Its
+name is **Toasty**, after the toast in its icon: it introduces itself by that
+name in its first answer. It runs in its own workspace, named **Coordinator**, with a terminal in
 `~/.toastty/coordinator/`. A runtime-isolated dev run uses
 `<runtime-home>/coordinator/` instead. The coordinator acts through the
 `toastty task` commands, as any agent can. Its job is described in
@@ -699,7 +700,10 @@ selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)`.
 
 On macOS 15 and later, the coordinator's panel shows the agent's conversation
 as a chat, with the same message views as Toastty Mobile. The terminal runs
-under it. On macOS 14 the panel shows the terminal.
+under it. On macOS 14 the panel shows the terminal. While the conversation
+has no message, as for a new coordinator or after Restart, the chat shows
+Toasty and a short introduction. A conversation that a relaunch resumes shows
+it only when Toastty read the conversation and found no message.
 
 - **Send.** Type in the field under the conversation and press Return.
   Shift-Return or Option-Return starts a new line. At an open prompt the

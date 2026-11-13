@@ -55,6 +55,61 @@ struct CoordinatorChatSendPathTests {
             == .userMessage(text: "Summarize the open tasks", origin: .local, deliveryMode: nil))
     }
 
+    // MARK: - Toasty's introduction
+
+    @MainActor
+    @Test func toastyIntroducesItselfUntilTheFirstMessageButNotWhileASavedConversationLoads() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        // The agent reported its start, so Toastty saved its conversation.
+        let workspaceID = try #require(fixture.store.state.coordinator?.workspaceID)
+        guard case .terminal(let terminal)? = fixture.store.state.workspacesByID[workspaceID]?.panelState(for: fixture.panelID) else {
+            Issue.record("The coordinator has no terminal")
+            return
+        }
+        let record = try #require(terminal.resumeRecord)
+
+        // Before Toastty saved a conversation, as while a new coordinator
+        // starts: Toasty introduces itself at once, before any read.
+        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)))
+        #expect(fixture.controller.hasSavedConversation == false)
+        #expect(fixture.chat.showsIntroduction)
+
+        // A saved conversation, as after a relaunch: until the chat read it,
+        // it may hold messages, so no introduction.
+        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: record)))
+        #expect(fixture.controller.hasSavedConversation)
+        #expect(fixture.chat.showsIntroduction == false)
+
+        // Read, and it has no message: Toasty introduces itself.
+        fixture.chat.show(panelID: fixture.panelID)
+        // Its rows are only the markers of its binding to the terminal,
+        // which the introduction covers.
+        try await fixture.waitUntil("the empty conversation, read") { fixture.chat.showsIntroduction }
+        #expect(fixture.chat.presentation.rows.isEmpty == false)
+        #expect(fixture.chat.presentation.rows.allSatisfy { row in
+            if case .sessionBindingChanged = row.content { return true }
+            return false
+        })
+
+        // The first message ends the introduction, while it waits for its
+        // echo too.
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        fixture.chat.draft = "hi"
+        fixture.chat.send()
+        #expect(fixture.chat.presentation.sendItems.isEmpty == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        try fixture.startTurn(1, userText: "hi")
+        try await fixture.waitUntil("the message in the conversation") {
+            fixture.chat.presentation.sendItems.isEmpty
+                && fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "hi", origin: .local, deliveryMode: nil)
+        }
+        #expect(fixture.chat.showsIntroduction == false)
+    }
+
     // MARK: - Whose message a row is
 
     @MainActor
