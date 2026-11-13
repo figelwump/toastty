@@ -48,6 +48,23 @@ struct ToasttyCLICoordinatorTests {
         #expect(try wake("--at", "2026-11-09T18:30:00Z")
             == .appControlRun(kind: .action, id: "coordinator.wake", args: ["at": .string("2026-11-09T18:30:00Z")]))
         #expect(try wake("--clear") == .appControlRun(kind: .action, id: "coordinator.wake", args: ["clear": .bool(true)]))
+        // The same call marks the wake turn quiet.
+        #expect(try wake("--clear", "--quiet")
+            == .appControlRun(kind: .action, id: "coordinator.wake", args: ["clear": .bool(true), "quiet": .bool(true)]))
+        #expect(try wake("--quiet", "--in", "16m")
+            == .appControlRun(kind: .action, id: "coordinator.wake", args: ["inSeconds": .int(960), "quiet": .bool(true)]))
+    }
+
+    @Test
+    func watchNamesATaskOrAProjectAndRemoveEndsIt() throws {
+        let taskID = UUID().uuidString
+        let workspaceID = UUID().uuidString
+        #expect(try command(["watch", "--task", taskID])
+            == .appControlRun(kind: .action, id: "coordinator.watch", args: ["taskID": .string(taskID)]))
+        #expect(try command(["watch", "--workspace", workspaceID])
+            == .appControlRun(kind: .action, id: "coordinator.watch", args: ["workspaceID": .string(workspaceID)]))
+        #expect(try command(["watch", "--task", taskID, "--remove"])
+            == .appControlRun(kind: .action, id: "coordinator.watch", args: ["taskID": .string(taskID), "remove": .bool(true)]))
     }
 
     @Test
@@ -73,6 +90,16 @@ struct ToasttyCLICoordinatorTests {
             ["wake", "now", "--clear"],
             ["send", "hello", "--clear"],
             ["open", "--in", "5m"],
+            ["wake", "--quiet"],
+            ["send", "hello", "--quiet"],
+            ["watch"],
+            ["watch", "--task", "not-an-id"],
+            ["watch", "--workspace", "not-an-id"],
+            ["watch", "--task", UUID().uuidString, "--workspace", UUID().uuidString],
+            ["watch", UUID().uuidString],
+            ["watch", "--remove"],
+            ["wake", "--clear", "--remove"],
+            ["status", "--task", UUID().uuidString],
         ] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { _ = try command(arguments) }
         }

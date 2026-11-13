@@ -1,27 +1,45 @@
+import CryptoKit
 import Foundation
 
 /// What waits for the coordinator's next open prompt: the task changes it
 /// has not been told about, and its timer.
 ///
-/// Toastty wakes the coordinator for three reasons: a task's stage changed
-/// in a way that may need it, a task got an alert (`TaskAlert`), or the
-/// time it set for its next check came. All go into one digest, which
-/// Toastty types when the coordinator's prompt is open. A task that only
-/// starts running wakes nothing: its line waits and goes into the next
-/// digest that something else starts. With no time set, no timer runs.
-/// This state is saved in the same file as the event detector's baseline,
-/// so one write records a change as seen and as waiting, and a quit loses
-/// nothing.
+/// Toastty wakes the coordinator only when something may need it:
+/// - a task moves into Needs you;
+/// - a task gets an alert (`TaskAlert`);
+/// - a task merges and something waits for that merge: the coordinator
+///   watches the task or its project, or the user asked for a release
+///   right after the merge;
+/// - a task the coordinator watches ends: Done, archived or deleted;
+/// - the time the coordinator set for its next check comes.
+///
+/// Every other change, such as a task that starts running, goes idle, or
+/// is Done after the user merged it, wakes nothing: its line waits and goes
+/// into the next digest that something else starts. All go into one
+/// digest, which Toastty types when the coordinator's prompt is open. With
+/// no time set, no timer runs. This state is saved in the same file as the
+/// event detector's baseline, so one write records a change as seen and as
+/// waiting, and a quit loses nothing.
 ///
 /// An alert is a fact with a fixed limit, not a judgment: a digest says
 /// which tasks changed and which alerts started; the coordinator reads
 /// `task list` and decides.
+///
+/// The state also keeps which digests started a quiet turn: a turn in
+/// which the coordinator found nothing for the user and said so with
+/// `coordinator wake --quiet`. The chat folds such a turn, and its end
+/// alerts nobody.
 public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// The soonest time the coordinator can ask for, so a timer cannot
     /// become a loop of turns.
     public static let minimumDelay: TimeInterval = 60
     /// The task lines one digest lists. The rest are counted in one line.
     public static let maximumListedTasks = 40
+    /// The tasks and the projects the coordinator can watch, each.
+    public static let maximumWatches = 100
+    /// The quiet turns the state remembers. The oldest is forgotten first,
+    /// and the chat then shows that turn whole again.
+    public static let maximumQuietDigests = 200
 
     /// One line of the digest: where a task stands now.
     public struct TaskChange: Codable, Equatable, Sendable {
@@ -34,10 +52,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         public var deleted: Bool
         /// When Toastty counted the change.
         public var at: Date
-        /// Whether the task's stage change wakes the coordinator. `false`
-        /// for a task that only starts running: its line waits for a digest
-        /// that something else starts. Saved as `wakes`, the key the build
-        /// before alerts used for the same fact.
+        /// Whether the task's stage change wakes the coordinator; see
+        /// `CoordinatorWakeState`. `false` for a change that may need
+        /// nothing, such as a task that starts running or is Done: its line
+        /// waits for a digest that something else starts. Saved as `wakes`,
+        /// the key the build before alerts used for the same fact.
         public var stageWakes: Bool
         /// The task's alerts now.
         public var alerts: [TaskAlert]
@@ -70,6 +89,19 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// first look does: a change from before the coordinator existed is
     /// not told, also when a webhook kept the detector running.
     public private(set) var isFollowing = false
+    /// The tasks whose merge or end the coordinator waits for, such as a
+    /// task that another task depends on. A watch ends when its task
+    /// merges or ends.
+    public private(set) var watchedTaskIDs: [UUID] = []
+    /// The projects where every merge may need the coordinator, such as a
+    /// project that releases on merge. Each is a project root as
+    /// `TasksConfigFile.normalizedPath` writes it.
+    public private(set) var watchedProjectRoots: [String] = []
+    /// `digestKey` of the digest Toastty typed last. `nil` before the first.
+    public private(set) var lastDigestKey: String?
+    /// `digestKey` of each digest whose turn the coordinator marked quiet,
+    /// oldest first.
+    public private(set) var quietDigestKeys: [String] = []
 
     public init(workspaceID: UUID, startedAt: Date) {
         self.workspaceID = workspaceID
@@ -94,7 +126,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         changes.removeAll { $0.taskID == change.taskID }
         let stageChanged = deleted || change.previous.map { $0.hasSameStage(as: key) == false } ?? true
         let stageWakes = stageChanged
-            ? Self.wakes(group: key.group, attention: key.attention, merged: key.merged, deleted: deleted)
+            ? wakes(change, deleted: deleted) || Self.holdsEventWake(waiting)
             : waiting?.stageWakes ?? false
         let alerts = deleted ? [] : key.alerts
         let newAlerts = alerts.filter { alert in
@@ -112,13 +144,43 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
             alerts: alerts,
             newAlerts: newAlerts
         ))
+        // The watch waited for this task's merge or end, and it came.
+        if stageChanged, key.merged || Self.ends(group: key.group, deleted: deleted) {
+            watchedTaskIDs.removeAll { $0 == change.taskID }
+        }
     }
 
-    /// Whether a change into this stage wakes the coordinator. A task that
-    /// only starts running, with no attention, not merged and not deleted,
-    /// needs nothing from it. Every other change may.
-    private static func wakes(group: String, attention: String?, merged: Bool, deleted: Bool) -> Bool {
-        group != "\(TaskStage.Group.running)" || attention != nil || merged || deleted
+    /// Whether a change of the task's stage wakes the coordinator; see the
+    /// type's comment for the rules.
+    private func wakes(_ change: TaskWebhookEventDetector.Change, deleted: Bool) -> Bool {
+        let key = change.state.key
+        if deleted == false, key.group == "\(TaskStage.Group.needsYou)" { return true }
+        let watched = watchedTaskIDs.contains(change.taskID)
+        if watched, Self.ends(group: key.group, deleted: deleted) { return true }
+        guard key.merged, change.previous?.merged != true else { return false }
+        return watched || change.state.releaseAfterMerge || watches(projectRoot: change.state.projectRoot)
+    }
+
+    /// Whether a waiting line wakes for something that happened, a merge or
+    /// a task's end, and not for a stage the task can leave. A later change
+    /// of that task keeps the wake until the digest is typed: a watched
+    /// task that ends and is then archived still wakes the coordinator. A
+    /// task that needed something and runs again needs nothing now.
+    private static func holdsEventWake(_ waiting: TaskChange?) -> Bool {
+        guard let waiting, waiting.stageWakes else { return false }
+        return waiting.deleted || waiting.group != "\(TaskStage.Group.needsYou)"
+    }
+
+    private static func ends(group: String, deleted: Bool) -> Bool {
+        deleted || group == "\(TaskStage.Group.done)" || group == "\(TaskStage.Group.archived)"
+    }
+
+    /// Whether the coordinator watches the project with this root. The
+    /// root is written out only when a project is watched, because that
+    /// reads the file system.
+    private func watches(projectRoot: String?) -> Bool {
+        guard let projectRoot, watchedProjectRoots.isEmpty == false else { return false }
+        return watchedProjectRoots.contains(TasksConfigFile.normalizedPath(projectRoot))
     }
 
     /// Ends the first look at the tasks: changes from here on are told.
@@ -136,10 +198,74 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// coordinator set before this wake is gone, whether it had come or
     /// not. The coordinator sets or clears its next check in the turn this
     /// wake starts; until it sets one, no timer runs.
-    public mutating func markDelivered(at: Date) {
+    public mutating func markDelivered(_ digest: String, at: Date) {
         changes = []
         requestedWakeAt = nil
         lastWakeAt = at
+        lastDigestKey = Self.digestKey(digest)
+    }
+
+    // MARK: - Watches
+
+    /// Watches a task: its merge, or its end without a merge, wakes the
+    /// coordinator once. `false` when the coordinator watches too many.
+    @discardableResult
+    public mutating func watch(taskID: UUID) -> Bool {
+        guard watchedTaskIDs.contains(taskID) == false else { return true }
+        guard watchedTaskIDs.count < Self.maximumWatches else { return false }
+        watchedTaskIDs.append(taskID)
+        return true
+    }
+
+    public mutating func unwatch(taskID: UUID) {
+        watchedTaskIDs.removeAll { $0 == taskID }
+    }
+
+    /// Watches a project, by its root as `TasksConfigFile.normalizedPath`
+    /// writes it: every merge of its tasks wakes the coordinator. `false`
+    /// when the coordinator watches too many.
+    @discardableResult
+    public mutating func watch(projectRoot: String) -> Bool {
+        guard watchedProjectRoots.contains(projectRoot) == false else { return true }
+        guard watchedProjectRoots.count < Self.maximumWatches else { return false }
+        watchedProjectRoots.append(projectRoot)
+        return true
+    }
+
+    public mutating func unwatch(projectRoot: String) {
+        watchedProjectRoots.removeAll { $0 == projectRoot }
+    }
+
+    // MARK: - Quiet turns
+
+    /// Records that the turn the last digest started needs nothing from
+    /// the user. The caller checks that this turn runs now and that no
+    /// other message came in it. `false` before the first digest.
+    @discardableResult
+    public mutating func markLastDigestQuiet() -> Bool {
+        guard let lastDigestKey else { return false }
+        guard quietDigestKeys.contains(lastDigestKey) == false else { return true }
+        quietDigestKeys.append(lastDigestKey)
+        if quietDigestKeys.count > Self.maximumQuietDigests {
+            quietDigestKeys.removeFirst(quietDigestKeys.count - Self.maximumQuietDigests)
+        }
+        return true
+    }
+
+    /// Whether the message is a digest whose turn the coordinator marked
+    /// quiet.
+    public func isQuietDigest(_ text: String) -> Bool {
+        quietDigestKeys.isEmpty == false && quietDigestKeys.contains(Self.digestKey(text))
+    }
+
+    /// Names a digest by its text: the SHA-256 of the text without leading
+    /// and trailing white space, in hex. The agent's transcript keeps the
+    /// text Toastty typed, so the key survives a relaunch, which forgets
+    /// which message Toastty sent. Every digest names the time of each
+    /// change it lists, so two digests do not share a text.
+    public static func digestKey(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Digest
@@ -209,6 +335,22 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 
     static func timestamp(_ date: Date) -> String {
         date.formatted(.iso8601)
+    }
+}
+
+extension CoordinatorWakeState {
+    /// A state saved before watches and quiet turns has neither.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
+        changes = try container.decodeIfPresent([TaskChange].self, forKey: .changes) ?? []
+        requestedWakeAt = try container.decodeIfPresent(Date.self, forKey: .requestedWakeAt)
+        lastWakeAt = try container.decode(Date.self, forKey: .lastWakeAt)
+        isFollowing = try container.decodeIfPresent(Bool.self, forKey: .isFollowing) ?? false
+        watchedTaskIDs = try container.decodeIfPresent([UUID].self, forKey: .watchedTaskIDs) ?? []
+        watchedProjectRoots = try container.decodeIfPresent([String].self, forKey: .watchedProjectRoots) ?? []
+        lastDigestKey = try container.decodeIfPresent(String.self, forKey: .lastDigestKey)
+        quietDigestKeys = try container.decodeIfPresent([String].self, forKey: .quietDigestKeys) ?? []
     }
 }
 

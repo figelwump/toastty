@@ -92,6 +92,12 @@ final class SessionRuntimeStore: ObservableObject {
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
     var onActionableEvent: (@MainActor (ManagedSessionActionableEvent) -> Void)?
 
+    /// Whether the turn of this session that ends now needs no reader: the
+    /// coordinator's wake turn that it marked quiet. Its end then marks
+    /// nothing unread, and sends no notification or push. The app sets it
+    /// from the coordinator.
+    var isQuietTurnEnd: (@MainActor (String) -> Bool)?
+
     var claudeQuestionBroker = ClaudeQuestionBroker()
     private var claudeQuestionWatchdog: Task<Void, Never>?
 
@@ -3633,7 +3639,8 @@ final class SessionRuntimeStore: ObservableObject {
         let actionableKind: ManagedSessionActionableEvent.Kind?
         switch kind {
         case .turnComplete:
-            actionableKind = .turnComplete
+            // A quiet coordinator turn sends no push to a phone either.
+            actionableKind = isQuietCoordinatorTurnEnd(record, kind: .ready) ? nil : .turnComplete
             sessionExitController?.handle(.turnCompleted(sessionID: record.sessionID))
         case .needsApproval:
             actionableKind = .needsApproval
@@ -5392,7 +5399,8 @@ final class SessionRuntimeStore: ObservableObject {
               currentRecord.isActive else {
             return
         }
-        guard !isActionableStatusTransitionSuppressed(for: currentRecord, state: store.state) else {
+        guard !isActionableStatusTransitionSuppressed(for: currentRecord, state: store.state),
+              !isQuietCoordinatorTurnEnd(currentRecord, kind: status.kind) else {
             return
         }
 
@@ -5646,6 +5654,14 @@ final class SessionRuntimeStore: ObservableObject {
         isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
+    /// The coordinator's agent ends a wake turn that it marked quiet
+    /// (`coordinator wake --quiet`): nothing needs the user, so the end of
+    /// the turn marks nothing unread and sends no notification. A question
+    /// or an error in that turn still does.
+    private func isQuietCoordinatorTurnEnd(_ record: SessionRecord, kind: SessionStatusKind) -> Bool {
+        kind == .ready && isQuietTurnEnd?(record.sessionID) == true
+    }
+
     private func normalizedStatusForStorage(
         requestedStatus: SessionStatus,
         previousRecord: SessionRecord?,
@@ -5654,7 +5670,8 @@ final class SessionRuntimeStore: ObservableObject {
         guard requestedStatus.kind == .ready,
               let previousRecord,
               let state,
-              isActionableStatusTransitionSuppressed(for: previousRecord, state: state) else {
+              isActionableStatusTransitionSuppressed(for: previousRecord, state: state)
+                || isQuietCoordinatorTurnEnd(previousRecord, kind: requestedStatus.kind) else {
             return requestedStatus
         }
 

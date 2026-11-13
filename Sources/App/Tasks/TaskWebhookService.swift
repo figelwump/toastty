@@ -713,7 +713,8 @@ extension TaskWebhookService {
                 externalRef: record.externalRef,
                 question: record.replyRequest?.question,
                 pullRequestURL: record.pullRequestURL,
-                mergedAt: record.mergedAt
+                mergedAt: record.mergedAt,
+                releaseAfterMerge: record.releaseAfterMerge != nil
             )
         }
         return states

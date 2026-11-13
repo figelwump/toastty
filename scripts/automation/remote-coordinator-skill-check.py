@@ -582,12 +582,22 @@ class Run:
         response = self.instance.request('app_control.run_query', dict(id='terminal.visible-text', args=dict(panelID=panel)))
         return (response.get('result') or {}).get('text', '') if response.get('ok') else ''
 
+    def waiting_wake(self):
+        """Whether a waiting change will wake the coordinator. A change that
+        wakes nothing on its own, such as a task that starts running, can
+        wait for a long time."""
+        try:
+            saved = json.loads((self.runtime_home / 'task-webhook-outbox.json').read_text()).get('coordinator') or {}
+        except (OSError, json.JSONDecodeError):
+            return False
+        return any(change.get('wakes') or change.get('newAlerts') for change in saved.get('changes') or [])
+
     def at_rest(self):
         current = self.coordinator()
         require(current.get('status') != 'needs_approval',
                 f'The coordinator stopped at a permission prompt:\n{self.screen()[-1500:]}')
         return (current.get('agentState') == 'running' and current.get('status') in ('idle', 'ready')
-                and current.get('queuedCount') == 0 and current['wake']['pendingTaskCount'] == 0)
+                and current.get('queuedCount') == 0 and not self.waiting_wake())
 
     def wait_idle(self, timeout=TURN_TIMEOUT, quiet=6):
         """Waits until the coordinator rests, with nothing waiting to be typed, for `quiet` seconds."""
@@ -1063,6 +1073,10 @@ def dependency(run):
     turns = run.new_turns(wake=True)
     run.check('nothing is sent while the other task is not merged', run.messages(waiting) == [], run.messages(waiting))
     run.check('the ledger holds the dependency', 'watch' in run.ledger() and waiting.id in run.ledger(), run.ledger())
+    # Toastty wakes the coordinator for a merge only when something waits
+    # for it: here the coordinator's watch.
+    watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
+    run.check('it asks Toastty to watch the other task', first.id in watched, watched)
     run.update_pr(first, state='MERGED', mergedAt=now_iso())
     run.wait_task(first, 'merged', lambda t: t.get('mergedAt'))
     later = run.new_turns(wake=True)
@@ -1070,7 +1084,43 @@ def dependency(run):
     run.check('after the merge, the waiting task is told once', len(messages) == 1 and 'merged' in messages[0].lower(), messages)
     watches = run.cli('task', 'watches').get('watches', [])
     run.check('Toastty holds no watch that would type into the task', watches == [], watches)
+    watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
+    run.check("the merge ended the coordinator's watch", first.id not in watched, watched)
     return turns + later
+
+
+def quiet_wake(run):
+    """A wake that finds nothing for the user: the turn is marked quiet, and its end alerts nobody."""
+    task = run.create_task('Fix the login redirect', status='working')
+    run.seed_policy()
+    run.open_coordinator()
+    run.reply(task, 'I pushed the fix to the branch, and CI is running on it now. I will open the pull request '
+                    'when the checks pass. Nothing is needed until then.')
+    run.status(task, 'ready')
+    run.wait_task(task, 'a finished turn', lambda t: t['stage'].get('attention') == 'agentFinished')
+    turns = run.new_turns(wake=True)
+    commands = [c for t in turns for c in t['commands']]
+    run.check('nothing is sent to the task that waits for CI', run.messages(task) == [], run.messages(task))
+    marked = [c for c in commands if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('it marks the wake turn quiet with coordinator wake --quiet', marked, commands)
+    saved = json.loads((run.runtime_home / 'task-webhook-outbox.json').read_text()).get('coordinator') or {}
+    run.check('Toastty took the mark for the digest that started the turn',
+              saved.get('lastDigestKey') and saved.get('lastDigestKey') in (saved.get('quietDigestKeys') or []),
+              {key: saved.get(key) for key in ('lastDigestKey', 'quietDigestKeys')})
+    status = run.coordinator()
+    run.check('the end of the quiet turn marks nothing unread: the coordinator waits, not Ready',
+              status.get('status') == 'idle', status)
+    final = turns[-1]['texts'][-1] if turns and turns[-1]['texts'] else ''
+    run.check('it answers only "Nothing needs you."', final.strip() == 'Nothing needs you.', final, required=False)
+
+    # A turn the user starts is never quiet: the answer reaches the user.
+    asked = run.tell('What waits for me? One line.')
+    status = run.coordinator()
+    saved = json.loads((run.runtime_home / 'task-webhook-outbox.json').read_text()).get('coordinator') or {}
+    run.check("the user's turn is not marked quiet", len(saved.get('quietDigestKeys') or []) == 1, saved.get('quietDigestKeys'))
+    run.check("the end of the user's turn shows as Ready", status.get('status') == 'ready', status)
+    run.check('it answers the user', bool(run.said(asked).strip()), run.said(asked))
+    return turns + asked
 
 
 def weak_proof(run):
@@ -1324,6 +1374,7 @@ SCENARIOS = {
     'ci-failed': ci_failed,
     'conflict': conflict,
     'dependency': dependency,
+    'quiet-wake': quiet_wake,
     'weak-proof': weak_proof,
     'good-proof': good_proof,
     'never-merge': never_merge,
@@ -1335,7 +1386,7 @@ SCENARIOS = {
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
-            'question-open', 'dependency', 'weak-proof', 'good-proof', 'never-merge', 'new-task', 'release')
+            'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'never-merge', 'new-task', 'release')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):

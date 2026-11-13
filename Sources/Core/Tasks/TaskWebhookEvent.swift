@@ -43,6 +43,9 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
     public var question: String?
     public var pullRequestURL: String?
     public var mergedAt: Date?
+    /// The user asked for a release right after the task merges, so its
+    /// merge wakes the coordinator. Not in the webhook payload.
+    public var releaseAfterMerge: Bool
 
     public init(
         key: Key,
@@ -51,7 +54,8 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
         externalRef: TaskExternalRef? = nil,
         question: String? = nil,
         pullRequestURL: String? = nil,
-        mergedAt: Date? = nil
+        mergedAt: Date? = nil,
+        releaseAfterMerge: Bool = false
     ) {
         self.key = key
         self.title = title
@@ -60,6 +64,22 @@ public struct TaskWebhookTaskState: Codable, Equatable, Sendable {
         self.question = question
         self.pullRequestURL = pullRequestURL
         self.mergedAt = mergedAt
+        self.releaseAfterMerge = releaseAfterMerge
+    }
+}
+
+extension TaskWebhookTaskState {
+    /// A state saved before `releaseAfterMerge` has none.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(Key.self, forKey: .key)
+        title = try container.decode(String.self, forKey: .title)
+        projectRoot = try container.decodeIfPresent(String.self, forKey: .projectRoot)
+        externalRef = try container.decodeIfPresent(TaskExternalRef.self, forKey: .externalRef)
+        question = try container.decodeIfPresent(String.self, forKey: .question)
+        pullRequestURL = try container.decodeIfPresent(String.self, forKey: .pullRequestURL)
+        mergedAt = try container.decodeIfPresent(Date.self, forKey: .mergedAt)
+        releaseAfterMerge = try container.decodeIfPresent(Bool.self, forKey: .releaseAfterMerge) ?? false
     }
 }
 

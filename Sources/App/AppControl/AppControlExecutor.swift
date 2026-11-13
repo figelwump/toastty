@@ -833,6 +833,9 @@ final class AppControlExecutor {
         case .coordinatorWake:
             return try runCoordinatorWake(args: args)
 
+        case .coordinatorWatch:
+            return try runCoordinatorWatch(args: args)
+
         case .taskRelease:
             return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
 

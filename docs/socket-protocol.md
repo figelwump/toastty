@@ -267,6 +267,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.restart`
 - `coordinator.send`
 - `coordinator.wake`
+- `coordinator.watch`
 - `window.tasks.show`
 - `window.tasks.hide`
 - `window.sidebar.set-segment`
@@ -739,7 +740,8 @@ Common query IDs include:
 `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
 `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
 `queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt` (the
-time that `coordinator.wake` set, or `null`) and `lastWakeAt`.
+time that `coordinator.wake` set, or `null`), `lastWakeAt`, `watchedTaskIDs`
+and `watchedProjectRoots`.
 `coordinator.open` (optional `windowID` and
 `select`) and `coordinator.restart` (optional `windowID`) return the same
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.
@@ -750,7 +752,15 @@ the sender, from the request's `callerSessionID`: the task whose space that
 session is in, else the session, else "a terminal command". `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
-fields. See [The coordinator](tasks.md#the-coordinator) and
+fields. With `args.quiet` it also marks the wake turn that runs now as one
+that needs nothing from the user. It fails, and changes nothing, unless the
+request's `callerSessionID` is the coordinator's agent session and Toastty's
+last digest started the turn that runs now with no other message in it.
+`coordinator.watch` takes exactly one of `args.taskID` and
+`args.workspaceID` (a project's workspace or one of its subspaces), and
+optional `args.remove`; a watched task's merge or end, or any merge in a
+watched project, then wakes the coordinator. It returns the
+`coordinator.get` fields. See [The coordinator](tasks.md#the-coordinator) and
 [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
