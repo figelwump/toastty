@@ -2107,13 +2107,17 @@ private struct ToasttyTranscriptRowView: View {
         let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
 
         if isUser {
+            // Copy takes the names of the files after the text, as a
+            // message of files alone has no text.
+            let names = attachments.map(\.lastPathComponent).joined(separator: ", ")
+            let copiedText = [text, names].filter { $0.isEmpty == false }.joined(separator: "\n\n")
             ToasttyUserMessageBubble(text: text, caption: metadata, quote: quote, attachments: attachments) {
                 if copiesMessage {
-                    messageCopyButton(text, alignment: .trailing)
+                    messageCopyButton(copiedText, alignment: .trailing)
                 }
             }
             .accessibilityLabel(accessibilityLabel)
-            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(text) }
+            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(copiedText) }
             .onHover(perform: messageHoverChanged)
         } else {
             VStack(alignment: .leading, spacing: ToasttyMessageCopyButtonMetrics.spacing) {

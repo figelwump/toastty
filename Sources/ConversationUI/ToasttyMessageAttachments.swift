@@ -4,8 +4,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The files sent with a user's message, in its bubble: an image as a
-/// thumbnail, any other file, or an image that cannot be read now, as its
-/// icon and name. The files are on this device; the host gives their paths.
+/// thumbnail, or as its name when it cannot be read now, and any other
+/// file as its icon and name. The files are on this device; the host gives
+/// their paths.
 struct ToasttyMessageAttachments: View {
     let urls: [URL]
 
@@ -19,10 +20,10 @@ struct ToasttyMessageAttachments: View {
 }
 
 private struct ToasttyMessageAttachment: View {
-    /// The thumbnail's height. Its width follows the image, within limits,
-    /// so that the row's height does not change when the image loads.
-    static let thumbnailHeight: CGFloat = 120
-    static let thumbnailWidthRange: ClosedRange<CGFloat> = 72...240
+    /// Every image takes this box, before and after it loads and also when
+    /// it cannot be read, so a row of the transcript keeps its size. The
+    /// image fits inside it.
+    static let thumbnailSize = CGSize(width: 200, height: 120)
 
     let url: URL
     @Environment(\.displayScale) private var displayScale
@@ -33,7 +34,7 @@ private struct ToasttyMessageAttachment: View {
     private var isImage: Bool { UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true }
 
     var body: some View {
-        if isImage, isUnreadable == false {
+        if isImage {
             thumbnailView
                 .task(id: url) { await load() }
         } else {
@@ -42,19 +43,28 @@ private struct ToasttyMessageAttachment: View {
     }
 
     private var thumbnailView: some View {
-        let width = thumbnail.map {
-            min(max($0.aspectRatio * Self.thumbnailHeight, Self.thumbnailWidthRange.lowerBound),
-                Self.thumbnailWidthRange.upperBound)
-        } ?? Self.thumbnailHeight
-        return ZStack {
+        ZStack {
             Color.black.opacity(0.25)
             if let thumbnail {
                 Image(decorative: thumbnail.image, scale: displayScale)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+            } else if isUnreadable {
+                // The image is gone, or is not one that this device reads.
+                VStack(spacing: 6) {
+                    Image(systemName: "photo")
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
+                    Text(name)
+                        .conversationFont(.caption)
+                        .foregroundStyle(ConversationDesignTokens.userBubbleText)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(8)
             }
         }
-        .frame(width: width, height: Self.thumbnailHeight)
+        .frame(width: Self.thumbnailSize.width, height: Self.thumbnailSize.height)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -68,7 +78,7 @@ private struct ToasttyMessageAttachment: View {
 
     private var fileChip: some View {
         HStack(spacing: 6) {
-            Image(systemName: isImage ? "photo" : "doc")
+            Image(systemName: "doc")
                 .foregroundStyle(ConversationDesignTokens.mutedText)
                 .accessibilityHidden(true)
             Text(name)
@@ -87,7 +97,7 @@ private struct ToasttyMessageAttachment: View {
     }
 
     private func load() async {
-        let pixelSize = Int(Self.thumbnailWidthRange.upperBound * displayScale)
+        let pixelSize = Int(max(Self.thumbnailSize.width, Self.thumbnailSize.height) * displayScale)
         let loaded = await ToasttyAttachmentThumbnail.load(url: url, maximumPixelSize: pixelSize)
         guard Task.isCancelled == false else { return }
         if let loaded {

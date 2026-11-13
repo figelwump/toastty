@@ -570,18 +570,20 @@ final class CoordinatorChatViewTests: XCTestCase {
 
         // Hover, find the button, click it, and read the pasteboard.
         let cases: [(name: String, lastFragment: String, expected: String)] = [
-            ("user-message", Self.copyUserText, Self.copyUserText),
+            // The name of the message's file comes after its text.
+            ("user-message", Self.copyUserText, Self.copyUserText + "\n\nnotes.txt"),
             ("long-answer", Self.longAnswerLastParagraph, Self.longAnswer),
             ("short-answer", Self.copyShortAnswer, Self.copyShortAnswer),
         ]
         for testCase in cases {
             let messageRect = try textRect(testCase.lastFragment)
             // The button sits under the message, inside the message column.
+            // Below the text, a user's message can show its files first.
             let band = CGRect(
                 x: messageRect.minX - 40,
                 y: messageRect.maxY,
                 width: messageRect.width + 80,
-                height: 44
+                height: 80
             )
             let before = try Self.bitmap(of: hostingView)
             try moveMouse(to: CGPoint(x: messageRect.midX, y: messageRect.midY))
@@ -853,7 +855,9 @@ final class CoordinatorChatViewTests: XCTestCase {
         }
         let events = [
             event(.userMessage(ConversationUserMessagePayload(
-                text: copyUserText,
+                text: RemoteMessageAttachmentStore.Staged.deliveryText(
+                    text: copyUserText, paths: ["/tmp/toastty-copy-test/notes.txt"]
+                ),
                 origin: .remote,
                 clientRequestID: "composer-1"
             ))),
