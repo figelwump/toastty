@@ -30,7 +30,7 @@ struct CoordinatorComposerView: View {
     var reply: CoordinatorReplyTarget?
     /// ✕ on the reply, or Escape in an empty field.
     var onCancelReply: () -> Void = {}
-    var placeholder = "Message the coordinator…"
+    var placeholder = "Message Toasty…"
     /// A turn runs that Stop can end.
     let canStop: Bool
     /// False while the message is being sent with its files.

@@ -590,6 +590,24 @@ final class CoordinatorChatModel: ObservableObject {
         }
     }
 
+    /// The chat shows Toasty's introduction in place of an empty
+    /// transcript while the conversation is new and has no message: for a
+    /// new coordinator, and after Restart. A conversation that a relaunch
+    /// resumes never shows it, so it cannot show while that one loads.
+    var showsIntroduction: Bool {
+        guard controller?.hasNewConversation == true, presentation.sendItems.isEmpty else { return false }
+        switch presentation.phase {
+        case .live, .loading: break
+        case .resyncing, .stale, .failure: return false
+        }
+        // A new conversation starts with the marker of its binding to the
+        // terminal, which is no message.
+        return presentation.rows.allSatisfy { row in
+            if case .sessionBindingChanged = row.content { return true }
+            return false
+        }
+    }
+
     /// What the chat says above the composer now. It reads the session's
     /// state, so a view that shows it also observes the session store.
     var notice: Notice? {

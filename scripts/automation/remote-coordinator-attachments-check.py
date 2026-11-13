@@ -300,7 +300,7 @@ def run(check, stills=False):
         # only in the terminal. A tool row may show the path Claude read.
         require(INTRODUCTION not in texts, f'The chat shows the list of paths: {texts[-600:]}')
         require('red-square.png' in texts, f'The chat does not name the file: {texts[-600:]}')
-        require(chips() == '' and composer_text().strip() in ('', 'Message the coordinator…'),
+        require(chips() == '' and composer_text().strip() in ('', 'Message Toasty…'),
                 f'The composer is not empty after the send: {chips()!r} {composer_text()!r}')
         wait_for('the prompt to open again', at_prompt, timeout=120)
         still('dropped-image-sent-and-answered')
