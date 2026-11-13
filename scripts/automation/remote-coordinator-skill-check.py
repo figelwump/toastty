@@ -582,12 +582,22 @@ class Run:
         response = self.instance.request('app_control.run_query', dict(id='terminal.visible-text', args=dict(panelID=panel)))
         return (response.get('result') or {}).get('text', '') if response.get('ok') else ''
 
+    def waiting_wake(self):
+        """Whether a waiting change will wake the coordinator. A change that
+        wakes nothing on its own, such as a task that starts running, can
+        wait for a long time."""
+        try:
+            saved = json.loads((self.runtime_home / 'task-webhook-outbox.json').read_text()).get('coordinator') or {}
+        except (OSError, json.JSONDecodeError):
+            return False
+        return any(change.get('wakes') or change.get('newAlerts') for change in saved.get('changes') or [])
+
     def at_rest(self):
         current = self.coordinator()
         require(current.get('status') != 'needs_approval',
                 f'The coordinator stopped at a permission prompt:\n{self.screen()[-1500:]}')
         return (current.get('agentState') == 'running' and current.get('status') in ('idle', 'ready')
-                and current.get('queuedCount') == 0 and current['wake']['pendingTaskCount'] == 0)
+                and current.get('queuedCount') == 0 and not self.waiting_wake())
 
     def wait_idle(self, timeout=TURN_TIMEOUT, quiet=6):
         """Waits until the coordinator rests, with nothing waiting to be typed, for `quiet` seconds."""
