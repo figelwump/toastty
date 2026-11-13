@@ -165,17 +165,19 @@ task's status. Point to the evidence in this task's Scratchpad.
   `"$TOASTTY_CLI_PATH" task needs-reply --question "<the question in a few words>"`
   just before you end the turn. The task then waits in Needs you until the
   user answers. Also use it for blocked work, and report the blocker and the
-  next action. Use it for a proposed change or plan that needs the user's
-  decision, even when the explanation or investigation is complete. State the
-  decision needed in your final answer. Check the conversation first: if the
-  user already authorized the work, continue within that scope instead of
-  asking for the same approval again.
+  next action. Use it when continuing this task depends on the user's
+  decision about a proposed change or plan, even when the explanation or
+  investigation is complete. State the decision needed in your final answer.
+  Check the conversation first: if the user already authorized the work,
+  continue within that scope instead of asking for the same approval again.
 - **A completed answer, investigation, plan, or other work without a pull
-  request:** use this only when the requested work is complete and no answer
-  or approval is pending. An explanation or proposed fix alone does not
-  complete requested or authorized implementation. Mark the task ready for
-  review, so that the user can read the result and follow up before deciding
-  the task is Done. Run
+  request:** use this only when the requested work is complete and the task
+  does not wait for a decision to continue that work. A request only for an
+  answer, investigation, or plan can be complete when delivered, even if it
+  suggests possible future work. An explanation or proposed fix alone does
+  not complete requested or authorized implementation. Mark the task ready
+  for review, so that the user can read the result and follow up before
+  deciding the task is Done. Run
   `"$TOASTTY_CLI_PATH" --json task get` and confirm that its request matches
   this conversation. Then run
   `"$TOASTTY_CLI_PATH" --json task ready-for-review <task-id>`, require

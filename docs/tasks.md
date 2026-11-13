@@ -1322,12 +1322,13 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | To ship or Done | it has no pull request and no worktree of its own, it started child tasks, and they all finished: each child is To ship, Done or Archived, and at least one merged. It is To ship while a child waits for a release, shown as "Child tasks merged · waiting for a release", and Done once every child that is not archived is Done. This also applies after its task space closed, unless it still waits for a reply or a review |
 | Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space |
 
-When an agent proposes a change and needs your decision, it asks a clear
-question and runs `task needs-reply`, even if its explanation is complete.
-An explanation-only request can be marked ready for review once answered.
-An explanation or proposed fix does not finish requested or approved
-implementation. Once you approve the work, the agent continues within that
-scope instead of asking for the same approval again.
+When continuing a task depends on your decision about a proposed change or
+plan, the agent asks a clear question and runs `task needs-reply`, even if its
+explanation is complete. An answer, investigation, or plan requested on its
+own can be marked ready for review once delivered, even if it suggests
+possible future work. An explanation or proposed fix does not finish
+requested or approved implementation. Once you approve the work, the agent
+continues within that scope instead of asking for the same approval again.
 
 A parent that finishes through its child tasks stores nothing: its stage
 follows theirs. A new child that is not finished moves it back to Idle, and its
