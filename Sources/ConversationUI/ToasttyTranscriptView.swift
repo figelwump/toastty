@@ -1704,6 +1704,8 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
     let caption: String?
     /// The agent's message that this message answers.
     var quote: ToasttyMessageQuote?
+    /// The local files sent with the message.
+    var attachments: [URL] = []
     var isSending = false
     /// Under the bubble, outside it: the message's copy button, or the
     /// same space while the message sends.
@@ -1721,12 +1723,20 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
     }
 
     private var bubble: some View {
-        VStack(alignment: .trailing, spacing: 5) {
+        // With files, the bubble is often wider than its text: the text
+        // starts at its leading edge, as the files do.
+        VStack(alignment: attachments.isEmpty ? .trailing : .leading, spacing: 5) {
             if let quote {
                 ToasttyMessageQuoteStrip(quote: quote)
             }
-            ToasttySelectableText(AttributedString(text),
-                                  textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
+            // A message of files alone has no text.
+            if text.isEmpty == false || attachments.isEmpty {
+                ToasttySelectableText(AttributedString(text),
+                                      textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
+            }
+            if attachments.isEmpty == false {
+                ToasttyMessageAttachments(urls: attachments)
+            }
             if let caption {
                 Text(caption)
                     .conversationFont(.caption2, monospaced: true)
@@ -1851,7 +1861,9 @@ private struct ToasttySendTailItemView: View {
     }
 
     private var optimisticBubble: some View {
-        ToasttyUserMessageBubble(text: item.text, caption: item.sentCaption, quote: item.quote, isSending: true) {
+        ToasttyUserMessageBubble(
+            text: item.text, caption: item.sentCaption, quote: item.quote, attachments: item.attachments, isSending: true
+        ) {
             if options.showsMessageCopyButton {
                 Color.clear
                     .frame(
@@ -2034,12 +2046,13 @@ private struct ToasttyTranscriptRowView: View {
     @ViewBuilder
     private var rowContent: some View {
         switch row.content {
-        case .userMessage(let text, let origin, let deliveryMode, let quote):
+        case .userMessage(let text, let origin, let deliveryMode, let quote, let attachments):
             message(
                 text: text,
                 isUser: true,
                 metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode),
-                quote: quote
+                quote: quote,
+                attachments: attachments
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -2080,7 +2093,13 @@ private struct ToasttyTranscriptRowView: View {
     }
 
     @ViewBuilder
-    private func message(text: String, isUser: Bool, metadata: String?, quote: ToasttyMessageQuote? = nil) -> some View {
+    private func message(
+        text: String,
+        isUser: Bool,
+        metadata: String?,
+        quote: ToasttyMessageQuote? = nil,
+        attachments: [URL] = []
+    ) -> some View {
         // A long message draws as several rows. Only its last row has the
         // buttons, and they act on the whole message.
         let copiesMessage = options.showsMessageCopyButton && (chunk?.isLast ?? true)
@@ -2088,7 +2107,7 @@ private struct ToasttyTranscriptRowView: View {
         let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
 
         if isUser {
-            ToasttyUserMessageBubble(text: text, caption: metadata, quote: quote) {
+            ToasttyUserMessageBubble(text: text, caption: metadata, quote: quote, attachments: attachments) {
                 if copiesMessage {
                     messageCopyButton(text, alignment: .trailing)
                 }

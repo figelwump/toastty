@@ -173,6 +173,104 @@ final class CoordinatorChatViewTests: XCTestCase {
         try Self.writeEvidence(png, name: name)
     }
 
+    /// A quick entry message's images show as thumbnails in the user's
+    /// bubble, and its other files, or an image that is gone, as their
+    /// names. The text no longer lists the names.
+    func testUserMessageShowsAttachedImagesAsThumbnailsAndOtherFilesByName() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("chat-attachments-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let wide = folder.appendingPathComponent("wide-screenshot.png")
+        try Self.solidPNG(width: 1_200, height: 300, color: .systemRed).write(to: wide)
+        let tall = folder.appendingPathComponent("tall.png")
+        try Self.solidPNG(width: 300, height: 600, color: .systemBlue).write(to: tall)
+        let notes = folder.appendingPathComponent("notes.txt")
+        try Data("socket closed".utf8).write(to: notes)
+        let gone = folder.appendingPathComponent("removed.png")
+
+        let message = CoordinatorMessageHeader.quickEntryMessage(
+            .init(project: .init(id: UUID(), title: "toastty"), agent: "claude"),
+            text: "The image in this message does not show in the chat.",
+            attachmentPaths: [wide, tall, notes, gone].map(\.path)
+        )
+        let event = ConversationEvent(
+            conversationID: RemoteConversationID(rawValue: UUID()),
+            sequence: 1,
+            eventID: "event-1",
+            timestamp: Date(timeIntervalSince1970: 1_800_000_000),
+            provider: .claude,
+            payload: .userMessage(ConversationUserMessagePayload(text: message, origin: .remote, clientRequestID: "quick-1"))
+        )
+        let state = ToasttyConversationPresentationState(
+            rows: CoordinatorChatTranscript.rows(
+                from: [event],
+                projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+                projectionGeneration: 1,
+                isSentFromThisMac: { _ in true },
+                timeText: { _ in "10:05" }
+            ),
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .working,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions
+        )
+        let (hostingView, window) = Self.host(transcript)
+        defer { window.close() }
+        // The thumbnails load off the main thread.
+        Self.settle(hostingView)
+
+        let bubbleText = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string).joined()
+        XCTAssertTrue(bubbleText.contains("The image in this message does not show in the chat."))
+        XCTAssertFalse(bubbleText.contains("wide-screenshot.png"), "The text no longer names the files")
+        XCTAssertFalse(bubbleText.contains("notes.txt"))
+
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        XCTAssertGreaterThan(Self.pixelCount(in: bitmap, matching: .systemRed), 200, "The wide image draws")
+        XCTAssertGreaterThan(Self.pixelCount(in: bitmap, matching: .systemBlue), 200, "The tall image draws")
+        try attachImage(of: hostingView, name: "coordinator-chat-attachments")
+    }
+
+    private static func solidPNG(width: Int, height: Int, color: NSColor) throws -> Data {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        color.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    /// Pixels in which one channel clearly leads, every fourth pixel in
+    /// each direction. The window's color space shifts the exact values.
+    private static func pixelCount(in bitmap: NSBitmapImageRep, matching color: NSColor) -> Int {
+        var count = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 4) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let (red, green, blue) = (pixel.redComponent, pixel.greenComponent, pixel.blueComponent)
+                let matches = color == .systemRed
+                    ? red > 0.75 && green < 0.5 && blue < 0.5
+                    : blue > 0.75 && red < 0.5 && green < 0.75
+                if matches { count += 1 }
+            }
+        }
+        return count
+    }
+
     /// A chip in running text: it moves to the next line as one piece, also
     /// when its title has a hyphen. A chip wider than the line wraps, and each
     /// line gets its own outline around that line's part of the chip.
