@@ -2469,6 +2469,7 @@ private extension AppControlExecutor {
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
             "currentTheme": .string(runtimeState.currentTheme.rawValue),
+            "runtimeMagnification": .double(runtimeState.magnification),
             "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
             "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
             "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,

@@ -19,7 +19,7 @@ Use this workflow when the user already has a built Toastty release artifact and
    - Commit: `<RELEASE_GHOSTTY_COMMIT_SHORT>`
    - Build flags: `<RELEASE_GHOSTTY_BUILD_FLAGS>`
    ```
-4. Run `scripts/release/publish-github-release.sh --create-tag` to publish a draft by default. Add `--publish` only when the user wants the release to go live immediately and update the Sparkle appcast.
+4. Run `scripts/release/publish-github-release.sh --create-tag` to publish a draft by default. Keep the draft default when the user asked only for a draft or did not say. Add `--publish` only when the user wants the release to go live immediately and update the Sparkle appcast. A release approval that covers making the release live is that request; do not ask again.
 
 ## Important invariants
 

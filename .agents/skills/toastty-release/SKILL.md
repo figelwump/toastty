@@ -33,15 +33,15 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
 9. Read several prior `artifacts/release/**/release-notes.md` files, prioritizing the most recent releases, so the new notes follow Toastty's established house style.
 10. Inspect the Toastty diff and commit history from `RELEASE_PREVIOUS_TAG` to `RELEASE_SOURCE_COMMIT`.
 11. Write `artifacts/release/<version>-<build>/release-notes.md` at `RELEASE_NOTES_PATH`, grounded in the recorded metadata rather than the current `HEAD`.
-12. Let the user review or edit `artifacts/release/<version>-<build>/release-notes.md` if they want changes before publication.
-13. Hand off the generated release directory and artifacts for later publication, always using repo-relative paths:
+12. Let the user review or edit `artifacts/release/<version>-<build>/release-notes.md` if they want changes before publication. Make any changes they ask for before step 14. Do not stop for a review that the user did not ask for.
+13. Hand off the generated release directory and artifacts, always using repo-relative paths:
    - `artifacts/release/<version>-<build>/`
    - `artifacts/release/<version>-<build>/release-metadata.env`
    - `artifacts/release/<version>-<build>/ghostty-metadata.env`
    - `artifacts/release/<version>-<build>/sparkle-metadata.env`
    - `artifacts/release/<version>-<build>/release-notes.md`
    - `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
-14. Stop after the build-and-draft handoff unless the user explicitly asks to continue into publication. If they do, open `../toastty-publish/SKILL.md` and follow that workflow.
+14. If the user's release approval already covers publication, do not ask again: open `../toastty-publish/SKILL.md` and follow that workflow. If the approval did not cover publication, stop after the build-and-draft handoff, and continue into publication only when the user asks.
 
 ## Important invariants
 

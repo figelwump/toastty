@@ -25,6 +25,13 @@ struct ScratchpadPanelRuntimeAutomationState: Equatable, Sendable {
     let currentAssetPath: String?
     let currentBootstrap: ScratchpadPanelBootstrap?
     let recentDiagnostics: [ScratchpadPanelDiagnostic]
+    let magnification: Double
+}
+
+enum ScratchpadMagnificationAdjustment: Equatable, Sendable {
+    case increase
+    case decrease
+    case reset
 }
 
 struct ScratchpadPanelDiagnostic: Equatable, Sendable {
@@ -49,6 +56,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     let annotationSession = WebPanelAnnotationSession()
     @Published private(set) var isAnnotationContentReady = false
     private var annotationObservation: AnyCancellable?
+    private var magnificationLockObservation: AnyCancellable?
     private var annotationRenderID: UUID?
 
     var annotationSource: WebPanelAnnotationSource { .scratchpad }
@@ -131,6 +139,9 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         let webViewCreationDuration = CFAbsoluteTimeGetCurrent() - webViewCreationStartTime
         webView.setValue(false, forKey: "drawsBackground")
         webView.showsHistoryContextMenuItems = true
+        // Magnification scales the whole page, like pinch zoom in Safari, and
+        // scrolling pans across the scaled page.
+        webView.allowsMagnification = true
         #if DEBUG
         webView.isInspectable = true
         #endif
@@ -144,6 +155,14 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         annotationObservation = annotationSession.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        // Annotation marks use page coordinates at 100%, so the page stays
+        // at 100% while annotation mode is on or drafts exist.
+        magnificationLockObservation = annotationSession.$annotationState
+            .map { $0.isAnnotationModeEnabled || $0.hasDrafts }
+            .removeDuplicates()
+            .sink { [weak self] isLocked in
+                self?.setMagnificationLocked(isLocked)
+            }
 
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
@@ -210,7 +229,8 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
             currentAssetPath: currentAssetURL?.path,
             currentBootstrap: currentBootstrap,
-            recentDiagnostics: recentDiagnostics
+            recentDiagnostics: recentDiagnostics,
+            magnification: magnification
         )
     }
 
@@ -313,6 +333,56 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             return
         }
         webView.isHidden = shouldHideWebView
+    }
+
+    var magnification: Double {
+        Double(webView.magnification)
+    }
+
+    /// Steps the page magnification with the browser zoom steps, but never
+    /// below 100%: below 100% WebKit shrinks the page into a corner instead
+    /// of laying it out again. Returns the new magnification, or nil when it
+    /// did not change.
+    @discardableResult
+    func adjustMagnification(_ adjustment: ScratchpadMagnificationAdjustment) -> Double? {
+        guard webView.allowsMagnification else { return nil }
+        let current = magnification
+        let next: Double
+        switch adjustment {
+        case .increase:
+            next = WebPanelState.increasedBrowserPageZoom(from: current)
+        case .decrease:
+            next = max(Self.minimumMagnification, WebPanelState.decreasedBrowserPageZoom(from: current))
+        case .reset:
+            next = Self.minimumMagnification
+        }
+        guard abs(next - current) >= WebPanelState.browserPageZoomComparisonEpsilon else { return nil }
+        setMagnification(next)
+        return magnification
+    }
+
+    private static let minimumMagnification: Double = 1
+
+    /// Keeps the center of the view in place. WebKit ignores the center
+    /// point of `setMagnification(_:centeredAt:)` here and keeps the
+    /// top-left page point, so the page then scrolls by half the change in
+    /// visible size. Each step's scroll is relative, so fast repeated steps
+    /// add up in order.
+    private func setMagnification(_ value: Double) {
+        let previous = magnification
+        let size = webView.bounds.size
+        webView.setMagnification(CGFloat(value), centeredAt: .zero)
+        let deltaX = (Double(size.width) / previous - Double(size.width) / value) / 2
+        let deltaY = (Double(size.height) / previous - Double(size.height) / value) / 2
+        guard deltaX.isFinite, deltaY.isFinite else { return }
+        webView.evaluateJavaScript("window.scrollBy(\(deltaX), \(deltaY));", completionHandler: nil)
+    }
+
+    private func setMagnificationLocked(_ isLocked: Bool) {
+        if isLocked, abs(magnification - Self.minimumMagnification) >= WebPanelState.browserPageZoomComparisonEpsilon {
+            setMagnification(Self.minimumMagnification)
+        }
+        webView.allowsMagnification = !isLocked
     }
 
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
@@ -1040,7 +1110,11 @@ extension ScratchpadPanelRuntime {
                 }
             }
         }
-        guard generation == currentAnnotationPageGeneration() else {
+        // Annotation marks use page coordinates at 100%. Zoom stays locked
+        // while annotating, but a capture still resolving after annotation
+        // mode ends can see a zoomed page.
+        guard generation == currentAnnotationPageGeneration(),
+              abs(magnification - Self.minimumMagnification) < WebPanelState.browserPageZoomComparisonEpsilon else {
             throw BrowserPanelScreenshotError.snapshotUnavailable
         }
         let identity = bootstrap.documentID.map { "Scratchpad \($0.uuidString)" } ?? "Scratchpad"

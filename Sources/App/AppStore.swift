@@ -87,6 +87,13 @@ final class AppStore: ObservableObject {
     /// Whether the subspace Merge button, its menu items, and its shortcut
     /// show at all. Read once at launch from a hidden defaults key.
     let isWorkspaceMergeEnabled: Bool
+    /// How Markdown panels open: formatted or as source. The last choice made
+    /// in any Markdown panel's header sets it, and it persists across launches.
+    private(set) var localDocumentMarkdownViewMode: LocalDocumentMarkdownViewMode
+    /// Light or dark colors for every document panel, or the app's
+    /// appearance. Set from any document panel's right-click menu; it
+    /// persists across launches.
+    private(set) var localDocumentAppearance: LocalDocumentAppearance
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
@@ -139,6 +146,8 @@ final class AppStore: ObservableObject {
         initialAskBeforeQuitting: Bool = true,
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
         isWorkspaceMergeEnabled: Bool = false,
+        initialLocalDocumentMarkdownViewMode: LocalDocumentMarkdownViewMode = .formatted,
+        initialLocalDocumentAppearance: LocalDocumentAppearance = .system,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
         appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
@@ -148,6 +157,8 @@ final class AppStore: ObservableObject {
         askBeforeQuitting = initialAskBeforeQuitting
         workspaceMergeMode = initialWorkspaceMergeMode
         self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
+        localDocumentMarkdownViewMode = initialLocalDocumentMarkdownViewMode
+        localDocumentAppearance = initialLocalDocumentAppearance
         self.recentRightPanelItems = recentRightPanelItemsStore.items
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
@@ -541,7 +552,9 @@ final class AppStore: ObservableObject {
                 return .markdown(windowID: selection.windowID)
             case .browser:
                 return .browser(windowID: selection.windowID, panelID: focusedPanel.panelID)
-            case .scratchpad, .diff:
+            case .scratchpad:
+                return .scratchpad(windowID: selection.windowID, panelID: focusedPanel.panelID)
+            case .diff:
                 return nil
             }
         }
@@ -2043,6 +2056,20 @@ final class AppStore: ObservableObject {
         self.askBeforeQuitting = askBeforeQuitting
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistAskBeforeQuitting(askBeforeQuitting)
+    }
+
+    func setLocalDocumentMarkdownViewMode(_ mode: LocalDocumentMarkdownViewMode) {
+        guard localDocumentMarkdownViewMode != mode else { return }
+        localDocumentMarkdownViewMode = mode
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistLocalDocumentMarkdownViewMode(mode)
+    }
+
+    func setLocalDocumentAppearance(_ appearance: LocalDocumentAppearance) {
+        guard localDocumentAppearance != appearance else { return }
+        localDocumentAppearance = appearance
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistLocalDocumentAppearance(appearance)
     }
 
     func setWorkspaceMergeMode(_ mode: WorkspaceMergeMode) {

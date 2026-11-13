@@ -181,14 +181,23 @@ final class TerminalHostView: NSView {
         return result
     }
 
-    override var isHidden: Bool {
-        didSet {
-            #if TOASTTY_HAS_GHOSTTY_KIT
-            syncSurfaceVisibility(reason: "hidden_changed")
-            #else
-            isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
-            #endif
-        }
+    // AppKit sends these callbacks for ancestor visibility changes as well.
+    override func viewDidHide() {
+        super.viewDidHide()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        syncSurfaceVisibility(reason: "view_hidden")
+        #else
+        isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
+        #endif
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        syncSurfaceVisibility(reason: "view_revealed")
+        #else
+        isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
+        #endif
     }
 
     deinit {
