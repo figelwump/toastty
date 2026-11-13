@@ -53,6 +53,18 @@ enum SidebarCoordinatorPresentation {
         }
     }
 
+    /// The status Toasty carries in the row's left column: steam while the
+    /// agent works, a session row's rail dot otherwise.
+    static func iconStatus(_ mark: Mark) -> ToastyIcon.Status {
+        switch mark {
+        case .working: .working
+        case .unread: .unread
+        case .needsApproval: .needsApproval
+        case .error: .error
+        case .quiet, .starting, .notRunning: .none
+        }
+    }
+
     static func statusText(_ mark: Mark) -> String? {
         switch mark {
         case .quiet: nil
@@ -110,10 +122,13 @@ struct SidebarCoordinatorRow: View {
         let label = SidebarCoordinatorPresentation.accessibilityLabel(mark, isSelected: isSelected)
         Button(action: select) {
             HStack(spacing: 8) {
-                Image(systemName: "diamond.fill")
-                    .font(.system(size: 7.5, weight: .medium))
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .frame(width: 14)
+                ToastyIcon(
+                    style: .outline,
+                    size: 14,
+                    status: SidebarCoordinatorPresentation.iconStatus(mark),
+                    badgeRingColor: rowBackground ?? ToastyTheme.chromeBackground
+                )
+                .frame(width: 14)
                 Text(AppState.coordinatorWorkspaceTitle)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(ToastyTheme.primaryText)
@@ -126,12 +141,7 @@ struct SidebarCoordinatorRow: View {
             .padding(.vertical, 5)
             .padding(.leading, 10)
             .padding(.trailing, 8)
-            .background(
-                isSelected
-                    ? ToastyTheme.sidebarSessionActiveBackground
-                    : (isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear),
-                in: RoundedRectangle(cornerRadius: 7)
-            )
+            .background(rowBackground ?? Color.clear, in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -153,15 +163,20 @@ struct SidebarCoordinatorRow: View {
         .background(ToastyTheme.chromeBackground)
     }
 
+    /// The selected or hovered row's fill. Without one, the row shows the
+    /// sidebar's chrome.
+    private var rowBackground: Color? {
+        if isSelected { return ToastyTheme.sidebarSessionActiveBackground }
+        if isHovered { return ToastyTheme.sidebarSessionHoverBackground }
+        return nil
+    }
+
+    /// The words at the right end, as on a session row's first line.
     @ViewBuilder
     private func markView(_ mark: SidebarCoordinatorPresentation.Mark) -> some View {
         switch mark {
-        case .quiet:
+        case .quiet, .working, .unread:
             EmptyView()
-        case .working:
-            SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .unread:
-            SessionStatusIndicator(state: .dot, size: 7)
         case .needsApproval:
             SessionStatusBadge(kind: .needsApproval)
         case .error:

@@ -147,6 +147,11 @@ enum ToastyTheme {
     static let emptyStateShortcutBg = Color(hex: 0x2A2420)
     static let emptyStateShortcutBorder = Color(hex: 0x3A3028)
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
+    // The golden style of `ToastyIcon`
+    static let toastyIconGoldenFill = Color(hex: 0xE2A55C)
+    static let toastyIconGoldenOutline = Color(hex: 0xA8662C)
+    static let toastyIconGoldenFace = Color(hex: 0x3A220F)
+    static let toastyIconGoldenButter = Color(hex: 0xFFE08A)
 
     static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidth)
     static let workspaceTabBarHeight: CGFloat = 34

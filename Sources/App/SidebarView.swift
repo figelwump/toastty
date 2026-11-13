@@ -395,7 +395,7 @@ private extension SessionChildRow {
 /// The status mark in a session row's left rail. The subspace hover card
 /// draws its session rows with it too.
 struct SessionRailStatusIcon: View {
-    private static let dotSize: CGFloat = 7
+    static let dotSize: CGFloat = 7
 
     let state: SidebarSessionPresentation.SessionRailState
 
