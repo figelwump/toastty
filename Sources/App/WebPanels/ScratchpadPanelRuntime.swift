@@ -1100,7 +1100,11 @@ extension ScratchpadPanelRuntime {
                 }
             }
         }
-        guard generation == currentAnnotationPageGeneration() else {
+        // Annotation marks use page coordinates at 100%. Zoom stays locked
+        // while annotating, but a capture still resolving after annotation
+        // mode ends can see a zoomed page.
+        guard generation == currentAnnotationPageGeneration(),
+              abs(magnification - Self.minimumMagnification) < WebPanelState.browserPageZoomComparisonEpsilon else {
             throw BrowserPanelScreenshotError.snapshotUnavailable
         }
         let identity = bootstrap.documentID.map { "Scratchpad \($0.uuidString)" } ?? "Scratchpad"
