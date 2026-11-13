@@ -2,8 +2,9 @@ import AppKit
 import CoreState
 import SwiftUI
 
-/// The groups the Tasks view lists, in sidebar order. To ship lists its
-/// tasks under one header per project.
+/// The groups the Tasks view lists, in sidebar order. Needs you is split as
+/// the sidebar splits it: what blocks an agent, then Ready to review. To
+/// ship lists its tasks under one header per project.
 struct TasksViewSections: Equatable {
     struct Lane: Equatable, Identifiable {
         /// The project's root directory, or its title for tasks without one:
@@ -17,6 +18,9 @@ struct TasksViewSections: Equatable {
     }
 
     var needsYou: [SidebarStatusSections.Entry] = []
+    /// Tasks in Needs you whose open pull request or ready mark waits for
+    /// the user's review.
+    var readyToReview: [SidebarStatusSections.Entry] = []
     var running: [SidebarStatusSections.Entry] = []
     var idle: [SidebarStatusSections.Entry] = []
     var toShip: [Lane] = []
@@ -28,7 +32,9 @@ struct TasksViewSections: Equatable {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
         var sections = Self()
-        sections.needsYou = entries(.needsYou)
+        let needsYou = items.filter { $0.stage.group == .needsYou }
+        sections.needsYou = SidebarStatusSections.grouped(needsYou.filter { SidebarBucket($0.stage) == .needsYou })
+        sections.readyToReview = SidebarStatusSections.grouped(needsYou.filter { SidebarBucket($0.stage) == .readyToReview })
         sections.running = entries(.running)
         sections.idle = entries(.idle)
         sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
@@ -48,13 +54,13 @@ struct TasksViewSections: Equatable {
 
     /// Every entry in display order, for picking a selection.
     var all: [SidebarStatusSections.Entry] {
-        needsYou + running + idle + toShip.flatMap(\.entries) + done + archived
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries) + done + archived
     }
 
     /// The entries the list shows, in order: Done and Archived only while
     /// they are expanded.
     func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
-        needsYou + running + idle + toShip.flatMap(\.entries)
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries)
             + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
     }
 
@@ -269,6 +275,13 @@ struct TasksView: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             groupHeader(.needsYou, count: sections.needsYou.count, isHot: sections.needsYou.isEmpty == false)
             rows(sections.needsYou, selectedID: selectedID)
+            if sections.readyToReview.isEmpty == false {
+                groupHeader(
+                    title: SidebarBucket.readyToReview.title, identifier: "readyToReview",
+                    count: sections.readyToReview.count, color: ToastyTheme.sidebarTaskReviewMark
+                )
+                rows(sections.readyToReview, selectedID: selectedID)
+            }
             groupHeader(.running, count: sections.running.count)
             rows(sections.running, selectedID: selectedID)
             groupHeader(.idle, count: sections.idle.count)
@@ -302,21 +315,28 @@ struct TasksView: View {
     }
 
     private func groupHeader(_ group: TaskStage.Group, count: Int, isHot: Bool = false) -> some View {
+        groupHeader(
+            title: TaskBoardPresentation.groupTitle(group), identifier: "\(group)", count: count,
+            color: isHot ? Color(hex: 0xF2C46B) : ToastyTheme.mutedText
+        )
+    }
+
+    private func groupHeader(title: String, identifier: String, count: Int, color: Color) -> some View {
         HStack(spacing: 8) {
-            Text(TaskBoardPresentation.groupTitle(group).uppercased())
+            Text(title.uppercased())
                 .tracking(0.8)
             Text("\(count)")
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(ToastyTheme.inactiveText)
         }
         .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(isHot ? Color(hex: 0xF2C46B) : ToastyTheme.mutedText)
+        .foregroundStyle(color)
         .padding(.horizontal, 18)
         .padding(.top, 14)
         .padding(.bottom, 6)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("tasks.view.group.\(group)")
+        .accessibilityIdentifier("tasks.view.group.\(identifier)")
     }
 
     private func collapsibleGroup(
