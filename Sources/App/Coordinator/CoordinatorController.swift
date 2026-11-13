@@ -992,39 +992,63 @@ final class CoordinatorController: ObservableObject {
     /// quiet. The service that keeps the wake state sets it.
     var isQuietDigest: (String) -> Bool = { _ in false }
 
-    /// The events read to find the newest message to the agent. A wake turn
-    /// has a few tool calls; a turn with more events than this is not read
-    /// as a quiet one.
+    /// The newest text this controller typed into the agent, from any
+    /// sender, as `CoordinatorWakeState.digestKey`, and when.
+    private var lastTyped: (key: String, at: Date)?
+    /// The wake turn that the coordinator marked quiet: its session and the
+    /// key of the digest that started it.
+    private var quietTurn: (sessionID: String, digestKey: String)?
+
+    /// The events read to find the newest message to the agent.
     private static let quietTurnEventLimit = 200
 
-    /// The text of the newest message to the agent in its conversation: the
-    /// message that started its turn, or one sent into the turn after it,
-    /// also one typed in its terminal. `nil` when Toastty cannot read the
-    /// conversation, or no message is among its newest events.
-    private func newestMessageToTheAgent() -> String? {
-        guard let subscription = syncConversationSubscription(),
-              case .page(let page) = subscription.events(before: nil, limit: Self.quietTurnEventLimit) else { return nil }
+    /// The text of the newest message to the agent among its newest events,
+    /// also one typed in its terminal, which does not pass through this
+    /// controller. `nil` when no message is among them.
+    private func newestMessageToTheAgent(_ subscription: any LocalConversationSubscription) -> String? {
+        guard case .page(let page) = subscription.events(before: nil, limit: Self.quietTurnEventLimit) else { return nil }
         for event in page.events.reversed() {
             if case .userMessage(let payload) = event.payload { return payload.text }
         }
         return nil
     }
 
-    /// Whether the coordinator's agent is in a turn now that the digest with
-    /// this key started, and no other message came into that turn.
-    func runsOnlyTheTurn(ofDigestKey digestKey: String) -> Bool {
-        guard syncConversationSubscription()?.snapshot(at: now())?.summary.state == .working,
-              let text = newestMessageToTheAgent() else { return false }
-        return CoordinatorWakeState.digestKey(text) == digestKey
+    /// Whether the turn that the digest with this key started still has no
+    /// other message in it: this controller typed nothing after the digest,
+    /// nobody typed in the terminal since, and the conversation shows no
+    /// newer message. Each check covers what the others can miss: the
+    /// conversation reads the transcript with a delay, and keys typed in
+    /// the terminal do not pass through this controller.
+    private func onlyTheDigestReached(_ digestKey: String, subscription: any LocalConversationSubscription) -> Bool {
+        guard let lastTyped, lastTyped.key == digestKey else { return false }
+        if let panelID = location?.panelID, let typedAt = sessionRuntimeStore.lastUserInputAt(panelID: panelID),
+           typedAt > lastTyped.at {
+            return false
+        }
+        // A turn with more events than the page holds started with the
+        // digest that this controller typed last.
+        guard let newest = newestMessageToTheAgent(subscription) else { return true }
+        return CoordinatorWakeState.digestKey(newest) == digestKey
     }
 
-    /// Whether the turn of this session that ends now is a quiet one: the
-    /// session is the coordinator's, and the newest message to its agent is
-    /// a digest whose turn it marked quiet. A message that came into the
-    /// turn after the digest makes the turn a normal one again.
+    /// Marks the turn that runs now as quiet, when the digest with this key
+    /// started it and no other message came into it. `false` changes
+    /// nothing.
+    func markQuietTurn(digestKey: String) -> Bool {
+        guard let session,
+              let subscription = syncConversationSubscription(),
+              subscription.snapshot(at: now())?.summary.state == .working,
+              onlyTheDigestReached(digestKey, subscription: subscription) else { return false }
+        quietTurn = (session.sessionID, digestKey)
+        return true
+    }
+
+    /// Whether the turn of this session that ends now is the quiet one, and
+    /// no message came into it after the mark.
     func turnEndsQuietly(sessionID: String) -> Bool {
-        guard session?.sessionID == sessionID, let text = newestMessageToTheAgent() else { return false }
-        return isQuietDigest(text)
+        guard let quietTurn, quietTurn.sessionID == sessionID,
+              let subscription = syncConversationSubscription() else { return false }
+        return onlyTheDigestReached(quietTurn.digestKey, subscription: subscription)
     }
 
     /// Types the first queued entry when the prompt is open. Returns that
@@ -1228,6 +1252,7 @@ final class CoordinatorController: ObservableObject {
         if typedMessageIDs.count > Self.rememberedTypedMessages {
             typedMessageIDs.removeFirst(typedMessageIDs.count - Self.rememberedTypedMessages)
         }
+        lastTyped = (CoordinatorWakeState.digestKey(entry.text), now())
         ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
             "session_id": session.sessionID,
             "submit_confirmed": result == .delivered ? "true" : "false",

@@ -1164,7 +1164,10 @@ toastty coordinator wake --clear --quiet
   question or an approval prompt in the turn stays visible.
 - The end of a quiet turn does not mark the coordinator unread and sends no
   notification to the Mac and no push to a phone. If you send a message into
-  the turn after the mark, its end shows and alerts as usual.
+  the turn after the mark, or type in the coordinator's terminal, its end
+  alerts as usual. Toastty keeps that part of the mark in memory: after a
+  relaunch in the middle of a quiet turn, its end alerts as usual, and the
+  chat still folds it.
 - Toastty saves the mark with the digest it belongs to, so the chat still
   folds the turn after a relaunch. It keeps the newest 200 marks.
 

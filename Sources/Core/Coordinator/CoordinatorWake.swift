@@ -125,7 +125,9 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         let waiting = changes.first { $0.taskID == change.taskID }
         changes.removeAll { $0.taskID == change.taskID }
         let stageChanged = deleted || change.previous.map { $0.hasSameStage(as: key) == false } ?? true
-        let stageWakes = stageChanged ? wakes(change, deleted: deleted) : waiting?.stageWakes ?? false
+        let stageWakes = stageChanged
+            ? wakes(change, deleted: deleted) || Self.holdsEventWake(waiting)
+            : waiting?.stageWakes ?? false
         let alerts = deleted ? [] : key.alerts
         let newAlerts = alerts.filter { alert in
             change.previous?.alerts.contains(alert) != true || waiting?.newAlerts.contains(alert) == true
@@ -157,6 +159,16 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         if watched, Self.ends(group: key.group, deleted: deleted) { return true }
         guard key.merged, change.previous?.merged != true else { return false }
         return watched || change.state.releaseAfterMerge || watches(projectRoot: change.state.projectRoot)
+    }
+
+    /// Whether a waiting line wakes for something that happened, a merge or
+    /// a task's end, and not for a stage the task can leave. A later change
+    /// of that task keeps the wake until the digest is typed: a watched
+    /// task that ends and is then archived still wakes the coordinator. A
+    /// task that needed something and runs again needs nothing now.
+    private static func holdsEventWake(_ waiting: TaskChange?) -> Bool {
+        guard let waiting, waiting.stageWakes else { return false }
+        return waiting.deleted || waiting.group != "\(TaskStage.Group.needsYou)"
     }
 
     private static func ends(group: String, deleted: Bool) -> Bool {

@@ -375,6 +375,10 @@ def run_fake(check):
         # arrive as one digest, with a task that only started running.
         task_b, _ = create('Add the export API')
         wait_for('the digest for the second task', lambda: told_at_rest(task_b))
+        # The finished task's line waited for this digest.
+        carried = next(d for d in digests() if task_b in d['tasks'])
+        require(carried['tasks'].get(early_id, {}).get('stage') == 'done',
+                f"The finished task's line did not go with the next digest: {carried}")
         wait_for('the coordinator at its prompt', at_prompt)
         time.sleep(SETTLE + 3)
         coordinator_session = status()['sessionID']
@@ -387,24 +391,23 @@ def run_fake(check):
         hold(session_a)
         cli('task', 'send', task_a, 'more work')
         wait_for_stage(task_a, 'running')
-        wait_for('the first change to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 2)
+        wait_for('the first change to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 1)
         # The coordinator watches the second task: its end wakes it.
         watched = cli('coordinator', 'watch', '--task', task_b)['wake']
         require(watched['watchedTaskIDs'] == [task_b], f'The watch is not shown: {watched}')
         cli('task', 'mark-done', task_b)
-        wait_for('three tasks to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 3)
+        wait_for('two tasks to wait for the digest', lambda: status()['wake']['pendingTaskCount'] == 2)
         time.sleep(SETTLE + 3)
         waiting = status()
-        require(waiting['wake']['pendingTaskCount'] == 3 and waiting['status'] == 'working' and waiting['queuedCount'] == 0,
+        require(waiting['wake']['pendingTaskCount'] == 2 and waiting['status'] == 'working' and waiting['queuedCount'] == 0,
                 f'Unexpected status while the coordinator works: {waiting}')
         require(len(digests()) == seen, f'A digest was typed while the coordinator worked: {digests()[seen:]}')
-        require(sorted(saved_changes()) == sorted([(early_id, 'done', False), (task_a, 'running', False), (task_b, 'done', True)]),
+        require(sorted(saved_changes()) == sorted([(task_a, 'running', False), (task_b, 'done', True)]),
                 f'The waiting changes are not saved: {saved_changes()}')
         require(waiting['wake']['watchedTaskIDs'] == [], f"The task's end did not end its watch: {waiting}")
         hold(coordinator_session, on=False)
         (burst,) = new_digests(seen)
-        require(set(burst['tasks']) == {early_id, task_a, task_b}
-                and burst['tasks'][early_id]['stage'] == 'done'
+        require(set(burst['tasks']) == {task_a, task_b}
                 and burst['tasks'][task_a]['stage'] == 'running'
                 and burst['tasks'][task_b]['stage'] == 'done' and not burst['other'],
                 f'Unexpected digest after the turn: {burst}')

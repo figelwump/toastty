@@ -251,6 +251,33 @@ struct CoordinatorWakeStateTests {
         #expect(many.watchedTaskIDs.count == CoordinatorWakeState.maximumWatches)
     }
 
+    @Test func aMergeOrAnEndThatWokeTheCoordinatorStillWakesItAfterALaterChange() throws {
+        // The coordinator works; a watched task ends, and the user archives
+        // it before the digest is typed. The end still wakes it, with the
+        // task's newest stage.
+        var wake = wake()
+        wake.watch(taskID: first)
+        for change in changes(from: [first: state("idle")], to: [first: state("done")]) { wake.record(change, at: at(1)) }
+        for change in changes(from: [first: state("done")], to: [first: state("archived")]) { wake.record(change, at: at(2)) }
+        #expect(try #require(wake.digest(now: at(3))).contains("): archived at "))
+        // So does a merge that a release moves on to Done.
+        var releasing = self.wake()
+        var merged = state("toShip", merged: true)
+        merged.releaseAfterMerge = true
+        for change in changes(from: [first: state("needsYou", "review")], to: [first: merged]) { releasing.record(change, at: at(1)) }
+        for change in changes(from: [first: merged], to: [first: state("done", merged: true)]) { releasing.record(change, at: at(2)) }
+        #expect(try #require(releasing.digest(now: at(3))).contains("): done, merged at "))
+        // A stage the task left is not held: Needs you, then Running again.
+        var left = self.wake()
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "agentFinished")]) {
+            left.record(change, at: at(1))
+        }
+        for change in changes(from: [first: state("needsYou", "agentFinished")], to: [first: state("running")]) {
+            left.record(change, at: at(2))
+        }
+        #expect(left.digest(now: at(3)) == nil)
+    }
+
     @Test func aTasksNewestChangeDecidesWhetherItWakes() throws {
         // A task that needed something runs again before the digest is
         // typed: it needs nothing now, and nothing is typed.

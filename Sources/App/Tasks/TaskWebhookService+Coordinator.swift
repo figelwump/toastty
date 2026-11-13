@@ -155,7 +155,7 @@ extension TaskWebhookService {
         }
         if quiet {
             guard let digestKey = wake.lastDigestKey,
-                  coordinator?.runsOnlyTheTurn(ofDigestKey: digestKey) == true else {
+                  coordinator?.markQuietTurn(digestKey: digestKey) == true else {
                 throw CoordinatorError(
                     "Only a turn that Toastty's last wake started, with no other message in it, can be quiet. "
                         + "Nothing changed. Run the command again without --quiet, and answer as usual."

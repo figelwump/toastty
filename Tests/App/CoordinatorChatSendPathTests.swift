@@ -904,6 +904,44 @@ struct CoordinatorChatSendPathTests {
         }
         #expect(hostLines.map(\.foldsTurn) == [true, false])
         #expect(fixture.chat.presentation.turns.filter(\.foldsWholeTurn).count == 1)
+
+        // A quiet mark, then the user steers from the chat. The transcript
+        // has not shown the message yet, and still the turn's end alerts.
+        func quietWakeTurn(_ turn: Int, _ attention: String) async throws -> String {
+            try await fixture.waitUntil("the open prompt") {
+                fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+            }
+            wakes.taskNeedsYou(attention)
+            let digest = try #require(fixture.delivered.texts.last)
+            try fixture.startTurn(turn, userText: digest)
+            try await fixture.waitUntil("the wake turn the chat has read") {
+                fixture.controller.canSteer && fixture.chat.presentation.rows.contains {
+                    if case .hostMessage(let line) = $0.content { line.text == digest } else { false }
+                }
+            }
+            try wakes.service.setCoordinatorWake(.clear, quiet: true)
+            #expect(fixture.controller.turnEndsQuietly(sessionID: fixture.conversations.sessionID))
+            return digest
+        }
+        _ = try await quietWakeTurn(3, "awaitingReply")
+        fixture.chat.draft = "Wait, is the release ready?"
+        fixture.chat.send()
+        #expect(fixture.delivered.texts.last == "Wait, is the release ready?")
+        #expect(fixture.controller.turnEndsQuietly(sessionID: fixture.conversations.sessionID) == false)
+        try fixture.recordAgentMessage("The release waits for your yes.")
+        fixture.report(.ready)
+        #expect(statusKind(fixture) == .ready)
+        try fixture.endTurn(3)
+
+        // A quiet mark, then a person types in the coordinator's terminal,
+        // which the transcript shows only later: the end alerts too.
+        _ = try await quietWakeTurn(4, "agentError")
+        fixture.conversations.sessionRuntimeStore.noteUserInput(panelID: fixture.panelID)
+        #expect(fixture.controller.turnEndsQuietly(sessionID: fixture.conversations.sessionID) == false)
+        try fixture.recordAgentMessage("Nothing needs you.")
+        fixture.report(.ready)
+        #expect(statusKind(fixture) == .ready)
+        try fixture.endTurn(4)
     }
 
     // MARK: - How long the conversation is read
