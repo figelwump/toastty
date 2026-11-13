@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 @testable import ToasttyApp
 import CoreState
 import WebKit
@@ -1184,6 +1185,60 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testTextSizeShortcutMagnifiesFocusedScratchpad() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        let interceptor = makeInterceptor(store: store, webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        XCTAssertTrue(interceptor.handle(.createScratchpad, appOwnedWindowID: windowID))
+
+        guard case .scratchpad(_, let panelID)? = store.focusedScaleCommandTarget(preferredWindowID: windowID) else {
+            XCTFail("expected the new Scratchpad to be the zoom target")
+            return
+        }
+        let increaseEvent = try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18)
+        XCTAssertEqual(interceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: windowID), .increaseTextSize)
+
+        let runtime = webPanelRuntimeRegistry.scratchpadRuntime(for: panelID)
+        var reportedMagnifications: [Double] = []
+        let subscription = webPanelRuntimeRegistry.scratchpadMagnificationDidChange.sink { change in
+            XCTAssertEqual(change.panelID, panelID)
+            reportedMagnifications.append(change.magnification)
+        }
+        defer { subscription.cancel() }
+
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertEqual(runtime.magnification, 1.25, accuracy: 0.0001)
+
+        // Zooming out stops at 100%.
+        for _ in 0..<3 {
+            XCTAssertTrue(interceptor.handle(.decreaseTextSize, appOwnedWindowID: windowID))
+        }
+        XCTAssertEqual(runtime.magnification, 1, accuracy: 0.0001)
+
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertTrue(interceptor.handle(.resetTextSize, appOwnedWindowID: windowID))
+        XCTAssertEqual(runtime.magnification, 1, accuracy: 0.0001)
+        XCTAssertEqual(reportedMagnifications.count, 6)
+        for (reported, expected) in zip(reportedMagnifications, [1.1, 1.25, 1.1, 1.0, 1.1, 1.0]) {
+            XCTAssertEqual(reported, expected, accuracy: 0.0001)
+        }
+
+        // Annotation marks need the page at 100%, so annotation mode resets
+        // the magnification and blocks zoom until it ends.
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        runtime.setAnnotationModeEnabled(true)
+        XCTAssertEqual(runtime.magnification, 1, accuracy: 0.0001)
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertEqual(runtime.magnification, 1, accuracy: 0.0001)
+        runtime.setAnnotationModeEnabled(false)
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertEqual(runtime.magnification, 1.1, accuracy: 0.0001)
+
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: windowID), AppState.defaultTerminalFontPoints)
+    }
+
     func testLocalDocumentCancelEditShortcutRequiresActiveEditMode() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1967,11 +2022,11 @@ private func makeInterceptor(
     store: AppStore,
     promptStateResolver: ((UUID) -> TerminalPromptState)? = nil,
     isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
-    toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false }
+    toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+    webPanelRuntimeRegistry: WebPanelRuntimeRegistry = WebPanelRuntimeRegistry()
 ) -> DisplayShortcutInterceptor {
     let terminalRuntimeRegistry = TerminalRuntimeRegistry()
     terminalRuntimeRegistry.bind(store: store)
-    let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
     webPanelRuntimeRegistry.bind(store: store)
     let sessionRuntimeStore = SessionRuntimeStore()
     sessionRuntimeStore.bind(store: store)

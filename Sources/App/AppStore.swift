@@ -546,7 +546,9 @@ final class AppStore: ObservableObject {
                 return .markdown(windowID: selection.windowID)
             case .browser:
                 return .browser(windowID: selection.windowID, panelID: focusedPanel.panelID)
-            case .scratchpad, .diff:
+            case .scratchpad:
+                return .scratchpad(windowID: selection.windowID, panelID: focusedPanel.panelID)
+            case .diff:
                 return nil
             }
         }
