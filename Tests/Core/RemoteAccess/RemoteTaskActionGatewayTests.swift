@@ -71,7 +71,7 @@ struct RemoteTaskActionGatewayTests {
         let client = try Self.makeClient(taskActions: false)
         let body = try Self.encode(Self.mergeRequest())
 
-        // Send access alone is not enough: the switch is off by default.
+        // Turning the switch off overrides the default, even with send access.
         var response = try client.response(RemoteTaskActionPolicy.actionPath, body: body)
         #expect(response.status == 200)
         #expect(try Self.actionResult(response) == .rejected(reason: .permissionDenied, message: nil))
@@ -208,10 +208,10 @@ struct RemoteTaskActionGatewayTests {
         let request = try decoder.decode(RemoteTaskActionRequest.self, from: minimal)
         #expect(request.action == .cancelMerge && request.expectedPullRequestNumber == nil && request.closePullRequest == false)
 
-        // A device record from before the switch reads as off.
+        // Old records adopt the default, but browser devices cannot act.
         let legacy = Data(#"{"id":"\#(UUID())","name":"Phone","scopes":["read","send"],"authKind":"browser","createdAt":0}"#.utf8)
         let device = try JSONDecoder().decode(RemoteDeviceRecord.self, from: legacy)
-        #expect(device.taskActionsEnabled == false)
+        #expect(device.taskActionsEnabled == true)
         #expect(device.canActOnTasks == false)
 
         // A task summary from before slice 2 reads with no actions.

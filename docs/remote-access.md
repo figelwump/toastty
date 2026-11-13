@@ -628,7 +628,10 @@ Checks** and **Release**.
 
 Acting on tasks needs a native paired device with send access and its **Task
 actions** switch on under **Paired Devices** in Remote Access settings. The
-switch is off by default, also for devices paired before this feature.
+switch is on by default, also for devices paired before this feature. You can
+turn it off per device, and that choice survives restarting the Mac app.
+Older versions omitted the saved setting when it was off, so those devices
+adopt the new default after an upgrade. Turn it off again if needed.
 Without it, the phone still shows the control, and the Mac refuses each
 action with a message that names the switch.
 
@@ -968,7 +971,7 @@ support conversations; update Toastty on the Mac to enable previews.
   to the terminal. Accepted and refused starts are recorded in the audit log
   with the device, without the message text.
 - Acting on a task needs a native paired device with send access and the
-  **Task actions** switch on, which is off by default. The device sends only a
+  **Task actions** switch on, which is on by default. The device sends only a
   task ID, the name of an action the Mac offered, and for an archive whether
   to close the pull request. The Mac reads the switch again when the action
   runs and refuses any action its current list for that task does not offer.

@@ -357,6 +357,7 @@ struct RemoteDeviceStoreTests {
         }
         #expect(device.authKind == .native)
         #expect(device.tailscaleLogin == Self.tailscaleLogin)
+        #expect(device.canActOnTasks)
         #expect(token.count == 43)
         #expect(Data(base64URLTestString: token)?.count == 32)
         #expect(store.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(2)) == nil)
@@ -381,6 +382,7 @@ struct RemoteDeviceStoreTests {
             return
         }
         #expect(authenticated.id == device.id)
+        #expect(authenticated.canActOnTasks)
         #expect(reloaded.authenticateBrowserCredential(token, at: Self.now.addingTimeInterval(4)) == nil)
     }
 
@@ -588,6 +590,8 @@ struct RemoteDeviceStoreTests {
         #expect(try Data(contentsOf: fileURL) == original)
         #expect(store.devices.map(\.id) == [legacyID, nativeID])
         #expect(store.devices.first?.authKind == .browser)
+        #expect(store.devices.first?.canActOnTasks == false)
+        #expect(store.devices[1].canActOnTasks)
         #expect(store.authenticateBrowserCredential(legacyToken, at: Self.now)?.id == legacyID)
         #expect(store.authenticateNativeBearer(
             nativeToken,
