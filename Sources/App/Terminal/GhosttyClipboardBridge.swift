@@ -40,7 +40,7 @@ enum GhosttyClipboardBridge {
                 }
                 return ghostty_clipboard_content_s(mime: copyString(entry.mime), data: pointer, len: entry.data.count)
             }
-            let cAvailable: [UnsafePointer<CChar>?] = available.map { copyString($0) }
+            let cAvailable = available.map { copyString($0) }
             cContents.withUnsafeBufferPointer { contentsBuffer in
                 cAvailable.withUnsafeBufferPointer { availableBuffer in
                     var complete = ghostty_clipboard_complete_s(
@@ -77,17 +77,16 @@ enum GhosttyClipboardBridge {
         selectionPasteboard.releaseGlobally()
     }
 
-    static func mimeStrings(from pointer: UnsafePointer<UnsafePointer<CChar>?>?, count: Int) -> [String] {
+    static func mimeStrings(from pointer: UnsafePointer<UnsafePointer<CChar>>?, count: Int) -> [String] {
         guard let pointer, count > 0 else { return [] }
-        return UnsafeBufferPointer(start: pointer, count: count).compactMap { $0.map { String(cString: $0) } }
+        return UnsafeBufferPointer(start: pointer, count: count).map { String(cString: $0) }
     }
 
     static func entries(from pointer: UnsafePointer<ghostty_clipboard_content_s>?, count: Int) -> [Entry] {
         guard let pointer, count > 0 else { return [] }
-        return UnsafeBufferPointer(start: pointer, count: count).compactMap { content in
-            guard let mime = content.mime, content.len == 0 || content.data != nil else { return nil }
-            let data = content.len == 0 ? Data() : Data(bytes: content.data!, count: content.len)
-            return Entry(mime: String(cString: mime), data: data)
+        return UnsafeBufferPointer(start: pointer, count: count).map { content in
+            let data = content.len == 0 ? Data() : Data(bytes: content.data, count: content.len)
+            return Entry(mime: String(cString: content.mime), data: data)
         }
     }
 
