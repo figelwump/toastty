@@ -13,9 +13,10 @@ triage.
 A task needs a workspace and an agent. You choose them when you create the
 task; `[defaults]` in `tasks.toml` fills an agent, model or effort you leave
 out, and a task without a workspace waits in Needs you until you pick one.
-The agent's first message is the task text, followed by the attached files
-and one line that tells the agent to run `toastty task needs-reply` before it
-ends a turn with a question.
+The agent's first message includes the task text and attached files. The
+start skill, or fallback instructions for a custom skill, tells it how to
+ask the coordinator and to run `toastty task needs-reply` before it ends a
+turn with a question for you.
 
 ## Quick entry
 
@@ -203,7 +204,8 @@ directory, one per root directory.
    selected, so your focus stays where it is.
 3. It starts the agent in that terminal. The agent's first message is the first
    prompt, then the task text exactly as written, then the paths of the
-   attached files, then the `task needs-reply` line. With `--fork`, the agent starts as a fork of the calling
+   attached files, then the coordinator-message and `task needs-reply`
+   guidance when the start skill does not supply it. With `--fork`, the agent starts as a fork of the calling
    session's conversation instead (see
    [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks)).
    The agent session is not workspace-scoped, so it can read
@@ -776,8 +778,11 @@ under it. On macOS 14 the panel shows the terminal.
   work and its answer. The end of a quiet turn marks nothing unread and
   sends no notification to the Mac or the phone.
 - **Messages from agents.** A message that `coordinator send` brought shows
-  as one muted line that names its sender, such as "From task Fix the unread
-  dot · 14:07". A click opens the full text. It never shows as your message.
+  in a neutral card with its sender, time and message text. A long message
+  shows its opening text and **Show full message**; **Show less** returns to
+  the opening. The coordinator's answer stays in the transcript outside
+  the card. It never shows as your message. Wake digests keep their folded
+  line.
 - **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
   text shows as a chip with the task's stage color, its current title and its
   pull request number. A click opens the task's space, and that space's
@@ -1720,9 +1725,10 @@ release_prompt = "Wait for my approval before any production change."  # optiona
   replace it. Rules for all agent work, such as code review, belong in your
   global agent instructions (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`),
   which the agent reads already.
-- A first message that does not name the shipped start skill ends with one
-  line that tells the agent to run `task needs-reply` before it ends a turn
-  with a question. The shipped skill already says this.
+- A first message that does not name the shipped start skill includes the
+  direct `coordinator send` command, where its answer appears, and a line
+  that tells the agent to run `task needs-reply` before it ends a turn with
+  a question. The shipped skill already says this.
 - `start_skill` also starts a first message that triage or `--prompt` wrote,
   and the first message of a fresh session that continues a moved task in its
   worktree. A forked session already has the conversation, so it gets no
