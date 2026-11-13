@@ -140,8 +140,10 @@ ready when they pass. Readiness does not authorize a merge.
 - Follow the pull request's checks to their result. Use one waiter, such as
   `gh pr checks --watch`, and keep the turn active until it returns. Pending
   checks are not a blocker and not a reason to hand off. Only results for the
-  pull request's current head commit count. An empty check list, or a waiter
-  that exits before the checks start, is not a pass. An error from the query
+  pull request's current head commit count. When checks are expected, an
+  empty check list, or a waiter that exits before the checks start, is not a
+  pass. If no checks apply, or they start only when the pull request is
+  marked ready, follow the repository's readiness rule. An error from the query
   is an error, not a pending result. Marking the pull request ready can start
   more checks: follow those too. If a check fails, fix it within the task's
   scope and check again.
@@ -165,8 +167,9 @@ workspace's Scratchpad, as `toastty-scratchpad` describes.
 - Look at the screenshots and video yourself, and confirm that they show in
   the report.
 - After later changes, refresh the same report so it names the current commit.
-- Publish or update the report after you open the pull request's panel, so
-  that the report is the selected tab in the right panel.
+- Open the pull request's panel before you publish the final version of the
+  report, so that the report is the selected tab in the right panel. Do not
+  publish it again only to select it.
 - Do not change the user's selected workspace, tab or keyboard focus to show
   the report or the pull request.
 
