@@ -212,14 +212,15 @@ usage. Remote Access stays off, so nothing follows the agent's conversation
 before the first send.
 
 The check makes one task with a real agent and sends to it with
-`task send --steer`: at its open prompt (`sent`), and in a turn that runs
-`sleep` (`steered`, and the agent follows the message in that turn). With
+`task send --steer`: at its open prompt (`sent`), and in a turn that a script
+of the run holds for 40 seconds (`steered`, and the agent must answer as that
+message says, not as the turn's first message said). With
 Claude it also sends while a permission prompt is on screen: the result must be
 `queued`, the prompt must stay unanswered, and its command must not run. The
 check then answers the prompt, and the held message must arrive after the turn
 ends. It records how long after the prompt was on screen Toastty reported the
 agent as waiting. Codex runs without permission prompts here. The Claude
-profile allows only `sleep` without a prompt, and the run marks only its
+profile allows only the run's hold script without a prompt, and the run marks only its
 temporary repository trusted in `~/.claude.json`, then removes that entry and
 the repository's Claude project directory.
 

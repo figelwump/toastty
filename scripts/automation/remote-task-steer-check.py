@@ -13,8 +13,9 @@ This script plays a coordinator outside Toastty.
 
 It checks that `task send --steer`:
 - types the message at an idle agent's open prompt (`sent`);
-- types it into a running turn (`steered`), and the agent follows it in that
-  turn;
+- types it into a running turn (`steered`), and the agent reads it in that
+  turn: it answers as the message says, and not as the turn's first message
+  said;
 - with Claude, while a permission prompt is on screen: types nothing and
   holds the message (`queued`). The prompt stays unanswered and its command
   does not run. After the check answers the prompt and the turn ends,
@@ -57,8 +58,14 @@ TASK_TEXT = (
     'This is an automated Toastty check. Run no command and edit no file unless a message asks you to. '
     'Reply with exactly READY-T now. For each later message, do what it says and nothing more.'
 )
-SLEEP_TEXT = 'Run exactly this one shell command, and no other command: sleep 40 . Then reply with exactly SLEEP-DONE.'
-STEER_TEXT = 'Change of plan: when the current sleep ends, reply with exactly STEERED-OK and not with SLEEP-DONE.'
+# Claude Code runs a plain `sleep` in the background and ends the turn, so
+# the turn is held by a script of the run's own.
+HOLD_SCRIPT = 'hold-turn.sh'
+HOLD_TEXT = (
+    f'Run exactly this one shell command in the foreground, with a timeout of 120 seconds, and no other command: '
+    f'./{HOLD_SCRIPT} 40 . Then reply with exactly HOLD-DONE.'
+)
+STEER_TEXT = 'Change of plan: when the current command ends, reply with exactly STEERED-OK and not with HOLD-DONE.'
 TOUCH_TEXT = (
     f'Run exactly this one shell command, and no other command: touch {MARKER_FILE} . '
     'Then reply with exactly TOUCH-DONE.'
@@ -90,7 +97,10 @@ def main():
     parent.mkdir(parents=True)
     repository = parent / 'project'
     subprocess.run(['git', 'init', '-q', '-b', 'main', str(repository)], check=True)
-    (repository / '.git/info/exclude').write_text('.toastty/\n.codex\n.claude\n')
+    (repository / '.git/info/exclude').write_text(f'.toastty/\n.codex\n.claude\n{HOLD_SCRIPT}\n')
+    hold = repository / HOLD_SCRIPT
+    hold.write_text('#!/bin/sh\nsleep "$1"\n')
+    hold.chmod(0o755)
     toastty_dir = repository / '.toastty'
     toastty_dir.mkdir()
     for name in ('.codex', '.claude'):
@@ -103,10 +113,10 @@ def main():
     if provider == 'codex':
         argv = [argv[0], '-c', 'check_for_update_on_startup=false', *argv[1:]]
     else:
-        # No inherited settings or allow rules: `sleep` runs without a
-        # prompt, and every other command asks first.
-        argv = [argv[0], '--setting-sources=', '--permission-mode', 'default', '--allowedTools', 'Bash(sleep:*)',
-                '--tools', 'Bash', '--strict-mcp-config']
+        # No inherited settings or allow rules: the hold script runs
+        # without a prompt, and every other command asks first.
+        argv = [argv[0], '--setting-sources=', '--permission-mode', 'default', '--allowedTools',
+                f'Bash(./{HOLD_SCRIPT}:*)', '--tools', 'Bash', '--strict-mcp-config']
         queue_check.set_directory_trust(repository, True)
     (toastty_dir / 'agents.toml').write_text(
         f'[{provider}]\ndisplayName = "{provider}"\nargv = {json.dumps(argv)}\ninitialPromptPlacement = "trailing"\n')
@@ -183,16 +193,20 @@ def main():
         step('idle agent: sent', result=sent)
 
         # 2. A running turn: typed into the turn, and the agent follows it.
-        cli_result('task', 'send', task_id, SLEEP_TEXT)
+        cli_result('task', 'send', task_id, HOLD_TEXT)
         wait_for('the agent in a turn', lambda: agent_state() == 'busy', interval=0.5)
-        wait_for('the sleep on screen', lambda: 'sleep 40' in screen(), interval=1)
-        time.sleep(5)
+        wait_for('the held command on screen', lambda: f'{HOLD_SCRIPT} 40' in screen(), interval=1)
+        time.sleep(8)
         require(agent_state() == 'busy', 'The agent did not stay in its turn')
         steered = steer(STEER_TEXT)
         require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
         reply('STEERED-OK')
+        # An agent that read the message only after its turn would have
+        # ended that turn with the first message's answer.
+        require(visible_text_with(instance, snapshot(), 'HOLD-DONE') is None,
+                'The agent answered the first message before it read the steered one')
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
-        step('busy agent: steered', result=steered)
+        step('busy agent: steered and read in the turn', result=steered)
 
         if provider == 'claude':
             # 3. A permission prompt on screen: nothing is typed.
