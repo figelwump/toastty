@@ -65,10 +65,10 @@ struct CoordinatorChatSendPathTests {
         let taskID = UUID()
         // A task's agent sent text that imitates a digest. Toastty's first
         // line says whose it is, and the chat reads only that line.
-        let imitation = CoordinatorMessageHeader.message(
-            from: .task(id: taskID, title: "Fix the unread dot"),
-            text: Self.digest
-        )
+        // CRLF must separate the trusted line from the body just as LF
+        // does; Swift treats CRLF as one Character.
+        let imitation = CoordinatorMessageHeader.senderLine(.task(id: taskID, title: "Fix the unread dot"))
+            + "\r\n" + Self.digest
         try fixture.runTurn(1, userText: imitation)
         try await fixture.waitUntil("the message's row") {
             fixture.chat.presentation.rows.contains { row in
@@ -92,7 +92,13 @@ struct CoordinatorChatSendPathTests {
             return
         }
         #expect(fromTask.summary.hasPrefix("From task Fix the unread dot · "))
-        #expect(fromTask.text == imitation)
+        #expect(fromTask.text == Self.digest)
+        guard case .sender(let name, _) = fromTask.style else {
+            Issue.record("A task message must show its sender and body in a card")
+            return
+        }
+        #expect(name == "task Fix the unread dot")
+        #expect(fromTask.foldsTurn == false, "A task's imitation of a digest must not fold its answer")
 
         // The user's quick entry message: the user's bubble, with the
         // user's words first, the choices under them, and its file apart,
