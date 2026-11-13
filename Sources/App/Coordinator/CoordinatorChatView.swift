@@ -300,7 +300,8 @@ struct CoordinatorTaskChips {
             chips[taskID] = ConversationLinkChip(
                 markColor: Self.chipColor(Self.markColor(for: item)),
                 title: Self.shortened(item.title),
-                detail: item.pullRequest.map { "#\($0.number)" }
+                detail: item.pullRequest.map { "#\($0.number)" },
+                showsActivity: Self.showsActivity(for: item)
             )
         }
         self.chips = chips
@@ -327,6 +328,15 @@ struct CoordinatorTaskChips {
         let oneLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard oneLine.isEmpty == false else { return "Untitled task" }
         return oneLine.count > maximumTitleLength ? oneLine.prefix(maximumTitleLength - 1) + "…" : oneLine
+    }
+
+    /// A spinner in place of the dot while the task's agent works, as the
+    /// Tasks view draws it.
+    static func showsActivity(for item: TaskBoardItem) -> Bool {
+        switch item.stage {
+        case .running, .idle: item.agent == .working
+        default: false
+        }
     }
 
     /// The color of the task's stage mark, as the Tasks view draws it.
