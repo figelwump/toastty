@@ -20,6 +20,11 @@ struct LocalDocumentCloseConfirmationSummary: Equatable, Sendable {
     }
 }
 
+struct ScratchpadMagnificationChange: Equatable, Sendable {
+    let panelID: UUID
+    let magnification: Double
+}
+
 @MainActor
 final class WebPanelRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
@@ -33,6 +38,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var scratchpadRuntimeByPanelID: [UUID: ScratchpadPanelRuntime] = [:]
     private var scratchpadRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
     let scratchpadDocumentStore: ScratchpadDocumentStore
+    /// Sends each magnification change that a zoom command makes, so the
+    /// window can show the zoom level. The value is not saved.
+    let scratchpadMagnificationDidChange = PassthroughSubject<ScratchpadMagnificationChange, Never>()
 
     init(scratchpadDocumentStore: ScratchpadDocumentStore = ScratchpadDocumentStore()) {
         self.scratchpadDocumentStore = scratchpadDocumentStore
@@ -210,6 +218,23 @@ final class WebPanelRuntimeRegistry: ObservableObject {
 
     func loadedScratchpadRuntime(for panelID: UUID) -> ScratchpadPanelRuntime? {
         scratchpadRuntimeByPanelID[panelID]
+    }
+
+    /// Changes a Scratchpad panel's magnification from a zoom command and
+    /// reports the new value on `scratchpadMagnificationDidChange`.
+    @discardableResult
+    func adjustScratchpadMagnification(
+        panelID: UUID,
+        adjustment: ScratchpadMagnificationAdjustment
+    ) -> Bool {
+        guard let runtime = scratchpadRuntimeByPanelID[panelID],
+              let magnification = runtime.adjustMagnification(adjustment) else {
+            return false
+        }
+        scratchpadMagnificationDidChange.send(
+            ScratchpadMagnificationChange(panelID: panelID, magnification: magnification)
+        )
+        return true
     }
 
     #if DEBUG
