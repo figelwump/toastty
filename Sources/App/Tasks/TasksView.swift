@@ -484,6 +484,16 @@ private struct TasksViewRow: View {
         .padding(.leading, entry.isLinkedChild ? 36 : 18)
         .padding(.trailing, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A task an agent split off lists under the task that started it,
+        // indented, with a ↳ mark left of its status mark.
+        .overlay(alignment: .topLeading) {
+            if entry.isLinkedChild {
+                TaskChildArrowMark(size: 10)
+                    .frame(width: 18, height: 16)
+                    .padding(.leading, 18)
+                    .padding(.top, 9)
+            }
+        }
         .background(isSelected ? Color(hex: 0x1C1C1C) : (isHovered ? Color(hex: 0x161616) : Color.clear))
         .overlay(alignment: .leading) {
             if isSelected {
