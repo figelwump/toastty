@@ -58,45 +58,30 @@ struct CoordinatorChatSendPathTests {
     // MARK: - Toasty's introduction
 
     @MainActor
-    @Test func toastyIntroducesItselfUntilTheFirstMessageButNotWhileASavedConversationLoads() async throws {
+    @Test func toastyIntroducesItselfInANewConversationUntilItsFirstMessage() async throws {
         let fixture = try CoordinatorChatFixture()
         defer { fixture.tearDown() }
-        // The agent reported its start, so Toastty saved its conversation.
-        let workspaceID = try #require(fixture.store.state.coordinator?.workspaceID)
-        guard case .terminal(let terminal)? = fixture.store.state.workspacesByID[workspaceID]?.panelState(for: fixture.panelID) else {
-            Issue.record("The coordinator has no terminal")
-            return
+        let session = try #require(fixture.controller.session)
+
+        // An agent that Toastty did not start in this run, as one that a
+        // relaunch resumed: its conversation may have history, so no
+        // introduction, before and after the chat read it.
+        #expect(fixture.controller.hasNewConversation == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt and the conversation's rows") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+                && fixture.chat.presentation.rows.isEmpty == false
         }
-        let record = try #require(terminal.resumeRecord)
-
-        // Before Toastty saved a conversation, as while a new coordinator
-        // starts: Toasty introduces itself at once, before any read.
-        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)))
-        #expect(fixture.controller.hasSavedConversation == false)
-        #expect(fixture.chat.showsIntroduction)
-
-        // A saved conversation, as after a relaunch: until the chat read it,
-        // it may hold messages, so no introduction.
-        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: record)))
-        #expect(fixture.controller.hasSavedConversation)
         #expect(fixture.chat.showsIntroduction == false)
 
-        // Read, and it has no message: Toasty introduces itself.
-        fixture.chat.show(panelID: fixture.panelID)
-        // Its rows are only the markers of its binding to the terminal,
-        // which the introduction covers.
-        try await fixture.waitUntil("the empty conversation, read") { fixture.chat.showsIntroduction }
-        #expect(fixture.chat.presentation.rows.isEmpty == false)
-        #expect(fixture.chat.presentation.rows.allSatisfy { row in
-            if case .sessionBindingChanged = row.content { return true }
-            return false
-        })
+        // The agent that Toastty started: a new conversation, whose rows are
+        // only the markers of its binding to the terminal.
+        fixture.controller.noteStartedSession(session.sessionID)
+        #expect(fixture.chat.showsIntroduction)
 
-        // The first message ends the introduction, while it waits for its
-        // echo too.
-        try await fixture.waitUntil("the open prompt") {
-            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
-        }
+        // The first message ends the introduction, also while it waits for
+        // its echo.
         fixture.chat.draft = "hi"
         fixture.chat.send()
         #expect(fixture.chat.presentation.sendItems.isEmpty == false)

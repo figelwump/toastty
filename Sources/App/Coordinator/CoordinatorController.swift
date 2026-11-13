@@ -130,6 +130,10 @@ final class CoordinatorController: ObservableObject {
     /// gets its own start.
     @Published private var startingWorkspaceID: UUID?
     @Published private var failedStart: FailedStart?
+    /// The agent session that Toastty last started for the coordinator in
+    /// this run. Its conversation is new, unlike one that a relaunch
+    /// resumes.
+    @Published private(set) var startedSessionID: String?
     @Published private(set) var queuedCount = 0
     @Published private(set) var hold: CoordinatorSendHold?
     /// The turn whose host refused a steer, for example because the
@@ -437,18 +441,32 @@ final class CoordinatorController: ObservableObject {
         return promptState(panelID) == .unavailable
     }
 
-    /// The coordinator's terminal has an agent conversation that Toastty
-    /// saved to resume: a conversation from before a relaunch, or one that
-    /// the running agent already wrote.
-    var hasSavedConversation: Bool {
-        location.map(hasSavedConversation) ?? false
+    /// The coordinator's agent conversation is new, so it has no history:
+    /// Toastty starts its agent or started it in this run, or no agent runs
+    /// and the terminal has no conversation saved to resume. A conversation
+    /// that a relaunch resumes is not new.
+    var hasNewConversation: Bool {
+        guard let location else { return false }
+        guard let session else {
+            return isStarting || hasSavedConversation(location) == false
+        }
+        // While Toastty starts it, the session may show before the start
+        // returns its ID.
+        return session.sessionID == startedSessionID || isStarting
     }
 
+    /// The terminal has an agent conversation that Toastty saved to resume.
     private func hasSavedConversation(_ location: CoordinatorLocation) -> Bool {
         guard let panelID = location.panelID,
               case .terminal(let terminal)? = store.state.workspacesByID[location.workspaceID]?.panelState(for: panelID)
         else { return false }
         return terminal.resumeRecord != nil
+    }
+
+    /// Notes the agent session that Toastty started, whose conversation is
+    /// new.
+    func noteStartedSession(_ sessionID: String) {
+        startedSessionID = sessionID
     }
 
     // MARK: - Open and restart
@@ -675,6 +693,7 @@ final class CoordinatorController: ObservableObject {
             throw error
         }
         adoptReplacement(terminal, workspaceID: location.workspaceID)
+        noteStartedSession(result.sessionID)
         ToasttyLog.info("Started the coordinator's agent", category: .tasks, metadata: [
             "session_id": result.sessionID,
             "panel_id": terminal.panelID.uuidString,

@@ -700,10 +700,10 @@ selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)`.
 
 On macOS 15 and later, the coordinator's panel shows the agent's conversation
 as a chat, with the same message views as Toastty Mobile. The terminal runs
-under it. On macOS 14 the panel shows the terminal. While the conversation
-has no message, as for a new coordinator or after Restart, the chat shows
-Toasty and a short introduction. A conversation that a relaunch resumes shows
-it only when Toastty read the conversation and found no message.
+under it. On macOS 14 the panel shows the terminal. While a conversation
+that Toastty started has no message, as for a new coordinator or after
+Restart, the chat shows Toasty and a short introduction. A conversation that a
+relaunch resumes does not show it.
 
 - **Send.** Type in the field under the conversation and press Return.
   Shift-Return or Option-Return starts a new line. At an open prompt the
