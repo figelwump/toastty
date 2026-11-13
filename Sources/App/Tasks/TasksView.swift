@@ -102,7 +102,8 @@ struct TasksView: View {
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
-    /// The row an arrow key selected, to scroll into view.
+    /// The row to scroll into view: one an arrow key selected, or a
+    /// selected task in a group the view was asked to reveal.
     @State private var keyboardSelection: TaskBoardItem.Subject?
 
     private static let detailWidth: CGFloat = 360
@@ -111,7 +112,14 @@ struct TasksView: View {
         let items = board.items()
         let sections = TasksViewSections.make(items, releasable: board.canRelease)
         let selected = board.tasksViewSelection(windowID: windowID, items: items)
-        let visibleIDs = sections.visible(isDoneExpanded: isDoneExpanded, isArchivedExpanded: isArchivedExpanded).map(\.id)
+        // A group the view was asked to reveal counts as expanded before the
+        // view applies the request. Otherwise a selected task in that group
+        // would leave the list when the view opens and lose the selection.
+        let revealing = board.revealGroupByWindowID[windowID]
+        let visibleIDs = sections.visible(
+            isDoneExpanded: isDoneExpanded || revealing == .done,
+            isArchivedExpanded: isArchivedExpanded || revealing == .archived
+        ).map(\.id)
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -288,6 +296,7 @@ struct TasksView: View {
                 .id(TaskStage.Group.done)
             if sections.archived.isEmpty == false {
                 collapsibleGroup(.archived, entries: sections.archived, isExpanded: $isArchivedExpanded, selectedID: selectedID)
+                    .id(TaskStage.Group.archived)
             }
         }
     }
@@ -346,16 +355,24 @@ struct TasksView: View {
         "\(TaskBoardPresentation.groupTitle(group)), \(count), \(isExpanded ? "expanded" : "collapsed")"
     }
 
-    /// Shows the group the sidebar asked for, once.
+    /// Shows the group that the sidebar or a task link asked for, once.
     private func revealRequestedGroup(using proxy: ScrollViewProxy) {
         guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
-        if group == .done {
-            isDoneExpanded = true
+        switch group {
+        case .done: isDoneExpanded = true
+        case .archived: isArchivedExpanded = true
+        case .needsYou, .running, .idle, .toShip: break
         }
         // After the expanded rows lay out, so the group's top lands at the
-        // top of the list.
+        // top of the list. A selected task in the group then scrolls its row
+        // into view, as an arrow key does, since a long group can put it
+        // below the fold. The lazy list knows a Done or Archived row only
+        // once its group is on screen, so the group comes first.
         Task { @MainActor in
             proxy.scrollTo(group, anchor: .top)
+            if let selected = board.tasksViewSelection(windowID: windowID), selected.stage.group == group {
+                keyboardSelection = selected.id
+            }
         }
     }
 

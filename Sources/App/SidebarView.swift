@@ -1108,13 +1108,13 @@ struct SidebarView: View {
 
     private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
         cancelWorkspaceRename()
-        if let subject {
-            taskBoard.selectionByWindowID[windowID] = subject
-        }
-        if let group {
-            taskBoard.revealGroupByWindowID[windowID] = group
-        }
-        _ = store.send(.setTasksViewShown(windowID: windowID, shown: true), source: .ui("sidebar_tasks_row"))
+        taskBoard.showTasksView(
+            windowID: windowID,
+            selecting: subject,
+            revealing: group,
+            store: store,
+            source: .ui("sidebar_tasks_row")
+        )
     }
 
     /// The Status segment: Needs you, Running, Idle, To ship and Done.
