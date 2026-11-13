@@ -374,8 +374,10 @@ each ready state once: write a `reviewed` line in the ledger.
 
 ## Releases
 
-A merged task whose project releases by tag has stage `toShip` until a
-release contains it.
+A task merged into the repository's default branch waits in `toShip` when
+release tags are configured. A feature-branch merge is Done for that branch;
+it does not mean the work shipped. Related Git worktrees share release
+settings unless they set their own values.
 
 - **A rule for each project.** The Releases section of `policy.md` says, for
   each project, "on merge" or "batch" with a time. When a project has a
@@ -394,14 +396,15 @@ release contains it.
   `toastty task set-release <task-id> --after-merge`. A task with
   `releaseAfterMerge` that reaches `toShip` gets a release at once, also in
   a batch project.
-- **Say what else ships.** A release ships every merged task of the project,
-  because it builds from the branch tip. Before you start one for a single
+- **Say what else ships.** A release builds the default branch tip and
+  includes the eligible `toShip` tasks from related project worktrees of the
+  same repository. Before you start one for a single
   task, name the others: "This also ships 3 other merged tasks: …".
 - **Start:** `toastty task release --workspace <workspaceID>`, with the
   project's workspace ID; `toastty --json task workspace-choices` lists it.
   When the user asks for a release, start it also when no task of the project
-  is in To ship. Do not start one while a release task of the project is
-  open. If the command refuses, tell the user why.
+  is in To ship. Do not start one while a release task of the same repository
+  is open. If the command refuses, tell the user why.
 - **Then follow the release task** like any other task. Its questions about
   versions, approvals and production always go to the user.
 

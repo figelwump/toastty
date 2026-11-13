@@ -195,8 +195,9 @@ extension TaskCoordinator {
     }
 
     private func checkReleases(root: String, config: TasksConfig, tasks: [TaskRecord]) async {
-        guard let checkout = try? await worktreeCreator.checkout(for: root), let remote = checkout.remote,
-              let pattern = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: checkout.root, homeDirectoryPath: homeDirectoryPath)?.releaseTags,
+        guard let checkout = try? await worktreeCreator.checkout(for: root),
+              let pattern = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: checkout.root, homeDirectoryPath: homeDirectoryPath)?.releaseTags else { return }
+        guard let remote = checkout.remote,
               let listed = try? await worktreeCreator.git(["ls-remote", "--tags", remote], in: checkout.root, allowFailure: true),
               listed.succeeded else {
             ToasttyLog.info("Release check skipped a project its remote did not answer for", category: .tasks, metadata: ["project_root": root])
