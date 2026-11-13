@@ -275,12 +275,13 @@ extension TaskCoordinator {
         case .merged(let state):
             // Saved before anything closes, so the task keeps its merge if
             // the cleanup or the app stops partway. A task in a project with
-            // `release_tags` is cleaned up now too and waits in To ship
-            // without its task space.
+            // `release_tags` is cleaned up now too. Only a merge into the
+            // repository's default branch waits in To ship without its task space.
             do {
                 try records.save(id: record.id) {
                     $0.mergedAt = $0.mergedAt ?? self.now()
                     $0.mergeCommit = state?.mergeCommit ?? $0.mergeCommit
+                    $0.mergeTarget = state?.mergeTarget ?? $0.mergeTarget
                     $0.mergeRequestedAt = $0.mergeRequestedAt ?? self.now()
                     $0.mergeFailure = nil
                     $0.cleanup = TaskCleanup(kind: .merge)
