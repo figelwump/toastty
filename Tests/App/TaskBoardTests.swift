@@ -1,3 +1,4 @@
+import Combine
 import CoreState
 import Foundation
 import Testing
@@ -18,6 +19,7 @@ struct TaskBoardTests {
         /// Fails requests for `readinessViewFields`, like a token that
         /// cannot read checks.
         var rejectsReadinessFields = false
+        var failsRequests = false
 
         /// `checks` is the `statusCheckRollup` array as JSON.
         func answer(
@@ -39,6 +41,7 @@ struct TaskBoardTests {
         }
 
         var calls: [[String]] { lock.withLock { recorded } }
+        var heldCount: Int { lock.withLock { held.count } }
 
         func release() {
             let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
@@ -57,6 +60,9 @@ struct TaskBoardTests {
                 await withCheckedContinuation { continuation in
                     lock.withLock { held.append(continuation) }
                 }
+            }
+            if lock.withLock({ failsRequests }) {
+                return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: offline", failure: nil)
             }
             if lock.withLock({ rejectsReadinessFields }), arguments.last == PullRequestStateCache.readinessViewFields {
                 return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "checks: forbidden", failure: nil)
@@ -728,6 +734,175 @@ struct TaskBoardTests {
         #expect(cache.entries[other.url]?.lastError == "gh: not found")
         await cache.refresh(link).value
         #expect(cache.state(for: link)?.state == .open)
+    }
+
+    @Test func pendingChecksRefreshSoonerThanSettledPullRequests() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let task = try await startTask(fixture, text: "Refresh completed checks")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, pullRequests: cache,
+            releaseCheckInterval: nil
+        )
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        // A restored PR is fetched immediately, before the first periodic tick.
+        await waitUntil { cache.answer(for: link) != nil }
+        let initialCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(119)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == initialCalls)
+
+        clock = clock.addingTimeInterval(1)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "UNSTABLE",
+                      checks: #"[{"status":"IN_PROGRESS"}]"#)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        let pendingCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(14)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == pendingCalls)
+
+        clock = clock.addingTimeInterval(1)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN",
+                      checks: #"[{"status":"COMPLETED","conclusion":"SUCCESS"}]"#)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await waitUntil { cache.state(for: link)?.mergeability?.checks == .passing }
+        #expect(gitHub.calls.count == pendingCalls + 1)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+        let settledCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(15)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == settledCalls)
+
+        // Inherited passing checks do not make a field-limited answer settled.
+        cache.store(TaskPullRequestState(state: .open, headSHA: "head1"), for: link, observedAt: clock)
+        clock = clock.addingTimeInterval(15)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await waitUntil { gitHub.calls.count == settledCalls + 1 && !cache.isRefreshing(link) }
+    }
+
+    @Test func unknownAndFailedAnswersDoNotKeepReadinessForever() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func store(_ head: String, _ mergeState: PullRequestMergeability.MergeState) {
+            cache.store(TaskPullRequestState(
+                state: .open, headSHA: head,
+                mergeability: PullRequestMergeability(mergeState: mergeState, checks: .running)
+            ), for: link, observedAt: clock)
+        }
+        store("aaa", .unstable)
+        clock = clock.addingTimeInterval(15)
+        store("aaa", .unknown)
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        #expect(cache.answer(for: link)?.mergeability?.mergeState == .unknown)
+        // Repeated unknown answers do not restart the 30 second grace period.
+        clock = clock.addingTimeInterval(15)
+        store("aaa", .unknown)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        store("aaa", .clean)
+        store("bbb", .unknown)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        #expect(cache.state(for: link)?.mergeability?.checks == .running)
+
+        store("bbb", .unstable)
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        let failedCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(14)
+        cache.refreshIfNeeded(link)
+        #expect(gitHub.calls.count == failedCalls)
+        clock = clock.addingTimeInterval(1)
+        cache.refreshIfNeeded(link)
+        await waitUntil { gitHub.calls.count == failedCalls + 2 && !cache.isRefreshing(link) }
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+
+        // Readiness-field fallback has the same expiry and cannot extend it.
+        gitHub.failsRequests = false
+        gitHub.rejectsReadinessFields = true
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        store("head1", .unstable)
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+
+        // A first failure after the known answer is already old gets no
+        // extra grace, and still keeps check history for task alerts.
+        store("head1", .unstable)
+        clock = clock.addingTimeInterval(45)
+        gitHub.failsRequests = true
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+    }
+
+    @Test func anOlderFailedRequestDoesNotReplaceANewerGoodAnswer() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.holdsAnswers = true
+        gitHub.failsRequests = true
+        let request = cache.refresh(link)
+        await waitUntil { gitHub.heldCount == 1 }
+        clock = clock.addingTimeInterval(60)
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "new",
+            mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
+        ), for: link, observedAt: clock)
+        gitHub.holdsAnswers = false
+        gitHub.release()
+        await request.value
+        #expect(cache.entries[link.url]?.lastError == nil)
+        #expect(cache.state(for: link)?.mergeability?.checks == .passing)
+    }
+
+    @Test func readinessExpiresWhileARefreshIsStillRunning() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unstable, checks: .running)
+        ), for: link, observedAt: clock)
+        clock = clock.addingTimeInterval(15)
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unknown)
+        ), for: link, observedAt: clock)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "UNKNOWN")
+        gitHub.holdsAnswers = true
+        let request = cache.refresh(link)
+        await waitUntil { gitHub.heldCount == 1 }
+        var publications = 0
+        let observation = cache.objectWillChange.sink { publications += 1 }
+        defer { observation.cancel() }
+        clock = clock.addingTimeInterval(15)
+        cache.refreshIfNeeded(link)
+        #expect(publications == 1, "The header must redraw when grace expires, even while a request is held")
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        #expect(gitHub.calls.count == 1)
+        gitHub.release()
+        await request.value
     }
 
     @Test func mergeabilityComesFromGitHubAndSurvivesAnUnknownAnswer() async throws {
