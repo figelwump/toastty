@@ -310,7 +310,8 @@ struct CoordinatorFolderTests {
         // The skill's body, without the front matter a skill loader reads.
         #expect(instructions.hasPrefix("# Toastty Coordinator\n"))
         #expect(instructions.contains("\nname: toastty-coordinator") == false)
-        // Codex reads at most 32 KiB of an instruction file.
+        // By default, Codex reads 32 KiB of its instruction files, all
+        // files together (`project_doc_max_bytes`).
         #expect(instructions.utf8.count + CoordinatorFolder.instructionsHeader.utf8.count < 32 * 1024)
         // The app ships every reference file that the instructions name.
         let shipped = CoordinatorFolder.shippedReferences()

@@ -968,9 +968,10 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   and a new version of Toastty brings new instructions to a conversation
   that began under the old one. Toastty replaces both files, and the files
   in `references/`, whenever their text differs, so do not edit them: put
-  your rules in `policy.md`. The instruction file stays under 32 KiB,
-  because an agent program can read no more of it; the reference files hold
-  the rest. An agent
+  your rules in `policy.md`. The instruction file stays under 32 KiB: by
+  default, Codex reads that much of its instruction files, all files
+  together (`project_doc_max_bytes` in its configuration). The reference
+  files hold the rest. An agent
   that reads neither file can load the `toastty-coordinator` skill by name.
   If Toastty cannot write the instructions, it does not start the
   coordinator's agent, and after a relaunch it does not resume it: the row

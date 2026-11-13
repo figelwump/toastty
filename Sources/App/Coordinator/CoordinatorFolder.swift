@@ -11,8 +11,8 @@ import Foundation
 ///   an older Toastty. Toastty writes both files again whenever they differ.
 /// - `references/` is Toastty's too. It holds the skill's reference files,
 ///   such as the rules for a merge, which the instructions tell the agent to
-///   read when it needs them. An agent program can limit how much of an
-///   instruction file it reads, so the instructions cannot hold everything.
+///   read when it needs them. By default, Codex reads 32 KiB of its
+///   instruction files, so the instructions cannot hold everything.
 /// - `policy.md` and `ledger.md` are the user's and the coordinator's.
 ///   Toastty creates each one when it is missing and never writes it again.
 /// - The folder is a git repository, so the coordinator can commit each
