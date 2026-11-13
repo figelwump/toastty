@@ -4689,8 +4689,7 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
         pendingCodexHookApprovalBySessionID[sessionID] = PendingCodexHookApproval(
             event: event,
-            token: token,
-            statusBeforeDeferral: record.status
+            token: token
         )
         logCodexHookEventDecision(
             sessionID: sessionID,
@@ -4764,19 +4763,18 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
         case .deferForContext(let reason):
-            var surfaced = pending
-            surfaced.didSurfaceAfterContextTimeout = true
-            pendingCodexHookApprovalBySessionID[sessionID] = surfaced
+            // PermissionRequest runs before Codex routes the request to its
+            // reviewer. Elapsed time does not prove that a person must answer.
+            // Retain the request so later context can accept or suppress it.
             pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: pending.event,
-                decision: "accepted",
+                decision: "deferred",
                 reason: "context_timeout_\(codexApprovalReason(reason, source: .hook))"
             )
-            updateStatus(sessionID: sessionID, status: status, at: Date())
         }
     }
 
@@ -4812,10 +4810,6 @@ final class SessionRuntimeStore: ObservableObject {
                 decision: "suppressed",
                 reason: codexApprovalReason(reason, source: .hook)
             )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
-            )
 
         case .ignore(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
@@ -4826,10 +4820,6 @@ final class SessionRuntimeStore: ObservableObject {
                 event: pending.event,
                 decision: "ignored",
                 reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
-            )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
             )
 
         case .accept(let reason):
@@ -4844,17 +4834,6 @@ final class SessionRuntimeStore: ObservableObject {
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
         }
-    }
-
-    private func restoreStatusBeforeDeferredApprovalIfNeeded(
-        sessionID: String,
-        pending: PendingCodexHookApproval
-    ) {
-        guard pending.didSurfaceAfterContextTimeout,
-              let status = pending.statusBeforeDeferral else {
-            return
-        }
-        updateSynthesizedStatus(sessionID: sessionID, status: status, at: Date())
     }
 
     private func removePendingCodexHookApprovalIfSuperseded(
@@ -5727,8 +5706,6 @@ private extension CodexRootTurnContextField {
 private struct PendingCodexHookApproval {
     let event: CodexHookEvent
     let token: UUID
-    let statusBeforeDeferral: SessionStatus?
-    var didSurfaceAfterContextTimeout = false
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
