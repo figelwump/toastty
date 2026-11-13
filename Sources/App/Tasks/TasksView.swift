@@ -31,9 +31,13 @@ struct TasksViewSections: Equatable {
         sections.needsYou = entries(.needsYou)
         sections.running = entries(.running)
         sections.idle = entries(.idle)
-        sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
-            .map { key, entries in
-                Lane(
+        // Lanes first, then families in each lane: a child in another
+        // project's lane lists apart from its parent.
+        let toShipItems = items.filter { $0.stage.group == .toShip }
+        sections.toShip = Dictionary(grouping: toShipItems, by: SidebarStatusSections.laneKey)
+            .map { key, items in
+                let entries = SidebarStatusSections.grouped(items)
+                return Lane(
                     id: key,
                     projectTitle: entries.first?.item.projectTitle ?? "Other",
                     entries: entries,
