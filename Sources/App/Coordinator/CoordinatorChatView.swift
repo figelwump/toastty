@@ -203,14 +203,16 @@ struct CoordinatorChatView: View {
     }
 
     /// A click on a link in the coordinator's text. The text is an agent's,
-    /// so only two things can happen: a task's space opens, or a web page
-    /// opens in the browser. Nothing else is opened and nothing is run.
+    /// so only three things can happen: a task's space opens, the Tasks
+    /// view shows a task whose space is closed, or a web page opens in the
+    /// browser. Nothing else is opened and nothing is run.
     private func open(_ url: URL, chips: CoordinatorTaskChips) -> OpenURLAction.Result {
-        switch CoordinatorChatLinks.action(for: url, taskSpaceWorkspaceID: { taskID in
-            guard chips.chips[taskID] != nil,
-                  let workspaceID = board.coordinator?.records.record(id: taskID)?.taskSpaceWorkspaceID,
-                  store.state.workspacesByID[workspaceID] != nil else { return nil }
-            return workspaceID
+        switch CoordinatorChatLinks.action(for: url, taskTarget: { taskID in
+            guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
+            if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
+                return .taskSpace(workspaceID: workspaceID)
+            }
+            return .tasksView
         }) {
         case .openTaskSpace(let workspaceID):
             TaskActions.openTaskSpace(
@@ -221,6 +223,16 @@ struct CoordinatorChatView: View {
             )
             // The task space's header then offers the way back.
             store.coordinatorReturnWorkspaceID = workspaceID
+            return .handled
+        case .showInTasksView(let taskID):
+            // The Tasks view covers this window's workspace; Esc returns to
+            // the chat.
+            board.showTasksView(
+                windowID: windowID,
+                selecting: .task(taskID),
+                store: store,
+                source: .ui("coordinator_task_link")
+            )
             return .handled
         case .openWebPage:
             return .systemAction
@@ -234,18 +246,32 @@ struct CoordinatorChatView: View {
 enum CoordinatorChatLinks {
     enum Action: Equatable {
         case openTaskSpace(workspaceID: UUID)
+        /// A task whose space is closed, such as a done or archived one:
+        /// the Tasks view, with the task selected.
+        case showInTasksView(taskID: UUID)
         /// An `http` or `https` page, in the user's browser.
         case openWebPage
         case ignore
     }
 
-    /// `taskSpaceWorkspaceID` answers with the open task space of a task
-    /// that exists, or `nil`.
-    static func action(for url: URL, taskSpaceWorkspaceID: (UUID) -> UUID?) -> Action {
+    /// Where a link to a task that exists leads.
+    enum TaskTarget: Equatable {
+        /// The task's space is open.
+        case taskSpace(workspaceID: UUID)
+        /// The task's space is closed or was never made.
+        case tasksView
+    }
+
+    /// `taskTarget` answers for a task that exists, or `nil` for any other
+    /// task ID.
+    static func action(for url: URL, taskTarget: (UUID) -> TaskTarget?) -> Action {
         if CoordinatorTaskLink.isToasttyURL(url) {
             guard let taskID = CoordinatorTaskLink.taskID(in: url),
-                  let workspaceID = taskSpaceWorkspaceID(taskID) else { return .ignore }
-            return .openTaskSpace(workspaceID: workspaceID)
+                  let target = taskTarget(taskID) else { return .ignore }
+            switch target {
+            case .taskSpace(let workspaceID): return .openTaskSpace(workspaceID: workspaceID)
+            case .tasksView: return .showInTasksView(taskID: taskID)
+            }
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               url.host?.isEmpty == false else { return .ignore }

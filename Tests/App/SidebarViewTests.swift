@@ -2849,6 +2849,69 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, expanded"), "\(renderedTextValues(in: tasks.hostingView))")
     }
 
+    /// A coordinator link to a task whose space is closed opens the Tasks
+    /// view on that task. A done or archived task's group expands and the
+    /// task stays selected, also when the view last showed the task in
+    /// another group.
+    func testTasksViewShowsARequestedArchivedTaskSelectedInItsExpandedGroup() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Fix the worktree build", title: "Fix the worktree build", slug: "fix-worktree-build",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        var done = TaskRecord(
+            createdAt: Date(), text: "Rename the CLI flag", title: "Rename the CLI flag", slug: "rename-cli-flag",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        done.doneAt = Date()
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [task, done], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        let coordinator = try XCTUnwrap(board.coordinator)
+        let subject = TaskBoardItem.Subject.task(task.id)
+
+        // A done task opens Done.
+        XCTAssertEqual(board.items().first { $0.id == .task(done.id) }?.stage.group, .done)
+        board.showTasksView(windowID: harness.windowID, selecting: .task(done.id), store: harness.store, source: .ui("test"))
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
+        board.revealGroupByWindowID[harness.windowID] = nil
+
+        // A task in Needs you shows without a group to open. The view then
+        // last showed it there.
+        board.showTasksView(windowID: harness.windowID, selecting: subject, store: harness.store, source: .ui("test"))
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        var tasks = hostTasksView(harness, board: board, height: 300)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], subject)
+        XCTAssertTrue(board.tasksViewListByWindowID[harness.windowID]?.contains(subject) == true)
+        tasks.window.orderOut(nil)
+        tasks.window.contentView = nil
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
+
+        // Archived while the view was closed, then shown from a link.
+        _ = coordinator.records.update(id: task.id) { $0.archivedAt = Date() }
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.items().first { $0.id == subject }?.stage.group, .archived)
+        // As the coordinator chat's link does: the task only.
+        board.showTasksView(windowID: harness.windowID, selecting: subject, store: harness.store, source: .ui("test"))
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .archived)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        tasks.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID], "The view should clear the request it applied.")
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], subject)
+        let textValues = renderedTextValues(in: tasks.hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Fix the worktree build,") }, "\(textValues)")
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Archived, 1, expanded"), "\(textValues)")
+        let rowFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "Fix the worktree build, ")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: rowFrame.midX, y: rowFrame.midY)),
+            "The archived row should scroll into view: \(rowFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-archived-task-link")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-archived-task-link")
+    }
+
     func testTasksViewArrowKeysMoveTheSelectionThroughTheRowsItShows() throws {
         let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 8, taskRecords: [], withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
