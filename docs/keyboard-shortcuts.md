@@ -19,6 +19,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Option+Shift+T` | Open the quick entry panel to create a task, from any app. Set it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`; see [Quick entry](tasks.md#quick-entry). On macOS 26 and later, hold it to dictate, or with **on open** set, press it again to stop and start dictation; see [Dictation](tasks.md#dictation) |
 | `Cmd+Shift+T` | Show the Tasks view, or hide it and return to the workspace it covered. **View > Show Tasks** does the same |
+| `Cmd+Shift+K` | Show the coordinator's dock beside the workspace, or hide it. From the coordinator's own workspace, go back to the last workspace with the dock open. **View > Show Coordinator Dock** does the same. In the window that holds the Coordinator workspace |
 | `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list. In the Agent list, `1`–`5` pick a Frequent preset while the search is empty |
 | `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
 
@@ -44,7 +45,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors and open task spaces ready for review; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels. Each group follows the Projects sidebar order downward before wrapping. |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors and open task spaces ready for review; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels. Each group follows the Projects sidebar order downward before wrapping. The coordinator is left out: the toolbar's toast button shows when it needs you. |
 | `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |
 | `Cmd+Ctrl+Right Arrow` | Resize split right |
@@ -113,6 +114,7 @@ These shortcuts target the focused panel type:
 - focused terminal: adjust the window's terminal font size
 - focused local document panel: adjust the window's local-document text size
 - focused browser panel: zoom the current browser panel
+- the coordinator's chat, in its panel or while the dock's field has the keyboard: adjust the chat's text size
 
 | Shortcut | Action |
 |---|---|

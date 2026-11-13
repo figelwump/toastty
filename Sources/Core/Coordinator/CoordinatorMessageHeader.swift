@@ -276,6 +276,30 @@ public enum CoordinatorMessageHeader {
         }
     }
 
+    /// The message as a chat's bubble shows it when the bubble shows each
+    /// attached file by itself: `displayText(of:)` without the names of
+    /// the files, and the path of each file as Toastty wrote it. A digest
+    /// and a message that `coordinator send` brought have no files.
+    public static func displayParts(of message: String) -> (text: String, attachmentPaths: [String]) {
+        switch kind(of: message) {
+        case .quickEntry(let text, _):
+            // The header is a person's text too: only the lines after it
+            // can hold Toastty's list.
+            let (first, rest) = splitFirstLine(message)
+            let choices = quickEntryDetails(inLine: first).joined(separator: " · ")
+            let paths = attachedFiles(in: rest)?.paths ?? []
+            return ([text, choices].filter { $0.isEmpty == false }.joined(separator: "\n\n"), paths)
+        case .reply(_, _, let text, _):
+            let paths = replyParts(of: message).flatMap { attachedFiles(in: $0.body)?.paths } ?? []
+            return (text, paths)
+        case .plain:
+            guard let (text, paths) = attachedFiles(in: message) else { return (message, []) }
+            return (text, paths)
+        case .digest, .fromSender:
+            return (message, [])
+        }
+    }
+
     private static func splitFirstLine(_ message: String) -> (first: Substring, rest: String) {
         guard let end = message.firstIndex(where: \.isNewline) else { return (message[...], "") }
         return (message[..<end], String(message[message.index(after: end)...]))

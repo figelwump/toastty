@@ -1396,7 +1396,8 @@ final class DisplayShortcutInterceptor {
         let coordinatorController = sessionRuntimeStore.taskCoordinator?.coordinatorController
         return store.focusedScaleCommandTarget(
             preferredWindowID: preferredWindowID,
-            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true }
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true },
+            coordinatorDockHasKeyboard: { coordinatorController?.dockHasKeyboard(in: $0) == true }
         )
     }
 

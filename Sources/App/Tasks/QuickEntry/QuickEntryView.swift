@@ -225,10 +225,22 @@ struct QuickEntryView: View {
 
     private static let attachChipID = "attach"
 
+    /// Only the Attach chip until a file is added: the row is then as tall
+    /// as the chip, so the panel stays short. Files make it as tall as a
+    /// thumbnail, and Attach stays on the row's bottom edge.
+    @ViewBuilder
     private var attachmentsRow: some View {
+        if model.attachments.isEmpty && model.pendingAttachmentCount == 0 {
+            attachButton
+        } else {
+            attachmentsScroller
+        }
+    }
+
+    private var attachmentsScroller: some View {
         ScrollViewReader { scroller in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(alignment: .bottom, spacing: 8) {
                     ForEach(model.attachments) { attachment in
                         AttachmentChip(attachment: attachment, accessibilityIdentifier: "quick-entry.attachment") {
                             model.removeAttachment(id: attachment.id)
@@ -239,27 +251,39 @@ struct QuickEntryView: View {
                         ProgressView()
                             .controlSize(.small)
                             .padding(.horizontal, 4)
+                            .frame(maxHeight: .infinity)
                     }
-                    Button(action: attachFiles) {
-                        HStack(spacing: 6) {
-                            Text("＋ Attach")
-                            KeyCap(text: "⌘V")
-                        }
-                    }
-                    .buttonStyle(AddChipStyle())
-                    .disabled(model.canAttachMore == false || model.isEditable == false)
-                    .help("Attach files. You can also paste an image with ⌘V or drop files on the panel.")
-                    .accessibilityIdentifier("quick-entry.attach")
-                    .id(Self.attachChipID)
+                    attachButton
+                        .id(Self.attachChipID)
                 }
                 .padding(.vertical, 1)
             }
             .frame(height: 74)
-            // Keeps Attach in view once the files fill the row.
-            .onChange(of: model.attachments.count + model.pendingAttachmentCount) {
+            // Keeps Attach in view once the files fill the row. The row
+            // appears with the first files, which can already fill it. A
+            // copied file replaces its progress indicator, so the two
+            // counts change together and are watched one by one.
+            .onAppear { scroller.scrollTo(Self.attachChipID, anchor: .trailing) }
+            .onChange(of: model.attachments.count) {
+                scroller.scrollTo(Self.attachChipID, anchor: .trailing)
+            }
+            .onChange(of: model.pendingAttachmentCount) {
                 scroller.scrollTo(Self.attachChipID, anchor: .trailing)
             }
         }
+    }
+
+    private var attachButton: some View {
+        Button(action: attachFiles) {
+            HStack(spacing: 6) {
+                Text("＋ Attach")
+                KeyCap(text: "⌘V")
+            }
+        }
+        .buttonStyle(AddChipStyle())
+        .disabled(model.canAttachMore == false || model.isEditable == false)
+        .help("Attach files. You can also paste an image with ⌘V or drop files on the panel.")
+        .accessibilityIdentifier("quick-entry.attach")
     }
 
     /// One row: a long workspace or model name is cut short, and the

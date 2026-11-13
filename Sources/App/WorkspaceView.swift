@@ -1,5 +1,6 @@
 import RemoteProtocol
 import AppKit
+import ConversationUI
 import CoreState
 import SwiftUI
 import UniformTypeIdentifiers
@@ -93,7 +94,12 @@ struct WorkspaceView: View {
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
-    let sidebarVisible: Bool
+    /// A column shows left of the workspace: the sidebar or the
+    /// coordinator's dock. Without one, the top bar starts after the
+    /// titlebar's buttons.
+    let leftColumnVisible: Bool
+    /// The buttons at the titlebar's left, after the traffic lights.
+    var titlebarButtonCount = 3
     /// Runs a click on the top bar's Merge button for a workspace.
     var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     /// Runs the Merge button menu's Close Without Merging for a workspace.
@@ -123,7 +129,7 @@ struct WorkspaceView: View {
     @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
     @StateObject private var splitResizeCoordinator = WorkspaceSplitResizeCoordinator()
 
-    private static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = -1.5
@@ -696,7 +702,10 @@ struct WorkspaceView: View {
                     }
                 }
             }
-            .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+            .padding(
+                .leading,
+                leftColumnVisible ? 12 : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount)
+            )
             .padding(.trailing, 12)
             .padding(.top, ToastyTheme.topBarContentTopPadding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -708,18 +717,6 @@ struct WorkspaceView: View {
 
     private var workspaceTitleLabel: some View {
         HStack(spacing: 6) {
-            // A task space that a chip in the coordinator's chat opened
-            // offers the way back. The store publishes which one, so the
-            // header is laid out again when the button comes or goes.
-            if let workspaceID = selectedWorkspace?.id,
-               store.coordinatorReturnWorkspaceID == workspaceID,
-               let location = store.state.coordinator {
-                WorkspaceHeaderCoordinatorReturnButton(
-                    location: location,
-                    store: store,
-                    sessionRuntimeStore: sessionRuntimeStore
-                )
-            }
             Text(selectedWorkspace?.title ?? "")
                 .font(ToastyTheme.fontTitle)
                 .foregroundStyle(ToastyTheme.primaryText)
@@ -4462,8 +4459,12 @@ struct PanelCardView: View {
         }
 
         if let coordinatorController, coordinatorController.location?.panelID == panelID {
+            // Dock, Policy, then Terminal: the dock and the switch need the chat.
+            if coordinatorController.chatIsAvailable {
+                CoordinatorPanelDockButton(controller: coordinatorController)
+            }
             CoordinatorPolicyButton(controller: coordinatorController)
-            if coordinatorController.supportsChat, coordinatorController.chat != nil {
+            if coordinatorController.chatIsAvailable {
                 CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
             }
         }
@@ -4484,9 +4485,15 @@ struct PanelCardView: View {
 
     /// The chat over the coordinator's terminal. On macOS 14 the shared
     /// transcript is not available, and the terminal shows.
+    ///
+    /// The chat is made only while it is on screen. A hidden workspace stays
+    /// mounted, and the dock shows the same chat while this one is hidden:
+    /// one view of the chat at a time keeps one composer for the keyboard.
     @ViewBuilder
     private var coordinatorChatCover: some View {
-        if #available(macOS 15.0, *), let coordinatorController, let chat = coordinatorController.chat,
+        if isWorkspaceSelected == false || isTabSelected == false {
+            ConversationDesignTokens.background
+        } else if #available(macOS 15.0, *), let coordinatorController, let chat = coordinatorController.chat,
            let location = coordinatorController.location {
             CoordinatorChatView(
                 model: chat,

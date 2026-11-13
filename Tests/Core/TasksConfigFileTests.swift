@@ -208,6 +208,34 @@ struct TasksConfigFileTests {
     }
 
     @Test
+    func worktreesShareOnlyReleaseSettingsAndKeepExplicitOverrides() throws {
+        let config = try parse("""
+        [workspace."~/repos/toastty"]
+        release_tags = "v*"
+        release_skill = "release-app"
+        release_prompt = "Publish it."
+        start_prompt = "Main checkout only."
+        [workspace."~/repos/coordinator"]
+        start_prompt = "Coordinator only."
+        release_tags = "preview-*"
+        """)
+        let inherited = try #require(config.releaseWorkspace(
+            forProjectRoot: "/Users/tester/repos/other-worktree", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
+        ))
+        #expect(inherited.releaseTags == "v*")
+        #expect(inherited.releaseSkill == "release-app")
+        #expect(inherited.releasePrompt == "Publish it.")
+        #expect(inherited.startPrompt == nil)
+        let explicit = try #require(config.releaseWorkspace(
+            forProjectRoot: "/Users/tester/repos/coordinator", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
+        ))
+        #expect(explicit.releaseTags == "preview-*")
+        #expect(explicit.releaseSkill == "release-app")
+        #expect(explicit.startPrompt == "Coordinator only.")
+        #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other-worktree", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
     func startSkillDefaultsToTheShippedSkillAndNoneTurnsItOff() throws {
         let config = try parse("""
         [defaults]

@@ -23,7 +23,7 @@ public enum TaskAttachmentRetention {
     }
 
     /// Whether the task is Done or Archived by its record: archived, marked
-    /// done, shipped, or merged in a project without `release_tags`. Not
+    /// done, shipped, merged into a feature branch, or merged without release tracking. Not
     /// while setup or a move into a worktree runs, as after a retry, and
     /// not while a stopped cleanup puts it in Needs you.
     public static func isFinished(_ record: TaskRecord, releaseTagsConfigured: Bool) -> Bool {
@@ -36,7 +36,7 @@ public enum TaskAttachmentRetention {
         if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil {
             return true
         }
-        return record.mergedAt != nil && releaseTagsConfigured == false
+        return record.mergedAt != nil && (releaseTagsConfigured == false || record.mergeTarget?.waitsForRelease == false)
     }
 
     /// `hasFiles` is whether the task's attachments folder exists; a record

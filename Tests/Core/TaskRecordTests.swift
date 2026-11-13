@@ -51,6 +51,8 @@ struct TaskRecordTests {
         - /tmp/a.png
         - /tmp/b c.pdf
 
+        \(TaskPrompt.coordinatorLine)
+
         \(TaskPrompt.replyLine)
         """)
     }
@@ -59,8 +61,8 @@ struct TaskRecordTests {
     func promptWithoutFirstPromptIsTheTextAlone() {
         // The text keeps its own spacing, such as indented code.
         #expect(TaskPrompt.compose(firstPrompt: nil, text: "    let x = 1\n", attachmentPaths: [])
-            == "    let x = 1\n\n\n\(TaskPrompt.replyLine)")
-        #expect(TaskPrompt.compose(firstPrompt: "Same", text: "Same", attachmentPaths: []) == "Same\n\n\(TaskPrompt.replyLine)")
+            == "    let x = 1\n\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)")
+        #expect(TaskPrompt.compose(firstPrompt: "Same", text: "Same", attachmentPaths: []) == "Same\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)")
     }
 
     @Test
@@ -70,6 +72,8 @@ struct TaskRecordTests {
         Use the task-start skill.
 
         Fix it
+
+        \(TaskPrompt.coordinatorLine)
 
         \(TaskPrompt.replyLine)
         """)
@@ -91,6 +95,8 @@ struct TaskRecordTests {
         The task, as written:
 
         Fix it
+
+        \(TaskPrompt.coordinatorLine)
 
         \(TaskPrompt.replyLine)
         """)
@@ -146,7 +152,7 @@ struct TaskRecordTests {
         )
         let fresh = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false)
         #expect(fresh.hasPrefix("Use the task-start skill.\n\nYou are in the git worktree /w/fix"))
-        #expect(fresh.hasSuffix("cannot continue.\n\nFix it\n\n\(TaskPrompt.replyLine)"))
+        #expect(fresh.hasSuffix("cannot continue.\n\nFix it\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"))
         let forked = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: true)
         #expect(forked.contains("skill") == false)
     }
