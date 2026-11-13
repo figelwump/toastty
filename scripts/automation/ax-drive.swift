@@ -446,6 +446,10 @@ case "key":
     case "cmd-shift-p": press(keyCode: 35, flags: [.maskCommand, .maskShift])
     case "cmd-v": press(keyCode: 9, flags: .maskCommand)
     case "cmd-shift-g": press(keyCode: 5, flags: [.maskCommand, .maskShift])
+    case "cmd-shift-k": press(keyCode: 40, flags: [.maskCommand, .maskShift])
+    case "cmd-b": press(keyCode: 11, flags: .maskCommand)
+    case "cmd-equal": press(keyCode: 24, flags: .maskCommand)
+    case "cmd-0": press(keyCode: 29, flags: .maskCommand)
     default:
         print("unknown key \(argument)")
         exit(64)

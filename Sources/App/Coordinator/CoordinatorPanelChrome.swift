@@ -37,30 +37,24 @@ struct CoordinatorPanelModeToggle: View {
     }
 }
 
-/// "← Coordinator" in the header of a task space that a chip in the
-/// coordinator's chat opened. The header shows it only for that space.
-struct WorkspaceHeaderCoordinatorReturnButton: View {
-    let location: CoordinatorLocation
-    let store: AppStore
-    let sessionRuntimeStore: SessionRuntimeStore
+/// "Dock" in the header of the coordinator's panel: leaves the full view
+/// for the workspace the user came from, with the chat in the dock.
+struct CoordinatorPanelDockButton: View {
+    let controller: CoordinatorController
 
     var body: some View {
         Button {
-            _ = store.selectWorkspace(
-                windowID: location.windowID,
-                workspaceID: location.workspaceID,
-                preferringUnreadSessionPanelIn: sessionRuntimeStore
-            )
+            controller.showDock(focusComposer: true)
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.left")
+            HStack(spacing: 4) {
+                Image(systemName: "sidebar.left")
                     .font(.system(size: 9, weight: .semibold))
-                Text(AppState.coordinatorWorkspaceTitle)
+                Text("Dock")
                     .font(ToastyTheme.fontWorkspaceMergeButton)
             }
             .foregroundStyle(ToastyTheme.sidebarDisclosureText)
             .padding(.horizontal, 7)
-            .frame(height: 18)
+            .frame(height: 16)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(ToastyTheme.sidebarDisclosureBackground)
@@ -68,9 +62,10 @@ struct WorkspaceHeaderCoordinatorReturnButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .fixedSize()
-        .help("Go back to the coordinator")
-        .accessibilityLabel("Back to Coordinator")
-        .accessibilityIdentifier("topbar.workspace.back-to-coordinator")
+        .help(ToasttyKeyboardShortcuts.toggleCoordinatorDock.helpText(
+            "Go back to your last workspace, with the coordinator's chat in the dock"
+        ))
+        .accessibilityLabel("Show in Dock")
+        .accessibilityIdentifier("coordinator.panel.dock")
     }
 }

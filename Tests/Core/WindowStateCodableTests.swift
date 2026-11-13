@@ -93,6 +93,53 @@ struct WindowStateCodableTests {
         #expect(decoded.sidebarWidthPointsOverride == nil)
         #expect(decoded.terminalFontSizePointsOverride == nil)
         #expect(decoded.markdownTextScaleOverride == nil)
+        // Saved before the coordinator's dock: the dock is hidden, at its
+        // default width.
+        #expect(decoded.coordinatorDockVisible == false)
+        #expect(decoded.coordinatorDockWidthPointsOverride == nil)
+        #expect(decoded.coordinatorDockWidth == WindowState.defaultCoordinatorDockWidth)
+    }
+
+    @Test
+    func coordinatorDockSurvivesARelaunchAndKeepsItsWidthInItsLimits() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(reducer.send(.setCoordinatorDockVisible(windowID: windowID, visible: true), state: &state))
+        #expect(reducer.send(.setCoordinatorDockVisible(windowID: windowID, visible: true), state: &state) == false)
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 420), state: &state))
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 420), state: &state) == false)
+
+        // Saved and read back, as a relaunch does.
+        let saved = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: saved).makeAppState()
+        let window = try #require(restored.windows.first)
+        #expect(window.coordinatorDockVisible)
+        #expect(window.coordinatorDockWidth == 420)
+
+        // A drag past either limit stops at it, and the default width is
+        // saved as no width.
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 90), state: &state))
+        #expect(state.windows.first?.coordinatorDockWidth == WindowState.minCoordinatorDockWidth)
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 2_000), state: &state))
+        #expect(state.windows.first?.coordinatorDockWidth == WindowState.maxCoordinatorDockWidth)
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: .nan), state: &state) == false)
+        #expect(reducer.send(
+            .setCoordinatorDockWidth(windowID: windowID, width: WindowState.defaultCoordinatorDockWidth),
+            state: &state
+        ))
+        #expect(state.windows.first?.coordinatorDockWidthPointsOverride == nil)
+        #expect(reducer.send(.setCoordinatorDockVisible(windowID: UUID(), visible: false), state: &state) == false)
+
+        // A width from a newer or edited file is kept in the limits too.
+        var json = try #require(
+            JSONSerialization.jsonObject(with: try JSONEncoder().encode(window)) as? [String: Any]
+        )
+        json["coordinatorDockWidthPointsOverride"] = 9_000
+        let edited = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(edited.coordinatorDockWidth == WindowState.maxCoordinatorDockWidth)
+        try StateValidator.validate(state)
     }
 }
 

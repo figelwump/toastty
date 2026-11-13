@@ -53,6 +53,30 @@ enum SidebarCoordinatorPresentation {
         }
     }
 
+    /// The coordinator's mark now. `readPanelID` is the panel whose output
+    /// the user sees: the full view's focused panel, or the coordinator's
+    /// terminal while the dock shows its chat. `nil` when neither shows.
+    static func currentMark(
+        controller: CoordinatorController,
+        sessionRuntimeStore: SessionRuntimeStore,
+        workspace: WorkspaceState,
+        readPanelID: UUID?
+    ) -> Mark {
+        let status = controller.status
+        let statusKind = status?.location.panelID
+            .flatMap { sessionRuntimeStore.sessionRegistry.panelStatus(for: $0) }
+            .flatMap { $0.isActive ? $0.status.kind : nil }
+        return mark(
+            agentState: status?.agentState ?? .notRunning,
+            statusKind: statusKind,
+            hasUnread: hasUnread(
+                in: workspace,
+                selectedWorkspaceID: readPanelID == nil ? nil : workspace.id,
+                selectedPanelID: readPanelID
+            )
+        )
+    }
+
     /// The status Toasty carries in the row's left column: steam while the
     /// agent works, a session row's rail dot otherwise.
     static func iconStatus(_ mark: Mark) -> ToastyIcon.Status {
@@ -89,32 +113,41 @@ enum SidebarCoordinatorPresentation {
 /// row. It is not a project card: it shows in both sidebar segments, has no
 /// number and does not reorder. It shows the agent's status and unread
 /// marks, and says when the agent does not run.
+///
+/// Where the chat can show, a click opens the dock beside the selected
+/// workspace. The full view opens from the hover button and the menu.
 struct SidebarCoordinatorRow: View {
     let workspace: WorkspaceState
+    /// The full view is open: the coordinator's workspace is selected.
     let isSelected: Bool
-    let selectedPanelID: UUID?
+    /// The panel whose output the user sees. See `currentMark`.
+    let readPanelID: UUID?
+    /// The chat can show in a dock.
+    let offersDock: Bool
+    let dockShows: Bool
     @ObservedObject var controller: CoordinatorController
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let select: () -> Void
+    let openFullView: () -> Void
+    let toggleDock: () -> Void
     let restart: () -> Void
     let close: () -> Void
 
     @State private var isHovered = false
 
     private var mark: SidebarCoordinatorPresentation.Mark {
-        let status = controller.status
-        let statusKind = status?.location.panelID
-            .flatMap { sessionRuntimeStore.sessionRegistry.panelStatus(for: $0) }
-            .flatMap { $0.isActive ? $0.status.kind : nil }
-        return SidebarCoordinatorPresentation.mark(
-            agentState: status?.agentState ?? .notRunning,
-            statusKind: statusKind,
-            hasUnread: SidebarCoordinatorPresentation.hasUnread(
-                in: workspace,
-                selectedWorkspaceID: isSelected ? workspace.id : nil,
-                selectedPanelID: selectedPanelID
-            )
+        SidebarCoordinatorPresentation.currentMark(
+            controller: controller,
+            sessionRuntimeStore: sessionRuntimeStore,
+            workspace: workspace,
+            readPanelID: readPanelID
         )
+    }
+
+    /// The hover button that opens the full view. The full view is open
+    /// already on a selected row.
+    private var showsOpenFullViewButton: Bool {
+        offersDock && isHovered && isSelected == false
     }
 
     var body: some View {
@@ -134,7 +167,9 @@ struct SidebarCoordinatorRow: View {
                     .foregroundStyle(ToastyTheme.primaryText)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                markView(mark)
+                // The hover button takes the words' place.
+                CoordinatorStatusLabel(mark: mark)
+                    .opacity(showsOpenFullViewButton ? 0 : 1)
             }
             // As tall as the Tasks row, whatever mark shows.
             .frame(minHeight: 20)
@@ -145,8 +180,34 @@ struct SidebarCoordinatorRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .trailing) {
+            if showsOpenFullViewButton {
+                Button(action: openFullView) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 4)
+                .help("Open Full View")
+                .accessibilityLabel("Open Full View")
+                .accessibilityIdentifier("sidebar.coordinator.open-full-view")
+            }
+        }
         .onHover { isHovered = $0 }
         .contextMenu {
+            if offersDock {
+                Button("Open Full View", action: openFullView)
+                    .disabled(isSelected)
+                Button(dockShows ? "Hide Dock" : "Show Dock", action: toggleDock)
+                    .keyboardShortcut(
+                        ToasttyKeyboardShortcuts.toggleCoordinatorDock.key,
+                        modifiers: ToasttyKeyboardShortcuts.toggleCoordinatorDock.modifiers
+                    )
+                Divider()
+            }
             Button("Restart Coordinator", action: restart)
             Button("Close Coordinator", role: .destructive, action: close)
         }
@@ -170,10 +231,15 @@ struct SidebarCoordinatorRow: View {
         if isHovered { return ToastyTheme.sidebarSessionHoverBackground }
         return nil
     }
+}
 
-    /// The words at the right end, as on a session row's first line.
-    @ViewBuilder
-    private func markView(_ mark: SidebarCoordinatorPresentation.Mark) -> some View {
+/// The words for the coordinator's status, as on a session row's first
+/// line: at the right end of the coordinator's row, and after the title in
+/// the dock's header.
+struct CoordinatorStatusLabel: View {
+    let mark: SidebarCoordinatorPresentation.Mark
+
+    var body: some View {
         switch mark {
         case .quiet, .working, .unread:
             EmptyView()

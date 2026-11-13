@@ -524,10 +524,15 @@ it are in [the policy file](#the-policy-file).
   the workspace on first use, selects it and starts the agent. Later it
   selects the workspace, and starts the agent only when none runs there.
 - The sidebar pins one **Coordinator** row at the top, above the Tasks row, in
-  both the Projects and the Status segment. The row shows the agent's state
-  (a spinner while it works, an approval or error badge, a dot for unread
-  output) and says **Not running** when no agent runs. It is not a project
-  card: it has no number, does not reorder, and its name does not change.
+  both the Projects and the Status segment. Its icon is Toasty, the toast,
+  which shows the agent's state: steam while it works, and a dot for unread
+  output, an approval or an error. An approval or error badge shows at the
+  row's right end, and the row says **Not running** when no agent runs. It is
+  not a project card: it has no number, does not reorder, and its name does
+  not change. A click on the row opens [the dock](#the-coordinators-dock)
+  with the keyboard in its field. The full view, the coordinator's own
+  workspace, opens from the row's hover button and context menu (**Open Full
+  View**), and from **Open Coordinator**.
 - **Restart Coordinator**, in the **Agent** menu, the command palette, the
   row's context menu and the workspace header, starts a fresh agent session
   in the same workspace. The menu offers it while the coordinator is open. An
@@ -749,8 +754,8 @@ under it. On macOS 14 the panel shows the terminal.
   then **Paused**, so none starts a new turn right after the stop. **Send
   next** lets them go again. A digest from Toastty does not wait for paused
   messages.
-- **Terminal.** The **Terminal** button in the panel's header shows the
-  terminal in place of the chat, and **Chat** switches back. Use the terminal
+- **Terminal.** The **Terminal** button in the full view's panel header
+  shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
   for a login, a folder-trust or a permission prompt, and to answer a
   question: the chat shows such a prompt but cannot answer it, and it says so
   above the field. The choice is not saved: a relaunch shows the chat.
@@ -775,10 +780,45 @@ under it. On macOS 14 the panel shows the terminal.
   dot · 14:07". A click opens the full text. It never shows as your message.
 - **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
   text shows as a chip with the task's stage color, its current title and its
-  pull request number. A click opens the task's space, and that space's
-  header then shows **← Coordinator** until you are back. A link to a task
-  that does not exist, and any other `toastty:` link, is plain text. Other
-  links open only `http` and `https` pages, in your browser.
+  pull request number. A click opens the task's space, with the chat beside
+  it in [the dock](#the-coordinators-dock): from the full view, the chat
+  moves into the dock. A link to a task that does not exist, and any other
+  `toastty:` link, is plain text. Other links open only `http` and `https`
+  pages, in your browser.
+
+### The coordinator's dock
+
+The dock shows the coordinator's chat in a column between the sidebar and
+the workspace, so it stays open while you move between tasks. It is the same
+chat as the full view, with the same transcript, field and waiting messages.
+It needs the chat, so it is on macOS 15 and later.
+
+- **Open and hide it** with the toast button in the window's toolbar, after
+  the sidebar button, with `Cmd+Shift+K`, with **View > Show Coordinator
+  Dock**, the command palette, or a click on the **Coordinator** row. The
+  dock's header has **Open Full View** and **Hide Dock**.
+- **Only in the coordinator's window.** The dock and its toolbar button show
+  in the window that holds the Coordinator workspace.
+- **The full view.** While the Coordinator workspace is selected, the dock
+  steps aside, because the full view shows the same chat. **Dock** in the
+  coordinator panel's header goes back to the workspace you were in before,
+  or else the first workspace in the sidebar, with the chat in the dock.
+- **The terminal stays in the full view.** When the chat says that the
+  coordinator waits in its terminal, **Show Terminal** in the dock opens the
+  full view with the terminal.
+- **The toolbar button** shows Toasty golden while the chat is on screen, in
+  the dock or the full view, and as a gray outline while it is not. Steam
+  rises while the coordinator works. While the chat is out of sight, a dot on
+  the toast shows unread output, an approval or an error.
+- **Read.** Output that the dock shows counts as read, as a focused panel's
+  does.
+- **Width.** Drag the dock's right edge to set its width, from 300 to 480
+  points. The width and whether the dock is open are saved for the window
+  and restored after a relaunch.
+- **The Tasks view** covers the workspace to the right of the dock.
+- **The keyboard.** While the dock's field has the keyboard, `Cmd+=`,
+  `Cmd+-` and `Cmd+0` change the chat's text size, and a click on a panel
+  gives that panel the keyboard.
 
 Toastty reads the coordinator's conversation while the coordinator's
 workspace is open, also with Remote Access off, because it must see what

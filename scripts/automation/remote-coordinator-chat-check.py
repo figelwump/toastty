@@ -24,9 +24,17 @@ that:
   turn; remote-coordinator-steer-check.py covers that);
 - Stop ends the turn and sets the waiting message aside; Send next types it;
 - a digest that Toastty typed shows as one folded line, and a click opens it;
-- a task link shows as a chip with the task's own title, a click opens the
-  task's space, and "← Coordinator" there goes back; a link to no task and
-  another Toastty link are plain text that a click does not open;
+- a task link shows as a chip with the task's own title; a click in the
+  full view opens the task's space with the chat beside it in the dock; a
+  link to no task and another Toastty link are plain text that a click does
+  not open;
+- the dock: a message sent there gets its reply there, and output it shows
+  is read; Open Full View and the full view's Dock button move the chat
+  between the dock and the full view; the toolbar button and Cmd+Shift+K
+  hide and show it, Cmd+Shift+K with the keyboard in its field, where
+  Cmd+= changes the chat's text size; with the sidebar hidden it is at the
+  window's left edge; while it is hidden, a reply leaves the coordinator's
+  row unread, and showing the dock reads it;
 - the header's switch shows the terminal and the chat again;
 - after the app is killed and relaunched, the chat shows the same
   conversation and takes a message;
@@ -79,8 +87,9 @@ while IFS= read -r line; do :; done
 
 NO_BREAK_SPACE = '\u00a0'
 HOLD_COMMAND = './hold-turn.sh'
-# The label of the "← Coordinator" button in a task space's header.
-BACK = 'Back to Coordinator'
+# The labels of the coordinator's sidebar row.
+ROW_READ = 'Coordinator'
+ROW_UNREAD = 'Coordinator, unread'
 
 
 def long_turn(seconds, marker):
@@ -435,7 +444,8 @@ def run(check):
         wait_for('Claude to end the digest\'s turn', at_prompt, timeout=240)
         step('a digest showed folded and opened', timer=timer, digest=transcript()[digest_at]['text'])
 
-        # 6. A task link is a chip; a click opens the task and offers the way back.
+        # 6. A task link is a chip; in the full view, a click opens the task
+        # with the chat in the dock.
         missing = str(uuid.uuid4()).upper()
         ui.send('Reply with exactly this text and nothing else: '
                 f'[some old words](toastty://task/{task_id}) is ready. '
@@ -449,26 +459,85 @@ def run(check):
         ui.run('click-text', 'not-a-link')
         time.sleep(1.5)
         require(selected_workspace() == coordinator_id, 'A link to no task opened something')
-        require(not ui.has_label(BACK), 'The way back shows before any chip was used')
+        require(not ui.exists('coordinator.dock'), 'The dock shows beside the full view')
         ui.run('click-text', chip_title)
         wait_for('the task\'s space', lambda: selected_workspace() == task_space, timeout=30)
-        wait_for('the way back', lambda: ui.has_label(BACK), timeout=30)
+        wait_for('the chat in the dock', lambda: ui.exists('coordinator.dock') and chip_title in ui.texts(), timeout=30)
+        require(not ui.exists('coordinator.panel.mode-toggle'), 'The full view still shows beside the dock')
         # The header's tab strip moves for 0.18 s after a workspace switch.
         time.sleep(0.6)
-        capture('task-space-with-way-back')
-        ui.run('click-label', BACK)
-        wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id, timeout=30)
-        wait_for('the chat again', lambda: ui.exists('coordinator.chat'), timeout=30)
-        capture('back-in-coordinator')
-        instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=task_space)))
-        wait_for('the task\'s space', lambda: selected_workspace() == task_space, timeout=30)
-        time.sleep(1)
-        require(not ui.has_label(BACK), 'The way back still shows after the user went back to the coordinator')
-        instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=coordinator_id)))
-        wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id, timeout=30)
-        step('a chip opened the task and the way back returned', taskID=task_id, chat=ui.texts()[-500:])
+        capture('task-space-with-dock')
+        step('a chip in the full view opened the task with the chat in the dock', taskID=task_id,
+             dock=ui.run('frame', 'coordinator.dock')[1])
 
-        # 7. The header's switch shows the terminal, then the chat.
+        # 7. The dock is the same chat: a message sent there gets its reply
+        # there, and the output it shows is read.
+        ui.send('Reply with exactly this one word and nothing else: CHAT-DOCK')
+        wait_for_reply('CHAT-DOCK')
+        require(selected_workspace() == task_space, 'Sending from the dock left the task')
+        wait_for('the reply to count as read', lambda: ui.has_label(ROW_READ) and not ui.has_label(ROW_UNREAD), timeout=10)
+        capture('dock-reply')
+        step('the dock sent and showed the reply, which is read', chat=ui.texts()[-300:])
+
+        # 8. Open Full View and the full view's Dock button move the chat.
+        ui.run('click', 'coordinator.dock.open-full-view')
+        wait_for('the full view', lambda: selected_workspace() == coordinator_id and not ui.exists('coordinator.dock')
+                 and ui.exists('coordinator.chat'), timeout=30)
+        time.sleep(0.6)
+        capture('full-view')
+        ui.run('click', 'coordinator.panel.dock')
+        wait_for('the task with the dock again', lambda: selected_workspace() == task_space
+                 and ui.exists('coordinator.dock'), timeout=30)
+        step('Open Full View and Dock moved the chat between the full view and the dock')
+
+        # 9. The toolbar button hides the dock; Cmd+Shift+K shows it with the
+        # keyboard in its field, where Cmd+= changes the chat's text size.
+        ui.run('click', 'titlebar.toggle.coordinator-dock')
+        wait_for('the dock to hide', lambda: not ui.exists('coordinator.dock'), timeout=30)
+        ui.run('key', 'cmd-shift-k')
+        wait_for('the dock to show', lambda: ui.exists('coordinator.dock'), timeout=30)
+        time.sleep(0.6)
+        composer_height = lambda: int(ui.run('frame', 'coordinator.chat.composer')[1].split()[3])
+        before_scale = composer_height()
+        ui.run('key', 'cmd-equal')
+        wait_for('a larger text size in the dock', lambda: composer_height() > before_scale, timeout=10)
+        ui.run('key', 'cmd-0')
+        wait_for('the text size again', lambda: composer_height() == before_scale, timeout=10)
+        require(selected_workspace() == task_space, 'The shortcut left the task')
+        step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat',
+             composerHeight=before_scale)
+
+        # 10. With the sidebar hidden, the dock is at the window's left edge.
+        ui.run('key', 'cmd-b')
+        wait_for('the dock at the window\'s left edge',
+                 lambda: int(ui.run('frame', 'coordinator.dock')[1].split()[0])
+                 == int(ui.run('window-frame')[1].split()[0]), timeout=10)
+        time.sleep(0.6)
+        capture('sidebar-hidden-dock')
+        ui.run('key', 'cmd-b')
+        wait_for('the sidebar again', lambda: ui.exists('sidebar.coordinator'), timeout=10)
+        step('with the sidebar hidden, the dock was at the window\'s left edge')
+
+        # 11. While the dock is hidden, a reply is unread on the row and the
+        # toolbar button. Showing the dock reads it.
+        ui.run('click', 'titlebar.toggle.coordinator-dock')
+        wait_for('the dock to hide', lambda: not ui.exists('coordinator.dock'), timeout=30)
+        cli('coordinator', 'send', 'Reply with exactly this one word and nothing else: CHAT-HIDDEN')
+        wait_for('the reply', lambda: replied('CHAT-HIDDEN'), timeout=240)
+        wait_for('the unread row', lambda: ui.has_label(ROW_UNREAD), timeout=30)
+        require(selected_workspace() == task_space, 'The reply took the user out of the task')
+        capture('dock-hidden-unread')
+        ui.run('click', 'titlebar.toggle.coordinator-dock')
+        wait_for('the dock with the reply', lambda: ui.exists('coordinator.dock') and 'CHAT-HIDDEN' in ui.texts(), timeout=30)
+        wait_for('the reply to count as read', lambda: not ui.has_label(ROW_UNREAD), timeout=10)
+        capture('dock-shown-read')
+        step('a reply while the dock was hidden was unread until the dock showed it')
+
+        instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=coordinator_id)))
+        wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id
+                 and ui.exists('coordinator.chat') and not ui.exists('coordinator.dock'), timeout=30)
+
+        # 12. The header's switch shows the terminal, then the chat.
         ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the terminal in place of the chat', lambda: not ui.exists('coordinator.chat'), timeout=30)
         panel = status()['panelID']
@@ -479,7 +548,7 @@ def run(check):
         capture('chat-after-terminal')
         step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:])
 
-        # 8. Kill and relaunch with the chat open, now with Remote Access on.
+        # 13. Kill and relaunch with the chat open, now with Remote Access on.
         before = status()
         coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
         instance.kill()
@@ -503,7 +572,7 @@ def run(check):
         capture('after-relaunch-send')
         step('the relaunch showed the same conversation and took a message', resumed=resumed)
 
-        # 9. With Remote Access on, a paired device sends to the same panel.
+        # 14. With Remote Access on, a paired device sends to the same panel.
         def conversation():
             _, body = gateway.call('GET', '/api/sessions')
             return next((c for c in (body or {}).get('snapshot', {}).get('conversations', [])
@@ -545,7 +614,7 @@ def run(check):
         capture('device-then-mac')
         step('a paired device and the Mac shared the prompt in order', order=order)
 
-        # 10. Restart Coordinator while the chat shows.
+        # 15. Restart Coordinator while the chat shows.
         old_session = status()['sessionID']
         restarted = cli('coordinator', 'restart')
         require(restarted['startedAgent'] and restarted['sessionID'] != old_session, f'Restart did not start an agent: {restarted}')

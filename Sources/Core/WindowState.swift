@@ -12,6 +12,11 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public static let minSidebarWidth: Double = 160
     public static let maxSidebarWidth: Double = 480
     public static let sidebarWidthComparisonEpsilon: Double = 0.0001
+    /// The coordinator's dock: a column between the sidebar and the
+    /// workspace that shows the coordinator's chat.
+    public static let defaultCoordinatorDockWidth: Double = 360
+    public static let minCoordinatorDockWidth: Double = 300
+    public static let maxCoordinatorDockWidth: Double = 480
 
     public let id: UUID
     public var frame: CGRectCodable
@@ -22,6 +27,12 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
     public var sidebarSegment: SidebarSegment
+    /// The user opened the coordinator's dock in this window. It shows only
+    /// in the window that holds the coordinator's workspace, and only while
+    /// that workspace is not the selected one.
+    public var coordinatorDockVisible: Bool
+    /// The dock's width after a resize, or `nil` for the default width.
+    public var coordinatorDockWidthPointsOverride: Double?
     /// Whether the Tasks view covers the workspace content. Not saved: a
     /// relaunch opens the workspace the window had selected.
     public var showsTasksView: Bool
@@ -36,7 +47,9 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         terminalFontSizePointsOverride: Double? = nil,
         markdownTextScaleOverride: Double? = nil,
         sidebarSegment: SidebarSegment = .projects,
-        showsTasksView: Bool = false
+        showsTasksView: Bool = false,
+        coordinatorDockVisible: Bool = false,
+        coordinatorDockWidthPointsOverride: Double? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -48,6 +61,21 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
         self.sidebarSegment = sidebarSegment
         self.showsTasksView = showsTasksView
+        self.coordinatorDockVisible = coordinatorDockVisible
+        self.coordinatorDockWidthPointsOverride = Self.normalizedCoordinatorDockWidthOverride(coordinatorDockWidthPointsOverride)
+    }
+
+    /// The dock's width within its limits, or `nil` for a width that is not
+    /// a number or is the default.
+    public static func normalizedCoordinatorDockWidthOverride(_ width: Double?) -> Double? {
+        guard let width, width.isFinite else { return nil }
+        let clamped = min(max(width, minCoordinatorDockWidth), maxCoordinatorDockWidth)
+        guard abs(clamped - defaultCoordinatorDockWidth) >= sidebarWidthComparisonEpsilon else { return nil }
+        return clamped
+    }
+
+    public var coordinatorDockWidth: Double {
+        coordinatorDockWidthPointsOverride ?? Self.defaultCoordinatorDockWidth
     }
 
     public static func clampedSidebarWidth(_ width: Double) -> Double {
@@ -84,6 +112,8 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case terminalFontSizePointsOverride
         case markdownTextScaleOverride
         case sidebarSegment
+        case coordinatorDockVisible
+        case coordinatorDockWidthPointsOverride
     }
 
     public init(from decoder: Decoder) throws {
@@ -112,6 +142,10 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         // An unknown segment from a newer version falls back to projects.
         sidebarSegment = (try? container.decodeIfPresent(SidebarSegment.self, forKey: .sidebarSegment)) ?? .projects
         showsTasksView = false
+        coordinatorDockVisible = try container.decodeIfPresent(Bool.self, forKey: .coordinatorDockVisible) ?? false
+        coordinatorDockWidthPointsOverride = Self.normalizedCoordinatorDockWidthOverride(
+            try container.decodeIfPresent(Double.self, forKey: .coordinatorDockWidthPointsOverride)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -125,5 +159,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
         try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
         try container.encode(sidebarSegment, forKey: .sidebarSegment)
+        try container.encode(coordinatorDockVisible, forKey: .coordinatorDockVisible)
+        try container.encodeIfPresent(coordinatorDockWidthPointsOverride, forKey: .coordinatorDockWidthPointsOverride)
     }
 }
