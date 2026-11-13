@@ -33,6 +33,9 @@ struct TaskBoardItem: Identifiable, Equatable {
     var parentTaskID: UUID?
     /// An accepted merge that is still under way.
     var merge: TaskMergeActivity?
+    /// When the merged task's open task space gets its cleanup, while
+    /// Toastty holds it so the user can still look at the task.
+    var cleanupHeldUntil: Date? = nil
     /// The latest change Toastty knows of, for ordering within a group.
     var activityAt: Date
 
@@ -270,8 +273,11 @@ enum TaskBoard {
             facts.doneAt = taskSpace.doneAt
         }
         var cleanupProblem: String?
-        if case .failed(let reason)? = request?.phase {
-            cleanupProblem = reason
+        var cleanupHeldUntil: Date?
+        switch request?.phase {
+        case .failed(let reason)?: cleanupProblem = reason
+        case .holdingCleanup(let until)?: cleanupHeldUntil = until
+        default: break
         }
         let merge = mergeActivity(
             record: record,
@@ -315,6 +321,7 @@ enum TaskBoard {
             branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
             parentTaskID: record.parentTaskID,
             merge: merge,
+            cleanupHeldUntil: cleanupHeldUntil,
             activityAt: dates.max() ?? record.createdAt
         )
     }
@@ -341,7 +348,7 @@ enum TaskBoard {
         case .merging?, .closing?: return .merging
         case .awaitingChecks?: return .waitingForChecks
         case .awaitingMerge?, .cleaningUp?: return .cleaningUp
-        case .failed?: return nil
+        case .holdingCleanup?, .failed?: return nil
         case nil: break
         }
         guard let requestedAt = record.mergeRequestedAt,
@@ -518,6 +525,7 @@ final class TaskBoardStore: ObservableObject {
             if Self.stageInputsChanged(from: previousState, to: nextState) {
                 self?.scheduleStateTimesPass()
             }
+            self?.handleClosedTaskSpaces(from: previousState, to: nextState)
         }
         reloadConfig()
         syncRecords(state: store.state)
@@ -784,6 +792,22 @@ final class TaskBoardStore: ObservableObject {
             }
             if next != record {
                 _ = records.update(id: record.id) { $0 = next }
+            }
+        }
+    }
+
+    /// Tells the coordinator about task spaces that closed, after the other
+    /// observers of the same change ran: the merge coordinator drops the
+    /// closed workspace's request first.
+    private func handleClosedTaskSpaces(from previousState: AppState, to nextState: AppState) {
+        guard previousState.workspacesByID.count > nextState.workspacesByID.count else { return }
+        let closed = previousState.workspacesByID.values
+            .filter { $0.taskID != nil && nextState.workspacesByID[$0.id] == nil }
+            .map(\.id)
+        guard closed.isEmpty == false else { return }
+        Task { @MainActor [weak self] in
+            for workspaceID in closed {
+                self?.coordinator?.mergedTaskSpaceClosed(workspaceID: workspaceID)
             }
         }
     }

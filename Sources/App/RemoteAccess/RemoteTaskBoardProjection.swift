@@ -144,6 +144,7 @@ enum RemoteTaskBoardProjection {
         case .archive: .archive
         case .cleanUp: .cleanUp
         case .keepAsIs: .keepAsIs
+        case .closeTaskSpace: nil
         }
     }
 

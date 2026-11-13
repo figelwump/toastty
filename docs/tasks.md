@@ -1496,7 +1496,8 @@ pressing Esc leaves it. It lists every task in the same groups, with Done and
 Archived collapsed, and a detail pane with the task's text, stage, pull
 request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
-and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
+Close Task Space while a merged task's task space waits for its cleanup, and
+Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project can release (see
 [Release](#release)); the project card's To ship line in the sidebar has
 one too. A task that is starting, or whose setup or
@@ -1587,10 +1588,20 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    **Merge** is offered again. `toastty task get` reports it as
    `mergeFailure` until a new merge starts, and a `task watch --until merged`
    or `--until to-ship` then ends as one that can never fire.
-4. Toastty records the merge on the task first. Once the agent's turn ends, it
-   closes the task space, removes the worktree and deletes the branch, the same
-   way as the Merge button does for any task space. In a project with
-   `release_tags`, the cleanup runs the same way. A merge into the repository's
+4. Toastty records the merge on the task first, and the task moves to Done
+   (or To ship). The task space stays open for 24 hours, so you can still read
+   the conversation, the Scratchpad and the pull request; the task's status
+   line says when it closes. Then, at a check every 30 seconds while the agent
+   is not in a turn and no window shows the task space, Toastty closes the
+   task space, removes the worktree and deletes the branch, the same way as the
+   Merge button does for any other workspace. **Close Task Space** in the
+   task's menu does it at once. A prompt to the agent after the merge clears
+   the task space's done mark, which cancels the wait: the task space stays
+   until you close it. When you close the task space of a merged task
+   yourself, Toastty removes the worktree and the local branch, with Archive's
+   checks: uncommitted files or commits on no remote branch stop it with
+   **Merged · clean up?**. The branch on GitHub stays in that case. In a
+   project with `release_tags`, the cleanup runs the same way. A merge into the repository's
    default branch waits in To ship until a release tag contains its merge.
    A merge into a feature branch is Done for that branch; see [Release](#release).
 
@@ -1605,8 +1616,8 @@ once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
-its task space when no agent there is working and the worktree is clean at the
-merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
+its task space, after the same 24-hour wait, when no agent there is working and
+the worktree is clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
@@ -1621,7 +1632,8 @@ In that case, it keeps every branch and leaves spaces with agents, running comma
 documents, or terminals in another worktree open. The primary checkout is
 never removed.
 While a merged task's task space stays open, its header no longer offers Merge:
-it shows **Done · PR #N**, with **Archive Task…** in its menu, or **Cleanup
+it shows **Done · PR #N**, with **Close Task Space** in its menu during the
+24 hours after the merge and **Archive Task…** after that, or **Cleanup
 Stopped** while a stopped cleanup waits for you.
 
 ## Archive a task

@@ -81,7 +81,8 @@ extension TaskCoordinator {
         }
         if let taskSpaceID = record.taskSpaceWorkspaceID, let request = merges?.request(workspaceID: taskSpaceID) {
             switch request.phase {
-            case .failed:
+            case .failed, .holdingCleanup:
+                // Archive's own teardown closes the held task space.
                 break
             case .awaitingChecks:
                 throw TaskError("Toastty is waiting to merge \(record.title). Cancel the merge first.")

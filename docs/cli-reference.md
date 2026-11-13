@@ -955,7 +955,8 @@ the Merge button does: the task's agent checks the pull request and then
 merges it, also in a project with `merge = "direct"`. It refuses where the
 Merge button is not offered. Toastty merges at the checkout's
 commit, refuses with `--head` when the checkout moved past the checked commit,
-waits for checks that still run, and cleans up after the agent's turn ends.
+waits for checks that still run, and cleans up 24 hours after the merge,
+once the agent's turn has ended.
 `task cancel-merge` stops a merge the user accepted. `task archive` closes a
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise

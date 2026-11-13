@@ -4487,6 +4487,7 @@ struct SidebarView: View {
             ),
             stage: boardItem?.stage,
             isTask: workspace.taskID != nil,
+            isCleanupHeld: boardItem?.cleanupHeldUntil != nil,
             projectTag: projectTag,
             linkedParentID: taskCoordinator?.records.linkedParentTaskSpaceID(of: workspace, in: store.state),
             isLinkedChild: isLinkedChild,
@@ -4501,7 +4502,8 @@ struct SidebarView: View {
             summary: boardItem.flatMap { item in
                 // The agent's question replaces its last status line.
                 if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
-                return item.stage.isBeforeStart ? TaskBoardPresentation.statusLine(item) : nil
+                // A merged task's held task space says when it closes.
+                return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
             spawningSessionID: workspace.spawningSessionID,
             spawnerName: spawner?.displayTitle,

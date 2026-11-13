@@ -44,6 +44,146 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// After the merge the task is Done, but its task space stays open for
+    /// the hold, so the user can still look at it; then the usual cleanup
+    /// runs. Both a merge Toastty runs and one seen on GitHub are held.
+    @Test(arguments: [false, true])
+    func aMergedTaskSpaceStaysOpenUntilItsCleanupTime(mergedOnGitHub: Bool) async throws {
+        try await withScenario(cleanupHold: 3) { scenario in
+            scenario.reportAgent(.ready)
+            if mergedOnGitHub {
+                FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+                await scenario.pullRequests.refresh(scenario.pullRequest).value
+            } else {
+                try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            }
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            let item = try #require(scenario.boardItem)
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(item.stage == .done)
+            #expect(item.merge == nil)
+            #expect(TaskBoardPresentation.detailActions(item) == [.closeTaskSpace])
+            #expect(TaskBoardPresentation.statusLine(item) == "Done · task space closes in 1 h")
+            #expect(scenario.headerPresentation == .done(pullRequest: "PR #7"))
+            // Several checks pass while the hold lasts; nothing closes.
+            try await Task.sleep(for: .seconds(1))
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+
+            await scenario.waitUntil("the held cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.remoteBranch().isEmpty)
+            #expect(scenario.boardItem?.stage == .done)
+            #expect(scenario.boardItem?.cleanupHeldUntil == nil)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+        }
+    }
+
+    @Test
+    func aHeldCleanupWaitsWhileAWindowShowsTheTaskSpace() async throws {
+        try await withScenario(cleanupHold: 0.5) { scenario in
+            scenario.reportAgent(.ready)
+            scenario.store.send(.selectWorkspace(windowID: scenario.windowID, workspaceID: scenario.taskSpaceID))
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            try await Task.sleep(for: .seconds(1.5))
+            #expect(scenario.isHeld)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+
+            scenario.store.send(.selectWorkspace(windowID: scenario.windowID, workspaceID: scenario.parentWorkspaceID))
+            await scenario.waitUntil("the cleanup runs once the task space is not shown") {
+                scenario.record?.cleanup?.finishedAt != nil
+            }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+        }
+    }
+
+    @Test
+    func closeTaskSpaceCleansUpAHeldTaskNow() async throws {
+        try await withScenario(cleanupHold: 3_600) { scenario in
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            #expect(scenario.boardItem.map { TaskBoardPresentation.statusLine($0) } == "Done · task space closes in 1 h")
+            try TaskActions.run(.closeTaskSpace, taskID: scenario.taskID, coordinator: scenario.tasks)
+            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.remoteBranch().isEmpty)
+            #expect(scenario.boardItem?.stage == .done)
+        }
+    }
+
+    /// Closing the task space by hand, as the user does once done with it,
+    /// still removes the worktree and the local branch, with an archive's
+    /// checks. Work left in the worktree stops that until the user decides.
+    @Test(arguments: [false, true])
+    func closingAHeldTaskSpaceRemovesTheWorktree(withUncommittedWork: Bool) async throws {
+        try await withScenario(cleanupHold: 3_600) { scenario in
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            if withUncommittedWork {
+                try "draft\n".write(toFile: "\(scenario.worktree)/notes.txt", atomically: true, encoding: .utf8)
+            }
+            scenario.store.send(.closeWorkspace(workspaceID: scenario.taskSpaceID))
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+
+            if withUncommittedWork {
+                await scenario.waitUntil("the cleanup stops on the uncommitted file") {
+                    scenario.record?.cleanup?.problem != nil
+                }
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+                #expect(scenario.boardItem?.stage == .needsYou(.cleanupStopped(reason: try #require(scenario.record?.cleanup?.problem))))
+                #expect(scenario.boardItem.map { TaskBoardPresentation.statusLine($0) } == "Merged · clean up?")
+                // Once the file is gone, Clean Up finishes the job.
+                try FileManager.default.removeItem(atPath: "\(scenario.worktree)/notes.txt")
+                try TaskActions.run(.cleanUp, taskID: scenario.taskID, coordinator: scenario.tasks)
+            }
+            // Closing the task space ends the held request, which marks the
+            // merge's cleanup finished at once; the teardown then follows.
+            await scenario.waitUntil("the local branch is deleted") {
+                (try? scenario.git(["rev-parse", "--verify", "refs/heads/fix/task-7"], in: scenario.repo)) == nil
+            }
+            await scenario.waitUntil("the teardown is recorded") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.record?.cleanup?.stepsDone.contains("removed the worktree") == true)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.remoteBranch().isEmpty == false)
+            #expect((try? scenario.git(["rev-parse", "--verify", "refs/heads/fix/task-7"], in: scenario.repo)) == nil)
+            #expect(scenario.boardItem?.stage == .done)
+        }
+    }
+
+    /// A prompt after the merge starts a turn, which clears the done mark:
+    /// the user works on in the task space, so the held cleanup is dropped
+    /// and it stays open until the user closes it.
+    @Test
+    func newWorkInAHeldTaskSpaceCancelsItsCleanup() async throws {
+        try await withScenario(cleanupHold: 0.5) { scenario in
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            scenario.reportAgent(.working)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            scenario.reportAgent(.ready)
+            try await Task.sleep(for: .seconds(1.5))
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+            #expect(scenario.boardItem?.stage == .done)
+            #expect(scenario.boardItem.map(TaskBoardPresentation.detailActions) == [])
+
+            scenario.store.send(.closeWorkspace(workspaceID: scenario.taskSpaceID))
+            await scenario.waitUntil("closing it deletes the local branch") {
+                (try? scenario.git(["rev-parse", "--verify", "refs/heads/fix/task-7"], in: scenario.repo)) == nil
+            }
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(scenario.record?.cleanup?.problem == nil)
+        }
+    }
+
     @Test
     func aWatchedCommandDoesNotHoldUpTheCleanup() async throws {
         try await withScenario { scenario in
@@ -630,6 +770,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         var taskID = UUID()
         /// What tasks.toml says; tests may change it.
         var config = TasksConfig()
+        /// The project the task space belongs to, which the window shows.
+        var parentWorkspaceID = UUID()
         var tasks: TaskCoordinator!
         var merges: WorkspaceMergeCoordinator!
         var board: TaskBoardStore!
@@ -692,6 +834,13 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             return tasks.waitWatches[watchID]?.firedAt != nil
         }
         var boardItem: TaskBoardItem? { board.items().first { $0.taskID == taskID } }
+        var isHeld: Bool {
+            if case .holdingCleanup? = merges.request(workspaceID: taskSpaceID)?.phase { return true }
+            return false
+        }
+        func remoteBranch() throws -> String {
+            try git(["ls-remote", "--heads", "origin", "fix/task-7"], in: repo)
+        }
         /// The task space's merge control, from what the top bar reads.
         var headerPresentation: WorkspaceMergePresentation? {
             guard let workspace = store.state.workspacesByID[taskSpaceID] else { return nil }
@@ -734,6 +883,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     /// way the app wires it.
     private func withScenario(
         checksPending: Bool = false, baseBranch: String = "main", adopted: Bool = false,
+        cleanupHold: TimeInterval = 0,
         _ body: (Scenario) async throws -> Void
     ) async throws {
         let root = URL(filePath: NSTemporaryDirectory())
@@ -807,6 +957,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         try waitForSocket(at: socketPath)
 
         let windowID = try #require(store.state.windows.first?.id)
+        #expect(store.state.windows.first?.selectedWorkspaceID == parentWorkspaceID)
         let existing = Set(store.state.workspacesByID.keys)
         store.send(.createWorkspace(windowID: windowID, title: "fix-task-7", activate: false))
         let taskSpaceID = try #require(Set(store.state.workspacesByID.keys).subtracting(existing).first)
@@ -825,6 +976,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             sessionRuntimeStore: sessionRuntimeStore, taskSpaceID: taskSpaceID, taskPanelID: taskPanelID, windowID: windowID,
             git: { [self] arguments, directory in try git(arguments, in: directory) }
         )
+        scenario.parentWorkspaceID = parentWorkspaceID
         let cliPath = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/toastty").path
         scenario.cliPath = cliPath
         let runner = WorkspaceMergeLiveCommandRunner(
@@ -838,6 +990,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             runner: runner,
             userDefaults: nil,
             pollInterval: .milliseconds(200),
+            taskSpaceCleanupHold: cleanupHold,
             notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") }
         )
         scenario.tasks = TaskCoordinator(

@@ -903,7 +903,8 @@ struct ToasttyApp: App {
                 socketPath: socketPath,
                 cliExecutablePath: cliExecutablePath
             ),
-            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+            taskSpaceCleanupHold: WorkspaceMergeCoordinator.taskSpaceCleanupHold
         )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {

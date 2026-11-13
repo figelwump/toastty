@@ -57,6 +57,10 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         /// The workspace is done; the pull request has merged or is about to,
         /// and the cleanup waits for it.
         case awaitingMerge
+        /// The pull request merged and the cleanup waits until `until`, so
+        /// the user can still look at the task space. A task space gets
+        /// this after its merge; other workspaces clean up at once.
+        case holdingCleanup(until: Date)
         case cleaningUp
         /// Cleanup did not finish. The workspace stays, and the user can retry
         /// or dismiss the request.
@@ -109,7 +113,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         switch phase {
         case .merging, .cleaningUp, .closing:
             return true
-        case .awaitingChecks, .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .holdingCleanup, .failed:
             return false
         }
     }
@@ -126,7 +130,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
             return next
         case .merging, .closing:
             return nil
-        case .awaitingChecks, .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .holdingCleanup, .failed:
             return self
         }
     }

@@ -188,6 +188,13 @@ struct WorkspaceMergeLiveCommandRunner: WorkspaceMergeCommandRunning {
 /// Cleanup closes the workspace, which ends its agents, so it waits until no
 /// agent there is in a turn: an agent that merged through `task.merge` is
 /// still writing its reply when the pull request merges.
+///
+/// A task space keeps its workspace for `taskSpaceCleanupHold` after the
+/// merge, so the user can still look at the task: the request waits in
+/// `.holdingCleanup`, saved across launches, and the cleanup starts at the
+/// first check after that time while no agent is in a turn and no window
+/// shows the workspace. New work in the workspace clears its done mark,
+/// which drops the request as for any other wait.
 @MainActor
 final class WorkspaceMergeCoordinator {
     /// What happened to a request's merge or cleanup, for the task that
@@ -207,6 +214,8 @@ final class WorkspaceMergeCoordinator {
     }
 
     static let pollInterval: Duration = .seconds(30)
+    /// How long a task space stays open after its pull request merged.
+    static let taskSpaceCleanupHold: TimeInterval = 24 * 60 * 60
     /// Failed `gh` checks in a row before the request shows as failed.
     static let maximumPollFailures = 3
     static let pullRequestCheckTimeout: TimeInterval = 30
@@ -224,6 +233,10 @@ final class WorkspaceMergeCoordinator {
     private let scriptPath: String?
     private let userDefaults: UserDefaults?
     private let pollInterval: Duration
+    /// How long a task space waits after the merge before its cleanup;
+    /// zero cleans up at once.
+    private let taskSpaceCleanupHold: TimeInterval
+    private let now: () -> Date
     /// Tells the user what happened. Never a modal alert: a merge can
     /// start from an agent or the CLI, and an app-modal alert would stall
     /// the automation socket until someone at the Mac dismisses it.
@@ -242,6 +255,8 @@ final class WorkspaceMergeCoordinator {
         scriptPath: String? = Bundle.main.url(forResource: "workspace-pull-request", withExtension: "py")?.path,
         userDefaults: UserDefaults? = ToasttyAppDefaults.current,
         pollInterval: Duration = WorkspaceMergeCoordinator.pollInterval,
+        taskSpaceCleanupHold: TimeInterval = 0,
+        now: @escaping () -> Date = Date.init,
         notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceMergeCoordinator.sendNotification
     ) {
         self.store = store
@@ -250,6 +265,8 @@ final class WorkspaceMergeCoordinator {
         self.scriptPath = scriptPath
         self.userDefaults = userDefaults
         self.pollInterval = pollInterval
+        self.taskSpaceCleanupHold = taskSpaceCleanupHold
+        self.now = now
         self.notify = notify
         sessionRuntimeStore.workspaceMergeCoordinator = self
         // Through `update`, so saved requests are shown and their checks
@@ -348,6 +365,22 @@ final class WorkspaceMergeCoordinator {
         }
     }
 
+    /// Starts a held cleanup now instead of at its time: the user is done
+    /// with the task space. Throws when the request is not held, or while
+    /// an agent there is in a turn.
+    func cleanUpHeldTaskSpaceNow(workspaceID: UUID) throws {
+        guard let request = requests[workspaceID], case .holdingCleanup = request.phase else {
+            throw TaskError("The task space is not waiting for its cleanup.")
+        }
+        guard agentInTurn(workspaceID: workspaceID) == nil else {
+            throw TaskError("The agent is still working. Close the task space once its turn ends.")
+        }
+        pollTasks.removeValue(forKey: workspaceID)?.cancel()
+        Task { [weak self] in
+            await self?.runCleanup(workspaceID: workspaceID, request: request)
+        }
+    }
+
     /// Checks the pull request again after a failure.
     func retryCleanup(workspaceID: UUID) {
         guard var request = requests[workspaceID], case .failed = request.phase else { return }
@@ -417,7 +450,7 @@ final class WorkspaceMergeCoordinator {
 
     private static func isPolling(_ phase: WorkspaceMergeRequest.Phase) -> Bool {
         switch phase {
-        case .awaitingChecks, .awaitingMerge:
+        case .awaitingChecks, .awaitingMerge, .holdingCleanup:
             return true
         case .merging, .cleaningUp, .failed, .closing:
             return false
@@ -574,6 +607,9 @@ final class WorkspaceMergeCoordinator {
                 thenCleanUp: thenCleanUp
             )
         }
+        if case .holdingCleanup(let until) = request.phase {
+            return await runHeldCleanupIfDue(workspaceID: workspaceID, request: request, until: until)
+        }
         guard request.phase == .awaitingMerge else { return false }
         let number = request.pullRequest.number
         let askedAt = Date()
@@ -604,10 +640,21 @@ final class WorkspaceMergeCoordinator {
                 )
                 return true
             }
-            pollTasks[workspaceID] = nil
             cleanupObserver?(workspaceID, .merged(state))
             // The observer may have changed what the request applies to.
-            guard requests[workspaceID] == request else { return false }
+            guard requests[workspaceID] == request else {
+                pollTasks[workspaceID] = nil
+                return false
+            }
+            if taskSpaceCleanupHold > 0, store?.state.workspacesByID[workspaceID]?.taskID != nil {
+                // This poll goes on and starts the cleanup once the time
+                // has passed.
+                var held = request
+                held.phase = .holdingCleanup(until: now().addingTimeInterval(taskSpaceCleanupHold))
+                update(workspaceID, held)
+                return true
+            }
+            pollTasks[workspaceID] = nil
             await runCleanup(workspaceID: workspaceID, request: request)
             return false
         case "CLOSED":
@@ -637,6 +684,27 @@ final class WorkspaceMergeCoordinator {
             }
             return true
         }
+    }
+
+    /// Starts a held cleanup once its time has passed, no agent is in a
+    /// turn, and no window shows the workspace. Returns whether to check
+    /// again later.
+    private func runHeldCleanupIfDue(workspaceID: UUID, request: WorkspaceMergeRequest, until: Date) async -> Bool {
+        guard now() >= until else { return true }
+        if let busy = agentInTurn(workspaceID: workspaceID) {
+            ToasttyLog.info(
+                "Held workspace cleanup waits for an agent's turn to end",
+                category: .terminal,
+                metadata: ["workspace_id": workspaceID.uuidString, "session_id": busy]
+            )
+            return true
+        }
+        if store?.state.windows.contains(where: { $0.selectedWorkspaceID == workspaceID && $0.showsTasksView == false }) == true {
+            return true
+        }
+        pollTasks[workspaceID] = nil
+        await runCleanup(workspaceID: workspaceID, request: request)
+        return false
     }
 
     /// A session in the workspace that is working or waiting for an
@@ -833,6 +901,7 @@ final class WorkspaceMergeCoordinator {
         case .merging(let thenCleanUp): return thenCleanUp ? "merging_then_clean_up" : "merging"
         case .awaitingChecks(_, let thenCleanUp): return thenCleanUp ? "awaiting_checks_then_clean_up" : "awaiting_checks"
         case .awaitingMerge: return "awaiting_merge"
+        case .holdingCleanup: return "holding_cleanup"
         case .cleaningUp: return "cleaning_up"
         case .failed: return "failed"
         case .closing: return "closing"
