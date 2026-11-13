@@ -551,14 +551,19 @@ def run(check):
         # toolbar button. Showing the dock reads it.
         ui.run('click', 'titlebar.toggle.coordinator-dock')
         wait_for('the dock to hide', lambda: not ui.exists('coordinator.dock'), timeout=30)
-        cli('coordinator', 'send', 'Reply with exactly this one word and nothing else: CHAT-HIDDEN')
-        wait_for('the reply', lambda: replied('CHAT-HIDDEN'), timeout=240)
-        wait_for('the unread row', lambda: ui.has_label(ROW_UNREAD), timeout=30)
+        # A note from `coordinator send` is not the user's, so the
+        # coordinator answers it without following it. Any answer will do.
+        cli('coordinator', 'send', 'For your information only: CHAT-HIDDEN. No action is needed.')
+        wait_for('the note in the conversation', lambda: index_of('user', 'CHAT-HIDDEN') is not None, timeout=120)
+        note_at = index_of('user', 'CHAT-HIDDEN')
+        wait_for('the coordinator\'s answer to the note',
+                 lambda: any(entry['role'] == 'assistant' for entry in transcript()[note_at + 1:]), timeout=240)
+        wait_for('the unread row', lambda: ui.has_label(ROW_UNREAD), timeout=60)
         require(selected_workspace() == task_space, 'The reply took the user out of the task')
         capture('dock-hidden-unread')
         ui.run('click', 'titlebar.toggle.coordinator-dock')
-        wait_for('the dock with the reply', lambda: ui.exists('coordinator.dock') and 'CHAT-HIDDEN' in ui.texts(), timeout=30)
-        wait_for('the reply to count as read', lambda: not ui.has_label(ROW_UNREAD), timeout=10)
+        wait_for('the dock', lambda: ui.exists('coordinator.dock'), timeout=30)
+        wait_for('the answer to count as read', lambda: not ui.has_label(ROW_UNREAD), timeout=10)
         capture('dock-shown-read')
         step('a reply while the dock was hidden was unread until the dock showed it')
 
