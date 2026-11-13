@@ -255,9 +255,49 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         model.workspaceOptions = [QuickEntryModel.Option(id: workspace.id.uuidString, title: "toastty-quick-entry-pickers-and-presets")]
         model.chooseWorkspace(workspace.id)
         model.choosePreset(QuickEntryPreset(agent: "codex", model: "gpt-6.1-sol-long-context-preview", effort: "xhigh"))
-        model.attachImageData(try Self.screenshotData(), named: "Screenshot 4.11.52 PM.png")
         let chosen = try render("quick-entry-coordinator-chosen")
         XCTAssertEqual(chosen.size.height, auto.size.height, "The footer stays one row")
+        model.attachImageData(try Self.screenshotData(), named: "Screenshot 4.11.52 PM.png")
+        try render("quick-entry-coordinator-chosen-attached")
+        withExtendedLifetime(coordinator) {}
+    }
+
+    /// Without files the attachments row is only as tall as the Attach
+    /// chip, so the panel is short; the first file makes the row as tall as
+    /// a thumbnail, and more files keep that height.
+    func testAttachmentsRowGrowsOnlyWithFiles() throws {
+        let coordinator = try makeCoordinator(running: true)
+        controller.present(prefill: .empty)
+        let model = try XCTUnwrap(controller.model)
+        model.text = "what would be involved in adding"
+        let oneLine = try render("quick-entry-attach-one-line")
+
+        model.text = Array(repeating: Self.designText, count: 3).joined(separator: "\n\n")
+        let longText = try render("quick-entry-attach-long-text")
+        XCTAssertGreaterThan(longText.size.height, oneLine.size.height)
+
+        model.text = "what would be involved in adding"
+        model.attachImageData(try Self.screenshotData(), named: "Screenshot 1.png")
+        let oneImage = try render("quick-entry-attach-one-image")
+        XCTAssertGreaterThan(oneImage.size.height, oneLine.size.height, "The row grows to show the thumbnail")
+
+        for index in 2...5 {
+            model.attachImageData(try Self.screenshotData(), named: "Screenshot \(index).png")
+        }
+        model.attachFiles([URL(fileURLWithPath: #filePath)])
+        let deadline = Date().addingTimeInterval(5)
+        while model.pendingAttachmentCount > 0, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(model.attachments.count, 6)
+        let several = try render("quick-entry-attach-several")
+        XCTAssertEqual(several.size.height, oneImage.size.height, "More files scroll in the same row")
+
+        while let attachment = model.attachments.first {
+            model.removeAttachment(id: attachment.id)
+        }
+        let removed = try render("quick-entry-attach-removed")
+        XCTAssertEqual(removed.size.height, oneLine.size.height, "The panel shrinks again without files")
         withExtendedLifetime(coordinator) {}
     }
 

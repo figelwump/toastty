@@ -7,8 +7,9 @@ import RemoteProtocol
 /// transcript draws.
 ///
 /// The iPhone has its own adapter, over the events it decodes from the
-/// gateway. This one differs in four ways: a digest that Toastty typed,
-/// and a message that `coordinator send` brought, become one folded line;
+/// gateway. This one differs in five ways: a digest that Toastty typed
+/// becomes one folded line; a message that `coordinator send` brought shows
+/// its sender and body in a card;
 /// a digest whose turn the coordinator marked quiet folds the whole turn
 /// under that line; a quick entry message shows without Toastty's first
 /// line; and a message this Mac sent is not marked as sent from another
@@ -117,11 +118,14 @@ enum CoordinatorChatTranscript {
                 foldsTurn: isQuietDigest(payload.text)
             ))
         case .fromSender(let sender):
-            // Not the user's words: one muted line that names the sender
-            // and opens to the text.
+            // Only Toastty's first line identifies the sender. The body
+            // stays third-party text, even when it imitates another header.
+            let body = payload.text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                .dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             return .hostMessage(ToasttyHostMessagePresentation(
                 summary: "From \(sender) · \(timeText(timestamp))",
-                text: payload.text
+                text: body,
+                style: .sender(name: sender, timeText: timeText(timestamp))
             ))
         case .reply(let quoted, let time, _, _):
             let source = time.flatMap { quotedRowID(QuotedMessage(text: quoted, time: $0)) }

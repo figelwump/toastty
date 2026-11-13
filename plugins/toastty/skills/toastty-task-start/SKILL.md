@@ -239,3 +239,19 @@ To ask another task's agent something, run `toastty task send <task-id>
 `toastty task get <task-id>`, under `lastReply`. A milestone that is not a
 stage, such as "the API is defined", is a `task send` from the task that
 reaches it.
+
+## Ask the coordinator
+
+When the user asks you to ask the coordinator something, send the question
+directly with `"$TOASTTY_CLI_PATH" coordinator send "<question>"`. For a long
+message, write it to a file and use `coordinator send --text-file <path>`.
+Include the relevant context and the decision needed. Toastty identifies
+this task as the sender; no coordinator panel or session ID is needed.
+
+Check the result: `sent` means the text was submitted, not that the agent
+read or answered it. `queued` means it waits for an open prompt.
+`sentUnconfirmed` means Return was not confirmed; check the coordinator's
+terminal before sending it again. The answer appears in Coordinator chat.
+It returns to this task only if the coordinator sends it here with
+`toastty task send <task-id> "<answer>"`. A question that needs the user's
+decision is shown to the user there.

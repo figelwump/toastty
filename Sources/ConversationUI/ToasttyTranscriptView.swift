@@ -2063,7 +2063,16 @@ private struct ToasttyTranscriptRowView: View {
                 metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
             )
         case .hostMessage(let message):
-            hostMessage(message)
+            switch message.style {
+            case .disclosure:
+                hostMessage(message)
+            case .sender(let sender, let timeText):
+                ToasttySenderMessageCard(
+                    sender: sender, timeText: timeText, text: message.text,
+                    isExpanded: subagentIsExpanded, toggleExpansion: toggleSubagentExpansion,
+                    accessibilitySuffix: row.id.accessibilitySuffix
+                )
+            }
         case .interaction:
             EmptyView()
         case .interactionResolved(_, let resolution):

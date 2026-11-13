@@ -16,6 +16,71 @@ final class CoordinatorChatViewTests: XCTestCase {
     private static let questionTaskID = UUID(uuidString: "41B7E9C0-1111-4222-8333-444455556666")!
     private static let missingTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
 
+    func testSenderCardShowsShortMessagesAndOnlyShortensLongMessages() throws {
+        let short = "How should we prevent GUI checks from failing while Screen Sharing is connected?"
+        XCTAssertNil(ToasttySenderMessageCard.preview(of: short))
+        let long = short + "\n\n" + String(repeating: "Evidence from the validation Mac. ", count: 30) + "End of the evidence."
+        let preview = try XCTUnwrap(ToasttySenderMessageCard.preview(of: long))
+        XCTAssertTrue(preview.hasPrefix(short))
+        XCTAssertFalse(preview.contains("End of the evidence."))
+
+        let message = ToasttyHostMessagePresentation(
+            summary: "From task Coordinator left panel design · 10:05",
+            text: long,
+            style: .sender(name: "task Coordinator left panel design", timeText: "10:05")
+        )
+        for expanded in [false, true] {
+            let card = ToasttySenderMessageCard(
+                sender: "task Coordinator left panel design", timeText: "10:05", text: message.text,
+                isExpanded: expanded, toggleExpansion: {}, accessibilitySuffix: "sender-test"
+            )
+            let (host, window) = Self.host(card.padding(30))
+            defer { window.close() }
+            let text = Self.descendants(of: host, as: ToasttyTranscriptTextView.self).map(\.string).joined(separator: "\n")
+            XCTAssertTrue(text.contains(short))
+            XCTAssertEqual(text.contains("End of the evidence."), expanded)
+            try attachImage(of: host, name: expanded ? "sender-card-expanded" : "sender-card-preview")
+        }
+    }
+
+    func testTaskMessageAndAnswerStayVisibleBeforeAFoldedWakeTurn() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("The transcript requires macOS 15.") }
+        let conversationID = RemoteConversationID()
+        let question = "How should we prevent GUI checks from failing while Screen Sharing is connected?"
+        let answer = "Add a preflight check before the build and document the cause."
+        let digest = CoordinatorWakeState.digestHeader + "\nScheduled check."
+        let payloads: [ConversationEventPayload] = [
+            .userMessage(.init(text: CoordinatorMessageHeader.message(
+                from: .task(id: Self.questionTaskID, title: "Coordinator left panel design"), text: question
+            ))),
+            .assistantMessage(.init(text: answer, phase: .final)),
+            .userMessage(.init(text: digest)),
+            .assistantMessage(.init(text: "Nothing needs you.", phase: .final)),
+        ]
+        let events = payloads.enumerated().map { index, payload in
+            ConversationEvent(conversationID: conversationID, sequence: UInt64(index + 1), eventID: "sender-\(index)",
+                              timestamp: Date(), provider: .claude, payload: payload)
+        }
+        let rows = CoordinatorChatTranscript.rows(
+            from: events, projectionRunID: RemoteProjectionRunID(), projectionGeneration: 0,
+            isSentFromThisMac: { _ in false }, isQuietDigest: { $0 == digest }, timeText: { _ in "10:05" }
+        )
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        XCTAssertFalse(state.turns[0].workBlockIDs.contains(ToasttyTranscriptBlockID(rowID: rows[1].id)))
+        let transcript = ToasttyTranscriptView(
+            state: state, isSubmitting: false, readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0), canAcknowledgeRead: false, options: CoordinatorChatView.transcriptOptions
+        )
+        let (host, window) = Self.host(transcript)
+        defer { window.close() }
+        let text = Self.descendants(of: host, as: ToasttyTranscriptTextView.self).map(\.string).joined(separator: "\n")
+        XCTAssertTrue(text.contains(question))
+        XCTAssertTrue(text.contains(answer))
+        XCTAssertFalse(text.contains("[Toastty] From"))
+        XCTAssertFalse(text.contains("Nothing needs you."), "Only the quiet digest's own answer folds")
+        try attachImage(of: host, name: "task-message-before-quiet-wake")
+    }
+
     func testTranscriptDrawsTaskChipsAFoldedDigestAndPlainTextForOtherToasttyLinks() throws {
         guard #available(macOS 15.0, *) else {
             throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")

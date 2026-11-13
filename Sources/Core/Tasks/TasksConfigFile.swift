@@ -194,6 +194,23 @@ public struct TasksConfig: Equatable, Sendable {
         }
     }
 
+    /// Release settings shared with the repository's main checkout. Other
+    /// project settings stay local; explicit release values take precedence.
+    public func releaseWorkspace(
+        forProjectRoot projectRoot: String,
+        repositoryRoot: String? = nil,
+        homeDirectoryPath: String = NSHomeDirectory()
+    ) -> Workspace? {
+        let own = workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)
+        let shared = repositoryRoot.flatMap { workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath) }
+        guard own != nil || shared != nil else { return nil }
+        var result = own ?? Workspace(path: projectRoot)
+        result.releaseTags = own?.releaseTags ?? shared?.releaseTags
+        result.releaseSkill = own?.releaseSkill ?? shared?.releaseSkill
+        result.releasePrompt = own?.releasePrompt ?? shared?.releasePrompt
+        return result
+    }
+
     /// The skill a task's first message names: the project's own, else
     /// `[defaults]`, else the shipped start skill. `"none"` names no skill.
     public func startSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
@@ -214,15 +231,15 @@ public struct TasksConfig: Equatable, Sendable {
 
     /// The skill a release task's first message names: the project's own,
     /// else `[defaults]`.
-    public func releaseSkill(forProjectRoot projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
-        workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.releaseSkill ?? defaults.releaseSkill
+    public func releaseSkill(forProjectRoot projectRoot: String, repositoryRoot: String? = nil, homeDirectoryPath: String = NSHomeDirectory()) -> String? {
+        releaseWorkspace(forProjectRoot: projectRoot, repositoryRoot: repositoryRoot, homeDirectoryPath: homeDirectoryPath)?.releaseSkill ?? defaults.releaseSkill
     }
 
     /// Whether Toastty can start a release for the project: it has a
     /// release skill or its own `release_prompt`.
-    public func canRelease(projectRoot: String, homeDirectoryPath: String = NSHomeDirectory()) -> Bool {
-        releaseSkill(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath) != nil
-            || workspace(forProjectRoot: projectRoot, homeDirectoryPath: homeDirectoryPath)?.releasePrompt != nil
+    public func canRelease(projectRoot: String, repositoryRoot: String? = nil, homeDirectoryPath: String = NSHomeDirectory()) -> Bool {
+        releaseSkill(forProjectRoot: projectRoot, repositoryRoot: repositoryRoot, homeDirectoryPath: homeDirectoryPath) != nil
+            || releaseWorkspace(forProjectRoot: projectRoot, repositoryRoot: repositoryRoot, homeDirectoryPath: homeDirectoryPath)?.releasePrompt != nil
     }
 }
 

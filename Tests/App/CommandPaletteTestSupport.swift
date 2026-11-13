@@ -305,8 +305,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return taskReleaseOptionsValue
     }
 
-    func coordinatorOption() -> PaletteCoordinatorOption? {
-        coordinatorOptionValue
+    func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption? {
+        _ = originWindowID
+        return coordinatorOptionValue
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {

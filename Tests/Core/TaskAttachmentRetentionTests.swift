@@ -62,6 +62,18 @@ struct TaskAttachmentRetentionTests {
     }
 
     @Test
+    func aFeatureBranchMergeFinishesEvenWhenTheRepositoryTracksReleases() {
+        let feature = record {
+            $0.mergedAt = seen
+            $0.mergeTarget = TaskMergeTarget(baseBranch: "feature/coordinator", releaseBranch: "main")
+        }
+        #expect(step(feature, releaseTags: true) == .startClock)
+        var main = feature
+        main.mergeTarget = TaskMergeTarget(baseBranch: "main", releaseBranch: "main")
+        #expect(step(main, releaseTags: true) == .none)
+    }
+
+    @Test
     func leavingDoneResetsTheWeek() {
         let resumed = record { $0.attachmentsFinishedSeenAt = seen }
         #expect(step(resumed, after: 2 * week) == .resetClock)
