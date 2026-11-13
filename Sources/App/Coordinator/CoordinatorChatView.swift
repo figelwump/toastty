@@ -38,7 +38,8 @@ struct CoordinatorChatView: View {
     )
 
     var body: some View {
-        let chips = CoordinatorTaskChips(items: board.items())
+        let items = board.items()
+        let chips = CoordinatorTaskChips(items: items)
         VStack(spacing: 0) {
             ToasttyTranscriptView(
                 state: model.presentation,
@@ -52,7 +53,7 @@ struct CoordinatorChatView: View {
                 options: Self.transcriptOptions,
                 replyToMessage: { model.reply(to: $0) }
             )
-            composerArea
+            composerArea(mentionCandidates: CoordinatorMentionCandidate.candidates(from: items))
         }
         // Files and images dropped anywhere on the chat are attached to the
         // composer's message. The terminal under the chat takes none.
@@ -84,7 +85,7 @@ struct CoordinatorChatView: View {
         }
     }
 
-    private var composerArea: some View {
+    private func composerArea(mentionCandidates: [CoordinatorMentionCandidate]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let notice = model.notice {
                 noticeRow(notice)
@@ -106,7 +107,8 @@ struct CoordinatorChatView: View {
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
                 dropTarget: model.attachmentDropTarget,
-                onTextView: { model.composerTextView = $0 }
+                onTextView: { model.composerTextView = $0 },
+                mentionCandidates: mentionCandidates
             )
         }
         .frame(maxWidth: Self.maximumContentWidth)
@@ -357,7 +359,7 @@ struct CoordinatorTaskChips {
         }
     }
 
-    private static func chipColor(_ color: Color) -> ConversationChipColor {
+    static func chipColor(_ color: Color) -> ConversationChipColor {
         let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .gray
         return ConversationChipColor(
             red: Double(resolved.redComponent),

@@ -21,7 +21,7 @@
 //                                 is nearest below `y`: the button under the message at `y`.
 //   focus <identifier>            Click the element, so it takes the keyboard.
 //   type <text>                   Type the text with key events.
-//   key <return|shift-return|escape|up|down|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
+//   key <return|shift-return|escape|up|down|tab|delete|cmd-a|cmd-c|cmd-z|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
 //   click-at <x> <y>              Click the point without bringing the app forward, as in an open menu.
 //   drag <x1> <y1> <x2> <y2>      Press at the first point, move to the second with the button down,
 //                                 and let go there: a drag and drop, as a hand makes it.
@@ -442,6 +442,11 @@ case "key":
     case "escape": press(keyCode: 53)
     case "up": press(keyCode: 126)
     case "down": press(keyCode: 125)
+    case "tab": press(keyCode: 48)
+    case "delete": press(keyCode: 51)
+    case "cmd-a": press(keyCode: 0, flags: .maskCommand)
+    case "cmd-c": press(keyCode: 8, flags: .maskCommand)
+    case "cmd-z": press(keyCode: 6, flags: .maskCommand)
     case "cmd-period": press(keyCode: 47, flags: .maskCommand)
     case "cmd-shift-p": press(keyCode: 35, flags: [.maskCommand, .maskShift])
     case "cmd-v": press(keyCode: 9, flags: .maskCommand)

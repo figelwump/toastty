@@ -1711,6 +1711,9 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
     /// same space while the message sends.
     @ViewBuilder let footer: () -> Footer
     @State private var showsSendingIndicator = false
+    /// The text is drawn as typed, except a link that the host draws as a
+    /// chip, such as a task the user mentioned.
+    @Environment(\.conversationLinkPresenter) private var linkPresenter
 
     var body: some View {
         VStack(alignment: .trailing, spacing: ToasttyMessageCopyButtonMetrics.spacing) {
@@ -1731,7 +1734,7 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
             }
             // A message of files alone has no text.
             if text.isEmpty == false || attachments.isEmpty {
-                ToasttySelectableText(AttributedString(text),
+                ToasttySelectableText(ConversationLinkDecoration.applyChips(toPlainText: text, presenter: linkPresenter),
                                       textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
             }
             if attachments.isEmpty == false {

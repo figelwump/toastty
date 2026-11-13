@@ -274,6 +274,27 @@ enum ConversationLinkDecoration {
         return result
     }
 
+    /// Text that is shown as typed, such as the user's own message, with
+    /// each inline link that the presenter draws as a chip in its place.
+    /// Every other character, also of a link the presenter does not draw
+    /// as a chip, stays as typed.
+    @MainActor
+    static func applyChips(toPlainText text: String, presenter: ConversationLinkPresenter?) -> AttributedString {
+        guard let presenter else { return AttributedString(text) }
+        let links = ConversationInlineLinks.scan(text)
+        guard links.isEmpty == false else { return AttributedString(text) }
+        var result = AttributedString()
+        var position = text.startIndex
+        for link in links {
+            guard case .chip(let chip)? = presenter.presentation(link.url) else { continue }
+            result.append(AttributedString(String(text[position..<link.range.lowerBound])))
+            result.append(chipText(chip, url: link.url))
+            position = link.range.upperBound
+        }
+        result.append(AttributedString(String(text[position...])))
+        return result
+    }
+
     /// The chip's text: its mark, title and detail. No-break spaces keep
     /// the chip on one line where the line allows it, and pad its outline.
     private static func chipText(_ chip: ConversationLinkChip, url: URL) -> AttributedString {
