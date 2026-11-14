@@ -829,9 +829,11 @@ It needs the chat, so it is on macOS 15 and later.
   the toast shows unread output, an approval or an error.
 - **Read.** Output that the dock shows counts as read, as a focused panel's
   does.
-- **Width.** Drag the dock's right edge to set its width, from 300 to 480
-  points. The width and whether the dock is open are saved for the window
-  and restored after a relaunch.
+- **Width.** Drag the dock's right edge to set its width, from 300 points
+  up to 40% of the window's width. A narrower window shows the dock
+  narrower and keeps its width for when the window is wider again. The width
+  and whether the dock is open are saved for the window and restored after a
+  relaunch.
 - **The Tasks view** covers the workspace to the right of the dock.
 - **The keyboard.** While the dock's field has the keyboard, `Cmd+=`,
   `Cmd+-` and `Cmd+0` change the chat's text size, and a click on a panel
