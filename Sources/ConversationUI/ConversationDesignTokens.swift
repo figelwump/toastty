@@ -29,6 +29,10 @@ public enum ConversationDesignTokens {
     public static let inkOnAmber = Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255)
     public static let green = Color(red: 70 / 255, green: 165 / 255, blue: 126 / 255)
     public static let red = Color(red: 224 / 255, green: 88 / 255, blue: 78 / 255)
+    /// The line above the first message the reader has not seen: between
+    /// red and amber, so it stands apart from the amber accent and does not
+    /// read as an error.
+    public static let newMessagesLine = Color(red: 242 / 255, green: 104 / 255, blue: 58 / 255)
     public static let userBubbleSurface = Color(red: 64 / 255, green: 47 / 255, blue: 21 / 255)
     public static let userBubbleBorder = Color(red: 90 / 255, green: 62 / 255, blue: 27 / 255)
     public static let userBubbleText = Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255)

@@ -340,6 +340,66 @@ final class ConversationUIRenderTests: XCTestCase {
         try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-wake-open")
     }
 
+    /// The transcript opens at the line above the messages the reader has
+    /// not seen, not at the latest response, and Jump to latest counts them.
+    func testTheTranscriptOpensAtTheNewMessagesLine() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        var rows: [ToasttyTranscriptRow] = []
+        for index in 1 ... 6 {
+            rows.append(Self.row(UInt64(rows.count + 1), .userMessage(text: "Earlier question \(index)", origin: .local)))
+            rows.append(Self.row(UInt64(rows.count + 1), .assistantMessage(
+                text: "Earlier answer \(index). The coordinator checked the task and reported its state.",
+                phase: .final
+            )))
+        }
+        let digest = "[Toastty] Wake: this message is from Toastty, not from the user.\n"
+            + "- [Fix the unread dot](toastty://task/2): needsYou (review) at 2026-11-14T18:52:03Z"
+        let firstNew = Self.row(UInt64(rows.count + 1), .hostMessage(.init(summary: "Toastty · 1 update · 10:52 AM", text: digest)))
+        rows.append(firstNew)
+        rows.append(Self.row(UInt64(rows.count + 1), .assistantMessage(
+            text: "Fix the unread dot is ready for your review.", phase: .final
+        )))
+        let longAnswer = (1 ... 24).map { "- Check \($0) of the release passed on the mini." }.joined(separator: "\n")
+        rows.append(Self.row(UInt64(rows.count + 1), .assistantMessage(text: "The release checks:\n\n" + longAnswer, phase: .final)))
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+
+        let size = CGSize(width: 560, height: 520)
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            newMessages: ToasttyNewMessagesMarker(firstRowID: firstNew.id, count: 2)
+        )
+        let (hostingView, window) = Self.host(transcript, size: size)
+        defer { window.close() }
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        window.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        hostingView.layoutSubtreeIfNeeded()
+
+        func top(of fragment: String) throws -> CGFloat {
+            let view = try XCTUnwrap(
+                Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).first { $0.string.contains(fragment) },
+                "No rendered text view contains \"\(fragment)\""
+            )
+            let frame = view.convert(view.bounds, to: hostingView)
+            return hostingView.isFlipped ? frame.minY : size.height - frame.maxY
+        }
+        // The line is at the top, then the wake's line, then the first
+        // unseen response; the messages before them are above the view.
+        // Opened at the latest response instead, the first unseen response
+        // would be at the top with the two lines above the view.
+        let firstNewTop = try top(of: "ready for your review")
+        XCTAssertGreaterThan(firstNewTop, 50, "The new messages' line or the wake's line is above the view")
+        XCTAssertLessThan(firstNewTop, 140, "The transcript did not open at the new messages' line")
+        XCTAssertLessThan(try top(of: "Earlier answer 6"), 0, "The read messages fill the view")
+        try keep(try Self.snapshot(hostingView), name: "coordinator-new-messages-line")
+    }
+
     /// The top of the first pixel row, in points, that differs from the
     /// top-left pixel's color.
     private static func firstDrawnRow(in bitmap: NSBitmapImageRep, scale: CGFloat) -> CGFloat? {
