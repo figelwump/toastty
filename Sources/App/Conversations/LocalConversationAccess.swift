@@ -32,6 +32,19 @@ protocol LocalConversationSubscription: AnyObject {
     /// subscription is cancelled.
     var followedSince: Date? { get }
 
+    /// The file reader is rebuilding this conversation from its start.
+    /// A change is yielded when the initial read completes, also for an
+    /// empty file. An unavailable file is not loading; it keeps polling and
+    /// reports when it can begin reading. Readers can take the newest page
+    /// once its initial read completes.
+    var isReadingInitialTranscript: Bool { get }
+
+    /// Identifies the current file reader, including after its first read.
+    /// A reader that starts after an empty page was loaded, or replaces an
+    /// earlier reader, requires a new newest-page read after it completes.
+    /// `nil` for a conversation with no file reader.
+    var transcriptReadID: UUID? { get }
+
     /// Yields after the conversation changed: new events, a different
     /// summary (state, input availability, queue), or a restarted event
     /// sequence. Changes are coalesced and a yield can be spurious, so read
