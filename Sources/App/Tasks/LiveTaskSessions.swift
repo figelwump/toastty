@@ -1,3 +1,4 @@
+import Combine
 import CoreState
 import RemoteProtocol
 import Foundation
@@ -14,6 +15,27 @@ final class LiveTaskSessions: TaskSessionProviding {
     /// never types it twice after a Return that may not have gone through.
     private let deliverText: @MainActor (_ text: String, _ panelID: UUID) -> TerminalInputDeliveryResult
     private let replyReader = TaskAgentReplyReader()
+    /// Types for `deliverSteering`, and holds the messages that wait.
+    private(set) lazy var steerSender = TaskSteerSender { [weak self] panelID in
+        guard let self, let session = self.activeSession(panelID: panelID) else { return nil }
+        let record = self.sessionRuntimeStore?.sessionRegistry.sessionsByID[session.sessionID]
+        return TaskSteerAgentView(
+            sessionID: session.sessionID,
+            state: TaskAgentState(statusKind: session.status?.kind),
+            latestTurnStartedAt: record?.turnStartedAt
+                ?? record?.lastTurnEndedAt?.addingTimeInterval(-(record?.lastTurnDuration ?? 0)),
+            userTypedAt: self.sessionRuntimeStore?.lastUserInputAt(panelID: panelID)
+        )
+    }
+    /// Ends the follow of a panel whose agent ended, with the messages
+    /// that waited for it.
+    private var endedAgentObservation: AnyCancellable?
+    /// The conversations of the agents' panels, for `deliverSteering`.
+    /// Without it, that delivery types nothing.
+    weak var conversationAccess: (any LocalConversationAccess)? {
+        get { steerSender.access }
+        set { steerSender.access = newValue }
+    }
 
     init(
         sessionRuntimeStore: SessionRuntimeStore,
@@ -27,6 +49,12 @@ final class LiveTaskSessions: TaskSessionProviding {
         self.exitController = exitController
         self.sendText = sendText
         self.deliverText = deliverText ?? { text, panelID in sendText(text, panelID) ? .delivered : .unavailable }
+        endedAgentObservation = sessionRuntimeStore.$sessionRegistry
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.steerSender.releasePanels { self.activeSession(panelID: $0) == nil }
+            }
     }
 
     func session(_ sessionID: String) -> TaskSessionInfo? {
@@ -69,6 +97,11 @@ final class LiveTaskSessions: TaskSessionProviding {
 
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult {
         deliverText(text, panelID)
+    }
+
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        steerSender.releasePanels { activeSession(panelID: $0) == nil }
+        return await steerSender.send(text, panelID: panelID)
     }
 
     func lastReply(sessionID: String) -> TaskAgentReply? {
