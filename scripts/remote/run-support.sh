@@ -79,9 +79,21 @@ toastty_copy_run_artifacts() {
     "$source/" "$destination/"
 }
 
+# Keep the selected source export unchanged. The current wrapper and its helpers
+# are a separate controller, including when --scope ref selects older source.
+toastty_stage_remote_controller() {
+  (cd "$ROOT_DIR" && rsync -a --relative \
+    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
+    scripts/remote/ scripts/automation/runtime-ownership.sh \
+    "$REMOTE_HOST:$1/controller/")
+}
+
 toastty_begin_run_metadata() {
   local kind="$1" platform="$2" selection="$3"
-  local ref=HEAD dirty=false worktree_status
+  local ref=HEAD dirty=false worktree_status controller_commit controller_dirty=false
+  controller_commit="$(git -C "$ROOT_DIR" rev-parse --verify 'HEAD^{commit}')" || return 1
+  worktree_status="$(git --no-optional-locks -C "$ROOT_DIR" status --porcelain --untracked-files=normal --ignore-submodules=none)" || return 1
+  [[ -z "$worktree_status" ]] || controller_dirty=true
   [[ "$VALIDATION_SCOPE" != ref ]] || ref="${REF_SPEC:?--ref is required for ref scope}"
   TOASTTY_SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify "$ref^{commit}")" || return 1
   case "$VALIDATION_SCOPE" in
@@ -96,12 +108,14 @@ toastty_begin_run_metadata() {
     --arg kind "$kind" --arg platform "$platform" --arg selection "$selection" \
     --arg runLabel "$RUN_LABEL" --arg scope "$VALIDATION_SCOPE" \
     --arg commit "$TOASTTY_SOURCE_COMMIT" --argjson dirty "$dirty" \
+    --arg controllerCommit "$controller_commit" --argjson controllerDirty "$controller_dirty" \
     --argjson fullArtifacts "$FULL_ARTIFACTS" '{
       schemaVersion: 1, runLabel: $runLabel, kind: $kind, platform: $platform,
       selection: $selection, requestedTarget: "remote", executionTarget: null,
       source: {commit: $commit, dirty: $dirty, scope: $scope,
         contentIdentity: (if $scope == "working-tree" then "mutable-working-tree" else "git-archive" end),
         ignoredDependenciesPinned: false},
+      controller: {commit: $controllerCommit, dirty: $controllerDirty},
       artifactMode: (if $fullArtifacts == 1 then "full" else "evidence" end),
       wrapperRetryCount: 0, testAttemptCount: null, phaseSeconds: {}, timingResolutionSeconds: 1
     }')" || return 1
