@@ -147,7 +147,8 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
   are restored. Parent links are then normalized to one level within the same
   window: deeper links resolve to their root; self-links, cycles, missing
   parents, and parents in another window are dropped. A workspace left at the
-  top level loses its spawning session and done mark.
+  top level loses its spawning session, and its done mark unless it is a
+  task's task space (it has a `taskID`).
 - `focusedPanelModeActive` is reset to `false`
 - `unreadPanelIDs` is reset to `[]`
 - `unreadWorkspaceNotificationCount` is reset to `0`

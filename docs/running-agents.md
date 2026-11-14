@@ -599,14 +599,18 @@ record the target requires a new merge acceptance. Toastty marks the workspace d
 - A waiting merge needs Toastty to be running. It is kept across launches and
   resumes after a relaunch.
 - To cancel a waiting merge, clear the workspace's done mark in the sidebar.
-  New agent work in the workspace clears it too.
+  New agent work in the workspace clears it too. A notification says that the
+  pull request was not merged, and why.
 - If the merge can no longer happen, for example because new commits were
   pushed, a check failed, or `gh` failed three times in a row, Toastty stops
   waiting, clears the done mark so the Merge button comes back, and a
   notification gives the reason. A refusal at the click shows an alert and
   changes nothing.
-- Top-level workspaces do not show the button, because only a task space holds a
-  done mark.
+- Top-level workspaces do not show the button, because only a subspace row
+  shows a done mark. A subspace that moves to top level, for example when its
+  parent workspace closes, loses its mark, and a merge waiting there stops
+  with a notification. A task's task space keeps its mark at top level, so
+  its waiting merge and cleanup continue.
 
 After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
 done, and **Cleaning Up PR #N…** while Toastty cleans up. Toastty confirms with `gh pr view` that the pull request

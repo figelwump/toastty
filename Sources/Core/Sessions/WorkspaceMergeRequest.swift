@@ -95,20 +95,29 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         self.requiresAbsentWorktree = requiresAbsentWorktree
     }
 
-    /// The request after a change to its workspace, or `nil` when it no longer
-    /// applies. `pullRequest` is what the workspace's `github-pr` annotation
-    /// links to now. A running script keeps its request until it reports
-    /// back, because the script itself can close the workspace.
-    public func reconciled(workspaceExists: Bool, isDone: Bool, pullRequest: WorkspacePullRequestLink?) -> Self? {
+    /// Why a request no longer applies after a change to its workspace.
+    public enum DropReason: Equatable, Sendable {
+        case workspaceClosed
+        /// The workspace's `github-pr` annotation links elsewhere, or nowhere.
+        case pullRequestChanged
+        /// New work in the workspace cleared its done mark, and with it the
+        /// user's acceptance of the version that was to merge; or someone
+        /// cleared the mark by hand.
+        case doneMarkCleared
+    }
+
+    /// Why the request no longer applies after a change to its workspace, or
+    /// `nil` while it still does. `pullRequest` is what the workspace's
+    /// `github-pr` annotation links to now. A running script keeps its
+    /// request until it reports back, because the script itself can close
+    /// the workspace.
+    public func dropReason(workspaceExists: Bool, isDone: Bool, pullRequest: WorkspacePullRequestLink?) -> DropReason? {
         if isRunning {
-            return self
-        }
-        guard workspaceExists, pullRequest == self.pullRequest else {
             return nil
         }
-        // New work in the workspace clears its done mark, and with it the
-        // user's acceptance of the version that was to merge.
-        return isDone ? self : nil
+        guard workspaceExists else { return .workspaceClosed }
+        guard pullRequest == self.pullRequest else { return .pullRequestChanged }
+        return isDone ? nil : .doneMarkCleared
     }
 
     /// Whether the pull request script is running for this request.

@@ -113,22 +113,21 @@ extension AppState {
                     workspacesByID[workspaceID]?.parentWorkspaceID = resolvedParentID
                     if resolvedParentID == nil {
                         workspacesByID[workspaceID]?.spawningSessionID = nil
-                        workspacesByID[workspaceID]?.doneAt = nil
+                        clearDoneMarkIfItCannotHoldOne(workspaceID)
                     }
                 }
             }
         }
         // Links whose parent was dropped above (or lives in a window that
-        // no longer exists) must not survive as dangling references, and a
-        // spawner or done mark only means something for a nested workspace.
+        // no longer exists) must not survive as dangling references. A
+        // spawner only means something for a nested workspace, and a done
+        // mark only for a workspace that `canHoldDoneMark`.
         for (workspaceID, workspace) in workspacesByID {
             guard let parentID = workspace.parentWorkspaceID else {
                 if workspace.spawningSessionID != nil {
                     workspacesByID[workspaceID]?.spawningSessionID = nil
                 }
-                if workspace.doneAt != nil {
-                    workspacesByID[workspaceID]?.doneAt = nil
-                }
+                clearDoneMarkIfItCannotHoldOne(workspaceID)
                 continue
             }
             let isValid = windows.contains { window in
@@ -140,9 +139,16 @@ extension AppState {
             if isValid == false {
                 workspacesByID[workspaceID]?.parentWorkspaceID = nil
                 workspacesByID[workspaceID]?.spawningSessionID = nil
-                workspacesByID[workspaceID]?.doneAt = nil
+                clearDoneMarkIfItCannotHoldOne(workspaceID)
             }
         }
+    }
+
+    private mutating func clearDoneMarkIfItCannotHoldOne(_ workspaceID: UUID) {
+        guard let workspace = workspacesByID[workspaceID],
+              workspace.doneAt != nil,
+              workspace.canHoldDoneMark == false else { return }
+        workspacesByID[workspaceID]?.doneAt = nil
     }
 
     private func isValidParentLink(from workspace: WorkspaceState, in window: WindowState) -> Bool {
