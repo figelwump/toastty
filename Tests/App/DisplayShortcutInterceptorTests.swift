@@ -1311,6 +1311,86 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertEqual(bootstrap.content, "# Preview\n")
     }
 
+    func testTextSizeShortcutsDoNothingWhileTheTasksViewCoversTheWorkspace() throws {
+        let increaseEvent = try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18)
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        let interceptor = makeInterceptor(store: store, webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+
+        func browserZoom(_ panelID: UUID) throws -> Double {
+            let workspace = try XCTUnwrap(store.state.workspaceSelection(in: windowID)?.workspace)
+            guard case .web(let webState) = workspace.panels[panelID] else {
+                XCTFail("expected a browser panel")
+                return 0
+            }
+            return webState.effectiveBrowserPageZoom
+        }
+
+        // Each case focuses one panel kind, checks that the keys do nothing
+        // while the Tasks view shows, then that they work once it hides.
+        func checkCoveredThenVisible(
+            _ kind: String,
+            value: () throws -> Double,
+            visibleValue: Double
+        ) throws {
+            let before = try value()
+            XCTAssertTrue(store.send(.setTasksViewShown(windowID: windowID, shown: true)))
+            XCTAssertNil(store.focusedScaleCommandTarget(preferredWindowID: windowID), kind)
+            XCTAssertNil(interceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: windowID), kind)
+            for action in [
+                DisplayShortcutInterceptor.ShortcutAction.increaseTextSize, .decreaseTextSize, .resetTextSize,
+            ] {
+                XCTAssertFalse(interceptor.handle(action, appOwnedWindowID: windowID), kind)
+            }
+            XCTAssertEqual(try value(), before, accuracy: 0.0001, kind)
+
+            XCTAssertTrue(store.send(.setTasksViewShown(windowID: windowID, shown: false)))
+            XCTAssertEqual(
+                interceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: windowID),
+                .increaseTextSize,
+                kind
+            )
+            XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID), kind)
+            XCTAssertEqual(try value(), visibleValue, accuracy: 0.0001, kind)
+        }
+
+        try checkCoveredThenVisible(
+            "terminal",
+            value: { store.state.effectiveTerminalFontPoints(for: windowID) },
+            visibleValue: AppState.defaultTerminalFontPoints + AppState.terminalFontStepPoints
+        )
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let browserPanelID = try XCTUnwrap(store.focusedBrowserPanelSelection(preferredWindowID: windowID)?.panelID)
+        try checkCoveredThenVisible("browser", value: { try browserZoom(browserPanelID) }, visibleValue: 1.1)
+
+        XCTAssertTrue(interceptor.handle(.createScratchpad, appOwnedWindowID: windowID))
+        guard case .scratchpad(_, let scratchpadPanelID)? = store.focusedScaleCommandTarget(
+            preferredWindowID: windowID
+        ) else {
+            XCTFail("expected the new Scratchpad to be the zoom target")
+            return
+        }
+        let scratchpad = webPanelRuntimeRegistry.scratchpadRuntime(for: scratchpadPanelID)
+        try checkCoveredThenVisible("Scratchpad", value: { scratchpad.magnification }, visibleValue: 1.1)
+
+        // Keys sent while the Tasks view showed changed no other panel.
+        XCTAssertEqual(
+            store.state.effectiveTerminalFontPoints(for: windowID),
+            AppState.defaultTerminalFontPoints + AppState.terminalFontStepPoints
+        )
+        XCTAssertEqual(try browserZoom(browserPanelID), 1.1, accuracy: 0.0001)
+    }
+
     func testTextSizeShortcutHandleAdjustsFocusedMarkdownScale() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
