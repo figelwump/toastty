@@ -75,3 +75,4 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - Before changing Ghostty artifacts, config loading, host-side terminal styling, or fallback builds, read `docs/ghostty-integration.md`.
 - Before touching menu rebuilds, hidden system menu items, workspace shortcuts, terminal jank that may involve AppKit, or `Cmd+W`, read `docs/agents/menu-performance.md`.
 - Manual GUI reproduction: prefer `.agents/skills/toastty-computer-use/SKILL.md`; `docs/agents/manual-interaction.md` covers local interaction pitfalls.
+- For a Mac indicator that moves for as long as it shows (a spinner, a pulse), use `ToasttyLayerAnimationView` (`Sources/ConversationUI/ToasttyLayerAnimationView+macOS.swift`). An endless SwiftUI animation (`TimelineView(.animation)`, `repeatForever`, a repeating `symbolEffect`) updates the window's whole view graph on each frame and keeps the main thread busy.
