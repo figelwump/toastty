@@ -3216,6 +3216,9 @@ final class RemoteAccessService: ObservableObject {
             )
             drainSendQueue(for: conversationID)
 
+        case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+            notifyLocalSubscribers(of: conversationID)
+
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
             // space and re-read the file from the start under a fresh
@@ -4810,6 +4813,16 @@ extension RemoteAccessService: LocalConversationAccess {
         return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
     }
 
+    fileprivate func transcriptReadID(subscriptionID: UUID) -> UUID? {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return nil }
+        return tailersByConversationID[conversationID]?.id
+    }
+
+    fileprivate func isReadingInitialTranscript(subscriptionID: UUID) -> Bool {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return false }
+        return tailersByConversationID[conversationID]?.isReadingInitialContent ?? false
+    }
+
     fileprivate func localSnapshot(subscriptionID: UUID, at date: Date) -> RemoteConversationSnapshot? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID,
               let summary = localSummary(
@@ -4934,6 +4947,14 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     var followedSince: Date? {
         service?.localFollowedSince(subscriptionID: id)
+    }
+
+    var transcriptReadID: UUID? {
+        service?.transcriptReadID(subscriptionID: id)
+    }
+
+    var isReadingInitialTranscript: Bool {
+        service?.isReadingInitialTranscript(subscriptionID: id) ?? false
     }
 
     func snapshot(at date: Date) -> RemoteConversationSnapshot? {
