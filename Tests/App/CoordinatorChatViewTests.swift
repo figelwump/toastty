@@ -432,6 +432,60 @@ final class CoordinatorChatViewTests: XCTestCase {
         }
     }
 
+    /// Two chips with nothing between them get one outline each, and a chip
+    /// next to plain text outlines only its own text.
+    func testTaskChipsSideBySideEachGetTheirOwnOutline() throws {
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(Self.reviewTaskID, title: "Restore split ratios", stage: .needsYou(.review)),
+            Self.item(Self.questionTaskID, title: "Composer blank line", stage: .needsYou(.awaitingReply)),
+        ])
+        let source = try AttributedString(markdown: """
+        Both wait for you: [one](toastty://task/\(Self.reviewTaskID.uuidString))\
+        [two](toastty://task/\(Self.questionTaskID.uuidString)) and nothing else.
+        """)
+        let (hostingView, window) = Self.hostChipText(source, presenter: chips.presenter, width: 600)
+        defer { window.close() }
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = "task-chips-side-by-side"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try Self.writeEvidence(png, name: "task-chips-side-by-side")
+
+        let textView = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).first)
+        let storage = try XCTUnwrap(textView.textStorage)
+        let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+        let text = storage.string as NSString
+        let first = text.range(of: "Restore\u{00A0}split\u{00A0}ratios")
+        let second = text.range(of: "Composer\u{00A0}blank\u{00A0}line")
+        XCTAssertNotEqual(first.location, NSNotFound)
+        XCTAssertNotEqual(second.location, NSNotFound)
+        XCTAssertFalse(text.substring(with: NSRange(location: NSMaxRange(first),
+                                                    length: second.location - NSMaxRange(first))).contains(" "),
+                       "The chips must have nothing between them")
+
+        let ranges = manager.chipRanges(in: NSRange(location: 0, length: storage.length))
+        XCTAssertEqual(ranges.count, 2, "Each chip has its own outline: \(ranges)")
+        guard ranges.count == 2 else { return }
+        XCTAssertEqual(NSIntersectionRange(ranges[0], first), first)
+        XCTAssertEqual(NSIntersectionRange(ranges[1], second), second)
+        XCTAssertEqual(NSMaxRange(ranges[0]), ranges[1].location)
+        XCTAssertFalse(text.substring(with: ranges[0]).contains("Both"))
+        XCTAssertFalse(text.substring(with: ranges[1]).contains("nothing"))
+
+        // On one line, the two outlines sit next to each other.
+        let firstOutlines = manager.chipOutlineRects(forCharacterRange: ranges[0])
+        let secondOutlines = manager.chipOutlineRects(forCharacterRange: ranges[1])
+        XCTAssertEqual(firstOutlines.count, 1)
+        XCTAssertEqual(secondOutlines.count, 1)
+        if let left = firstOutlines.first, let right = secondOutlines.first {
+            XCTAssertEqual(left.midY, right.midY, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(left.maxX, right.minX + 0.5)
+        }
+    }
+
     /// A working task's chip draws a turning spinner where its dot was. The
     /// chip keeps the dot's width and line height, so the text around it
     /// does not move when the task starts or stops working.
