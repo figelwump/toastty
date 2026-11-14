@@ -134,26 +134,15 @@ final class CoordinatorChatModel: ObservableObject {
 
     private var events: [ConversationEvent] = []
     private var loaded: LoadedPage?
+    private var loadedTranscriptReadID: UUID?
     private var pendingSends: [PendingSend] = []
     private var lastJumpRequest: UInt64 = 0
-    /// The conversation's events stopped arriving after the chat showed,
-    /// so the newest page was read. See `waitForTheConversationToSettle`.
-    private var isSettled = false
-    private var settleTask: Task<Void, Never>?
-    private var settleDeadline: Date?
-
     /// How long the agent's process may run without a report of its session
     /// before the chat says that it may wait in the terminal. Claude Code
     /// reports within a few seconds of its start.
     static let startGrace: TimeInterval = 8
     /// Shows the notice again once `startGrace` is over for this session.
     private var startGraceWake: (sessionID: String, task: Task<Void, Never>)?
-
-    /// How long no event must arrive before the chat reads the newest page.
-    static let settleInterval: TimeInterval = 0.15
-    /// The chat reads what there is after this time, also while events
-    /// still arrive, as they do while the agent works.
-    static let maximumSettleInterval: TimeInterval = 1.5
 
     /// The sequence space the loaded events belong to.
     fileprivate struct LoadedPage: Equatable {
@@ -209,7 +198,6 @@ final class CoordinatorChatModel: ObservableObject {
 
     deinit {
         observer?.cancel()
-        settleTask?.cancel()
         startGraceWake?.task.cancel()
     }
 
@@ -281,18 +269,12 @@ final class CoordinatorChatModel: ObservableObject {
                 self?.refresh()
             }
         }
-        // A chat that shows rows already reads on from them. The first
-        // read of a conversation waits until its events are in.
-        isSettled = presentation.rows.isEmpty == false
-        settleDeadline = now().addingTimeInterval(Self.maximumSettleInterval)
         refresh()
     }
 
     private func endSubscription() {
         observer?.cancel()
         observer = nil
-        settleTask?.cancel()
-        settleTask = nil
         subscription?.cancel()
         subscription = nil
     }
@@ -302,11 +284,21 @@ final class CoordinatorChatModel: ObservableObject {
     private func refresh() {
         guard let subscription else { return }
         let snapshot = subscription.snapshot(at: now())
-        summary = snapshot?.summary
+        if summary != snapshot?.summary { summary = snapshot?.summary }
+        // Replay batches are historical output, not new live messages.
+        // Wait for the reader's boundary instead of guessing from a pause;
+        // a long transcript can take seconds and have gaps between batches.
+        guard subscription.isReadingInitialTranscript == false else {
+            if presentation.rows.isEmpty, presentation.phase != .loading {
+                presentation = ToasttyConversationPresentationState(
+                    rows: [], sendItems: sendItems(), phase: .loading, revision: .initial, historyTruncated: false
+                )
+            }
+            return
+        }
         guard let summary = snapshot?.summary else {
             // No agent conversation in the terminal: none started yet, or
             // Toastty cannot read this agent's.
-            isSettled = true
             if events.isEmpty == false || loaded != nil || presentation.rows.isEmpty == false
                 || presentation.phase != .live {
                 events = []
@@ -318,50 +310,16 @@ final class CoordinatorChatModel: ObservableObject {
             }
             return
         }
-        guard isSettled else {
-            waitForTheConversationToSettle()
-            return
-        }
-        if let loaded, loaded.conversationID == summary.conversationID {
+        if let loaded, loaded.conversationID == summary.conversationID,
+           loadedTranscriptReadID == subscription.transcriptReadID {
             appendNewEvents(from: subscription, loaded: loaded)
         } else {
             loadNewestPage(from: subscription)
         }
     }
 
-    /// After a launch, Toastty reads the agent's transcript from its start,
-    /// and the events arrive over a short time. The chat's first read waits
-    /// until no more arrive, and then takes the newest page once, not every
-    /// event of a long conversation.
-    private func waitForTheConversationToSettle() {
-        settleTask?.cancel()
-        guard now() < (settleDeadline ?? .distantPast) else {
-            finishSettling()
-            return
-        }
-        if presentation.rows.isEmpty, presentation.phase != .loading {
-            presentation = ToasttyConversationPresentationState(
-                rows: [], sendItems: sendItems(), phase: .loading, revision: .initial, historyTruncated: false
-            )
-        }
-        settleTask = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(Self.settleInterval))
-            } catch {
-                return
-            }
-            self?.finishSettling()
-        }
-    }
-
-    private func finishSettling() {
-        settleTask = nil
-        guard isSettled == false else { return }
-        isSettled = true
-        refresh()
-    }
-
     private func loadNewestPage(from subscription: any LocalConversationSubscription) {
+        loadedTranscriptReadID = subscription.transcriptReadID
         let wasEmpty = presentation.rows.isEmpty
         guard case .page(let page) = subscription.events(before: nil, limit: Self.pageSize) else {
             events = []
@@ -411,7 +369,8 @@ final class CoordinatorChatModel: ObservableObject {
 
     /// Reads the page before the oldest loaded event.
     func loadOlder() {
-        guard let subscription, let loaded, let first = events.first else { return }
+        guard let subscription, subscription.isReadingInitialTranscript == false,
+              let loaded, let first = events.first else { return }
         let cursor = ConversationEventBackwardCursor(
             projectionRunID: loaded.projectionRunID,
             projectionGeneration: loaded.projectionGeneration,

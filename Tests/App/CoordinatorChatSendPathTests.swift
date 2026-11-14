@@ -19,6 +19,80 @@ struct CoordinatorChatSendPathTests {
     \(CoordinatorWakeState.digestFooter)
     """
 
+    @MainActor
+    @Test func restartReadsTheNewestPageBeforeShowingHistory() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        for index in 0 ..< 1_000 {
+            try fixture.recordUserMessage("History message \(index)")
+        }
+        var firstShownMessages: [ToasttyTranscriptRow]?
+        let observer = fixture.chat.$presentation.sink { presentation in
+            guard firstShownMessages == nil,
+                  presentation.rows.contains(where: { row in
+                      if case .userMessage = row.content { return true }
+                      return false
+                  }) else { return }
+            firstShownMessages = presentation.rows
+        }
+        defer { observer.cancel() }
+        fixture.chat.show(panelID: fixture.panelID)
+        // Replay can take much longer than a short pause between batches.
+        // Advance the chat's clock while its reader still has work to do.
+        fixture.clock.secondsAhead = 60
+        try await fixture.waitUntil("the newest history message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "History message 999", origin: .unknown, deliveryMode: nil)
+        }
+        #expect(firstShownMessages?.last?.content
+            == .userMessage(text: "History message 999", origin: .unknown, deliveryMode: nil))
+        #expect(fixture.chat.presentation.rows.count <= CoordinatorChatModel.pageSize)
+        #expect(fixture.chat.presentation.hasOlder)
+        let newestRows = fixture.chat.presentation.rows
+        fixture.chat.loadOlder()
+        #expect(fixture.chat.presentation.rows.count > newestRows.count)
+        #expect(fixture.chat.presentation.rows.suffix(newestRows.count) == newestRows[...])
+
+        // Later output still appends; hiding and showing keeps loaded history.
+        try fixture.recordUserMessage("Live message")
+        try await fixture.waitUntil("the live message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "Live message", origin: .unknown, deliveryMode: nil)
+        }
+        let rows = fixture.chat.presentation.rows
+        fixture.chat.hide()
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.chat.presentation.rows == rows)
+    }
+
+    @MainActor
+    @Test func aMissingTranscriptDoesNotHideTheSessionAndItsLaterHistoryLoadsAsOnePage() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let path = fixture.conversations.resumeRecord.sessionFilePath
+        try FileManager.default.removeItem(atPath: path)
+        fixture.chat.show(panelID: fixture.panelID)
+        fixture.clock.secondsAhead = 60
+        try await fixture.waitUntil("a live session without a readable transcript") {
+            fixture.chat.summary != nil && fixture.chat.presentation.phase == .live
+        }
+        fixture.report(.working)
+        try await fixture.waitUntil("Stop while the transcript is missing") { fixture.chat.canStop }
+
+        // A provider can report its path before it creates the file. When
+        // it becomes readable, its first read must still have a boundary.
+        try Data().write(to: URL(filePath: path))
+        for index in 0 ..< 1_000 {
+            try fixture.recordUserMessage("Delayed history \(index)")
+        }
+        try await fixture.waitUntil("the newest delayed message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "Delayed history 999", origin: .unknown, deliveryMode: nil)
+        }
+        #expect(fixture.chat.presentation.rows.count <= CoordinatorChatModel.pageSize)
+        #expect(fixture.chat.presentation.hasOlder)
+    }
+
     // MARK: - At an open prompt
 
     @MainActor
