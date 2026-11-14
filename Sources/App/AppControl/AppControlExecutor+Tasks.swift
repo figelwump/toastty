@@ -779,7 +779,7 @@ extension AppControlExecutor {
             "mergeFailure": record.mergeFailure.map {
                 .object([
                     "at": date($0.at), "reason": .string($0.reason),
-                    "cause": optional($0.cause?.rawValue), "head": optional($0.head),
+                    "cause": optional($0.cause?.rawValue), "head": optional($0.head), "base": optional($0.base),
                 ])
             } ?? .null,
             "releaseAfterMerge": record.releaseAfterMerge.map {

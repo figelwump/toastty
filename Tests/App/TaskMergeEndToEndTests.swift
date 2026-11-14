@@ -891,6 +891,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             let failure = try #require(scenario.record?.mergeFailure)
             #expect(failure.cause == .error)
             #expect(failure.head == scenario.head)
+            #expect(failure.base == "main")
             #expect(failure.reason.contains("Server Error"), "\(failure.reason)")
             #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(scenario.notifications == ["PR #7 was not merged: \(failure.reason)"])
@@ -912,6 +913,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             let reported = (response?["result"] as? [String: Any])?["mergeFailure"] as? [String: Any]
             #expect(reported?["cause"] as? String == "error", "\(get.output)")
             #expect(reported?["head"] as? String == scenario.head, "\(get.output)")
+            #expect(reported?["base"] as? String == "main", "\(get.output)")
 
             scenario.gitHubWorksAgain()
             let requested = try await scenario.cli(["--json", "task", "request-merge", taskID])

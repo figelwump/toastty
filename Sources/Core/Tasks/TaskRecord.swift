@@ -192,12 +192,16 @@ public struct TaskMergeFailure: Codable, Equatable, Sendable {
     public var cause: Cause?
     /// The commit that was to merge, when Toastty knew it.
     public var head: String?
+    /// The target branch that was accepted with that commit, when the
+    /// merge got far enough to read it.
+    public var base: String?
 
-    public init(at: Date, reason: String, cause: Cause? = nil, head: String? = nil) {
+    public init(at: Date, reason: String, cause: Cause? = nil, head: String? = nil, base: String? = nil) {
         self.at = at
         self.reason = reason
         self.cause = cause
         self.head = head
+        self.base = base
     }
 }
 

@@ -76,11 +76,13 @@ private final class MergeFixture {
     /// What the coordinator told the task that owns the workspace.
     var events: [WorkspaceMergeCoordinator.CleanupEvent] = []
     var mergeFailures: [String] {
-        events.compactMap { if case .mergeFailed(let reason, _, _) = $0 { reason } else { nil } }
+        events.compactMap { if case .mergeFailed(let reason, _, _, _) = $0 { reason } else { nil } }
     }
-    /// The cause and the commit of the last merge that stopped.
-    var lastMergeFailure: (cause: TaskMergeFailure.Cause, head: String?)? {
-        events.compactMap { if case .mergeFailed(_, let cause, let head) = $0 { (cause, head) } else { nil } }.last
+    /// The cause, the commit and the target branch of the last merge that stopped.
+    var lastMergeFailure: (cause: TaskMergeFailure.Cause, head: String?, base: String?)? {
+        events.compactMap {
+            if case .mergeFailed(_, let cause, let head, let base) = $0 { (cause, head, base) } else { nil }
+        }.last
     }
     private(set) var coordinator: WorkspaceMergeCoordinator!
 
@@ -361,7 +363,29 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.mergeFailures == ["GitHub did not merge PR #59: Server Error"])
         #expect(fixture.lastMergeFailure?.cause == .error)
         #expect(fixture.lastMergeFailure?.head == MergeFixture.acceptedHead)
+        #expect(fixture.lastMergeFailure?.base == "feat/integration")
         #expect(fixture.savedRequests == nil)
+    }
+
+    /// New work that starts while the failed runs repeat ends the user's
+    /// acceptance. The merge then stops for that reason: recorded as an
+    /// error, it would read as a merge to ask for again.
+    @Test
+    func newWorkWhileAFailedMergeRunsAgainStopsItAsAnEndedAcceptance() async throws {
+        let fixture = try MergeFixture()
+        let failure = MergeFixture.mergeReport("failed", "GitHub did not merge PR #59: Server Error")
+        fixture.runner.scriptResults["merge"] = failure
+        fixture.runner.waitingMergeResults = [failure]
+        // The done mark clears during a run, so that run's report decides.
+        fixture.runner.onScript["merge"] = { if fixture.isDone { fixture.markDone(false) } }
+
+        await fixture.merge(thenCleanUp: true)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == WorkspaceMergeCoordinator.maximumPollFailures)
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.mergeFailures.first?.hasPrefix("New work started in the workspace") == true)
+        #expect(fixture.lastMergeFailure?.cause == .acceptanceEnded)
     }
 
     @Test

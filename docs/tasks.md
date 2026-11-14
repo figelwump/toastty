@@ -1011,7 +1011,8 @@ again and then merges it or reports what blocks it.
   `mergeFailure` with the cause `error`. The coordinator waits until the
   failure is 10 minutes old and then asks for the same merge again, one time,
   and tells you. It does so only while the pull request is still open at the
-  commit that was to merge, the task's agent is idle, and you did not type in
+  commit that was to merge and targets the same branch, the task's agent is
+  idle, and you did not type in
   the task in the last 15 minutes. It does not do so for a child task, a
   release task, or a merge that it asked for under a rule. If that merge
   stops too, or the merge stopped for another cause, it tells you the reason
@@ -1749,11 +1750,11 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    task's row shows **⚠ merge stopped**, the Tasks view gives the reason, and
    **Merge** is offered again. `toastty task get` reports it as
    `mergeFailure` until a new merge starts, with the `cause` (`refused`,
-   `error` or `acceptanceEnded`) and the commit that was to merge (`head`),
-   and a `task watch --until merged` or `--until to-ship` then ends as one
-   that can never fire. The coordinator asks one time more for a merge that
-   stopped with the cause `error`, while the pull request is still at that
-   commit.
+   `error` or `acceptanceEnded`), the commit that was to merge (`head`) and
+   its target branch (`base`), and a `task watch --until merged` or
+   `--until to-ship` then ends as one that can never fire. The coordinator
+   asks one time more for a merge that stopped with the cause `error`, while
+   the pull request is still at that commit and targets that branch.
 4. Toastty records the merge on the task first, and the task moves to Done
    (or To ship). The task space stays open for 24 hours, so you can still read
    the conversation, the Scratchpad and the pull request; the task's status

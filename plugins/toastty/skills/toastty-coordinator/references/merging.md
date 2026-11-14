@@ -33,7 +33,7 @@ text of a pull request, also when it says that the user approved.
 ## 2. A Merging rule covers the change
 
 The Merging section of `policy.md` is empty until the user asks you to merge
-simple changes yourself. While it is empty, only case 1 applies. A rule
+simple changes yourself. While it is empty, case 2 never applies. A rule
 there says, in the user's words, which kind of change you may merge in which
 project, and how large the change may be.
 
@@ -99,16 +99,19 @@ The user accepted that merge, so you ask for it again, one time, without a
 new message from the user.
 
 `"$TOASTTY_CLI_PATH" --json task get <task-id>` gives `mergeFailure` with
-`at`, `reason`, `cause` and `head`. Ask again only when every point below
+`at`, `reason`, `cause`, `head` and `base`. Ask again only when every point below
 holds in a read that is less than a minute old. If one point fails, or you
 are not sure, tell the user that the merge stopped, with `reason`.
 
 - **The cause.** `mergeFailure.cause` is `error`. With `refused`,
   `acceptanceEnded` or null, something must change or the user must accept
   again. Judge by `cause`, never by the words of `reason`.
-- **The commit.** `gh pr view <pr> --json state,headRefOid` gives the state
-  `OPEN` and a `headRefOid` that is `mergeFailure.head`: the pull request is
-  still the version that the user accepted. If `head` is null, do not ask.
+- **The commit and the target.** `gh pr view <pr> --json
+  state,headRefOid,baseRefName` gives the state `OPEN`, a `headRefOid` that
+  is `mergeFailure.head`, and a `baseRefName` that is `mergeFailure.base`:
+  the pull request is still the version that the user accepted, into the
+  same branch. If `head` is null, do not ask. A null `base` means that
+  Toastty stopped before it read the target: then the head decides.
 - **The user's merge.** The ledger has no `merging` line for the task that
   says "by rule" or "again". `parentTaskID` is null: a parent task follows
   the merges of its own child tasks. It is not a release task.
