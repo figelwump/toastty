@@ -3124,6 +3124,46 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
     }
 
+    func testTasksViewDoubleClickOpensTheRowsTaskSpace() throws {
+        let failed = TaskRecord(
+            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: true))
+        let tasks = hostTasksView(harness, board: board, height: 640)
+        defer { tasks.window.orderOut(nil) }
+        let startWorkspaceID = harness.store.selectedWorkspaceID(in: harness.windowID)
+        let target = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
+        XCTAssertNotEqual(startWorkspaceID, ids.readyUnreadID)
+
+        // One click selects the row and stays in the Tasks view, also after
+        // the double-click interval has passed.
+        try clickSemanticText(prefix: "\(target.title), ", in: tasks.hostingView)
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), startWorkspaceID)
+
+        // A task with no task space only selects on a double click.
+        try clickSemanticText(prefix: "Fix the unread dot, ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], .task(failed.id))
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), startWorkspaceID)
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-double-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-double-click")
+
+        // A double click opens the row's task space and closes the view.
+        try clickSemanticText(prefix: "\(target.title), ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, false)
+    }
+
     func testTasksViewSelectsTheNextTaskWhenTheSelectedOneLeavesTheList() throws {
         let failed = TaskRecord(
             createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
@@ -4266,24 +4306,28 @@ final class SidebarViewTests: XCTestCase {
 
     /// Clicks the hosted view at the semantic text bridge whose text starts
     /// with `prefix`; the bridge is a zero-size field centered on its view.
-    private func clickSemanticText(prefix: String, in rootView: NSView) throws {
+    /// Clicks the text's middle; `clickCount` 2 sends both clicks of a
+    /// double click.
+    private func clickSemanticText(prefix: String, in rootView: NSView, clickCount: Int = 1) throws {
         let frame = try semanticTextFrame(in: rootView, prefix: prefix)
         let window = try XCTUnwrap(rootView.window)
         let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
-        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: type,
-                location: windowPoint,
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: eventNumber,
-                clickCount: 1,
-                pressure: pressure
-            ))
-            window.sendEvent(event)
-            pumpMainRunLoop(duration: 0.05)
+        for click in 1...clickCount {
+            for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type,
+                    location: windowPoint,
+                    modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil,
+                    eventNumber: eventNumber + 2 * (click - 1),
+                    clickCount: click,
+                    pressure: pressure
+                ))
+                window.sendEvent(event)
+                pumpMainRunLoop(duration: 0.05)
+            }
         }
     }
 
