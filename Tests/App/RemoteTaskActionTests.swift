@@ -26,6 +26,8 @@ struct RemoteTaskActionTests {
         /// Answers whether the device may still act; counts each check.
         var deviceMayAct: (Int) -> Bool = { _ in true }
         var permissionChecks = 0
+        /// Answers whether the device may still start a release.
+        var deviceMayRelease = true
         private(set) var runner: RemoteTaskActionRunner!
 
         init(coordinator: TaskCoordinator, store: AppStore, sessionRuntimeStore: SessionRuntimeStore) {
@@ -45,6 +47,7 @@ struct RemoteTaskActionTests {
                     permissionChecks += 1
                     return deviceMayAct(permissionChecks)
                 },
+                deviceMayRelease: { [unowned self] _ in deviceMayRelease },
                 currentTask: { [unowned self] taskID in current(taskID) }
             )
         }
@@ -54,6 +57,14 @@ struct RemoteTaskActionTests {
                 state: store.state,
                 mergeRequest: { [unowned self] in mergeRequests[$0] }
             )
+        }
+
+        /// As the service reads releases.
+        var releaseContext: RemoteTaskBoardProjection.Context {
+            var context = context
+            context.canRelease = { [board] in board.canRelease($0) }
+            context.releaseUnderWay = { [coordinator] in coordinator.releaseUnderWay(projectRoot: $0)?.id }
+            return context
         }
 
         func item(_ taskID: UUID) throws -> TaskBoardItem {
@@ -82,6 +93,10 @@ struct RemoteTaskActionTests {
                 ),
                 device: Self.device
             )
+        }
+
+        func release(_ workspaceID: UUID, id: String) -> RemoteProjectReleaseResult {
+            runner.release(RemoteProjectReleaseRequest(workspaceID: workspaceID, clientRequestID: id), device: Self.device)
         }
 
         static let device = RemoteDeviceRecord(
@@ -510,6 +525,92 @@ struct RemoteTaskActionTests {
         // A retry after a lost answer finds the first result.
         #expect(await harness.perform(.delete, failed.id, id: "delete-1") == .performed)
         #expect(await harness.perform(.delete, failed.id, id: "delete-2") == .rejected(reason: .taskNotFound, message: nil))
+    }
+
+    // MARK: - Release
+
+    /// A project with two merged tasks that wait for a release. With
+    /// `canRelease`, tasks.toml gives it a release prompt that only echoes.
+    private func releasingProject(_ fixture: Fixture, canRelease: Bool = true) throws -> [TaskRecord] {
+        fixture.config.defaults = TasksConfig.Defaults(agent: "claude")
+        fixture.config.workspaces = [TasksConfig.Workspace(
+            path: fixture.repository.project,
+            releaseTags: "v*",
+            releasePrompt: canRelease ? "Echo the release plan; publish nothing." : nil
+        )]
+        let tip = try fixture.repository.pushToRemote("released")
+        return try ["Fix the parser", "Fix the composer"].enumerated().map { index, title in
+            var merged = TaskRecord(
+                createdAt: Date(), text: title, title: title, slug: "merged-\(index)", source: .cli,
+                workspaceID: fixture.workspaceID, projectRoot: fixture.repository.project, setup: .started
+            )
+            merged.pullRequestURL = "https://github.com/example/project/pull/\(index + 3)"
+            merged.mergedAt = Date()
+            merged.mergeCommit = tip
+            try fixture.coordinator.records.insert(merged)
+            return merged
+        }
+    }
+
+    private func releases(_ fixture: Fixture) -> [TaskRecord] {
+        fixture.coordinator.records.records.filter { $0.release != nil }
+    }
+
+    /// The phone's Release… reaches the same release as the Mac's button,
+    /// once per request ID, one at a time, and only with the device's
+    /// permissions.
+    @Test func aPhoneStartsOneReleaseAndARepeatFindsIt() async throws {
+        let (fixture, harness) = try worktreeHarness()
+        let merged = try releasingProject(fixture)
+        harness.board.reloadConfig()
+
+        // A device without its Task actions switch or start permission
+        // starts nothing.
+        harness.deviceMayRelease = false
+        #expect(harness.release(fixture.workspaceID, id: "release-1") == .rejected(reason: .permissionDenied, message: nil))
+        #expect(releases(fixture).isEmpty)
+
+        harness.deviceMayRelease = true
+        guard case .started(let taskID) = harness.release(fixture.workspaceID, id: "release-1") else {
+            Issue.record("Expected a release to start")
+            return
+        }
+        let release = try #require(fixture.record(taskID))
+        #expect(Set(try #require(release.release).childTaskIDs) == Set(merged.map(\.id)))
+        #expect(release.source == .remoteDevice(deviceID: Harness.device.id))
+        #expect(release.clientRequestID == "release-1")
+        #expect(release.startWork?.detached == true)
+
+        // A repeat after a lost answer finds the same release.
+        #expect(harness.release(fixture.workspaceID, id: "release-1") == .started(taskID: taskID))
+        #expect(releases(fixture).map(\.id) == [taskID])
+        // A new request while it runs is refused and names it.
+        guard case .rejected(.releaseUnderWay, let message?) = harness.release(fixture.workspaceID, id: "release-2") else {
+            Issue.record("Expected a refusal while the release runs")
+            return
+        }
+        #expect(message.contains(release.title))
+        #expect(releases(fixture).count == 1)
+        // The board shows the release under way on the project's lane.
+        let lane = try #require(RemoteTaskBoardProjection.board(items: harness.board.items(), context: harness.releaseContext).toShip.first)
+        #expect(lane.releaseWorkspaceID == fixture.workspaceID)
+        #expect(lane.releaseTaskID == taskID)
+        await fixture.waitUntil("setup ends") { fixture.record(taskID)?.setup != .settingUp }
+    }
+
+    @Test func aProjectThatCannotReleaseOrIsGoneRefusesTheRelease() async throws {
+        let (fixture, harness) = try worktreeHarness()
+        _ = try releasingProject(fixture, canRelease: false)
+        harness.board.reloadConfig()
+        // The phone words this one; the Mac's message names a local path.
+        #expect(harness.release(fixture.workspaceID, id: "release-1") == .rejected(reason: .notReleasable, message: nil))
+        #expect(harness.release(UUID(), id: "release-2") == .rejected(reason: .projectNotFound, message: nil))
+        #expect(releases(fixture).isEmpty)
+        // Without a release setting the lane offers no Release.
+        let lane = try #require(RemoteTaskBoardProjection.board(items: harness.board.items(), context: harness.releaseContext).toShip.first)
+        #expect(lane.releaseWorkspaceID == nil)
+        #expect(lane.releaseTaskID == nil)
+        #expect(lane.count == 2)
     }
 }
 

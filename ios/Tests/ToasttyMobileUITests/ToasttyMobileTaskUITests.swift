@@ -16,6 +16,9 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let startingTaskID = "D1000000-0000-0000-0000-000000000004"
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
     private let otherProjectTaskID = "D1000000-0000-0000-0000-000000000012"
+    private let shareSheetTaskID = "D1000000-0000-0000-0000-000000000013"
+    /// The release task the fixture starts.
+    private let releaseTaskID = "D1000000-0000-0000-0000-000000000015"
     /// A working session in the toastty workspace.
     private let workingSessionID = "B1000000-0000-0000-0000-000000000002"
 
@@ -223,6 +226,59 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(conversationTitle, homeTitle))
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(waitUntilHittable(homeSession))
+    }
+
+    /// Release… on a card's expanded To ship line and on the Tasks tab's
+    /// lane: the phone asks first, Cancel sends nothing, and once the Mac
+    /// starts the release both read Releasing… and are off.
+    func testReleaseAsksFirstThenTheProjectReadsReleasing() {
+        let app = launchTaskFixture()
+        select(.all, in: app)
+        let toggle = app.buttons["toastty-card-to-ship-toggle-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(scrollTo(toggle, in: app))
+        let cardRelease = app.buttons["toastty-card-release-\(toasttyWorkspaceID)"]
+        // Only the expanded line offers it.
+        XCTAssertFalse(cardRelease.exists)
+        toggle.tap()
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(shareSheetTaskID)"], in: app))
+        XCTAssertTrue(scrollTo(cardRelease, in: app))
+        XCTAssertEqual(cardRelease.label, "Release toastty")
+        XCTAssertTrue(cardRelease.isEnabled)
+        attachScreenshot(named: "release-card-to-ship-line", of: app)
+
+        // The phone asks first, naming the project and what ships.
+        cardRelease.tap()
+        let alert = app.alerts["Release \u{201C}toastty\u{201D}?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "3 merged tasks")).firstMatch.exists)
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Share sheet links")).firstMatch.exists)
+        attachScreenshot(named: "release-confirmation", of: app)
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(cardRelease.label, "Release toastty")
+
+        // The Tasks tab's lane offers the same release.
+        app.tabBars.buttons["Tasks"].tap()
+        let laneRelease = app.buttons["toastty-tasks-lane-release-toastty"]
+        XCTAssertTrue(waitUntilHittable(laneRelease))
+        XCTAssertEqual(laneRelease.label, "Release toastty")
+        attachScreenshot(named: "release-tasks-lane", of: app)
+        laneRelease.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Release"].tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitForLabel(laneRelease, "Releasing toastty"))
+        XCTAssertFalse(laneRelease.isEnabled)
+        attachScreenshot(named: "release-tasks-lane-releasing", of: app)
+        // The release task lists like any other task.
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(releaseTaskID)"], in: app, list: "toastty-mobile-tasks"))
+
+        // Home's card reads Releasing… too.
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(scrollTo(cardRelease, in: app))
+        XCTAssertTrue(waitForLabel(cardRelease, "Releasing toastty"))
+        XCTAssertFalse(cardRelease.isEnabled)
+        attachScreenshot(named: "release-card-releasing", of: app)
     }
 
     func testACardsToShipAndDoneCountsOpenTheTasksTabAtTheirGroup() {

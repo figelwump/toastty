@@ -114,6 +114,9 @@ public protocol GatewayClientProtocol: Sendable {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse
+    func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse
@@ -203,6 +206,12 @@ public extension GatewayClientProtocol {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse {
         throw GatewayFailure.invalidResponse
     }
     func taskCreateOptions(
@@ -599,6 +608,19 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             body: try encode(request)
         )
         return try decodeVersioned(RemoteTaskArchiveCheckResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteProjectReleasePolicy.releasePath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteProjectReleaseResponse.self, from: response.body) {
             $0.protocolVersion
         }
     }

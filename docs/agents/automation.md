@@ -136,6 +136,33 @@ refused. It writes `remote-session-start.json` under the run's artifacts
 directory. This is state evidence from the automation socket and the gateway.
 It is not a screenshot, and it does not cover the iOS screens.
 
+### Remote project release
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/remote-project-release-check.py'
+```
+
+This checks Release from a paired device end to end on the remote host. Like
+the session start check, it starts its own second instance with a throwaway
+runtime home, a throwaway user home, seeded test devices and a loopback
+gateway port. The user home is a git repository whose `origin` is a local bare
+repository, its `agents.toml` names a fake `claude` script, and its
+`tasks.toml` gives the project release tags and a release prompt that only
+asks to echo. No real agent runs and nothing can publish; the check confirms
+that the bare remote has no tags at the end.
+
+The check creates a task with the real CLI, stops the app, marks the record
+merged in `task-records.json`, and starts the app again, so the task waits to
+ship. Then it acts as the phone over HTTP: devices with **Start sessions** or
+**Task actions** off are refused, the To ship lane names its
+`releaseWorkspaceID`, `POST /api/project.release` starts the release task, a
+repeat of the request returns the same task, and a second request is refused
+with `release_under_way`. It checks that the release agent got the release
+prompt and the merged task, and that the lane then names the running release.
+It writes `remote-project-release-check.json` and the app log under the run's
+artifacts directory. It does not cover the iOS screens.
+
 ### Remote session close
 
 ```bash
