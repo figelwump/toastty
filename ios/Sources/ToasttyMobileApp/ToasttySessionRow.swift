@@ -71,7 +71,7 @@ struct ToasttySessionRow: View {
                         .overlay {
                             ToasttySessionRailMark(bucket: bucket, freshness: freshness)
                         }
-                    if conversation.isFlaggedForLater {
+                    if conversation.isFlaggedForLater, compact == nil {
                         ToasttyLaterFlagMark()
                     }
                 }
@@ -148,8 +148,16 @@ struct ToasttySessionRow: View {
             }
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                titleText
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // A one-line row has no room under the status mark, so the
+                // flag follows the name, as on the Mac.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    titleText
+                    if compact != nil, conversation.isFlaggedForLater {
+                        ToasttyLaterFlagMark()
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 trailingFacts
             }
         }
