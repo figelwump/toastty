@@ -710,7 +710,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
         for panelID in searchDispatchTaskByPanelID.keys where livePanelIDs.contains(panelID) == false {
             cancelPendingSearchDispatch(for: panelID)
         }
-        if searchStateByPanelID.isEmpty == false {
+        // Assign only when a panel went away: this runs for every change of
+        // the app state, and an assignment publishes also when it is equal.
+        if searchStateByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
             searchStateByPanelID = searchStateByPanelID.filter { livePanelIDs.contains($0.key) }
         }
         if let searchFieldFocusedPanelID,

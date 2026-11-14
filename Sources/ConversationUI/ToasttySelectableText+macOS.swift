@@ -88,6 +88,12 @@ struct ToasttySelectableText: NSViewRepresentable {
 
     func updateNSView(_ view: ToasttyTranscriptTextView, context: Context) {
         context.coordinator.openURL = openURL
+        // SwiftUI updates the view whenever a parent draws again, most often
+        // with nothing changed. Comparing what the text is built from costs
+        // far less than building the text to compare it.
+        let inputs = renderInputs
+        guard inputs != context.coordinator.renderedInputs else { return }
+        context.coordinator.renderedInputs = inputs
         let rendered = attributedText()
         let previous = context.coordinator.renderedText
         guard !rendered.isEqual(to: previous) else { return }
@@ -172,6 +178,32 @@ struct ToasttySelectableText: NSViewRepresentable {
     static func dismantleNSView(_ view: ToasttyTranscriptTextView, coordinator: Coordinator) {
         view.delegate = nil
         view.stopChipSpinners()
+    }
+
+    /// Everything `attributedText()` reads. Equal inputs give an equal text.
+    struct RenderInputs: Equatable {
+        var paragraphs: [ToasttySelectableParagraph]
+        var monospaced: Bool
+        var lineSpacing: CGFloat
+        var alignment: NSTextAlignment
+        var keepsLineBreaksInsideParagraphs: Bool
+        var boldText: Bool
+        var textScale: CGFloat
+        /// The system's size for body text, which every text style follows.
+        var systemBodyPointSize: CGFloat
+    }
+
+    private var renderInputs: RenderInputs {
+        RenderInputs(
+            paragraphs: paragraphs,
+            monospaced: monospaced,
+            lineSpacing: lineSpacing,
+            alignment: alignment,
+            keepsLineBreaksInsideParagraphs: keepsLineBreaksInsideParagraphs,
+            boldText: legibilityWeight == .bold,
+            textScale: textScale,
+            systemBodyPointSize: NSFont.preferredFont(forTextStyle: .body).pointSize
+        )
     }
 
     private func attributedText() -> NSAttributedString {
@@ -328,6 +360,8 @@ struct ToasttySelectableText: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var renderedText = NSAttributedString(string: "")
+        /// What `renderedText` was built from; `nil` before the first text.
+        var renderedInputs: RenderInputs?
         var idealWidth: CGFloat?
         var measuredSizes: [CGFloat: CGSize] = [:]
         var openURL: OpenURLAction?

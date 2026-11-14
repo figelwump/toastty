@@ -1685,6 +1685,262 @@ struct TaskBoardTests {
         }
     }
 
+    private func makeBoard(
+        _ fixture: TaskCoordinatorTests.Fixture, pullRequests: PullRequestStateCache
+    ) -> TaskBoardStore {
+        TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, pullRequests: pullRequests,
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+    }
+
+    /// The board keeps its items while its sources stay equal. Each source
+    /// publishes before it changes, so a reader that a publisher calls, as
+    /// SwiftUI and the board's own sinks are, still reads the old values.
+    /// The next read after the change must give the new items.
+    @Test func itemsFollowEachSourceAlsoAfterAReadFromItsPublisher() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let cache = PullRequestStateCache(runner: gitHub)
+        let board = makeBoard(fixture, pullRequests: cache)
+        let task = try await startTask(fixture, text: "Keep the board current")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() -> TaskBoardItem? { board.items().first { $0.taskID == task.id } }
+
+        var cancellables: Set<AnyCancellable> = []
+        runtime.$sessionRegistry.sink { _ in _ = board.items() }.store(in: &cancellables)
+        runtime.$workspaceMergeRequests.sink { _ in _ = board.items() }.store(in: &cancellables)
+        fixture.coordinator.records.objectWillChange.sink { _ in _ = board.items() }.store(in: &cancellables)
+        cache.objectWillChange.sink { _ in _ = board.items() }.store(in: &cancellables)
+        fixture.store.$state.sink { _ in _ = board.items() }.store(in: &cancellables)
+
+        // The session registry.
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(item()?.agent == .working)
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        #expect(item()?.agent == .idle)
+
+        // The task records.
+        _ = fixture.coordinator.records.update(id: task.id) { $0.readyForReviewAt = Date() }
+        #expect(item()?.stage == .needsYou(.readyForReview))
+        _ = fixture.coordinator.records.update(id: task.id) { $0.readyForReviewAt = nil }
+        #expect(item()?.stage == .idle)
+
+        // The workspaces.
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(item()?.pullRequest?.url == pullRequestURL)
+        #expect(item()?.pullRequestState == nil)
+
+        // The pull request answers.
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "OPEN", isDraft: true)
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.isDraft == true)
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.isDraft == false)
+        #expect(item()?.stage == .needsYou(.review))
+
+        // The merges that Toastty runs.
+        runtime.setWorkspaceMergeRequests([
+            workspaceID: WorkspaceMergeRequest(pullRequest: link, repoPath: fixture.projectRoot, phase: .merging(thenCleanUp: false)),
+        ])
+        #expect(item()?.merge == .merging)
+        runtime.setWorkspaceMergeRequests([:])
+        #expect(item()?.merge == nil)
+    }
+
+    /// Two answers change with the time alone, with no change of a source:
+    /// the readiness of a pull request that GitHub stopped answering for
+    /// ends after a grace period, and so does a session's "resuming" state.
+    /// The kept board must not outlive either.
+    @Test func itemsFollowAGracePeriodThatEndsWithoutAChange() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let board = makeBoard(fixture, pullRequests: cache)
+        let task = try await startTask(fixture, text: "Follow the grace periods")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() -> TaskBoardItem? { board.items().first { $0.taskID == task.id } }
+
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.mergeability?.isKnown == true)
+        // GitHub stops answering: the last readiness shows for 30 seconds.
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(10)
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.mergeability?.isKnown == true)
+        var publishes = 0
+        let subscription = cache.objectWillChange.sink { publishes += 1 }
+        clock = clock.addingTimeInterval(PullRequestStateCache.mergeabilityGracePeriod)
+        #expect(item()?.pullRequestState?.mergeability == nil)
+        #expect(publishes == 0)
+        subscription.cancel()
+
+        // A session whose last background activity finished 12 seconds ago
+        // shows as resuming, and so as working, for 3 more seconds.
+        let finishedAt = Date().addingTimeInterval(3 - SessionRegistry.resumeProjectionGraceInterval)
+        runtime.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"),
+            at: finishedAt.addingTimeInterval(-3)
+        )
+        runtime.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"),
+            at: finishedAt.addingTimeInterval(-2)
+        )
+        _ = runtime.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: "helper", kind: .subagent,
+                startedAt: finishedAt.addingTimeInterval(-1), lastUpdatedAt: finishedAt.addingTimeInterval(-1)
+            ),
+            at: finishedAt.addingTimeInterval(-1)
+        )
+        _ = runtime.finishBackgroundActivity(sessionID: sessionID, activityID: "helper", at: finishedAt)
+        #expect(runtime.workspaceStatuses(for: workspaceID).first?.projection == .resuming)
+        #expect(item()?.agent == .working)
+        // Let the check that these reports scheduled run, so the board's
+        // views have drawn the working agent.
+        for _ in 0..<5 { await Task.yield() }
+        var boardPublishes = 0
+        let boardSubscription = board.objectWillChange.sink { boardPublishes += 1 }
+        defer { boardSubscription.cancel() }
+        await waitUntil(timeout: .seconds(20)) { item()?.agent != .working }
+        #expect(item()?.agent == .idle)
+        // A view that observes only the board, such as the header's task
+        // control, hears of the end too.
+        await waitUntil(timeout: .seconds(20)) { boardPublishes > 0 }
+    }
+
+    /// A row asks for its task space's item with the statuses it read. That
+    /// is the board's own item when the statuses are the store's, in any
+    /// order, and an item for the caller's statuses when they differ.
+    @Test func aTaskSpaceItemIsTheBoardsItemForTheCallersStatuses() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Read one task space")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
+        runtime.startSession(
+            sessionID: "helper", agent: .claude, panelID: UUID(), windowID: fixture.store.state.windows[0].id,
+            workspaceID: workspaceID, codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(sessionID: "helper", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+
+        let statuses = runtime.workspaceStatuses(for: workspaceID)
+        #expect(statuses.count == 2)
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.agent == .working)
+        #expect(board.item(taskSpace: workspace, statuses: statuses) == item)
+        #expect(board.item(taskSpace: workspace, statuses: statuses.reversed()) == item)
+        // The caller's own statuses decide, also when the store has others.
+        let idle = statuses.filter { $0.sessionID == "helper" }
+        #expect(board.item(taskSpace: workspace, statuses: idle)?.agent == .idle)
+        #expect(board.item(taskSpace: workspace, statuses: [])?.agent == TaskAgentActivity.none)
+    }
+
+    /// The board tells its views about a session change only when the
+    /// change moved an item: views that show sessions observe the session
+    /// store themselves, and a second publish draws the sidebar and the
+    /// Coordinator chat again for nothing.
+    @Test func aSessionChangePublishesTheBoardOnlyWhenAnItemChanged() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Publish what changed")
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        // Let the checks that the launch scheduled finish.
+        for _ in 0..<5 { await Task.yield() }
+        var publishes = 0
+        let subscription = board.objectWillChange.sink { publishes += 1 }
+        defer { subscription.cancel() }
+
+        // A session in the project's own workspace is on no task's row.
+        runtime.startSession(
+            sessionID: "project-shell", agent: .claude, panelID: UUID(), windowID: fixture.store.state.windows[0].id,
+            workspaceID: fixture.workspaceID, codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(sessionID: "project-shell", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        for _ in 0..<5 { await Task.yield() }
+        #expect(publishes == 0)
+
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        await waitUntil { publishes > 0 }
+        #expect(board.items().first { $0.taskID == task.id }?.agent == .working)
+    }
+
+    /// GitHub is asked again every 15 seconds to two minutes for each pull
+    /// request. An answer that repeats the last one changes nothing a view
+    /// shows and publishes nothing; the time of the request still moves.
+    @Test func aRepeatedPullRequestAnswerDoesNotPublish() async throws {
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        var publishes = 0
+        let subscription = cache.objectWillChange.sink { publishes += 1 }
+        defer { subscription.cancel() }
+
+        await cache.refresh(link).value
+        #expect(publishes == 1)
+        let revision = cache.stateRevision
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(publishes == 1)
+        #expect(cache.stateRevision == revision)
+        #expect(cache.entries[link.url]?.answeredAt == clock)
+
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "BLOCKED")
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(publishes == 2)
+        #expect(cache.stateRevision != revision)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .blocked)
+
+        // A request that fails the same way again publishes nothing, while
+        // the last readiness still shows.
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 3)
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 3)
+        #expect(cache.entries[link.url]?.requestedAt == clock)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .blocked)
+        let duringGrace = cache.stateRevision
+
+        // After the grace period the readiness no longer shows. Views drew
+        // it, so the next answer publishes once, also when it repeats.
+        clock = clock.addingTimeInterval(PullRequestStateCache.mergeabilityGracePeriod)
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.stateRevision != duringGrace)
+        await cache.refresh(link).value
+        #expect(publishes == 4)
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 4)
+    }
+
     private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while condition() == false {

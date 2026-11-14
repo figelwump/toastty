@@ -302,7 +302,11 @@ final class CoordinatorChatModel: ObservableObject {
     private func refresh() {
         guard let subscription else { return }
         let snapshot = subscription.snapshot(at: now())
-        summary = snapshot?.summary
+        // A new event leaves the summary as it was; publish it only when it
+        // changed, so the chat does not draw again for an equal value.
+        if summary != snapshot?.summary {
+            summary = snapshot?.summary
+        }
         guard let summary = snapshot?.summary else {
             // No agent conversation in the terminal: none started yet, or
             // Toastty cannot read this agent's.
