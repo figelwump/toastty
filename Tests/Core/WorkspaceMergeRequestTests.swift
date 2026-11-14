@@ -17,6 +17,7 @@ struct WorkspaceMergeRequestTests {
         for phase in [
             WorkspaceMergeRequest.Phase.awaitingMerge,
             .awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: false),
+            .holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)),
             .failed(reason: "skipped"),
         ] {
             #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: link) == with(phase))
@@ -39,6 +40,15 @@ struct WorkspaceMergeRequestTests {
         #expect(with(.failed(reason: "x")).persisted == with(.failed(reason: "x")))
         let waiting = with(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: true))
         #expect(waiting.persisted == waiting)
+        // A held cleanup keeps its time across a relaunch.
+        let held = with(.holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)))
+        let savedHold = try JSONEncoder().encode(#require(held.persisted))
+        #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedHold) == held)
+        // A cleanup that a quit interrupted after its hold does not wait again.
+        var released = with(.cleaningUp)
+        released.cleanupHoldEnded = true
+        let savedRelease = try JSONEncoder().encode(#require(released.persisted))
+        #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedRelease).cleanupHoldEnded == true)
         // Restarting an adopted task's interrupted cleanup must not permit
         // deletion of a checkout discovered only by its branch name.
         var restricted = with(.cleaningUp)

@@ -63,6 +63,9 @@ enum SidebarSubspacePresentation {
         /// True when the row is a task's space. Its ↖ spawner tag is hidden:
         /// the task list already shows which task started it.
         var isTask = false
+        /// The task merged and Toastty holds its task space open for a
+        /// while, so the user can look at it: the row stays listed.
+        var isCleanupHeld = false
         /// The project the row belongs to, shown where rows from several
         /// projects share a list.
         var projectTag: String? = nil
@@ -203,8 +206,10 @@ enum SidebarSubspacePresentation {
 
     /// Whether a project's Task Spaces group leaves the row out: its task
     /// is finished and nothing in it is running or waiting for the user.
-    /// The Tasks view still lists it.
+    /// The Tasks view still lists it. A merged task's task space that
+    /// Toastty holds open stays listed until it closes.
     static func isHiddenAsFinished(_ row: Row) -> Bool {
+        guard row.isCleanupHeld == false else { return false }
         switch row.status {
         case .done, .toShip:
             // The row's status shows one session; any other agent that is

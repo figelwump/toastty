@@ -71,6 +71,9 @@ enum WorkspaceMergePresentation: Equatable {
             return .cleaningUp(pullRequest: pullRequest)
         case .failed(let reason):
             return .cleanupFailed(pullRequest: pullRequest, reason: reason)
+        case .holdingCleanup:
+            // Merged; the task space stays open for a while before cleanup.
+            return .done(pullRequest: pullRequest)
         case .awaitingMerge, .awaitingChecks, nil:
             // A Merge Only that waits for checks shows as done: the user has
             // accepted the version, and Toastty merges it when it can.
