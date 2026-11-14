@@ -24,7 +24,20 @@ enum TaskBoardPresentation {
     }
 
     /// One line on what the task is doing or waiting for.
-    static func statusLine(_ item: TaskBoardItem) -> String {
+    static func statusLine(_ item: TaskBoardItem, now: Date = Date()) -> String {
+        let line = stageStatusLine(item)
+        guard let until = item.cleanupHeldUntil else { return line }
+        return "\(line) · \(heldCleanupPhrase(until: until, now: now))"
+    }
+
+    /// When a held task space closes, in whole hours rounded up.
+    static func heldCleanupPhrase(until: Date, now: Date) -> String {
+        let remaining = until.timeIntervalSince(now)
+        guard remaining > 0 else { return "task space closes soon" }
+        return "task space closes in \(Int((remaining / 3_600).rounded(.up))) h"
+    }
+
+    private static func stageStatusLine(_ item: TaskBoardItem) -> String {
         switch item.stage {
         case .starting:
             switch item.record?.setup {
@@ -101,7 +114,13 @@ enum TaskBoardPresentation {
     }
 
     /// The stage's name and why, for the detail pane.
-    static func stageDescription(_ item: TaskBoardItem) -> (stage: String, why: String) {
+    static func stageDescription(_ item: TaskBoardItem, now: Date = Date()) -> (stage: String, why: String) {
+        let description = stageDescriptionWithoutHold(item)
+        guard let until = item.cleanupHeldUntil else { return description }
+        return (description.stage, "\(description.why), \(heldCleanupPhrase(until: until, now: now))")
+    }
+
+    private static func stageDescriptionWithoutHold(_ item: TaskBoardItem) -> (stage: String, why: String) {
         switch item.stage {
         case .starting: return ("Starting", statusLine(item))
         case .needsYou(let attention):
@@ -142,6 +161,8 @@ enum TaskBoardPresentation {
         case archive
         case cleanUp
         case keepAsIs
+        /// A merged task whose task space Toastty holds open: clean up now.
+        case closeTaskSpace
 
         var title: String {
             switch self {
@@ -152,6 +173,7 @@ enum TaskBoardPresentation {
             case .archive: "Archive…"
             case .cleanUp: "Clean Up"
             case .keepAsIs: "Keep As Is"
+            case .closeTaskSpace: "Close Task Space"
             }
         }
 
@@ -166,6 +188,7 @@ enum TaskBoardPresentation {
             case .archive: "Close the task without merging"
             case .cleanUp: "Try the cleanup again"
             case .keepAsIs: "Leave the task space and worktree as they are"
+            case .closeTaskSpace: "Close the task space, remove its worktree and delete its branches now, instead of a day after the merge"
             }
         }
 
@@ -178,6 +201,7 @@ enum TaskBoardPresentation {
             case .archive: "Unable to Archive"
             case .cleanUp: "Unable to Clean Up"
             case .keepAsIs: "Unable to Keep As Is"
+            case .closeTaskSpace: "Unable to Close the Task Space of"
             }
         }
 
@@ -190,6 +214,7 @@ enum TaskBoardPresentation {
             case .archive: "archive"
             case .cleanUp: "cleanUp"
             case .keepAsIs: "keepAsIs"
+            case .closeTaskSpace: "closeTaskSpace"
             }
         }
     }
@@ -206,6 +231,9 @@ enum TaskBoardPresentation {
             return []
         case nil:
             break
+        }
+        if item.cleanupHeldUntil != nil {
+            return [.closeTaskSpace]
         }
         switch item.stage {
         case .needsYou(let attention) where attention.isBeforeStart == false && attention != .taskSpaceClosed:

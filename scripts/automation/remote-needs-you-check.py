@@ -12,8 +12,9 @@ that:
 - a task whose agent ran `task needs-reply --question` before it ended its
   turn is `needsYou`/`awaitingReply`, shows the question, stays so after the
   user reads the turn, and clears when its agent starts the next turn;
-- an idle task lists in Needs you, as context, with its child that waits for
-  review, instead of apart in Idle;
+- an idle task lists in Ready to review, as context, with its child that
+  waits for review, instead of apart in Idle, and a pull request that waits
+  for review lists below what blocks an agent;
 - selecting an unread finished task reads it, but its row keeps its place in
   Needs you until another task is selected or work resumes; resuming moves
   it to Running even while selected.
@@ -42,7 +43,7 @@ QUESTION = 'Pick a hostname option'
 # One line of task-stages-ui-helper's dump.
 DUMP_LINE = re.compile(r'^\d+ \S+ id=(?P<id>\S*) title=(?P<title>.*) frame=-?\d+,(?P<y>-?\d+) \d+x\d+$')
 # A project card draws its bucket titles in capitals.
-GROUP_HEADERS = {'NEEDS YOU': 'Needs you', 'RUNNING': 'Running', 'IDLE': 'Idle'}
+GROUP_HEADERS = {'NEEDS YOU': 'Needs you', 'READY TO REVIEW': 'Ready to review', 'RUNNING': 'Running', 'IDLE': 'Idle'}
 
 
 def main():
@@ -221,7 +222,7 @@ def main():
         status(asked_session, 'idle', 'Waiting')
 
         # 2. A family lists in its most urgent group: an idle parent with a
-        # child that waits for review lists in Needs you.
+        # child that waits for review lists in Ready to review.
         parent_id, parent_session, parent_space = start('Explain the public URL warning')
         child = cli_json('task', 'create', 'Keep private pages private', '--workspace', workspace_id,
                          '--wait', '--timeout', '90', extra_env={'TOASTTY_SESSION_ID': parent_session})
@@ -231,15 +232,19 @@ def main():
                  'key=github-pr', 'text=PR #11', f'url={PULL_REQUEST}')
         wait_for('the child to wait for review', lambda: stage(child_id).get('attention') == 'review')
         require(stage(parent_id)['group'] == 'idle', f'The parent should be idle: {stage(parent_id)}')
-        family = wait_for('the family to list in Needs you', lambda: (
-            (order := sidebar_order()) and group_of(order, parent_space) == 'Needs you'
-            and group_of(order, child_space) == 'Needs you' and order))
-        needs_you = rows_in(family, 'Needs you')
-        require(needs_you.index(child_space) == needs_you.index(parent_space) + 1,
+        family = wait_for('the family to list in Ready to review', lambda: (
+            (order := sidebar_order()) and group_of(order, parent_space) == 'Ready to review'
+            and group_of(order, child_space) == 'Ready to review' and order))
+        reviews = rows_in(family, 'Ready to review')
+        require(reviews.index(child_space) == reviews.index(parent_space) + 1,
                 f'The child should list right under its parent: {family}')
+        headers = [value for kind, value in family if kind == 'header']
+        if 'Needs you' in headers:
+            require(headers.index('Ready to review') > headers.index('Needs you'),
+                    f'Ready to review should list below Needs you: {family}')
         require(parent_space not in rows_in(family, 'Idle'), f'The parent listed twice: {family}')
         step('family lists together', order=family)
-        capture('3-family-in-needs-you')
+        capture('3-family-in-ready-to-review')
 
         # 3. Selecting an unread finished task reads it; its row holds its
         # place until another task is selected.

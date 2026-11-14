@@ -1036,6 +1036,14 @@ final class DisplayShortcutInterceptor {
             _ = store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
         case (.browser(_, let panelID), .reset):
             _ = store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        case (.scratchpad(_, let panelID), _):
+            let adjustment: ScratchpadMagnificationAdjustment
+            switch direction {
+            case .increase: adjustment = .increase
+            case .decrease: adjustment = .decrease
+            case .reset: adjustment = .reset
+            }
+            webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: adjustment)
         case (.coordinatorChat, .increase):
             coordinatorChat?.changeTextScale(.increase)
         case (.coordinatorChat, .decrease):

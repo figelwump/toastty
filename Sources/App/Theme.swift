@@ -30,6 +30,9 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
+    /// The coordinator's row while its dock shows beside another workspace.
+    static let sidebarCoordinatorDockOpenBackground = Color(hex: 0x2B2B2B)
+    static let sidebarCoordinatorDockOpenHoverBackground = Color(hex: 0x333333)
     /// Row fills for the states that want the user, on session and subspace
     /// rows alike. Faint on purpose: the rail mark and heavy name carry the
     /// state, and approval and error rows also keep their word badge.

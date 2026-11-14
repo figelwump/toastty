@@ -1157,8 +1157,7 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
-        sessionRuntimeStore.$providerConversationRevision
-            .dropFirst()
+        sessionRuntimeStore.providerConversationRevisions
             .sink { [weak self] _ in
                 guard let self,
                       self.isTrackingConversations,

@@ -27,6 +27,7 @@ struct CoordinatorChatView: View {
     let hasPanelFocus: Bool
     /// Where this view of the chat is.
     var host: CoordinatorChatModel.Host = .panel
+    @StateObject private var linkOpener = CoordinatorChatLinkOpener()
 
     /// The size of the notice's text before the text scale: the caption
     /// style's size on macOS.
@@ -42,26 +43,28 @@ struct CoordinatorChatView: View {
     )
 
     var body: some View {
-        let chips = CoordinatorTaskChips(items: board.items())
-        VStack(spacing: 0) {
-            ToasttyTranscriptView(
-                state: model.presentation,
-                isSubmitting: false,
-                loadOlder: { model.loadOlder() },
-                queuedMessageAction: { model.perform($0) },
-                readAcknowledgementEpoch: model.sessionStatus,
+        let items = board.items()
+        let chips = CoordinatorTaskChips(items: items)
+        // The handler of this pass, for the one action the text views hold.
+        // It takes what it needs and not the view, which holds the opener.
+        linkOpener.open = { [board, store, controller, windowID] url in
+            Self.open(url, chips: chips, board: board, store: store, controller: controller, windowID: windowID)
+        }
+        return VStack(spacing: 0) {
+            CoordinatorChatTranscriptPane(
+                model: model,
+                presentation: model.presentation,
+                sessionStatus: model.sessionStatus,
                 workingIndicator: model.workingIndicator,
-                jumpToLiveEdgeRequest: $model.jumpToLiveEdgeRequest,
-                canAcknowledgeRead: false,
-                options: Self.transcriptOptions,
-                replyToMessage: { model.reply(to: $0) }
+                jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest
             )
+            .equatable()
             .overlay {
                 if model.showsIntroduction {
                     introduction
                 }
             }
-            composerArea
+            composerArea(mentionCandidates: CoordinatorMentionCandidate.candidates(from: items))
         }
         // Files and images dropped anywhere on the chat are attached to the
         // composer's message. The terminal under the chat takes none.
@@ -72,7 +75,7 @@ struct CoordinatorChatView: View {
         .background(ConversationDesignTokens.background)
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.conversationTextScale, model.textScale)
-        .environment(\.openURL, OpenURLAction { url in open(url, chips: chips) })
+        .environment(\.openURL, linkOpener.action)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
         // Read the conversation only while the chat is on screen.
@@ -119,7 +122,7 @@ struct CoordinatorChatView: View {
         .accessibilityIdentifier("coordinator.chat.introduction")
     }
 
-    private var composerArea: some View {
+    private func composerArea(mentionCandidates: [CoordinatorMentionCandidate]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let notice = model.notice {
                 noticeRow(notice)
@@ -131,7 +134,7 @@ struct CoordinatorChatView: View {
                 onCancelReply: { model.cancelReply() },
                 // The dock is narrow: its hint leaves out the shortcut.
                 placeholder: Self.composerPlaceholder(
-                    quickEntryShortcut: host == .panel ? board.newTaskShortcutLabel() : nil
+                    quickEntryShortcut: host == .panel ? board.newTaskShortcut : nil
                 ),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,
@@ -144,7 +147,8 @@ struct CoordinatorChatView: View {
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
                 dropTarget: model.attachmentDropTarget,
-                onTextView: { [host] in model.setComposerTextView($0, host: host) }
+                onTextView: { [host] in model.setComposerTextView($0, host: host) },
+                mentionCandidates: mentionCandidates
             )
         }
         .frame(maxWidth: Self.maximumContentWidth)
@@ -217,11 +221,12 @@ struct CoordinatorChatView: View {
     }
 
     /// The field's hint also names the quick entry shortcut, which sends to
-    /// the coordinator from any app. Without a shortcut it names none.
-    static func composerPlaceholder(quickEntryShortcut: String?) -> String {
+    /// the coordinator from any app. It names none when the shortcut is off
+    /// or another app holds its keys.
+    static func composerPlaceholder(quickEntryShortcut: NewTaskShortcutHint?) -> String {
         let placeholder = "Message Toasty…"
-        guard let quickEntryShortcut else { return placeholder }
-        return "\(placeholder)  \(quickEntryShortcut) from anywhere"
+        guard let quickEntryShortcut, quickEntryShortcut.isGlobal else { return placeholder }
+        return "\(placeholder)  \(quickEntryShortcut.label) from anywhere"
     }
 
     static func text(for notice: CoordinatorChatModel.Notice) -> String {
@@ -247,16 +252,31 @@ struct CoordinatorChatView: View {
 
     /// A click on a link in the coordinator's text. The text is an agent's,
     /// so only three things can happen: a task's space opens, the Tasks
-    /// view shows a task whose space is closed, or a web page opens in the
+    /// view shows a task whose space is closed, or a web page opens in a
     /// browser. Nothing else is opened and nothing is run.
-    private func open(_ url: URL, chips: CoordinatorTaskChips) -> OpenURLAction.Result {
-        switch CoordinatorChatLinks.action(for: url, taskTarget: { taskID in
-            guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
-            if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
-                return .taskSpace(workspaceID: workspaceID)
+    private static func open(
+        _ url: URL,
+        chips: CoordinatorTaskChips,
+        board: TaskBoardStore,
+        store: AppStore,
+        controller: CoordinatorController,
+        windowID: UUID
+    ) -> OpenURLAction.Result {
+        // The link's click is the current event: the text view calls this
+        // while it handles the click.
+        let holdsShift = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+        let showsTasksView = store.state.window(id: windowID)?.showsTasksView == true
+        switch CoordinatorChatLinks.action(
+            for: url,
+            webPagesOpenInSystemBrowser: holdsShift || showsTasksView,
+            taskTarget: { taskID in
+                guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
+                if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
+                    return .taskSpace(workspaceID: workspaceID)
+                }
+                return .tasksView
             }
-            return .tasksView
-        }) {
+        ) {
         case .openTaskSpace(let workspaceID):
             // The chat stays beside the task, in the dock.
             controller.openTaskSpaceFromChat(workspaceID: workspaceID, fallbackWindowID: windowID)
@@ -271,11 +291,78 @@ struct CoordinatorChatView: View {
                 source: .ui("coordinator_task_link")
             )
             return .handled
-        case .openWebPage:
+        case .openWebPageInToastty:
+            // The same router as every other link in the app: a Toastty
+            // browser in the right panel of the workspace on screen (in the
+            // full view, the coordinator's own; beside the dock, that
+            // workspace's), unless the user's settings send web links to
+            // the system browser.
+            let result = AppURLRouter.openResult(url, preferredWindowID: windowID, appStore: store)
+            // Focus mode gives the right panel no width, so it ends, as
+            // for a link in a terminal.
+            if result.openedRightPanelInToastty,
+               let workspaceID = store.state.workspaceSelection(in: windowID)?.workspaceID {
+                store.send(.exitFocusedPanelMode(workspaceID: workspaceID))
+            }
+            return .handled
+        case .openWebPageInSystemBrowser:
             return .systemAction
         case .ignore:
             return .discarded
         }
+    }
+}
+
+/// The transcript of the chat. The chat view draws again for every change of
+/// the session store and the task board, most of which leave the
+/// conversation as it is. This view compares what the transcript shows, so
+/// SwiftUI works through the rows again only when that changed. The
+/// transcript's actions all go to the model, which stays the same object.
+@available(macOS 15.0, *)
+private struct CoordinatorChatTranscriptPane: View, Equatable {
+    let model: CoordinatorChatModel
+    let presentation: ToasttyConversationPresentationState
+    let sessionStatus: ToasttyTranscriptSessionStatus?
+    let workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let jumpToLiveEdgeRequest: UInt64
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model
+            && lhs.presentation == rhs.presentation
+            && lhs.sessionStatus == rhs.sessionStatus
+            && lhs.workingIndicator == rhs.workingIndicator
+            && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
+    }
+
+    var body: some View {
+        ToasttyTranscriptView(
+            state: presentation,
+            isSubmitting: false,
+            loadOlder: { model.loadOlder() },
+            queuedMessageAction: { model.perform($0) },
+            readAcknowledgementEpoch: sessionStatus,
+            workingIndicator: workingIndicator,
+            jumpToLiveEdgeRequest: Binding(
+                get: { model.jumpToLiveEdgeRequest },
+                set: { model.jumpToLiveEdgeRequest = $0 }
+            ),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions,
+            replyToMessage: { model.reply(to: $0) }
+        )
+    }
+}
+
+/// Holds one `OpenURLAction` for a chat view's lifetime. An action made in
+/// the view's body is a new value on every pass, and the environment then
+/// tells every text view in the transcript that its link action changed.
+/// This action stays the same value and calls the handler of the latest
+/// pass.
+@MainActor
+final class CoordinatorChatLinkOpener: ObservableObject {
+    var open: (URL) -> OpenURLAction.Result = { _ in .discarded }
+    private(set) lazy var action = OpenURLAction { [weak self] url in
+        self?.open(url) ?? .discarded
     }
 }
 
@@ -286,8 +373,12 @@ enum CoordinatorChatLinks {
         /// A task whose space is closed, such as a done or archived one:
         /// the Tasks view, with the task selected.
         case showInTasksView(taskID: UUID)
-        /// An `http` or `https` page, in the user's browser.
-        case openWebPage
+        /// An `http` or `https` page, in a Toastty browser.
+        case openWebPageInToastty
+        /// An `http` or `https` page, in the system browser: the click held
+        /// Shift, as for a link in a terminal, or the Tasks view covers the
+        /// window's workspace, so a Toastty browser could not be seen.
+        case openWebPageInSystemBrowser
         case ignore
     }
 
@@ -300,8 +391,12 @@ enum CoordinatorChatLinks {
     }
 
     /// `taskTarget` answers for a task that exists, or `nil` for any other
-    /// task ID.
-    static func action(for url: URL, taskTarget: (UUID) -> TaskTarget?) -> Action {
+    /// task ID. `webPagesOpenInSystemBrowser` changes only web links.
+    static func action(
+        for url: URL,
+        webPagesOpenInSystemBrowser: Bool = false,
+        taskTarget: (UUID) -> TaskTarget?
+    ) -> Action {
         if CoordinatorTaskLink.isToasttyURL(url) {
             guard let taskID = CoordinatorTaskLink.taskID(in: url),
                   let target = taskTarget(taskID) else { return .ignore }
@@ -312,7 +407,7 @@ enum CoordinatorChatLinks {
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               url.host?.isEmpty == false else { return .ignore }
-        return .openWebPage
+        return webPagesOpenInSystemBrowser ? .openWebPageInSystemBrowser : .openWebPageInToastty
     }
 }
 
@@ -394,7 +489,7 @@ struct CoordinatorTaskChips {
         }
     }
 
-    private static func chipColor(_ color: Color) -> ConversationChipColor {
+    static func chipColor(_ color: Color) -> ConversationChipColor {
         let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .gray
         return ConversationChipColor(
             red: Double(resolved.redComponent),

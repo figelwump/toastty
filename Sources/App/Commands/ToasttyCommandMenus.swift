@@ -1256,6 +1256,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        case .scratchpad(_, let panelID):
+            webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .increase)
         case .coordinatorChat:
             coordinatorController?.chat?.changeTextScale(.increase)
         }
@@ -1269,6 +1271,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        case .scratchpad(_, let panelID):
+            webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .decrease)
         case .coordinatorChat:
             coordinatorController?.chat?.changeTextScale(.decrease)
         }
@@ -1282,6 +1286,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.resetWindowMarkdownTextScale(windowID: windowID))
         case .browser(_, let panelID):
             store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        case .scratchpad(_, let panelID):
+            webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .reset)
         case .coordinatorChat:
             coordinatorController?.chat?.changeTextScale(.reset)
         }

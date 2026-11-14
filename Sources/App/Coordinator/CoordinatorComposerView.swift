@@ -15,10 +15,12 @@ struct CoordinatorComposerDelivery: Equatable {
 
 /// The composer for a message to the coordinator: the coordinator's message
 /// that it replies to, a row of attached files,
-/// a ＋ menu that attaches files or photos, a text field that grows with its
-/// text, and one button that sends, or stops the running turn. While a turn
-/// runs, a chip beside the button says whether Send steers the turn or
-/// queues the message.
+/// a ＋ menu that attaches files or photos or mentions a task, a text field
+/// that grows with its text, and one button that sends, or stops the
+/// running turn. While a turn runs, a chip beside the button says whether
+/// Send steers the turn or queues the message. Typing `@` lists the tasks
+/// to mention; a mentioned task is a chip in the field and its link in the
+/// text.
 ///
 /// It knows nothing about the chat around it, so another window can host
 /// it: the host gives the text, the files, the state and the actions.
@@ -56,8 +58,11 @@ struct CoordinatorComposerView: View {
     /// Tells the host which text view is the composer's, so the host can
     /// give it the keyboard.
     var onTextView: (NSTextView?) -> Void = { _ in }
+    /// The tasks that `@` lists, newest activity first.
+    var mentionCandidates: [CoordinatorMentionCandidate] = []
 
     @State private var isPhotosPickerPresented = false
+    @StateObject private var mentionPicker = CoordinatorMentionPicker()
     @State private var photoSelection: [PhotosPickerItem] = []
 
     /// Text or a file to send.
@@ -101,7 +106,9 @@ struct CoordinatorComposerView: View {
                     onPasteAttachments: { attachments.pasteAttachments(from: $0) },
                     canPasteAttachments: { attachments.canPasteAttachments(from: $0) },
                     dropTarget: dropTarget,
-                    onTextView: onTextView
+                    onTextView: onTextView,
+                    mentionPicker: mentionPicker,
+                    mentionCandidates: mentionCandidates
                 )
 
                 HStack(spacing: 6) {
@@ -140,6 +147,22 @@ struct CoordinatorComposerView: View {
                     attachments.isDropTargeted ? ToastyTheme.accent : ToastyTheme.hairline,
                     lineWidth: attachments.isDropTargeted ? 1.5 : 1
                 )
+        }
+        // The tasks to mention, above the composer: hung from a strip of no
+        // height at its top edge, so the list grows up over the chat.
+        .overlay(alignment: .top) {
+            Color.clear
+                .frame(height: 0)
+                .overlay(alignment: .bottomLeading) {
+                    if mentionPicker.isOpen {
+                        CoordinatorMentionPickerView(
+                            picker: mentionPicker,
+                            textScale: fontSize / CoordinatorComposerTextEditor.defaultFontSize
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 6)
+                    }
+                }
         }
         .photosPicker(
             isPresented: $isPhotosPickerPresented,
@@ -249,13 +272,23 @@ struct CoordinatorComposerView: View {
 
     private static let trayEndID = "end"
 
-    /// ＋: attach files with the open panel, or photos from Photos.
+    /// ＋: attach files with the open panel, or photos from Photos, or
+    /// mention a task. With as many files as a message takes, only the
+    /// mention is on.
     private var attachMenu: some View {
         Menu {
             Button("Files…", action: onChooseFiles)
+                .disabled(attachments.canAttachMore == false)
                 .accessibilityIdentifier("coordinator.chat.attach.files")
             Button("Photos…") { isPhotosPickerPresented = true }
+                .disabled(attachments.canAttachMore == false)
                 .accessibilityIdentifier("coordinator.chat.attach.photos")
+            Divider()
+            // After the menu closes, so the field can take the keyboard.
+            Button("Mention a Task…") {
+                DispatchQueue.main.async { mentionPicker.beginMention() }
+            }
+            .accessibilityIdentifier("coordinator.chat.attach.mention")
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .semibold))
@@ -266,9 +299,9 @@ struct CoordinatorComposerView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .disabled(isEditable == false || attachments.canAttachMore == false)
-        .help("Attach files or photos. You can also paste or drop them here.")
-        .accessibilityLabel("Attach")
+        .disabled(isEditable == false)
+        .help("Attach files or photos, or mention a task. You can also paste or drop files here, and type @ to mention a task.")
+        .accessibilityLabel("Attach or mention")
         .accessibilityIdentifier("coordinator.chat.attach")
     }
 
@@ -364,6 +397,8 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     let canPasteAttachments: (NSPasteboard) -> Bool
     let dropTarget: AttachmentDropTarget
     let onTextView: (NSTextView?) -> Void
+    let mentionPicker: CoordinatorMentionPicker
+    var mentionCandidates: [CoordinatorMentionCandidate] = []
 
     static let defaultFontSize: CGFloat = 13
     static let lineSpacing: CGFloat = 3
@@ -392,7 +427,7 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, picker: mentionPicker)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -416,7 +451,6 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityIdentifier("coordinator.chat.composer")
-        textView.string = text
 
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
@@ -428,7 +462,8 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         // Only a later request gives the field the keyboard. A composer
         // that is made while its workspace is hidden must not take it.
         context.coordinator.lastFocusRequestID = focusRequestID
-        configure(textView)
+        configure(textView, picker: mentionPicker)
+        textView.setDraft(text)
         // Takes files and images as well as text.
         textView.updateDragTypeRegistration()
         onTextView(textView)
@@ -460,10 +495,16 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
         context.coordinator.text = $text
-        configure(textView)
-        if textView.string != text {
-            textView.string = text
+        let fontChanged = configure(textView, picker: mentionPicker)
+        // A chip is drawn at the font's size, so a new size draws it again,
+        // with the selection kept.
+        if textView.draft != text || (fontChanged && textView.containsMention) {
+            textView.setDraft(text, keepingSelection: textView.draft == text)
             textView.needsDisplay = true
+            // Not while SwiftUI updates the view: the picker publishes.
+            DispatchQueue.main.async { [weak textView] in
+                textView?.updateMentionPicker()
+            }
         }
         if context.coordinator.lastFocusRequestID != focusRequestID {
             context.coordinator.lastFocusRequestID = focusRequestID
@@ -478,13 +519,17 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         coordinator.textView?.delegate = nil
     }
 
-    private func configure(_ textView: CoordinatorComposerTextView) {
+    /// Returns true when the font's size changed.
+    @discardableResult
+    private func configure(_ textView: CoordinatorComposerTextView, picker: CoordinatorMentionPicker) -> Bool {
         textView.placeholder = placeholder
         if textView.isEditable != isEditable {
             textView.isEditable = isEditable
         }
+        var fontChanged = false
         if textView.font?.pointSize != fontSize {
             textView.font = .systemFont(ofSize: fontSize)
+            fontChanged = true
         }
         let inset = NSSize(width: 0, height: Self.verticalInset(fontSize: fontSize))
         if textView.textContainerInset != inset {
@@ -496,20 +541,33 @@ struct CoordinatorComposerTextEditor: NSViewRepresentable {
         textView.onPasteAttachments = onPasteAttachments
         textView.canPasteAttachments = canPasteAttachments
         textView.dropTarget = dropTarget
+        textView.mentionPicker = picker
+        picker.textView = textView
+        picker.candidates = mentionCandidates
+        return fontChanged
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
+        let picker: CoordinatorMentionPicker
         weak var textView: CoordinatorComposerTextView?
         var lastFocusRequestID: Int?
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, picker: CoordinatorMentionPicker) {
             self.text = text
+            self.picker = picker
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            text.wrappedValue = textView.string
+            guard let textView = notification.object as? CoordinatorComposerTextView else { return }
+            text.wrappedValue = textView.draft
+            textView.updateMentionPicker()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? CoordinatorComposerTextView,
+                  textView.isSettingDraft == false else { return }
+            textView.updateMentionPicker()
         }
     }
 }
@@ -521,6 +579,10 @@ final class CoordinatorComposerTextView: AttachmentTextView {
     var onSubmit: () -> Void = {}
     var onQueue: () -> Void = {}
     var onCancel: () -> Bool = { false }
+    /// The tasks to mention, and the keys they take while their list shows.
+    weak var mentionPicker: CoordinatorMentionPicker?
+    /// True while the draft is set from the host, not typed.
+    private(set) var isSettingDraft = false
 
     private var hasPendingFocusRequest = false
 
@@ -545,11 +607,21 @@ final class CoordinatorComposerTextView: AttachmentTextView {
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // While the list of tasks to mention shows, the arrows choose a
+        // task and Return or Tab puts it in. While an input method
+        // composes, its keys belong to it.
+        if hasMarkedText() == false,
+           modifiers.subtracting([.numericPad, .function, .capsLock]).isEmpty,
+           let key = Self.mentionKey(event),
+           mentionPicker?.handle(key) == true {
+            return
+        }
         // Return sends, and with Command it queues. With Shift or Option it
         // starts a new line. While an input method composes, Return belongs
         // to it.
         if Self.isReturn(event), hasMarkedText() == false {
-            let keys = modifiers.subtracting([.numericPad, .function])
+            // Caps Lock changes nothing here.
+            let keys = modifiers.subtracting([.numericPad, .function, .capsLock])
             if keys.isEmpty {
                 onSubmit()
                 return
@@ -568,6 +640,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
 
     /// Escape. While an input method composes, Escape belongs to it.
     override func cancelOperation(_ sender: Any?) {
+        if hasMarkedText() == false, mentionPicker?.handle(.cancel) == true { return }
         if hasMarkedText() == false, onCancel() { return }
         super.cancelOperation(sender)
     }
@@ -592,5 +665,157 @@ final class CoordinatorComposerTextView: AttachmentTextView {
 
     static func isReturn(_ event: NSEvent) -> Bool {
         event.keyCode == 36 || event.keyCode == 76
+    }
+
+    static func mentionKey(_ event: NSEvent) -> CoordinatorMentionPicker.Key? {
+        switch event.keyCode {
+        case 126: .up
+        case 125: .down
+        case 48: .choose
+        default: isReturn(event) ? .choose : nil
+        }
+    }
+
+    // MARK: - Mentions
+
+    /// The text as the draft holds it: each chip as its task's link.
+    var draft: String {
+        guard let textStorage else { return string }
+        return CoordinatorMentionText.serialized(textStorage)
+    }
+
+    var containsMention: Bool {
+        guard let textStorage, textStorage.length > 0 else { return false }
+        var found = false
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, _, stop in
+            if value is CoordinatorMentionAttachment {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    /// Shows the draft: a link to a task the picker lists is a chip.
+    /// `keepingSelection` is for the same text drawn again, at a new size.
+    func setDraft(_ text: String, keepingSelection: Bool = false) {
+        isSettingDraft = true
+        defer { isSettingDraft = false }
+        let selection = selectedRanges
+        let attributes = textAttributes
+        if let attributed = CoordinatorMentionText.attributed(text, candidates: mentionCandidatesByID, attributes: attributes) {
+            textStorage?.setAttributedString(attributed)
+            setSelectedRange(NSRange(location: attributed.length, length: 0))
+        } else {
+            string = text
+        }
+        if keepingSelection {
+            let length = (string as NSString).length
+            let kept = selection.map(\.rangeValue).filter { NSMaxRange($0) <= length }
+            if kept.isEmpty == false { selectedRanges = kept.map { NSValue(range: $0) } }
+        }
+        typingAttributes = attributes
+    }
+
+    func updateMentionPicker() {
+        mentionPicker?.update(text: string as NSString, selection: selectedRange())
+    }
+
+    /// Puts the task's chip in place of `range`, then a space unless one
+    /// follows, with the caret after them. Undo takes it out as one step.
+    func insertMention(_ candidate: CoordinatorMentionCandidate, replacing range: NSRange) {
+        guard isEditable, let textStorage, NSMaxRange(range) <= textStorage.length else { return }
+        let attributes = textAttributes
+        let replacement = NSMutableAttributedString(
+            attributedString: CoordinatorMentionText.chip(candidate, font: textFont, attributes: attributes)
+        )
+        let after = NSMaxRange(range)
+        let followedBySpace = after < textStorage.length && (textStorage.string as NSString).character(at: after) == 0x20
+        if followedBySpace == false {
+            replacement.append(NSAttributedString(string: " ", attributes: attributes))
+        }
+        // Undo then takes out the chip alone, and the search comes back.
+        breakUndoCoalescing()
+        guard replace(range, with: replacement) else { return }
+        breakUndoCoalescing()
+        setSelectedRange(NSRange(location: range.location + replacement.length + (followedBySpace ? 1 : 0), length: 0))
+        typingAttributes = attributes
+    }
+
+    /// ＋ › Mention a Task…: types `@` at the caret, with a space before
+    /// it when the caret follows a word, and the picker opens.
+    func beginMention() {
+        guard isEditable, let window else { return }
+        window.makeFirstResponder(self)
+        let range = selectedRange()
+        let text = string as NSString
+        let needsSpace = range.location > 0
+            && range.location <= text.length
+            && CoordinatorMentionTrigger.startsAMention(after: text.character(at: range.location - 1)) == false
+        insertText(needsSpace ? " @" : "@", replacementRange: range)
+    }
+
+    /// A paste with a link to a task the picker lists puts in its chip.
+    /// Files and images still attach, and other text pastes as plain text.
+    override func paste(_ sender: Any?) {
+        if isEditable,
+           canPasteAttachments(pasteboard) == false,
+           let text = pasteboard.string(forType: .string),
+           let attributed = CoordinatorMentionText.attributed(
+               text, candidates: mentionCandidatesByID, attributes: textAttributes
+           ) {
+            let range = selectedRange()
+            if replace(range, with: attributed) {
+                setSelectedRange(NSRange(location: range.location + attributed.length, length: 0))
+                typingAttributes = textAttributes
+            }
+            return
+        }
+        super.paste(sender)
+    }
+
+    /// Copy, Cut and a drag of text with a chip give the task's link.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let textStorage else { return super.writeSelection(to: pboard, types: types) }
+        let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= textStorage.length }
+        let parts = ranges.map { textStorage.attributedSubstring(from: $0) }
+        let hasMention = parts.contains { part in
+            var found = false
+            part.enumerateAttribute(.attachment, in: NSRange(location: 0, length: part.length)) { value, _, stop in
+                if value is CoordinatorMentionAttachment {
+                    found = true
+                    stop.pointee = true
+                }
+            }
+            return found
+        }
+        guard hasMention else { return super.writeSelection(to: pboard, types: types) }
+        pboard.clearContents()
+        return pboard.setString(parts.map(CoordinatorMentionText.serialized).joined(separator: "\n"), forType: .string)
+    }
+
+    private var mentionCandidatesByID: [UUID: CoordinatorMentionCandidate] {
+        Dictionary((mentionPicker?.candidates ?? []).map { ($0.taskID, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private var textFont: NSFont {
+        font ?? .systemFont(ofSize: CoordinatorComposerTextEditor.defaultFontSize)
+    }
+
+    /// The attributes of typed text, without a chip's.
+    private var textAttributes: [NSAttributedString.Key: Any] {
+        var attributes = typingAttributes
+        attributes[.attachment] = nil
+        attributes[.font] = textFont
+        if let textColor { attributes[.foregroundColor] = textColor }
+        return attributes
+    }
+
+    /// One undoable change, as typing makes.
+    private func replace(_ range: NSRange, with text: NSAttributedString) -> Bool {
+        guard let textStorage, shouldChangeText(in: range, replacementString: text.string) else { return false }
+        textStorage.replaceCharacters(in: range, with: text)
+        didChangeText()
+        return true
     }
 }

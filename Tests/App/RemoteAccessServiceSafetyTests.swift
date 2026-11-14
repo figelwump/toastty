@@ -4650,6 +4650,67 @@ extension RemoteAccessServiceSafetyTests {
         }
     }
 
+    /// The phone steers by default while the agent works, so a message with
+    /// attachments steers too: the Mac stages the files and types the text
+    /// with their paths into the running turn.
+    @MainActor
+    @Test func attachmentSteerTypesTextAndStagedPathsIntoTheRunningTurn() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .codex, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, panelID, _ in
+            #expect(panelID == fixture.panelID)
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.seekToEnd()
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"Fix the flicker","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
+            at: "2026-08-07T10:00:05.100Z"
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.canSteer == true }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+
+        let attachment = RemoteMessageAttachment(filename: "trace.txt", data: Data("frame timings".utf8))
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "steer-attachment",
+            expectedInputEpoch: turnEpoch, text: "Match this trace", attachments: [attachment], deliveryMode: .steer
+        )
+        let http = RemoteGatewayHTTPRequest(method: "POST", path: RemoteAttachmentPolicy.sendPath,
+            headers: ["authorization": "Bearer \(try #require(fixture.nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(request))
+        guard case .deferredAttachments(let deviceID, let body) = fixture.gatewayHandler.handle(http, at: Date()) else {
+            Issue.record("Expected the attachment send route")
+            return
+        }
+        let response = await fixture.gatewayHandler.resolveAttachments(deviceID: deviceID, body: body)
+        #expect(try JSONDecoder().decode(RemoteMessageSendResult.self, from: response.body) == .accepted(epoch: turnEpoch))
+
+        let directory = try #require(
+            try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).first
+        )
+        let file = try #require(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        #expect(try Data(contentsOf: file) == attachment.data)
+        let deliveredFile = fixture.attachmentRoot
+            .appendingPathComponent(directory.lastPathComponent)
+            .appendingPathComponent(file.lastPathComponent)
+        #expect(delivered == [
+            "Match this trace\n\nRead the following files attached to this message on this Mac:\n`" + deliveredFile.path + "`",
+        ])
+        // A steer joins the running turn; it does not open or consume a prompt.
+        #expect(fixture.summary.inputControl?.turnEpoch == turnEpoch)
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+    }
+
     @MainActor
     @Test func claudeSteerStartingTheNextTurnKeepsToasttyQueueHeld() async throws {
         let fixture = try RemoteBootstrapFixture(

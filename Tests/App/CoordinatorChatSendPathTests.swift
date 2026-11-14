@@ -21,11 +21,11 @@ struct CoordinatorChatSendPathTests {
 
     @MainActor
     @Test func restartReadsTheNewestPageBeforeShowingHistory() async throws {
-        let fixture = try CoordinatorChatFixture()
+        // Saved history exists before the controller starts its reader.
+        let fixture = try CoordinatorChatFixture(
+            initialUserMessages: (0 ..< 1_000).map { "History message \($0)" }
+        )
         defer { fixture.tearDown() }
-        for index in 0 ..< 1_000 {
-            try fixture.recordUserMessage("History message \(index)")
-        }
         var firstShownMessages: [ToasttyTranscriptRow]?
         let observer = fixture.chat.$presentation.sink { presentation in
             guard firstShownMessages == nil,
@@ -81,10 +81,10 @@ struct CoordinatorChatSendPathTests {
 
         // A provider can report its path before it creates the file. When
         // it becomes readable, its first read must still have a boundary.
-        try Data().write(to: URL(filePath: path))
-        for index in 0 ..< 1_000 {
-            try fixture.recordUserMessage("Delayed history \(index)")
-        }
+        let history = try CoordinatorChatFixture.userMessagesTranscript(
+            (0 ..< 1_000).map { "Delayed history \($0)" }
+        )
+        try history.write(to: URL(filePath: path), options: .atomic)
         try await fixture.waitUntil("the newest delayed message") {
             fixture.chat.presentation.rows.last?.content
                 == .userMessage(text: "Delayed history 999", origin: .unknown, deliveryMode: nil)
@@ -343,7 +343,11 @@ struct CoordinatorChatSendPathTests {
         try await Task.sleep(for: .milliseconds(300))
         let changesBefore = changes
         #expect(fixture.chat.notice == .agentStarting)
-        try await fixture.waitUntil("the notice that names the terminal") { changes > changesBefore }
+        // Transcript and queue updates can also publish before the grace
+        // period ends. Wait for the notice itself, as well as a publish.
+        try await fixture.waitUntil("the notice that names the terminal") {
+            fixture.chat.notice == .startWaitsInTerminal && changes > changesBefore
+        }
         #expect(fixture.chat.notice == .startWaitsInTerminal)
         if #available(macOS 15.0, *) {
             #expect(CoordinatorChatView.text(for: .startWaitsInTerminal).contains("answer in the terminal"))
@@ -1332,10 +1336,16 @@ final class CoordinatorChatFixture {
     /// Without `agentReportsStart`, Toastty launched the agent and the
     /// agent has reported nothing yet, as while it asks a question that
     /// comes before its first report. `reportAgentStart` reports then.
-    init(pairsNativeDevice: Bool = false, savesQueue: Bool = false, agentReportsStart: Bool = true) throws {
+    init(
+        pairsNativeDevice: Bool = false,
+        savesQueue: Bool = false,
+        agentReportsStart: Bool = true,
+        initialUserMessages: [String] = []
+    ) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
-            inCoordinatorWorkspace: true
+            inCoordinatorWorkspace: true,
+            initialTranscript: try Self.userMessagesTranscript(initialUserMessages)
         )
         self.conversations = conversations
         delivered = conversations.captureDeliveredText()
@@ -1347,6 +1357,7 @@ final class CoordinatorChatFixture {
             : nil
         (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
+        second = initialUserMessages.count + 5
         if agentReportsStart { reportAgentStart() }
         #expect(conversations.store.state.coordinator?.panelID == conversations.panelID)
     }
@@ -1423,6 +1434,19 @@ final class CoordinatorChatFixture {
     private static func line(_ payload: String, second: Int, type: String) -> Data {
         let timestamp = String(format: "2026-08-07T10:%02d:%02d.000Z", second / 60, second % 60)
         return Data((#"{"timestamp":"\#(timestamp)","type":"\#(type)","payload":\#(payload)}"# + "\n").utf8)
+    }
+
+    /// Builds saved history before a file reader can observe it.
+    static func userMessagesTranscript(_ messages: [String]) throws -> Data {
+        var data = Data()
+        for (index, message) in messages.enumerated() {
+            let escaped = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
+            data.append(Self.line(
+                #"{"type":"user_message","message":\#(escaped),"images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+                second: index + 6, type: "event_msg"
+            ))
+        }
+        return data
     }
 
     private var second = 5

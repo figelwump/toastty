@@ -663,7 +663,13 @@ struct ToasttyApp: App {
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
-    @StateObject private var remoteAccessService: RemoteAccessService
+    /// Held, not observed. `body` only hands this service to the Settings
+    /// view, which observes it. No view of the main window reads what it
+    /// publishes, and while the gateway is on it publishes its list of
+    /// sessions 150 ms after each agent status line. As a `@StateObject`,
+    /// each of those publishes made SwiftUI work out the app's scenes and
+    /// menus again and, with them, update the whole window a second time.
+    private let remoteAccessService: RemoteAccessService
     @StateObject private var annotationStyleStore: AnnotationStyleStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
@@ -782,6 +788,8 @@ struct ToasttyApp: App {
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
+            initialLocalDocumentMarkdownViewMode: initialToasttySettings.localDocumentMarkdownViewMode,
+            initialLocalDocumentAppearance: initialToasttySettings.localDocumentAppearance,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -903,7 +911,8 @@ struct ToasttyApp: App {
                 socketPath: socketPath,
                 cliExecutablePath: cliExecutablePath
             ),
-            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+            taskSpaceCleanupHold: WorkspaceMergeCoordinator.taskSpaceCleanupHold
         )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
@@ -1151,9 +1160,7 @@ struct ToasttyApp: App {
         taskBoard.newTask = { [weak quickEntryController] in
             quickEntryController?.present(prefill: .empty)
         }
-        taskBoard.newTaskShortcutLabel = { [weak quickEntryController] in
-            quickEntryController?.shortcut?.symbolLabel
-        }
+        taskBoard.showShortcut(of: quickEntryController)
         terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
             quickEntryController?.presentFromSelection(text, panelID: panelID)
         }
@@ -1462,7 +1469,7 @@ struct ToasttyApp: App {
             taskCoordinator: taskCoordinator,
             quickEntryController: quickEntryController
         )
-        _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
+        self.remoteAccessService = remoteAccessService
         // `task send --steer` types through the same path.
         taskSessions.conversationAccess = remoteAccessService
         // The coordinator types through its agent's conversation, the path

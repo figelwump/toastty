@@ -1,6 +1,7 @@
 import RemoteProtocol
 import AppKit
 import CodexReconciliation
+import Combine
 import CoreState
 import CryptoKit
 import Darwin
@@ -68,11 +69,34 @@ final class SessionRuntimeStore: ObservableObject {
     ) async -> Void
     typealias ApplicationActiveHandler = @MainActor () -> Bool
 
-    @Published private(set) var sessionRegistry = SessionRegistry()
+    @Published private(set) var sessionRegistry = SessionRegistry() {
+        // After the change, so a reader that the publisher calls before the
+        // change still gets answers for the registry it can read.
+        didSet {
+            statusReader = nil
+            workspaceStatusCache = nil
+        }
+    }
+    /// Reads statuses from the current registry; made at the first read.
+    private var statusReader: SessionRegistry.WorkspaceStatusReader?
+    /// `workspaceStatuses(for:at:)` answers for the current registry; see
+    /// `WorkspaceStatusCache`.
+    private var workspaceStatusCache: WorkspaceStatusCache?
+    private var workspaceStatusGenerationCount = 0
     @Published var programStatusRevision: UInt64 = 0
     var programStatusRuntime = TerminalProgramStatusRuntime()
     var programStatusPublicationTask: Task<Void, Never>?
-    @Published private(set) var providerConversationRevision: UInt64 = 0
+    /// Counts changes to the provider conversation feeds. Not `@Published`:
+    /// no view reads the feeds from this store, and a published count would
+    /// draw every view that observes the store again for each transcript
+    /// line. `providerConversationRevisions` sends each new count.
+    private(set) var providerConversationRevision: UInt64 = 0 {
+        didSet {
+            guard providerConversationRevision != oldValue else { return }
+            providerConversationRevisions.send(providerConversationRevision)
+        }
+    }
+    let providerConversationRevisions = PassthroughSubject<UInt64, Never>()
     /// What each subspace's Merge button is doing, by workspace, published
     /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
@@ -3281,12 +3305,49 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
     }
 
+    /// One update of the window asks for the same workspace's statuses
+    /// several times: the sidebar, the task board and the menus each do. The
+    /// answers are kept until the registry changes or the time reaches the
+    /// next moment that changes an answer.
     func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
-        sessionRegistry.workspaceStatuses(for: workspaceID, at: now)
+        startWorkspaceStatusCacheIfNeeded(at: now)
+        if let statuses = workspaceStatusCache?.statusesByWorkspaceID[workspaceID] {
+            return statuses
+        }
+        let statuses = currentStatusReader().statuses(for: workspaceID, at: now)
+        workspaceStatusCache?.statusesByWorkspaceID[workspaceID] = statuses
+        return statuses
+    }
+
+    /// A number that changes whenever `sessionRegistry` changed, or
+    /// `workspaceStatuses(for:at:)` can give another answer than at the
+    /// last read of this number because a resume grace period ended. Equal
+    /// numbers mean an equal registry and equal statuses for every
+    /// workspace. A reader that keeps what it derived from them reads the
+    /// number at each use.
+    func workspaceStatusGeneration(at now: Date = Date()) -> Int {
+        startWorkspaceStatusCacheIfNeeded(at: now)
+        return workspaceStatusGenerationCount
+    }
+
+    private func startWorkspaceStatusCacheIfNeeded(at now: Date) {
+        guard workspaceStatusCache?.holds(at: now) != true else { return }
+        workspaceStatusGenerationCount &+= 1
+        workspaceStatusCache = WorkspaceStatusCache(
+            readAt: now,
+            changesAt: sessionRegistry.nextWorkspaceStatusChange(after: now)
+        )
+    }
+
+    private func currentStatusReader() -> SessionRegistry.WorkspaceStatusReader {
+        if let statusReader { return statusReader }
+        let reader = SessionRegistry.WorkspaceStatusReader(sessionRegistry)
+        statusReader = reader
+        return reader
     }
 
     func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
-        sessionRegistry.panelStatus(for: panelID, at: now)
+        currentStatusReader().panelStatus(for: panelID, at: now)
     }
 
     func isLaterFlagged(sessionID: String) -> Bool {
@@ -3397,7 +3458,7 @@ final class SessionRuntimeStore: ObservableObject {
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
                 guard let record = sessionRegistry.sessionsByID[sessionID],
                       record.isActive,
-                      let status = sessionRegistry.panelStatus(for: panelID)?.status,
+                      let status = panelStatus(for: panelID)?.status,
                       kinds.contains(status.kind) else {
                     return nil
                 }
@@ -4184,12 +4245,16 @@ final class SessionRuntimeStore: ObservableObject {
                 nextRegistry.sessionsByID.values.map(\.workspaceID)
         )
 
+        // One reader for each registry: this runs for every publish, and a
+        // status report changes one workspace of many.
+        let previousReader = SessionRegistry.WorkspaceStatusReader(previousRegistry)
+        let nextReader = SessionRegistry.WorkspaceStatusReader(nextRegistry)
         for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             let previousRows = workspaceStatusDiagnosticRows(
-                previousRegistry.workspaceStatuses(for: workspaceID, at: now)
+                previousReader.statuses(for: workspaceID, at: now)
             )
             let nextRows = workspaceStatusDiagnosticRows(
-                nextRegistry.workspaceStatuses(for: workspaceID, at: now)
+                nextReader.statuses(for: workspaceID, at: now)
             )
             guard previousRows != nextRows else { continue }
 
@@ -4886,8 +4951,7 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
         pendingCodexHookApprovalBySessionID[sessionID] = PendingCodexHookApproval(
             event: event,
-            token: token,
-            statusBeforeDeferral: record.status
+            token: token
         )
         logCodexHookEventDecision(
             sessionID: sessionID,
@@ -4961,19 +5025,18 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
         case .deferForContext(let reason):
-            var surfaced = pending
-            surfaced.didSurfaceAfterContextTimeout = true
-            pendingCodexHookApprovalBySessionID[sessionID] = surfaced
+            // PermissionRequest runs before Codex routes the request to its
+            // reviewer. Elapsed time does not prove that a person must answer.
+            // Retain the request so later context can accept or suppress it.
             pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: pending.event,
-                decision: "accepted",
+                decision: "deferred",
                 reason: "context_timeout_\(codexApprovalReason(reason, source: .hook))"
             )
-            updateStatus(sessionID: sessionID, status: status, at: Date())
         }
     }
 
@@ -5009,10 +5072,6 @@ final class SessionRuntimeStore: ObservableObject {
                 decision: "suppressed",
                 reason: codexApprovalReason(reason, source: .hook)
             )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
-            )
 
         case .ignore(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
@@ -5023,10 +5082,6 @@ final class SessionRuntimeStore: ObservableObject {
                 event: pending.event,
                 decision: "ignored",
                 reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
-            )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
             )
 
         case .accept(let reason):
@@ -5041,17 +5096,6 @@ final class SessionRuntimeStore: ObservableObject {
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
         }
-    }
-
-    private func restoreStatusBeforeDeferredApprovalIfNeeded(
-        sessionID: String,
-        pending: PendingCodexHookApproval
-    ) {
-        guard pending.didSurfaceAfterContextTimeout,
-              let status = pending.statusBeforeDeferral else {
-            return
-        }
-        updateSynthesizedStatus(sessionID: sessionID, status: status, at: Date())
     }
 
     private func removePendingCodexHookApprovalIfSuperseded(
@@ -5859,6 +5903,22 @@ final class SessionRuntimeStore: ObservableObject {
     }
 }
 
+/// Workspace statuses read from one registry value. A status depends on the
+/// registry and, during a resume grace period, on the time: the answers
+/// hold from the time they were first read until the registry's next
+/// time-driven change.
+private struct WorkspaceStatusCache {
+    let readAt: Date
+    /// `nil` when no answer changes with the time alone.
+    let changesAt: Date?
+    var statusesByWorkspaceID: [UUID: [WorkspaceSessionStatus]] = [:]
+
+    func holds(at time: Date) -> Bool {
+        guard time >= readAt else { return false }
+        return changesAt.map { time < $0 } ?? true
+    }
+}
+
 private struct CodexSessionReconciliationRuntime {
     var rootTurn: CodexRootTurnReconciler
     var approval: CodexApprovalReconciler
@@ -5936,8 +5996,6 @@ private extension CodexRootTurnContextField {
 private struct PendingCodexHookApproval {
     let event: CodexHookEvent
     let token: UUID
-    let statusBeforeDeferral: SessionStatus?
-    var didSurfaceAfterContextTimeout = false
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {

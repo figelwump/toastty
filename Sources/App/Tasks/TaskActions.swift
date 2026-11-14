@@ -67,6 +67,8 @@ enum TaskActions {
             try coordinator.retryCleanup(taskID: taskID)
         case .keepAsIs:
             try coordinator.dismissCleanup(taskID: taskID)
+        case .closeTaskSpace:
+            try coordinator.cleanUpHeldTaskSpaceNow(taskID: taskID)
         }
     }
 

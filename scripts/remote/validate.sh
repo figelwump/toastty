@@ -14,6 +14,7 @@ SMOKE_TEST=""
 VALIDATION_COMMAND=""
 KEEP_REMOTE=0
 FULL_ARTIFACTS=0
+SYNC_GHOSTTY_ARTIFACTS=0
 REQUIRE_REMOTE=0
 SETUP_ERROR_EXIT_CODE=78
 
@@ -48,6 +49,8 @@ Options:
   --require-remote                      Fail instead of falling back to local smoke when remote preflight fails
   --full-artifacts                      Copy build products and caches as well as evidence
   --keep-remote                         Keep the remote worktree and run directory after completion
+  --sync-ghostty-artifacts              Copy this checkout's Dependencies/GhosttyKit.* into the remote worktree,
+                                        instead of linking the remote primary checkout's artifacts
   --remote-exec                         Internal mode used on the remote host
   -h, --help                            Show this help
 
@@ -419,7 +422,11 @@ sync_local_ghostty_artifacts_to_remote() {
   local remote_worktree_dir="$1"
   local dependencies_dir="$ROOT_DIR/Dependencies"
   local candidate=""
-  local synced_any=0
+
+  # The remote build links the Debug variant. Without it here, the remote
+  # bootstrap links the remote checkout's shared artifacts instead.
+  [[ -e "$dependencies_dir/GhosttyKit.Debug.xcframework" ]] \
+    || fail "No local Dependencies/GhosttyKit.Debug.xcframework to sync to the remote worktree"
 
   for candidate in \
     GhosttyKit.Debug.xcframework \
@@ -431,12 +438,11 @@ sync_local_ghostty_artifacts_to_remote() {
         -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
         "$dependencies_dir/$candidate" \
         "$REMOTE_HOST:$remote_worktree_dir/Dependencies/" || return 1
-      synced_any=1
     fi
   done
 
-  if [[ "$synced_any" != "1" ]]; then
-    fail "Smoke test $SMOKE_TEST requires local Ghostty artifacts under Dependencies/"
+  if [[ -f "$dependencies_dir/GhosttyKit.Debug.metadata.env" ]]; then
+    log "Synced local Ghostty artifacts: $(grep '^GHOSTTY_COMMIT=' "$dependencies_dir/GhosttyKit.Debug.metadata.env" || true)"
   fi
 }
 
@@ -756,7 +762,7 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     rm -rf "$export_root"
   fi
 
-  if [[ -n "$SMOKE_TEST" ]] && smoke_test_requires_ghostty "$SMOKE_TEST"; then
+  if [[ "$SYNC_GHOSTTY_ARTIFACTS" == "1" ]] || { [[ -n "$SMOKE_TEST" ]] && smoke_test_requires_ghostty "$SMOKE_TEST"; }; then
     log "Syncing local Ghostty artifacts to remote worktree"
     sync_local_ghostty_artifacts_to_remote "$remote_worktree_dir"
   fi
@@ -1098,6 +1104,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --keep-remote)
       KEEP_REMOTE=1
+      shift
+      ;;
+    --sync-ghostty-artifacts)
+      SYNC_GHOSTTY_ARTIFACTS=1
       shift
       ;;
     --validation-command)

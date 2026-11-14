@@ -1002,10 +1002,17 @@ final class TaskCoordinator {
     /// one rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
         // An archive or a release cleanup that a quit interrupted shows as
-        // stopped, so Clean Up continues it from what is still there.
+        // stopped, so Clean Up continues it from what is still there. So
+        // does a merge's cleanup whose task space is gone while its worktree
+        // is still there: no merge request is left to finish it.
         for record in records.records {
-            guard let cleanup = record.cleanup, cleanup.kind != .merge,
+            guard let cleanup = record.cleanup,
                   cleanup.finishedAt == nil, cleanup.problem == nil else { continue }
+            if cleanup.kind == .merge {
+                let taskSpaceClosed = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] == nil } ?? true
+                guard taskSpaceClosed, let worktree = record.worktree, worktree.isDetached == false,
+                      isDirectory(worktree.path) else { continue }
+            }
             records.update(id: record.id) {
                 $0.cleanup?.problem = "Toastty quit before the cleanup finished. Clean Up continues it."
             }

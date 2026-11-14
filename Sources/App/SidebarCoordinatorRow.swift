@@ -101,10 +101,11 @@ enum SidebarCoordinatorPresentation {
         }
     }
 
-    static func accessibilityLabel(_ mark: Mark, isSelected: Bool) -> String {
+    static func accessibilityLabel(_ mark: Mark, isSelected: Bool, dockShows: Bool = false) -> String {
         var parts = [AppState.coordinatorWorkspaceTitle]
         if let status = statusText(mark) { parts.append(status) }
         if isSelected { parts.append("selected") }
+        if dockShows { parts.append("dock open") }
         return parts.joined(separator: ", ")
     }
 }
@@ -114,8 +115,10 @@ enum SidebarCoordinatorPresentation {
 /// number and does not reorder. It shows the agent's status and unread
 /// marks, and says when the agent does not run.
 ///
-/// Where the chat can show, a click opens the dock beside the selected
-/// workspace. The full view opens from the hover button and the menu.
+/// Where the chat can show, a click shows or hides the dock beside the
+/// selected workspace, as the toolbar's Toasty button does. While the dock
+/// shows, the row is filled and Toasty is golden. The full view opens from
+/// the hover button and the menu.
 struct SidebarCoordinatorRow: View {
     let workspace: WorkspaceState
     /// The full view is open: the coordinator's workspace is selected.
@@ -153,11 +156,17 @@ struct SidebarCoordinatorRow: View {
 
     var body: some View {
         let mark = mark
-        let label = SidebarCoordinatorPresentation.accessibilityLabel(mark, isSelected: isSelected)
+        let label = SidebarCoordinatorPresentation.accessibilityLabel(
+            mark,
+            isSelected: isSelected,
+            dockShows: dockShows
+        )
         Button(action: select) {
             HStack(spacing: 8) {
+                // Golden while the coordinator is on screen, in the dock or
+                // the full view, as Toasty on the toolbar is.
                 ToastyIcon(
-                    style: .outline,
+                    style: dockShows || isSelected ? .golden : .outline,
                     size: 14,
                     status: SidebarCoordinatorPresentation.iconStatus(mark),
                     badgeRingColor: rowBackground ?? ToastyTheme.chromeBackground
@@ -181,6 +190,7 @@ struct SidebarCoordinatorRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(clickHelp)
         .overlay(alignment: .trailing) {
             if showsOpenFullViewButton {
                 Button(action: openFullView) {
@@ -226,10 +236,23 @@ struct SidebarCoordinatorRow: View {
         .background(ToastyTheme.chromeBackground)
     }
 
-    /// The selected or hovered row's fill. Without one, the row shows the
-    /// sidebar's chrome.
+    /// What a click does, where it shows or hides the dock.
+    private var clickHelp: String {
+        guard offersDock, isSelected == false else { return "" }
+        return ToasttyKeyboardShortcuts.toggleCoordinatorDock.helpText(
+            CoordinatorDockPresentation.toggleTitle(dockShows: dockShows)
+        )
+    }
+
+    /// The selected, dock-open or hovered row's fill. Without one, the row
+    /// shows the sidebar's chrome.
     private var rowBackground: Color? {
         if isSelected { return ToastyTheme.sidebarSessionActiveBackground }
+        if dockShows {
+            return isHovered
+                ? ToastyTheme.sidebarCoordinatorDockOpenHoverBackground
+                : ToastyTheme.sidebarCoordinatorDockOpenBackground
+        }
         if isHovered { return ToastyTheme.sidebarSessionHoverBackground }
         return nil
     }

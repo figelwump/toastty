@@ -774,7 +774,8 @@ final class LocalConversationFixture {
         pairsNativeDevice: Bool = false,
         startsSession: Bool = true,
         savedConversationID: RemoteConversationID? = nil,
-        inCoordinatorWorkspace: Bool = false
+        inCoordinatorWorkspace: Bool = false,
+        initialTranscript: Data = Data()
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         if inCoordinatorWorkspace {
@@ -791,7 +792,7 @@ final class LocalConversationFixture {
         confirmedAt = Date(timeIntervalSince1970: 1_786_000_000)
         runtimeHome = "/tmp/toastty-local-conversation-\(UUID().uuidString)"
         let transcriptURL = URL(filePath: runtimeHome + "-transcript.jsonl")
-        try Data().write(to: transcriptURL)
+        try initialTranscript.write(to: transcriptURL)
         resumeRecord = ManagedAgentResumeRecord(
             agent: .codex,
             nativeSessionID: "native-\(UUID().uuidString)",

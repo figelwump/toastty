@@ -5,7 +5,12 @@ import Foundation
 /// most urgent first. Sessions, task spaces and tasks without an open task
 /// space share them. To ship and Done stay in the card's footer.
 enum SidebarBucket: Int, CaseIterable, Comparable, Sendable {
+    /// An agent or a task is stopped until the user acts: a question, an
+    /// approval, an error, an unread finished turn, or a failed setup.
     case needsYou
+    /// Finished work waits for the user's review: an open pull request, or
+    /// work the agent marked ready. Nothing is stopped on it.
+    case readyToReview
     case running
     case idle
 
@@ -16,17 +21,28 @@ enum SidebarBucket: Int, CaseIterable, Comparable, Sendable {
     var title: String {
         switch self {
         case .needsYou: "Needs you"
+        case .readyToReview: "Ready to review"
         case .running: "Running"
         case .idle: "Idle"
         }
     }
 
-    /// A task stage's group; `nil` for To ship and Done, which the card's
+    /// The buckets the Needs you segment lists, in their order.
+    static let needsYouSegmentBuckets: [Self] = [.needsYou, .readyToReview]
+
+    /// Whether the Needs you segment lists the bucket's rows.
+    var isListedInNeedsYouSegment: Bool {
+        Self.needsYouSegmentBuckets.contains(self)
+    }
+
+    /// A task stage's bucket: its group, with a review split off from the
+    /// rest of Needs you. `nil` for To ship and Done, which the card's
     /// footer counts, and for Archived.
-    init?(_ group: TaskStage.Group) {
-        switch group {
+    init?(_ stage: TaskStage) {
+        switch stage {
+        case .needsYou(.review), .needsYou(.readyForReview): self = .readyToReview
         case .needsYou: self = .needsYou
-        case .running: self = .running
+        case .starting, .running: self = .running
         case .idle: self = .idle
         case .toShip, .done, .archived: return nil
         }
@@ -47,14 +63,17 @@ enum SidebarBucket: Int, CaseIterable, Comparable, Sendable {
 
     /// A task space or other subspace row: the more urgent of what its
     /// sessions show and its task's stage. The stage covers a task that
-    /// needs the user while no agent asks, such as a failed setup.
+    /// needs the user while no agent asks, such as a failed setup. A row
+    /// shows its review over a finished turn that is not read yet, so a
+    /// task that just opened its pull request lists in Ready to review.
     static func subspace(_ row: SidebarSubspacePresentation.Row) -> Self {
         let fromStatus: Self = switch row.status {
-        case .ready, .question, .needsApproval, .error, .review: .needsYou
+        case .ready, .question, .needsApproval, .error: .needsYou
+        case .review: .readyToReview
         case .working: .running
         case .idle, .toShip, .done: .idle
         }
-        guard let fromStage = row.stage.flatMap({ Self($0.group) }) else { return fromStatus }
+        guard let fromStage = row.stage.flatMap(Self.init) else { return fromStatus }
         return min(fromStatus, fromStage)
     }
 }
@@ -91,8 +110,8 @@ struct SidebarBucketEntry<Payload>: Identifiable {
     /// here to keep its family together, or because it is selected and
     /// holds its place.
     var isContext = false
-    /// Its parent task has a row, but this list shows the row without it.
-    /// The Needs you segment then names the parent on the row.
+    /// Its parent task has a row, but the Needs you segment shows the row
+    /// without it, so the row names the parent.
     var listsApartFromParent = false
 
     var id: SidebarRowKey { key }
@@ -109,7 +128,8 @@ struct SidebarBucketPin: Equatable {
 /// Pure rules for the bucketed sidebar, kept apart from the view so they
 /// can be tested without hosting it.
 enum SidebarBuckets {
-    /// A card's buckets in the All segment.
+    /// A card's rows by bucket: every bucket in the All segment, Needs you
+    /// and Ready to review in the Needs you segment.
     struct Layout<Payload> {
         var entries: [SidebarBucket: [SidebarBucketEntry<Payload>]] = [:]
         /// Where each row is drawn, for the next pin.
@@ -120,13 +140,6 @@ enum SidebarBuckets {
         func entries(_ bucket: SidebarBucket) -> [SidebarBucketEntry<Payload>] {
             entries[bucket] ?? []
         }
-    }
-
-    /// A card's rows in the Needs you segment.
-    struct NeedsYouList<Payload> {
-        var entries: [SidebarBucketEntry<Payload>] = []
-        var displayed: [SidebarRowKey: SidebarBucket] = [:]
-        var pin: SidebarBucketPin?
     }
 
     /// How many rows each bucket holds by the rows' own state. A dimmed
@@ -145,6 +158,32 @@ enum SidebarBuckets {
         _ candidates: [SidebarBucketCandidate<Payload>],
         pin: SidebarBucketPin?
     ) -> Layout<Payload> {
+        place(candidates, pin: pin, marksRowsApartFromParent: false)
+    }
+
+    /// The Needs you segment: only the rows whose own state needs the user,
+    /// in Needs you and Ready to review, and the selected row while it
+    /// holds. A family lists in the more urgent of the two, as in All. A
+    /// child lists under its parent only when both list; otherwise it lists
+    /// alone and says so.
+    static func needsYou<Payload>(
+        _ candidates: [SidebarBucketCandidate<Payload>],
+        pin: SidebarBucketPin?
+    ) -> Layout<Payload> {
+        var heldKey: SidebarRowKey?
+        if let pin, let selected = candidates.first(where: { $0.key == pin.key }),
+           held(selected.bucket, pin: pin, selected: selected).isListedInNeedsYouSegment {
+            heldKey = selected.key
+        }
+        let listed = candidates.filter { $0.bucket.isListedInNeedsYouSegment || $0.key == heldKey }
+        return place(listed, pin: pin, marksRowsApartFromParent: true)
+    }
+
+    private static func place<Payload>(
+        _ candidates: [SidebarBucketCandidate<Payload>],
+        pin: SidebarBucketPin?,
+        marksRowsApartFromParent: Bool
+    ) -> Layout<Payload> {
         var placed = families(candidates).map { (bucket: $0.bucket, family: $0) }
         var layout = Layout<Payload>()
         if let pin, let index = placed.firstIndex(where: { $0.family.contains(pin.key) }) {
@@ -155,7 +194,8 @@ enum SidebarBuckets {
         }
         for bucket in SidebarBucket.allCases {
             let entries = placed.filter { $0.bucket == bucket }.flatMap { placed in
-                [entry(placed.family.root, in: bucket)]
+                let root = placed.family.root
+                return [entry(root, in: bucket, apartFromParent: marksRowsApartFromParent && root.parent != nil)]
                     + placed.family.children.map { entry($0, in: bucket, isLinkedChild: true) }
             }
             guard entries.isEmpty == false else { continue }
@@ -165,33 +205,6 @@ enum SidebarBuckets {
             }
         }
         return layout
-    }
-
-    /// The Needs you segment: only the rows whose own state needs the user,
-    /// and the selected row while it holds. A child lists under its parent
-    /// only when both list; otherwise it lists alone and says so.
-    static func needsYou<Payload>(
-        _ candidates: [SidebarBucketCandidate<Payload>],
-        pin: SidebarBucketPin?
-    ) -> NeedsYouList<Payload> {
-        var list = NeedsYouList<Payload>()
-        var heldKey: SidebarRowKey?
-        if let pin, let selected = candidates.first(where: { $0.key == pin.key }) {
-            let bucket = held(selected.bucket, pin: pin, selected: selected)
-            list.pin = SidebarBucketPin(key: pin.key, bucket: bucket)
-            if bucket == .needsYou, selected.bucket != .needsYou {
-                heldKey = selected.key
-            }
-        }
-        let listed = candidates.filter { $0.bucket == .needsYou || $0.key == heldKey }
-        for family in families(listed) {
-            list.entries.append(entry(family.root, in: .needsYou, apartFromParent: family.root.parent != nil))
-            list.entries += family.children.map { entry($0, in: .needsYou, isLinkedChild: true) }
-        }
-        for entry in list.entries {
-            list.displayed[entry.key] = .needsYou
-        }
-        return list
     }
 
     /// The pin for the selected row: kept while the same row stays

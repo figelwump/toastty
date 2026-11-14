@@ -426,6 +426,11 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             session(.working, reportedAt: 1),
         ])
         XCTAssertFalse(P.isHiddenAsFinished(mixed))
+        // A merged task's task space that Toastty holds open stays listed
+        // until its cleanup, so the user can still find it.
+        var held = row("held", status: .done, doneAt: Date())
+        held.isCleanupHeld = true
+        XCTAssertFalse(P.isHiddenAsFinished(held))
 
         XCTAssertEqual(P.tally([row("a", status: .review), row("b", status: .review)]).review, 2)
         XCTAssertTrue(P.showsDoneToggle(row("review", status: .review)))

@@ -250,6 +250,12 @@ struct SubspaceHoverTipModel: Hashable {
     /// What the copy button copies.
     var absolutePath: String?
     var spawnerName: String?
+    /// The row's summary, such as the question it asks, for a one-line row
+    /// that does not show it.
+    var rowSummary: String? = nil
+    /// The task that started this one, for a one-line row that shows
+    /// another tag instead.
+    var parentTaskTitle: String? = nil
 }
 
 struct SubspaceHoverTipCard: View {
@@ -270,6 +276,14 @@ struct SubspaceHoverTipCard: View {
             // No status mark: each session line below shows its own, and a
             // combined one beside them would repeat it.
             HoverTipHeader(name: model.name, tag: "task space")
+
+            if let rowSummary = model.rowSummary {
+                Text(rowSummary)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 7)
+            }
 
             if model.annotations.isEmpty == false {
                 // Text only: the card cannot be clicked, so no chip is a link.
@@ -306,7 +320,7 @@ struct SubspaceHoverTipCard: View {
                 .padding(.bottom, 7)
             }
 
-            if model.path != nil || model.spawnerName != nil {
+            if model.path != nil || model.spawnerName != nil || model.parentTaskTitle != nil {
                 Rectangle()
                     .fill(ToastyTheme.hoverTipDivider)
                     .frame(height: 1)
@@ -323,6 +337,9 @@ struct SubspaceHoverTipCard: View {
                     }
                     if let spawnerName = model.spawnerName {
                         HoverTipMetaRow(label: "spawner", value: spawnerName)
+                    }
+                    if let parentTaskTitle = model.parentTaskTitle {
+                        HoverTipMetaRow(label: "parent", value: parentTaskTitle)
                     }
                 }
                 .padding(.top, 6)

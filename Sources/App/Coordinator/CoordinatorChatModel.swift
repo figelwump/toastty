@@ -284,7 +284,11 @@ final class CoordinatorChatModel: ObservableObject {
     private func refresh() {
         guard let subscription else { return }
         let snapshot = subscription.snapshot(at: now())
-        if summary != snapshot?.summary { summary = snapshot?.summary }
+        // A new event leaves the summary as it was; publish it only when it
+        // changed, so the chat does not draw again for an equal value.
+        if summary != snapshot?.summary {
+            summary = snapshot?.summary
+        }
         // Replay batches are historical output, not new live messages.
         // Wait for the reader's boundary instead of guessing from a pause;
         // a long transcript can take seconds and have gaps between batches.

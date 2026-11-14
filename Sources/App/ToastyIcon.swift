@@ -1,3 +1,4 @@
+import ConversationUI
 import SwiftUI
 
 /// Toasty, the empty-window toast, as a small glyph: the coordinator's icon.
@@ -151,64 +152,58 @@ private struct ToastySteam: View {
     private static let rise: CGFloat = 3.5
     private static let period: TimeInterval = 1.6
     private static let stagger: TimeInterval = 0.5
-    /// The canvas reaches this far above the icon's top edge and below it.
+    /// The frame reaches this far above the icon's top edge and below it.
     private static let above: CGFloat = 7
     private static let below: CGFloat = 1.5
+    /// A wisp that stands still has risen this far and shows this much.
+    private static let stillLift: CGFloat = 1
+    private static let fullOpacity: Double = 0.9
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                canvas(at: nil)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    canvas(at: context.date)
-                }
-            }
-        }
-        .frame(width: 16 * scale, height: (Self.above + Self.below) * scale)
-        .offset(y: -Self.above * scale)
-        .allowsHitTesting(false)
+        ToasttyLayerAnimationView(shapes: Self.wispXs.indices.map(wisp), animates: reduceMotion == false)
+            .frame(width: 16 * scale, height: (Self.above + Self.below) * scale)
+            .offset(y: -Self.above * scale)
+            .allowsHitTesting(false)
     }
 
-    private func canvas(at date: Date?) -> some View {
-        Canvas { context, _ in
-            context.scaleBy(x: scale, y: scale)
-            context.translateBy(x: 0, y: Self.above)
-            for index in Self.wispXs.indices {
-                let (lift, opacity) = Self.motion(index: index, date: date)
-                guard opacity > 0 else { continue }
-                let x = Self.wispXs[index]
-                let bottom = Self.wispBaseYs[index] + 1 - lift
-                var wisp = Path()
-                wisp.move(to: CGPoint(x: x, y: bottom))
-                wisp.addQuadCurve(
-                    to: CGPoint(x: x, y: bottom - Self.wispHeight),
-                    control: CGPoint(x: x + 0.8, y: bottom - Self.wispHeight / 2)
-                )
-                context.stroke(
-                    wisp,
-                    with: .color(ToastyTheme.accent.opacity(opacity)),
-                    style: StrokeStyle(lineWidth: 1, lineCap: .round)
-                )
-            }
-        }
-    }
-
-    /// How far a wisp has risen from its start, and its opacity. Without a
-    /// date, the still pose of Reduce Motion.
-    private static func motion(index: Int, date: Date?) -> (lift: CGFloat, opacity: Double) {
-        guard let date else { return (1, 0.9) }
-        let time = date.timeIntervalSinceReferenceDate - Double(index) * stagger
-        let phase = time.truncatingRemainder(dividingBy: period) / period
-        let progress = phase < 0 ? phase + 1 : phase
-        let lift = rise * CGFloat(easeOut(progress))
-        let opacity = progress < 0.4
-            ? 0.9 * easeOut(progress / 0.4)
-            : 0.9 * (1 - easeOut((progress - 0.4) / 0.6))
-        return (lift, opacity)
-    }
-
-    private static func easeOut(_ value: Double) -> Double {
-        1 - (1 - value) * (1 - value)
+    /// One wisp before it rises: a short curve whose bottom is one unit
+    /// below its resting place. In each period it rises by `rise` and slows
+    /// down, and its opacity grows in the first 40% and then fades.
+    private func wisp(_ index: Int) -> ToasttyLayerAnimationView.Shape {
+        let x = Self.wispXs[index] * scale
+        let bottom = (Self.above + Self.wispBaseYs[index] + 1) * scale
+        let height = Self.wispHeight * scale
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: x, y: bottom))
+        path.addQuadCurve(
+            to: CGPoint(x: x, y: bottom - height),
+            control: CGPoint(x: x + 0.8 * scale, y: bottom - height / 2)
+        )
+        let delay = Double(index) * Self.stagger
+        return .init(
+            path: path,
+            strokeColor: ToastyTheme.accent,
+            lineWidth: scale,
+            roundLineCap: true,
+            restingOpacity: Self.fullOpacity,
+            restingOffsetY: -Self.stillLift * scale,
+            animations: [
+                .init(
+                    property: .offsetY,
+                    values: [0, -Self.rise * scale],
+                    easing: .easeOutQuadratic,
+                    duration: Self.period,
+                    delay: delay
+                ),
+                .init(
+                    property: .opacity,
+                    values: [0, Self.fullOpacity, 0],
+                    keyTimes: [0, 0.4, 1],
+                    easing: .easeOutQuadratic,
+                    duration: Self.period,
+                    delay: delay
+                ),
+            ]
+        )
     }
 }

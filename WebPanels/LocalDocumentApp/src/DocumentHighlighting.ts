@@ -12,6 +12,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import type {
+  LocalDocumentFormat,
   LocalDocumentHighlightState,
   LocalDocumentPanelBootstrap,
   LocalDocumentSyntaxLanguage
@@ -71,7 +72,8 @@ export function highlightedCodeHTML(
 
 export function highlightStatusMessage(
   highlightState: LocalDocumentHighlightState,
-  formatLabel: string
+  formatLabel: string,
+  format: LocalDocumentFormat | null = null
 ): string | null {
   switch (highlightState) {
     case "enabled":
@@ -79,6 +81,9 @@ export function highlightStatusMessage(
     case "unavailable":
       return null;
     case "disabledForLargeFile":
+      if (format === "markdown") {
+        return "The formatted view and syntax highlighting are off for large files. Editing remains available, but performance may still degrade on very large documents.";
+      }
       return "Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.";
     case "unsupportedFormat":
       if (formatLabel === "JSONC") {

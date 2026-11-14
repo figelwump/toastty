@@ -1,6 +1,6 @@
 ---
 name: toastty-verify
-description: Use this skill when selecting, running, or reporting Toastty verification after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. It chooses the right mix of remote smoke validation, remote xcodebuild tests, local helpers, live GUI checks, Computer Use, and the global qa subagent for deeper user-perspective QA.
+description: Use this skill when selecting, running, or reporting Toastty verification after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. It chooses the right mix of remote smoke validation, remote xcodebuild tests, local helpers, live GUI checks, and Computer Use, including deeper user-perspective checks through the real app.
 ---
 
 # Toastty Verify
@@ -17,7 +17,7 @@ Use this as the Toastty verification decision layer. Keep detailed command seman
    - `head`: the current commit only, usually after commit or for a baseline.
    - `ref --ref <rev>`: an explicit branch, tag, or commit.
 3. List the scenarios a user could hit for the changed behavior, not only the main path: state combinations, relaunch and restore, interruption and cancellation, failure and retry paths, concurrent or repeated actions, boundary inputs, and interaction with adjacent features such as other panels, sessions, or the iOS client. Add any "Scenarios to verify" from a second-opinion review.
-4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks, Computer Use, or the `qa` subagent for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
+4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks or Computer Use for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
 6. Report the exact command family, scope, remote/local target, fallback status, result, and any artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
 
@@ -41,9 +41,9 @@ Use the least disruptive path that covers the risk.
 
 For docs-only or agent-instruction-only changes, do not run the full app gate by default. Validate the changed artifact directly:
 
-- Skills: run the active runtime's `skill-creator` `quick_validate.py <skill-dir>` when available. If the script is unavailable or its Python environment is missing dependencies, at minimum parse `SKILL.md` frontmatter and `agents/openai.yaml`, then state the validator blocker in the handoff.
+- Skills: run the active runtime's `skill-creator` `quick_validate.py <skill-dir>` when available. If the script is unavailable or its Python environment is missing dependencies, at minimum parse `SKILL.md` frontmatter, then state the validator blocker in the handoff.
 - Shell snippets or scripts in docs: run `bash -n` only for real shell files, not Markdown examples.
-- Agent workflow changes: follow the global Review Gate; it does not call for second-opinion review of instruction changes.
+- Agent workflow changes: follow the global Review Gate.
 
 If the docs change alters build, release, automation, or validation behavior, also run a representative command or dry validation path.
 
@@ -126,16 +126,16 @@ peekaboo permissions --json
 
 If Accessibility is missing, stop and ask the user to grant it before continuing locally. If the user does not want to grant local Accessibility, switch to the remote GUI path.
 
-### Deeper QA
+### Deeper User-Perspective Checks
 
-Invoke the global `qa` custom subagent when a meaningful user-facing change needs independent user-perspective validation that deterministic checks do not cover well. Good triggers:
+Run a deeper user-perspective check yourself when a meaningful user-facing change needs validation that deterministic checks do not cover well. Use the change as a user would, through the live GUI and Computer Use paths above. Good triggers:
 
 - Broad UI, navigation, onboarding, menu, shortcut, or multi-window behavior changes.
 - Changes with design/mockup references or visual acceptance criteria.
 - Workflows with several adjacent regressions where exploratory testing is useful.
 - A fix that passed narrow automation but still has UX, accessibility, focus, or state-transition risk.
 
-Do not use QA as a substitute for relevant deterministic tests. Give the QA agent a concise packet: intended behavior, changed files or diff scope, validation already run, target commands or wrappers, fixtures, design references, known risk areas, and cleanup expectations. If the runtime cannot invoke the global `qa` subagent, say that in the handoff and rely on the deterministic checks you ran.
+Do not use this check as a substitute for relevant deterministic tests.
 
 ## Local Helpers
 
@@ -160,7 +160,7 @@ State:
 - Which commands or skills ran, with remote/local/fallback status.
 - Whether generated project/build currency was validated when applicable.
 - Whether remote GUI/test environment was accessed only through `sv exec --`.
-- Whether deeper QA was run, skipped as unnecessary, or unavailable in the active runtime.
+- Whether a deeper user-perspective check was run, skipped as unnecessary, or blocked, with the reason.
 - What user-visible behaviors were covered.
 - What remains untested or blocked, with the reason.
 - Artifact paths under `artifacts/` when produced.

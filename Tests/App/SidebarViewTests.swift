@@ -2213,8 +2213,9 @@ final class SidebarViewTests: XCTestCase {
 
     /// The report behind these rules: a clicked unread task jumped to Idle
     /// from under the pointer, a parent showed apart from its child, and a
-    /// question looked idle once read. The Needs you segment then lists only
-    /// the rows that need the user.
+    /// question looked idle once read. A pull request waits for review apart
+    /// from what blocks an agent. The Needs you segment then lists only the
+    /// rows that need the user, in those two sections.
     func testBucketsKeepQuestionsFamiliesAndTheClickedRowInPlace() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
@@ -2260,8 +2261,8 @@ final class SidebarViewTests: XCTestCase {
         let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
         harness.sessionRuntimeStore.bind(store: harness.store)
-        // The newest report comes last, but Needs you keeps the order the
-        // task spaces opened in: the family, Thumbnail, then Hostname.
+        // The newest report comes last, but each bucket keeps the order the
+        // task spaces opened in.
         let reports: [(String, SessionStatusKind, TimeInterval)] = [
             ("Public URL warning", .idle, 1), ("Private pages stay private", .idle, 2),
             ("Hostname options", .idle, 3), ("Thumbnail filenames", .ready, 4),
@@ -2292,7 +2293,7 @@ final class SidebarViewTests: XCTestCase {
                 semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
             }
             var frames: [(String, CGRect)] = []
-            for header in ["Needs you", "Running", "Idle"] {
+            for header in ["Needs you", "Ready to review", "Running", "Idle"] {
                 if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
             }
             for title in panelByTitle.keys {
@@ -2302,13 +2303,16 @@ final class SidebarViewTests: XCTestCase {
             return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
         }
 
-        // A question waits in Needs you with its text; a family lists with
-        // its child that waits for review.
+        // A question waits in Needs you with its text; a family lists in
+        // Ready to review with its child whose pull request waits there.
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Thumbnail filenames", "Hostname options",
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
         ])
         var textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Ready to review, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("2 need you, 1 ready for review, 1 idle"), "\(textValues)")
         XCTAssertTrue(textValues.contains {
             $0.hasPrefix("Hostname options, task space, waiting for your reply") && $0.contains("Asks: Pick a hostname option")
         }, "\(textValues)")
@@ -2331,10 +2335,11 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: clicked.workspaceID)))
         XCTAssertTrue(harness.store.send(.focusPanel(workspaceID: clicked.workspaceID, panelID: clicked.panelID)))
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Thumbnail filenames", "Hostname options",
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
         ])
         textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
         try writeSidebarEvidence(root, name: "buckets-2-clicked-row-holds")
         try attachSidebarRender(root, name: "buckets-2-clicked-row-holds")
 
@@ -2344,11 +2349,12 @@ final class SidebarViewTests: XCTestCase {
             at: now.addingTimeInterval(5)
         )
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "RUNNING", "Thumbnail filenames",
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "RUNNING", "Thumbnail filenames",
         ])
         textValues = renderedTextValues(in: root)
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
         try writeSidebarEvidence(root, name: "buckets-3-selected-row-resumes")
         try attachSidebarRender(root, name: "buckets-3-selected-row-resumes")
         harness.sessionRuntimeStore.updateStatus(
@@ -2359,19 +2365,28 @@ final class SidebarViewTests: XCTestCase {
         // Once the selection moves, the read task lists in Idle.
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: project.id)))
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "IDLE", "Thumbnail filenames",
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "IDLE", "Thumbnail filenames",
         ])
         try writeSidebarEvidence(root, name: "buckets-4-after-selection-moves")
         try attachSidebarRender(root, name: "buckets-4-after-selection-moves")
 
-        // Needs you lists only what needs the user: the idle parent stays
-        // out, and its child that waits for review names it instead.
+        // Needs you lists only what needs the user, in two sections: the
+        // idle parent stays out, and its child that waits for review names
+        // it instead.
         _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
-        pumpMainRunLoop(duration: 0.6)
-        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try layout(), ["NEEDS YOU", "Hostname options", "READY TO REVIEW", "Private pages stay private"])
         textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Only what needs you, 2"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("emptyos, 2 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only what needs you, 1, 1 ready for review"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos, 1 needs you, 1 ready for review"), "\(textValues)")
+        // Rows take one line: the question moves to the row's hover card,
+        // and the child's tag is its pull request, not its parent. A
+        // two-line row would put the next header about 33 points below the
+        // row's center; a one-line row puts it about 25 below.
+        let questionRowInSegment = try semanticTextFrame(in: root, prefix: "Hostname options, task space")
+        let reviewHeader = try semanticTextFrame(in: root, text: "Ready to review, 1", shape: "the Ready to review header")
+        XCTAssertLessThan(abs(reviewHeader.midY - questionRowInSegment.midY), 29, "\(questionRowInSegment) \(reviewHeader)")
+        XCTAssertTrue(textValues.contains("github-pr: PR #322"), "\(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Thumbnail filenames, task space") }, "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Hostname options, task space, waiting for your reply") }, "\(textValues)")
@@ -2926,8 +2941,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 640))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
@@ -3124,6 +3138,41 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
     }
 
+    /// A single click in this test window cannot be checked: the test host
+    /// is not the active app, so AppKit drops a lone click into its window.
+    /// The second click of a double click still arrives.
+    func testTasksViewDoubleClickOpensTheRowsTaskSpace() throws {
+        let failed = TaskRecord(
+            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: true))
+        let tasks = hostTasksView(harness, board: board, height: 640)
+        defer { tasks.window.orderOut(nil) }
+        let startWorkspaceID = harness.store.selectedWorkspaceID(in: harness.windowID)
+        let target = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
+        XCTAssertNotEqual(startWorkspaceID, ids.readyUnreadID)
+
+        // A task with no task space only selects on a double click.
+        try clickSemanticText(prefix: "Fix the unread dot, ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], .task(failed.id))
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), startWorkspaceID)
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-double-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-double-click")
+
+        // A double click opens the row's task space and closes the view.
+        try clickSemanticText(prefix: "\(target.title), ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, false)
+    }
+
     func testTasksViewSelectsTheNextTaskWhenTheSelectedOneLeavesTheList() throws {
         let failed = TaskRecord(
             createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
@@ -3178,8 +3227,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: height))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: height), styleMask: [.titled], backing: .buffered, defer: false)
@@ -3210,8 +3258,7 @@ final class SidebarViewTests: XCTestCase {
             store: harness.store,
             board: board,
             sessionRuntimeStore: harness.sessionRuntimeStore,
-            newTask: {},
-            newTaskShortcutLabel: "⌥⇧T"
+            newTask: {}
         )
         let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 560))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
@@ -4236,6 +4283,90 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(coordinatorLabels(), [])
     }
 
+    /// Where the chat can show, the row shows and hides the dock as the
+    /// toolbar's Toasty button does, and says when the dock shows.
+    func testCoordinatorRowShowsAndHidesTheDockAsTheToolbarButtonDoes() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let location = try XCTUnwrap(store.state.coordinator)
+        let windowID = location.windowID
+        let otherWorkspaceID = try XCTUnwrap(store.state.topLevelWorkspaceIDs(in: windowID).first)
+        XCTAssertTrue(store.selectWorkspace(windowID: windowID, workspaceID: otherWorkspaceID, preferringUnreadSessionPanelIn: nil))
+        XCTAssertTrue(controller.chatIsAvailable)
+
+        let taskCoordinator = TaskCoordinator(
+            records: TaskRecordStore.inMemory(),
+            store: store,
+            launcher: nil,
+            configLoader: { .empty },
+            attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+            hasActiveSession: { _ in false },
+            grantScope: { _, _ in }
+        )
+        taskCoordinator.coordinatorController = controller
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskCoordinator: taskCoordinator,
+            taskBoard: .disabled,
+            newTask: nil,
+            terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        )
+        let root = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.contentView = root
+        hostWindow.makeKeyAndOrderFront(nil)
+        defer { hostWindow.orderOut(nil) }
+        func coordinatorLabels() -> [String] {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            return renderedTextValues(in: root).filter { $0.hasPrefix("Coordinator") }
+        }
+        func dockShows() -> Bool { controller.dockShows(in: windowID) }
+
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-hidden")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-hidden")
+
+        // A click shows the dock beside the workspace, and the row says so.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertTrue(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-open")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-open")
+
+        // A second click hides it again.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+
+        // The toolbar button and Cmd+Shift+K show the dock: the row follows.
+        controller.toggleDock()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+
+        // In the full view, a click keeps the full view.
+        controller.openFullView()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), location.workspaceID)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+    }
+
     func testCoordinatorRowUnreadMarkFollowsTheSessionRowRule() throws {
         let fixture = try makeCoordinatorSidebarState()
         var workspace = try XCTUnwrap(fixture.state.workspacesByID[fixture.coordinator.workspaceID])
@@ -4266,24 +4397,27 @@ final class SidebarViewTests: XCTestCase {
 
     /// Clicks the hosted view at the semantic text bridge whose text starts
     /// with `prefix`; the bridge is a zero-size field centered on its view.
-    private func clickSemanticText(prefix: String, in rootView: NSView) throws {
+    /// `clickCount` 2 sends both clicks of a double click.
+    private func clickSemanticText(prefix: String, in rootView: NSView, clickCount: Int = 1) throws {
         let frame = try semanticTextFrame(in: rootView, prefix: prefix)
         let window = try XCTUnwrap(rootView.window)
         let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
-        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: type,
-                location: windowPoint,
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: eventNumber,
-                clickCount: 1,
-                pressure: pressure
-            ))
-            window.sendEvent(event)
-            pumpMainRunLoop(duration: 0.05)
+        for click in 1...clickCount {
+            for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type,
+                    location: windowPoint,
+                    modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil,
+                    eventNumber: eventNumber + 2 * (click - 1),
+                    clickCount: click,
+                    pressure: pressure
+                ))
+                window.sendEvent(event)
+                pumpMainRunLoop(duration: 0.05)
+            }
         }
     }
 
