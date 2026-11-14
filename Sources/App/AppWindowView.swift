@@ -70,8 +70,16 @@ struct AppWindowView: View {
         showsDockToggle ? 4 : 3
     }
 
+    /// The window's content width, or its saved frame width before the
+    /// first layout reports one.
+    private var dockLimitWindowWidth: Double {
+        windowContentWidth > 0
+            ? Double(windowContentWidth)
+            : store.window(id: windowID)?.frame.width ?? 0
+    }
+
     private var dockWidth: CGFloat {
-        let width = Double(windowContentWidth)
+        let width = dockLimitWindowWidth
         guard let window = store.window(id: windowID) else {
             return CGFloat(min(
                 WindowState.defaultCoordinatorDockWidth,
@@ -120,10 +128,10 @@ struct AppWindowView: View {
                     "windowID": windowID.uuidString,
                     "dockWidth": String(format: "%.1f", dockWidth),
                 ],
-                setWidth: { [store, windowID, windowContentWidth] width in
+                setWidth: { [store, windowID, dockLimitWindowWidth] width in
                     // A drag stops at this window's limit, so the saved
                     // width is one the user saw.
-                    let limit = WindowState.maxCoordinatorDockWidth(windowWidth: Double(windowContentWidth))
+                    let limit = WindowState.maxCoordinatorDockWidth(windowWidth: dockLimitWindowWidth)
                     _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: min(width, limit)))
                 }
             ))
