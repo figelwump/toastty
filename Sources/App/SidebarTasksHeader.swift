@@ -116,6 +116,8 @@ struct SidebarTasksHeader: View {
                         Text(Self.title(candidate))
                             .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                             .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.sidebarSessionPathText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         // Yellow for what blocks an agent, blue for what
                         // waits for review.
                         if count > 0 {
@@ -125,7 +127,7 @@ struct SidebarTasksHeader: View {
                             Self.countCapsule(reviewCount, fill: ToastyTheme.sidebarTaskReviewMark)
                         }
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(minWidth: 0, maxWidth: .infinity)
                     .padding(.vertical, 3)
                     .background(
                         isSelected ? Color(hex: 0x3D3D3D) : Color.clear,
@@ -155,6 +157,8 @@ struct SidebarTasksHeader: View {
             .foregroundStyle(Color(hex: 0x160F06))
             .padding(.horizontal, 5)
             .background(fill, in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
     }
 
     static func title(_ segment: SidebarSegment) -> String {

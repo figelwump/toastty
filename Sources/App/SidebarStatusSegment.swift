@@ -342,6 +342,9 @@ struct SidebarTaskRecordRow: View {
 
     private var label: String {
         var label = TaskBoardPresentation.addingReleaseAfterMerge(to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item)
+        if showsProject, let project = item.projectTitle {
+            label += ", in \(project)"
+        }
         if let parentTaskTitle {
             label += ", started by \(parentTaskTitle)"
         }
@@ -466,7 +469,7 @@ struct SidebarToShipGroupToggle: View {
     /// What the toggle says; starts with `label(count:isExpanded:)`.
     let accessibilityText: String
 
-    static func label(count: Int, isExpanded: Bool) -> String {
+    nonisolated static func label(count: Int, isExpanded: Bool) -> String {
         "To ship, \(count) \(count == 1 ? "task" : "tasks"), \(isExpanded ? "expanded" : "collapsed")"
     }
 

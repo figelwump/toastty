@@ -1057,7 +1057,7 @@ struct TaskBoardTests {
         let endedAt = Date().addingTimeInterval(1)
         fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt)
         _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
-        var finished = try item()
+        let finished = try item()
         #expect(finished.stage == .needsYou(.agentFinished))
         #expect(finished.stage.group == .needsYou)
         #expect(finished.hasUnreadTurn)

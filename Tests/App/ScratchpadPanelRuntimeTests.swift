@@ -277,7 +277,7 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
             "typeof window.webkit?.messageHandlers?.toasttyScratchpadExternalLink"
         )
         XCTAssertEqual(pageAccess as? String, "undefined")
-        _ = try await webView.evaluateJavaScript(
+        webView.evaluateJavaScript(
             "window.webkit.messageHandlers.toasttyScratchpadExternalLink.postMessage('https://example.com/'); true",
             in: nil,
             in: .defaultClient

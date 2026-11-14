@@ -33,10 +33,10 @@ struct TerminalProgramStatusRuntimeTests {
     func programCompletionUsesNotificationFocusRules(_ applicationActive: Bool) async throws {
         let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
         let recorder = SessionNotificationRecorder()
-        var isActive = applicationActive
+        let isActive = MainActorValue(applicationActive)
         let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
             await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
-        }, isApplicationActive: { isActive })
+        }, isApplicationActive: { isActive.value })
         store.bind(store: appStore)
         defer { store.reset() }
         let workspace = try #require(appStore.selectedWorkspace)
@@ -59,7 +59,7 @@ struct TerminalProgramStatusRuntimeTests {
         }
         // A result received while already focused remains until the next read/input action.
         #expect(store.programStatusRuntime.recordsByPanel[panelID]?.presentation?.record.state == .done)
-        isActive = true
+        isActive.value = true
         // WorkspaceView dispatches this when the app becomes active again.
         _ = appStore.send(.markPanelNotificationsRead(workspaceID: workspace.id, panelID: panelID))
         #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
@@ -176,9 +176,9 @@ struct TerminalProgramStatusRuntimeTests {
     @Test
     func notificationFocusWhileInactiveDefersAcknowledgementUntilActivation() throws {
         let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
-        var isActive = false
+        let isActive = MainActorValue(false)
         let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in },
-                                        isApplicationActive: { isActive })
+                                        isApplicationActive: { isActive.value })
         store.bind(store: appStore)
         defer { store.reset() }
         let workspace = try #require(appStore.selectedWorkspace)
@@ -187,7 +187,7 @@ struct TerminalProgramStatusRuntimeTests {
         _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
         #expect(store.programStatusRuntime.recordsByPanel[panelID] != nil)
         #expect(appStore.selectedWorkspace?.unreadPanelIDs.isEmpty == true)
-        isActive = true
+        isActive.value = true
         store.acknowledgeViewedProgramStatusResults()
         #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
     }
@@ -468,3 +468,4 @@ struct TerminalProgramStatusRuntimeTests {
         #expect(row.isAgent)
     }
 }
+

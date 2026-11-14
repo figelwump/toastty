@@ -601,9 +601,9 @@ struct RemoteAccessServiceSafetyTests {
     @Test func activeMacDropsEventsWithoutReplayingThemWhenAway() async throws {
         let relay = RemotePushRelaySpy()
         let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
-        var presence = RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0)
+        let presence = MainActorValue(RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0))
         let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration,
-            pushRelay: relay, pushMacPresence: { presence })
+            pushRelay: relay, pushMacPresence: { presence.value })
         defer { fixture.removeRuntimeFiles() }
         try fixture.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID))
         let pushHandler = fixture.sessionRuntimeStore.onActionableEvent
@@ -618,7 +618,7 @@ struct RemoteAccessServiceSafetyTests {
         }
         status(.working, at: 1)
         status(.ready, at: 2)
-        presence = .init(screenIsLocked: false, idleSeconds: 120)
+        presence.value = .init(screenIsLocked: false, idleSeconds: 120)
         status(.ready, at: 3) // A duplicate after walking away must not replay the dropped event.
         status(.working, at: 4)
         status(.ready, at: 5)
@@ -627,10 +627,10 @@ struct RemoteAccessServiceSafetyTests {
         #expect(acceptedEvents.map(\.timestamp) == [2.0, 5.0].map { fixture.confirmedAt.addingTimeInterval($0) })
         #expect(relay.notifications.map(\.eventID) == [readyEvent.eventID])
 
-        presence = .init(screenIsLocked: false, idleSeconds: 0)
+        presence.value = .init(screenIsLocked: false, idleSeconds: 0)
         status(.working, at: 6)
         status(.needsApproval, at: 7)
-        presence = .init(screenIsLocked: true, idleSeconds: 0)
+        presence.value = .init(screenIsLocked: true, idleSeconds: 0)
         status(.needsApproval, at: 8)
         status(.working, at: 9)
         status(.needsApproval, at: 10)
@@ -2312,7 +2312,7 @@ struct RemoteAccessServiceSafetyTests {
             keyTranslationMods: { _, mods in mods }, sendKey: { _, _ in true },
             keyIsBinding: { _, _ in false }, setPreedit: { _, _, _ in }
         )
-        host.setGhosttySurface(try #require(UnsafeMutableRawPointer(bitPattern: 0x1251)))
+        host.setGhosttySurface(UnsafeMutableRawPointer(bitPattern: 0x1251))
         host.handleLocalInput = { kind in
             fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: kind)
         }

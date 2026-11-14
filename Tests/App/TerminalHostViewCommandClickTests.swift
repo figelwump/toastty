@@ -60,7 +60,9 @@ final class TerminalHostViewCommandClickTests: TerminalHostViewTestCase {
                 guard x >= 0, y >= 0, mods.rawValue == GHOSTTY_MODS_SUPER.rawValue else {
                     return
                 }
-                hostView.setGhosttyMouseOverLink("https://example.com/docs")
+                MainActor.assumeIsolated {
+                    hostView.setGhosttyMouseOverLink("https://example.com/docs")
+                }
             }
         )
         hostView.setGhosttySurface(fakeSurfaceHandle(0x124B))
@@ -115,7 +117,9 @@ final class TerminalHostViewCommandClickTests: TerminalHostViewTestCase {
                 guard x >= 0, y >= 0, mods.rawValue == GHOSTTY_MODS_SUPER.rawValue else {
                     return
                 }
-                hostView.setGhosttyMouseOverLink("https://example.com/docs")
+                MainActor.assumeIsolated {
+                    hostView.setGhosttyMouseOverLink("https://example.com/docs")
+                }
             }
         )
         hostView.setGhosttySurface(fakeSurfaceHandle(0x124C))
@@ -347,7 +351,9 @@ final class TerminalHostViewCommandClickTests: TerminalHostViewTestCase {
             sendKey: { _, _ in
                 // Simulate Ghostty synchronously clearing the hovered link
                 // when the shift modifier press is forwarded.
-                hostView.setGhosttyMouseOverLink(nil)
+                MainActor.assumeIsolated {
+                    hostView.setGhosttyMouseOverLink(nil)
+                }
                 return true
             }
         )

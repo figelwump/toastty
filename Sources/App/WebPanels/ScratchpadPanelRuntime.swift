@@ -1081,7 +1081,8 @@ extension ScratchpadPanelRuntime {
             in: nil,
             contentWorld: .page
         )
-        guard let scrollOffset = BrowserPanelRuntime.annotationScrollOffset(from: result) else {
+        guard let result,
+              let scrollOffset = BrowserPanelRuntime.annotationScrollOffset(from: result) else {
             throw BrowserPanelScreenshotError.snapshotUnavailable
         }
         return BrowserAnnotationViewport(scrollOffset: scrollOffset, viewportSize: webView.bounds.size)

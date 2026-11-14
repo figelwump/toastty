@@ -858,6 +858,13 @@ It needs the chat, so it is on macOS 15 and later.
   the sidebar button, with `Cmd+Shift+K`, with **View > Show Coordinator
   Dock**, the command palette, or a click on the **Coordinator** row. The
   dock's header has **Open Full View** and **Hide Dock**.
+- **Type to the coordinator with `Cmd+Shift+K`.** The key puts the keyboard
+  in the chat's field first. While the dock shows and you type in a
+  terminal or another panel, the key moves the keyboard to the dock's field;
+  a second press hides the dock. In the full view, the key moves the
+  keyboard to the chat's field. The **View** menu item names what the key
+  does next: **Show Coordinator Dock**, **Focus Coordinator Chat** or
+  **Hide Coordinator Dock**.
 - **Only in the coordinator's window.** The dock and its toolbar button show
   in the window that holds the Coordinator workspace.
 - **The full view.** While the Coordinator workspace is selected, the dock
@@ -873,9 +880,11 @@ It needs the chat, so it is on macOS 15 and later.
   the toast shows unread output, an approval or an error.
 - **Read.** Output that the dock shows counts as read, as a focused panel's
   does.
-- **Width.** Drag the dock's right edge to set its width, from 300 to 480
-  points. The width and whether the dock is open are saved for the window
-  and restored after a relaunch.
+- **Width.** Drag the dock's right edge to set its width, from 300 points
+  up to 40% of the window's width. A narrower window shows the dock
+  narrower and keeps its width for when the window is wider again. The width
+  and whether the dock is open are saved for the window and restored after a
+  relaunch.
 - **The Tasks view** covers the workspace to the right of the dock.
 - **The keyboard.** While the dock's field has the keyboard, `Cmd+=`,
   `Cmd+-` and `Cmd+0` change the chat's text size, and a click on a panel
