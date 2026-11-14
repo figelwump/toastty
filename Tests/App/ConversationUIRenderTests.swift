@@ -130,7 +130,7 @@ final class ConversationUIRenderTests: XCTestCase {
             jumpToLiveEdgeRequest: .constant(0),
             canAcknowledgeRead: false,
             options: options,
-            replyToMessage: replies ? { _ in } : nil
+            replyToMessage: replies ? { @MainActor _ in } : nil
         )
         let (hostingView, window) = Self.host(transcript, size: size)
         defer { window.close() }

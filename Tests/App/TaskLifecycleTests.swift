@@ -37,6 +37,7 @@ struct TaskLifecycleTests {
         return task
     }
 
+    @discardableResult
     private func git(_ arguments: [String], in directory: String) throws -> String {
         try TaskGitTestRepository.git(arguments, in: directory)
     }

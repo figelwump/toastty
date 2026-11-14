@@ -1310,8 +1310,8 @@ struct ToasttyApp: App {
                 url,
                 preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
                 appStore: store,
-                requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
-                    webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                requestLocalDocumentReveal: { panelID, lineNumber in
+                    webPanelRuntimeRegistry.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber)
                 }
             )
         }
@@ -1885,11 +1885,11 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
-                toggleCommandPalette: { [weak commandPaletteController] originWindowID in
-                    _ = commandPaletteController?.toggle(originWindowID: originWindowID)
+                toggleCommandPalette: { originWindowID in
+                    _ = commandPaletteController.toggle(originWindowID: originWindowID)
                 },
-                presentCommandPalette: { [weak commandPaletteController] originWindowID, initialQuery in
-                    _ = commandPaletteController?.present(originWindowID: originWindowID, initialQuery: initialQuery)
+                presentCommandPalette: { originWindowID, initialQuery in
+                    _ = commandPaletteController.present(originWindowID: originWindowID, initialQuery: initialQuery)
                 },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
@@ -2130,7 +2130,7 @@ struct ToasttyApp: App {
         alert.runModal()
     }
 
-    private static func resolveCodexProcessPath(
+    nonisolated private static func resolveCodexProcessPath(
         environment: [String: String],
         agentShimDirectoryPath: String
     ) -> String? {

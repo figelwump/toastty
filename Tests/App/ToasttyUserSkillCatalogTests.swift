@@ -1051,7 +1051,7 @@ private extension UserSkillCatalogState {
 
 /// Replaces the target regular file with a FIFO the moment the validator's
 /// readability probe touches it, reproducing a scan-to-copy swap race.
-private final class FifoSwappingFileManager: FileManager, @unchecked Sendable {
+private final class FifoSwappingFileManager: FileManager {
     private let lock = NSLock()
     private var targetPath: String?
     private var swapped = false

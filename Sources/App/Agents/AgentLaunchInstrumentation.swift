@@ -597,12 +597,111 @@ enum AgentLaunchInstrumentation {
     }
 }
 
-private extension AgentLaunchInstrumentation {
-    internal enum TelemetryInputMode {
+// Shared with GrokLaunchInstrumentation.
+extension AgentLaunchInstrumentation {
+    enum TelemetryInputMode {
         case none
         case stdinOrFirstArgument
     }
 
+    static func writeExecutableScript(
+        _ script: String,
+        to url: URL,
+        fileManager: FileManager
+    ) throws {
+        try Data(script.appending("\n").utf8).write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+    }
+
+    static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
+        artifactsDirectoryURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
+    }
+
+    static func makeTelemetryForwarderScript(
+        cliExecutablePath: String,
+        source: String,
+        telemetryErrorLogURL: URL,
+        stderrFallbackURL: URL,
+        inputMode: TelemetryInputMode,
+        ownerRecordURL: URL? = nil,
+        ownerPIDEnvironmentKey: String? = nil
+    ) -> String {
+        let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
+            .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
+        let respondsToQuestions = source == "claude-hooks"
+        let responseFlag = respondsToQuestions ? " --respond-to-questions" : ""
+        let stdoutRedirect = respondsToQuestions ? "" : " >/dev/null"
+        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)\(responseFlag)"
+        let commandInvocationLines: [String]
+
+        switch inputMode {
+        case .none:
+            commandInvocationLines = [
+                "if \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"; then",
+                "  :",
+                "else",
+                "  status=$?",
+                "  append_telemetry_failure \"$status\"",
+                "fi",
+            ]
+
+        case .stdinOrFirstArgument:
+            commandInvocationLines = [
+                "if [ -n \"$1\" ]; then",
+                "  printf '%s' \"$1\"",
+                "else",
+                "  cat",
+                "fi | \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"",
+                "status=$?",
+                "if [ \"$status\" -ne 0 ]; then",
+                "  append_telemetry_failure \"$status\"",
+                "fi",
+            ]
+        }
+
+        return (
+            [
+                "#!/bin/sh",
+                "umask 077",
+            ] + ownerRecordScriptLines(
+                ownerRecordURL: ownerRecordURL,
+                ownerPIDEnvironmentKey: ownerPIDEnvironmentKey
+            ) + [
+                "log_file=\(shellQuote(telemetryErrorLogURL.path))",
+                "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
+                "if [ -z \"$stderr_file\" ]; then",
+                "  stderr_file=\(shellQuote(stderrFallbackURL.path))",
+                "fi",
+                "rm -f \"$stderr_file\"",
+                "",
+                "append_telemetry_failure() {",
+                "  status=\"$1\"",
+                "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
+                "  {",
+                "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
+                "    if [ -s \"$stderr_file\" ]; then",
+                "      sed 's/^/stderr: /' \"$stderr_file\"",
+                "    else",
+                "      printf 'stderr: <empty>\\n'",
+                "    fi",
+                "  } >> \"$log_file\"",
+                "}",
+                "",
+            ] + commandInvocationLines + [
+                "rm -f \"$stderr_file\"",
+                "exit 0",
+            ]
+        ).joined(separator: "\n")
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        guard value.isEmpty == false else { return "''" }
+        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
+    }
+}
+
+private extension AgentLaunchInstrumentation {
     enum OpenCodeFamilyRuntime {
         case mimocode
         case opencode
@@ -883,15 +982,6 @@ private extension AgentLaunchInstrumentation {
         hooks[eventName] = entries
     }
 
-    internal static func writeExecutableScript(
-        _ script: String,
-        to url: URL,
-        fileManager: FileManager
-    ) throws {
-        try Data(script.appending("\n").utf8).write(to: url, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-    }
-
     static func writeJSONObject(
         _ object: [String: Any],
         to url: URL,
@@ -900,10 +990,6 @@ private extension AgentLaunchInstrumentation {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         try data.write(to: url, options: .atomic)
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
-
-    internal static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
-        artifactsDirectoryURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
     }
 
     static func makeOpenCodeFamilyStatusPlugin(
@@ -2282,83 +2368,6 @@ private extension AgentLaunchInstrumentation {
         """
     }
 
-    internal static func makeTelemetryForwarderScript(
-        cliExecutablePath: String,
-        source: String,
-        telemetryErrorLogURL: URL,
-        stderrFallbackURL: URL,
-        inputMode: TelemetryInputMode,
-        ownerRecordURL: URL? = nil,
-        ownerPIDEnvironmentKey: String? = nil
-    ) -> String {
-        let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
-            .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
-        let respondsToQuestions = source == "claude-hooks"
-        let responseFlag = respondsToQuestions ? " --respond-to-questions" : ""
-        let stdoutRedirect = respondsToQuestions ? "" : " >/dev/null"
-        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)\(responseFlag)"
-        let commandInvocationLines: [String]
-
-        switch inputMode {
-        case .none:
-            commandInvocationLines = [
-                "if \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"; then",
-                "  :",
-                "else",
-                "  status=$?",
-                "  append_telemetry_failure \"$status\"",
-                "fi",
-            ]
-
-        case .stdinOrFirstArgument:
-            commandInvocationLines = [
-                "if [ -n \"$1\" ]; then",
-                "  printf '%s' \"$1\"",
-                "else",
-                "  cat",
-                "fi | \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"",
-                "status=$?",
-                "if [ \"$status\" -ne 0 ]; then",
-                "  append_telemetry_failure \"$status\"",
-                "fi",
-            ]
-        }
-
-        return (
-            [
-                "#!/bin/sh",
-                "umask 077",
-            ] + ownerRecordScriptLines(
-                ownerRecordURL: ownerRecordURL,
-                ownerPIDEnvironmentKey: ownerPIDEnvironmentKey
-            ) + [
-                "log_file=\(shellQuote(telemetryErrorLogURL.path))",
-                "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
-                "if [ -z \"$stderr_file\" ]; then",
-                "  stderr_file=\(shellQuote(stderrFallbackURL.path))",
-                "fi",
-                "rm -f \"$stderr_file\"",
-                "",
-                "append_telemetry_failure() {",
-                "  status=\"$1\"",
-                "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
-                "  {",
-                "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
-                "    if [ -s \"$stderr_file\" ]; then",
-                "      sed 's/^/stderr: /' \"$stderr_file\"",
-                "    else",
-                "      printf 'stderr: <empty>\\n'",
-                "    fi",
-                "  } >> \"$log_file\"",
-                "}",
-                "",
-            ] + commandInvocationLines + [
-                "rm -f \"$stderr_file\"",
-                "exit 0",
-            ]
-        ).joined(separator: "\n")
-    }
-
     static func ownerRecordScriptLines(
         ownerRecordURL: URL?,
         ownerPIDEnvironmentKey: String?
@@ -2387,12 +2396,6 @@ private extension AgentLaunchInstrumentation {
             return "\"\""
         }
         return string
-    }
-
-    internal static func shellQuote(_ value: String) -> String {
-        guard value.isEmpty == false else { return "''" }
-        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
-        return "'\(escaped)'"
     }
 
     static func insertingArguments(

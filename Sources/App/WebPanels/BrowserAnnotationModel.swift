@@ -22,6 +22,7 @@ struct BrowserAnnotationDraftState: Equatable {
         }
     }
 
+    @discardableResult
     mutating func recordAnnotation(
         in capturedSection: BrowserAnnotationCapturedSection,
         kind: BrowserAnnotationKind,

@@ -31,7 +31,7 @@ struct QuickEntryView: View {
     static let chipBorder = Color(hex: 0x333333)
     static let pillBackground = Color(hex: 0x202020)
     static let pillBorder = Color(hex: 0x343434)
-    static let accentText = Color(hex: 0xE8B46A)
+    nonisolated static let accentText = Color(hex: 0xE8B46A)
     static let missingBackground = Color(hex: 0x241C11)
     static let missingBorder = Color(hex: 0x4A3A22)
     static let errorText = Color(hex: 0xE55C5C)

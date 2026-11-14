@@ -75,6 +75,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Provisioned banner wording
 
+    @MainActor
     func testProvisionedBannerTitleIdentifiesTheManagedAgent() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.title(for: .codex),
@@ -98,6 +99,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testProvisionedBannerMessageForShippedOnlyLaunch() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -112,6 +114,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testProvisionedBannerMessageIncludesDeliveredUserSkillCount() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -177,6 +180,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Launch-provided delivery row (Claude Code, Pi, OpenCode, MiMo Code)
 
+    @MainActor
     func testLaunchDeliveryStatusTitleForEachState() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
@@ -202,6 +206,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testDeliveredSkillsVersionPrefersStagedSkillsVersion() {
         let codexStatus = makeCodexStatus(bundledVersion: "0.3.0")
 
@@ -221,6 +226,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testDeliveredSkillsVersionFallsBackToCodexBundledVersion() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.deliveredSkillsVersion(
@@ -246,6 +252,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Duplicate-skills guidance copy
 
+    @MainActor
     func testDuplicateSkillsGuidanceStaysConciseAndNamesDeliveredHosts() {
         let guidance = ToasttySkillsManagementSheet.duplicateSkillsGuidanceText
 

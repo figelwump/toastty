@@ -1031,6 +1031,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             )
         }
 
+        @discardableResult
         func git(_ arguments: [String], in directory: String) throws -> String { try git(arguments, directory) }
 
         /// Closes the project's workspace, as Cmd+W on its last panel does.

@@ -146,10 +146,10 @@ final class SessionCloseControllerTests: XCTestCase {
 
     func testInteractiveCloseAsksAndHonorsCancel() throws {
         var confirmations: [String?] = []
-        var answer = false
+        let answer = MainActorValue(false)
         let fixture = try makeFixture(confirmStopAndClose: { _, detail in
             confirmations.append(detail)
-            return answer
+            return answer.value
         })
         fixture.startAgent()
         fixture.setStatus(.working)
@@ -158,7 +158,7 @@ final class SessionCloseControllerTests: XCTestCase {
         XCTAssertEqual(confirmations, ["Claude Code"])
         XCTAssertNotNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
 
-        answer = true
+        answer.value = true
         fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
         XCTAssertEqual(confirmations.count, 2)
         XCTAssertNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
@@ -166,10 +166,10 @@ final class SessionCloseControllerTests: XCTestCase {
 
     func testInteractiveWorkspaceCloseAsksOnceForAWorkingAgentAndHonorsCancel() throws {
         var prompts: [SessionCloseController.WorkspaceClose] = []
-        var answer = false
+        let answer = MainActorValue(false)
         let fixture = try makeFixture(addsSecondTab: false, confirmWorkspaceClose: { _, close in
             prompts.append(close)
-            return answer
+            return answer.value
         })
         fixture.startAgent()
         fixture.setStatus(.working)
@@ -180,7 +180,7 @@ final class SessionCloseControllerTests: XCTestCase {
 
         // The fixture fails on a separate stop confirmation, so one prompt
         // covers stopping the agent too.
-        answer = true
+        answer.value = true
         fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
         XCTAssertEqual(prompts.count, 2)
         XCTAssertNil(fixture.store.state.workspacesByID[fixture.workspaceID])

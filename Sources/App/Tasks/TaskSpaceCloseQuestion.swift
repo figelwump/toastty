@@ -55,6 +55,7 @@ struct TaskSpaceCloseQuestion: Equatable {
         ].compactMap { $0 }.joined(separator: "\n\n")
     }
 
+    @MainActor
     static func present(_ question: TaskSpaceCloseQuestion) -> TaskSpaceCloseChoice? {
         let alert = NSAlert()
         alert.messageText = question.messageText

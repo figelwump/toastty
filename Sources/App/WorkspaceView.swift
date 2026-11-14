@@ -272,7 +272,7 @@ struct WorkspaceView: View {
     private static let transientUnfocusHighlightFadeDuration: Double = 0.3
     // Once tabs compress near their minimum width, keep the focus badge
     // single-line by switching to the icon-only variant.
-    private static let workspaceTabCompactFocusIndicatorThreshold: CGFloat = 120
+    nonisolated private static let workspaceTabCompactFocusIndicatorThreshold: CGFloat = 120
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,

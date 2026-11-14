@@ -6,7 +6,8 @@ import CoreState
 import SwiftUI
 import XCTest
 
-private final class SidebarLayoutWidthRecorder {
+// SwiftUI runs layout on the main thread.
+private final class SidebarLayoutWidthRecorder: @unchecked Sendable {
     var width: CGFloat = 0
     var height: CGFloat = 0
 }
@@ -5027,7 +5028,7 @@ final class SidebarViewTests: XCTestCase {
             annotationStyleStore: makeTestAnnotationStyleStore(),
             taskCoordinator: taskCoordinator,
             taskBoard: taskBoard ?? .disabled,
-            newTask: withTaskBoard ? {} : nil,
+            newTask: withTaskBoard ? { @MainActor in } : nil,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
@@ -5881,7 +5882,7 @@ final class SidebarViewTests: XCTestCase {
             }
         }
 
-        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).compactMap { $0 as? AnyObject }
+        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).map { $0 as AnyObject }
         for child in unignoredChildren {
             values.append(
                 contentsOf: recursiveAccessibilityTextValues(
