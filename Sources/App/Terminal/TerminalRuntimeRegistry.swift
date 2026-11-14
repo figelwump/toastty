@@ -903,7 +903,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         scheduleSearchDispatch(needle: needle, panelID: panelID)
     }
 
-    func restoreTerminalFocusAfterSearch(panelID: UUID) {
+    /// Gives the terminal the keyboard on an explicit request, such as the
+    /// end of a search or Select Next Split from the coordinator's dock:
+    /// now, or on a retry while its view is not ready. The retry may take
+    /// the keyboard from a text field, as the request means it to.
+    func takeKeyboardFocus(panelID: UUID) {
         if focusPanelIfPossible(panelID: panelID) {
             return
         }

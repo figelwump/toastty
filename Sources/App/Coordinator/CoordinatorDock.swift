@@ -72,6 +72,20 @@ enum CoordinatorDockPresentation {
     }
 }
 
+/// The coordinator's dock as a stop of Select Next Split and Select
+/// Previous Split, beside the panels of the workspace it shows with.
+@MainActor
+protocol CoordinatorDockFocusStop: AnyObject {
+    /// Whether the dock shows in `windowID` now.
+    func dockShows(in windowID: UUID) -> Bool
+    /// Whether the dock's field has the keyboard in `windowID`.
+    func dockHasKeyboard(in windowID: UUID) -> Bool
+    /// Gives the dock's field the keyboard. Returns whether the dock shows.
+    func focusDockComposer(in windowID: UUID) -> Bool
+}
+
+extension CoordinatorController: CoordinatorDockFocusStop {}
+
 /// The coordinator's dock: a header with Toasty, the coordinator's status
 /// and two buttons, then the chat. The terminal stays in the coordinator's
 /// workspace: Open Full View shows it there.

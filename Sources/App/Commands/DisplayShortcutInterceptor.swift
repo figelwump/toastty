@@ -9,6 +9,9 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    /// Select Next Split and Select Previous Split, which include the
+    /// coordinator's dock. Without it, the shortcuts cycle the panels only.
+    private let splitLayoutCommandController: SplitLayoutCommandController?
     private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
@@ -63,6 +66,7 @@ final class DisplayShortcutInterceptor {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         processWatchCommandController: ProcessWatchCommandController? = nil,
+        splitLayoutCommandController: SplitLayoutCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
@@ -73,6 +77,7 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.splitLayoutCommandController = splitLayoutCommandController
         self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1218,7 +1223,11 @@ final class DisplayShortcutInterceptor {
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        if let splitLayoutCommandController {
+            _ = splitLayoutCommandController.focusSplit(direction: direction, preferredWindowID: preferredWindowID)
+        } else {
+            _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        }
         // Toastty-owned pane-focus shortcuts should not fall through to
         // embedded views once the current workspace window resolves, even if
         // there is no adjacent split target in that direction.

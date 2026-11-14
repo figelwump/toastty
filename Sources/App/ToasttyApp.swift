@@ -994,7 +994,13 @@ struct ToasttyApp: App {
             taskSpaceCloseAsker: .live(sessionRuntimeStore: sessionRuntimeStore)
         )
         self.focusedPanelCommandController = focusedPanelCommandController
-        let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let splitLayoutCommandController = SplitLayoutCommandController(
+            store: store,
+            focusPanelKeyboard: { [weak terminalRuntimeRegistry, weak webPanelRuntimeRegistry] panelID in
+                if webPanelRuntimeRegistry?.focusWebView(panelID: panelID) == true { return }
+                terminalRuntimeRegistry?.takeKeyboardFocus(panelID: panelID)
+            }
+        )
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1329,6 +1335,7 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             processWatchCommandController: processWatchCommandController,
+            splitLayoutCommandController: splitLayoutCommandController,
             isCommandPalettePresented: { [weak commandPaletteController] in
                 commandPaletteController?.isPresented ?? false
             },
@@ -1444,6 +1451,7 @@ struct ToasttyApp: App {
                 coordinatorController?.turnEndsQuietly(sessionID: sessionID) ?? false
             }
         }
+        splitLayoutCommandController.coordinatorDock = taskCoordinator.coordinatorController
         // While a coordinator exists, quick entry sends to it.
         quickEntryController.coordinatorController = taskCoordinator.coordinatorController
         // A run without saved preferences, such as an automation run, asks

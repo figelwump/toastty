@@ -1667,6 +1667,81 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(controller.canAdjustSplitLayout(preferredWindowID: windowID))
     }
 
+    func testSelectSplitCommandsIncludeTheCoordinatorDockAsTheFirstStop() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let firstPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertTrue(store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right)))
+        let lastPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertNotEqual(firstPanelID, lastPanelID)
+
+        var keyboardPanelIDs: [UUID] = []
+        let controller = SplitLayoutCommandController(store: store) { keyboardPanelIDs.append($0) }
+        let dock = FakeCoordinatorDockFocusStop(windowID: windowID)
+        controller.coordinatorDock = dock
+        func focusedPanelID() -> UUID? { store.state.workspacesByID[workspaceID]?.focusedPanelID }
+
+        // Next from the last panel goes to the dock's field.
+        XCTAssertTrue(controller.focusSplit(direction: .next, preferredWindowID: windowID))
+        XCTAssertEqual(dock.composerFocusRequests, 1)
+        XCTAssertEqual(focusedPanelID(), lastPanelID)
+
+        // Next from the dock's field goes to the first panel, with the keyboard.
+        dock.hasKeyboard = true
+        XCTAssertTrue(controller.focusSplit(direction: .next, preferredWindowID: windowID))
+        XCTAssertEqual(focusedPanelID(), firstPanelID)
+        XCTAssertEqual(keyboardPanelIDs, [firstPanelID])
+
+        // Previous from the first panel goes to the dock's field.
+        dock.hasKeyboard = false
+        XCTAssertTrue(controller.focusSplit(direction: .previous, preferredWindowID: windowID))
+        XCTAssertEqual(dock.composerFocusRequests, 2)
+        XCTAssertEqual(focusedPanelID(), firstPanelID)
+
+        // Previous from the dock's field goes to the last panel.
+        dock.hasKeyboard = true
+        XCTAssertTrue(controller.focusSplit(direction: .previous, preferredWindowID: windowID))
+        XCTAssertEqual(focusedPanelID(), lastPanelID)
+        XCTAssertEqual(keyboardPanelIDs, [firstPanelID, lastPanelID])
+
+        // Between the panels, the commands move as before.
+        dock.hasKeyboard = false
+        XCTAssertTrue(controller.focusSplit(direction: .previous, preferredWindowID: windowID))
+        XCTAssertEqual(focusedPanelID(), firstPanelID)
+        XCTAssertEqual(dock.composerFocusRequests, 2)
+        XCTAssertEqual(keyboardPanelIDs, [firstPanelID, lastPanelID])
+
+        // A hidden dock is no stop: the panels wrap around.
+        dock.shows = false
+        XCTAssertTrue(controller.focusSplit(direction: .previous, preferredWindowID: windowID))
+        XCTAssertEqual(focusedPanelID(), lastPanelID)
+        XCTAssertEqual(dock.composerFocusRequests, 2)
+    }
+
+    func testSelectSplitCommandsMoveBetweenTheCoordinatorDockAndASinglePanel() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        var keyboardPanelIDs: [UUID] = []
+        let controller = SplitLayoutCommandController(store: store) { keyboardPanelIDs.append($0) }
+
+        // Without a dock, one panel has nowhere to go.
+        XCTAssertFalse(controller.focusSplit(direction: .next, preferredWindowID: windowID))
+
+        let dock = FakeCoordinatorDockFocusStop(windowID: windowID)
+        controller.coordinatorDock = dock
+        XCTAssertTrue(controller.focusSplit(direction: .next, preferredWindowID: windowID))
+        XCTAssertEqual(dock.composerFocusRequests, 1)
+
+        // The panel keeps its focus in the state, so only its view takes
+        // the keyboard back.
+        dock.hasKeyboard = true
+        XCTAssertTrue(controller.focusSplit(direction: .previous, preferredWindowID: windowID))
+        XCTAssertEqual(keyboardPanelIDs, [panelID])
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, panelID)
+    }
+
     func testSplitLayoutCommandControllerResizeUsesAppOwnedStepAmount() throws {
         let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -1967,4 +2042,30 @@ private struct SplitWorkspaceFixture {
     let workspaceID: UUID
     let closedPanelID: UUID
     let controller: WindowCommandController
+}
+
+@MainActor
+private final class FakeCoordinatorDockFocusStop: CoordinatorDockFocusStop {
+    let windowID: UUID
+    var shows = true
+    var hasKeyboard = false
+    private(set) var composerFocusRequests = 0
+
+    init(windowID: UUID) {
+        self.windowID = windowID
+    }
+
+    func dockShows(in windowID: UUID) -> Bool {
+        shows && windowID == self.windowID
+    }
+
+    func dockHasKeyboard(in windowID: UUID) -> Bool {
+        dockShows(in: windowID) && hasKeyboard
+    }
+
+    func focusDockComposer(in windowID: UUID) -> Bool {
+        guard dockShows(in: windowID) else { return false }
+        composerFocusRequests += 1
+        return true
+    }
 }
