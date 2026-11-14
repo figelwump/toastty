@@ -722,6 +722,13 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         subspaceRowsByParentID.values.lazy.joined().first { $0.id == workspaceID }
     }
 
+    /// The task space that opens for `task`: `nil` when the task has none or
+    /// the phone does not list it.
+    public func openableTaskSpaceID(of task: RemoteTaskSummary) -> UUID? {
+        guard let id = task.taskSpaceWorkspaceID, subspaceRow(id: id) != nil else { return nil }
+        return id
+    }
+
     /// Orders two workspaces by their most urgent member.
     private static func isOrderedBefore(
         _ lhs: MobileWorkspace,

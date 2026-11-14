@@ -1,6 +1,7 @@
 @testable import ToasttyApp
 import ConversationUI
 import CoreState
+import RemoteProtocol
 import Foundation
 import Testing
 
@@ -101,23 +102,23 @@ struct CoordinatorChatLinkTests {
         #expect(chip.title == "Restore split ratios")
         #expect(chip.detail == "#283")
         let long = try #require(chips.chips[other])
-        #expect(long.title.count == CoordinatorTaskChips.maximumTitleLength)
+        #expect(long.title.count == ConversationLinkChip.maximumTaskTitleLength)
         #expect(long.title.hasSuffix("…"))
         #expect(long.detail == nil)
         // Stages differ in color.
         #expect(chip.markColor != long.markColor)
 
         let link = CoordinatorTaskLink.url(taskID: taskID)
-        #expect(CoordinatorTaskChips.presentation(for: link, chips: chips.chips) == .chip(chip))
+        #expect(ConversationLinkPresenter.taskLinkPresentation(for: link, chips: chips.chips) == .chip(chip))
         // A link to no task, and any other Toastty link, is plain text.
         for text in ["toastty://task/99999999-9999-4999-8999-999999999999", "toastty://action/open-settings",
                      "toastty://task/\(taskID.uuidString)/merge"] {
             let url = try #require(URL(string: text))
-            #expect(CoordinatorTaskChips.presentation(for: url, chips: chips.chips) == .plainText)
+            #expect(ConversationLinkPresenter.taskLinkPresentation(for: url, chips: chips.chips) == .plainText)
         }
         // Other links are left to the transcript.
         let web = try #require(URL(string: "https://example.com"))
-        #expect(CoordinatorTaskChips.presentation(for: web, chips: chips.chips) == nil)
+        #expect(ConversationLinkPresenter.taskLinkPresentation(for: web, chips: chips.chips) == nil)
     }
 
     @Test func aChipFollowsItsTasksRecord() {

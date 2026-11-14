@@ -1,6 +1,7 @@
 import AppKit
 import ConversationUI
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 /// The coordinator's conversation as a chat: the shared transcript that the
@@ -417,15 +418,13 @@ enum CoordinatorChatLinks {
 struct CoordinatorTaskChips {
     let chips: [UUID: ConversationLinkChip]
 
-    static let maximumTitleLength = 60
-
     init(items: [TaskBoardItem]) {
         var chips: [UUID: ConversationLinkChip] = [:]
         for item in items {
             guard case .task(let taskID) = item.id else { continue }
             chips[taskID] = ConversationLinkChip(
                 markColor: Self.chipColor(Self.markColor(for: item)),
-                title: Self.shortened(item.title),
+                title: ConversationLinkChip.taskTitle(item.title),
                 detail: item.pullRequest.map { "#\($0.number)" },
                 showsActivity: Self.showsActivity(for: item)
             )
@@ -434,26 +433,7 @@ struct CoordinatorTaskChips {
     }
 
     var presenter: ConversationLinkPresenter {
-        let chips = chips
-        return ConversationLinkPresenter(revision: chips.hashValue) { url in
-            Self.presentation(for: url, chips: chips)
-        }
-    }
-
-    /// `nil` for a link that is not Toastty's: the transcript draws it as
-    /// any link.
-    static func presentation(for url: URL, chips: [UUID: ConversationLinkChip]) -> ConversationLinkPresentation? {
-        guard CoordinatorTaskLink.isToasttyURL(url) else { return nil }
-        guard let taskID = CoordinatorTaskLink.taskID(in: url), let chip = chips[taskID] else {
-            return .plainText
-        }
-        return .chip(chip)
-    }
-
-    static func shortened(_ title: String) -> String {
-        let oneLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard oneLine.isEmpty == false else { return "Untitled task" }
-        return oneLine.count > maximumTitleLength ? oneLine.prefix(maximumTitleLength - 1) + "…" : oneLine
+        .taskChips(chips)
     }
 
     /// A spinner in place of the dot while the task's agent works, as the
