@@ -27,6 +27,7 @@ struct CoordinatorChatView: View {
     let hasPanelFocus: Bool
     /// Where this view of the chat is.
     var host: CoordinatorChatModel.Host = .panel
+    @StateObject private var linkOpener = CoordinatorChatLinkOpener()
 
     /// The size of the notice's text before the text scale: the caption
     /// style's size on macOS.
@@ -43,19 +44,20 @@ struct CoordinatorChatView: View {
 
     var body: some View {
         let chips = CoordinatorTaskChips(items: board.items())
-        VStack(spacing: 0) {
-            ToasttyTranscriptView(
-                state: model.presentation,
-                isSubmitting: false,
-                loadOlder: { model.loadOlder() },
-                queuedMessageAction: { model.perform($0) },
-                readAcknowledgementEpoch: model.sessionStatus,
+        // The handler of this pass, for the one action the text views hold.
+        // It takes what it needs and not the view, which holds the opener.
+        linkOpener.open = { [board, store, controller, windowID] url in
+            Self.open(url, chips: chips, board: board, store: store, controller: controller, windowID: windowID)
+        }
+        return VStack(spacing: 0) {
+            CoordinatorChatTranscriptPane(
+                model: model,
+                presentation: model.presentation,
+                sessionStatus: model.sessionStatus,
                 workingIndicator: model.workingIndicator,
-                jumpToLiveEdgeRequest: $model.jumpToLiveEdgeRequest,
-                canAcknowledgeRead: false,
-                options: Self.transcriptOptions,
-                replyToMessage: { model.reply(to: $0) }
+                jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest
             )
+            .equatable()
             .overlay {
                 if model.showsIntroduction {
                     introduction
@@ -72,7 +74,7 @@ struct CoordinatorChatView: View {
         .background(ConversationDesignTokens.background)
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.conversationTextScale, model.textScale)
-        .environment(\.openURL, OpenURLAction { url in open(url, chips: chips) })
+        .environment(\.openURL, linkOpener.action)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
         // Read the conversation only while the chat is on screen.
@@ -249,7 +251,14 @@ struct CoordinatorChatView: View {
     /// so only three things can happen: a task's space opens, the Tasks
     /// view shows a task whose space is closed, or a web page opens in the
     /// browser. Nothing else is opened and nothing is run.
-    private func open(_ url: URL, chips: CoordinatorTaskChips) -> OpenURLAction.Result {
+    private static func open(
+        _ url: URL,
+        chips: CoordinatorTaskChips,
+        board: TaskBoardStore,
+        store: AppStore,
+        controller: CoordinatorController,
+        windowID: UUID
+    ) -> OpenURLAction.Result {
         switch CoordinatorChatLinks.action(for: url, taskTarget: { taskID in
             guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
             if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
@@ -276,6 +285,59 @@ struct CoordinatorChatView: View {
         case .ignore:
             return .discarded
         }
+    }
+}
+
+/// The transcript of the chat. The chat view draws again for every change of
+/// the session store and the task board, most of which leave the
+/// conversation as it is. This view compares what the transcript shows, so
+/// SwiftUI works through the rows again only when that changed. The
+/// transcript's actions all go to the model, which stays the same object.
+@available(macOS 15.0, *)
+private struct CoordinatorChatTranscriptPane: View, Equatable {
+    let model: CoordinatorChatModel
+    let presentation: ToasttyConversationPresentationState
+    let sessionStatus: ToasttyTranscriptSessionStatus?
+    let workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let jumpToLiveEdgeRequest: UInt64
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model
+            && lhs.presentation == rhs.presentation
+            && lhs.sessionStatus == rhs.sessionStatus
+            && lhs.workingIndicator == rhs.workingIndicator
+            && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
+    }
+
+    var body: some View {
+        ToasttyTranscriptView(
+            state: presentation,
+            isSubmitting: false,
+            loadOlder: { model.loadOlder() },
+            queuedMessageAction: { model.perform($0) },
+            readAcknowledgementEpoch: sessionStatus,
+            workingIndicator: workingIndicator,
+            jumpToLiveEdgeRequest: Binding(
+                get: { model.jumpToLiveEdgeRequest },
+                set: { model.jumpToLiveEdgeRequest = $0 }
+            ),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions,
+            replyToMessage: { model.reply(to: $0) }
+        )
+    }
+}
+
+/// Holds one `OpenURLAction` for a chat view's lifetime. An action made in
+/// the view's body is a new value on every pass, and the environment then
+/// tells every text view in the transcript that its link action changed.
+/// This action stays the same value and calls the handler of the latest
+/// pass.
+@MainActor
+final class CoordinatorChatLinkOpener: ObservableObject {
+    var open: (URL) -> OpenURLAction.Result = { _ in .discarded }
+    private(set) lazy var action = OpenURLAction { [weak self] url in
+        self?.open(url) ?? .discarded
     }
 }
 

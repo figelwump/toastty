@@ -25,6 +25,17 @@ final class PullRequestStateCache: ObservableObject {
         /// Includes failed requests, so failures cannot cause a tight retry loop.
         var requestedAt: Date?
         var lastError: String?
+
+        /// The entry without the times of its requests. `state(for:)` and
+        /// `answer(for:)` can give another answer only when this part
+        /// changes, or when a grace period ends; see `resolved(_:at:)`.
+        fileprivate var withoutRequestTimes: Entry {
+            var entry = self
+            entry.knownAt = nil
+            entry.answeredAt = nil
+            entry.requestedAt = nil
+            return entry
+        }
     }
 
     static let requestTimeout: TimeInterval = 30
@@ -38,7 +49,22 @@ final class PullRequestStateCache: ObservableObject {
     /// a failed request asks again with `viewFields`.
     nonisolated static let readinessViewFields = viewFields + ",mergeStateStatus,reviewDecision,statusCheckRollup"
 
-    @Published private(set) var entries: [String: Entry] = [:]
+    /// Not `@Published`: GitHub is asked again every 15 seconds to two
+    /// minutes for each pull request, and an answer that repeats the last
+    /// one changes only the times of the request. `setEntry` publishes when
+    /// the change can show.
+    private(set) var entries: [String: Entry] = [:]
+    /// Counts the publishes of `setEntry`.
+    private var publishedChangeCount = 0
+    /// The first moment at which a grace period that ran at the last
+    /// publish ends. From then on, views show a readiness that ended.
+    private var publishedGraceEndsAt: Date?
+    /// The count that `stateRevision` last returned, when it was worked
+    /// out, and the first moment at which a grace period that ran then ends.
+    private var stateRevisionCount = 0
+    private var stateRevisionSeenChanges = 0
+    private var stateRevisionReadAt: Date?
+    private var stateRevisionEndsAt: Date?
     /// Called with each answer that changes the cache.
     var answerObserver: ((WorkspacePullRequestLink, TaskPullRequestState) -> Void)?
 
@@ -58,19 +84,63 @@ final class PullRequestStateCache: ObservableObject {
     }
 
     func state(for link: WorkspacePullRequestLink) -> TaskPullRequestState? {
-        guard let entry = entries[link.url], var state = entry.answer else { return nil }
-        guard state.state == .open else { return state }
+        entries[link.url].flatMap { Self.resolved($0, at: now()).state }
+    }
+
+    /// The state an entry gives at `time`, and the moment at which that
+    /// answer changes with the time alone: the end of a grace period that
+    /// runs at `time`.
+    private static func resolved(_ entry: Entry, at time: Date) -> (state: TaskPullRequestState?, changesAt: Date?) {
+        guard var state = entry.answer else { return (nil, nil) }
+        guard state.state == .open else { return (state, nil) }
         if entry.readinessWasReported == false { state.mergeability = nil }
-        if state.mergeability?.isKnown == true, entry.lastError == nil { return state }
+        if state.mergeability?.isKnown == true, entry.lastError == nil { return (state, nil) }
         if let head = state.headSHA, let known = entry.knownState, known.headSHA == head,
-           let knownAt = entry.knownAt, now().timeIntervalSince(knownAt) < Self.mergeabilityGracePeriod {
+           let knownAt = entry.knownAt, time.timeIntervalSince(knownAt) < Self.mergeabilityGracePeriod {
             state.mergeability = known.mergeability
+            return (state, knownAt.addingTimeInterval(Self.mergeabilityGracePeriod))
         } else if entry.lastError != nil {
             // Keep the PR's lifecycle state, but stop presenting old readiness
             // as current after the grace period.
             state.mergeability = nil
         }
-        return state
+        return (state, nil)
+    }
+
+    /// A number that changes whenever `state(for:)` or `answer(for:)` can
+    /// give another answer than at the last read of this number: after a
+    /// change of an entry that can show, and after a grace period ended.
+    /// Equal numbers mean equal answers for every link. A reader that keeps
+    /// what it derived from the answers reads the number at each use.
+    var stateRevision: Int {
+        let time = now()
+        let graceEnded = stateRevisionEndsAt.map { time >= $0 } ?? false
+        // A clock that moved back can put the time inside a grace period
+        // that had ended.
+        let clockMovedBack = stateRevisionReadAt.map { time < $0 } ?? false
+        if graceEnded || clockMovedBack || stateRevisionSeenChanges != publishedChangeCount {
+            stateRevisionCount &+= 1
+            stateRevisionSeenChanges = publishedChangeCount
+            stateRevisionReadAt = time
+            stateRevisionEndsAt = entries.values.compactMap { Self.resolved($0, at: time).changesAt }.min()
+        }
+        return stateRevisionCount
+    }
+
+    /// Stores an entry. It publishes, before the change as `@Published`
+    /// does, when the change can show. An entry that only gets new request
+    /// times publishes nothing, except once after a grace period ended:
+    /// views drew the readiness that ended, and nothing else tells them.
+    private func setEntry(_ entry: Entry, for url: String) {
+        let time = now()
+        let graceEnded = publishedGraceEndsAt.map { time >= $0 } ?? false
+        let publishes = graceEnded || entries[url]?.withoutRequestTimes != entry.withoutRequestTimes
+        if publishes { objectWillChange.send() }
+        entries[url] = entry
+        if publishes {
+            publishedChangeCount &+= 1
+            publishedGraceEndsAt = entries.values.compactMap { Self.resolved($0, at: time).changesAt }.min()
+        }
     }
 
     /// The last reported checks for this head, without the Merge button's
@@ -89,7 +159,7 @@ final class PullRequestStateCache: ObservableObject {
             // views stop displaying the previous readiness on this tick.
             entry.knownState = nil
             entry.knownAt = nil
-            entries[link.url] = entry
+            setEntry(entry, for: link.url)
         }
         let entry = entries[link.url]
         let answer = entry?.answer
@@ -153,7 +223,7 @@ final class PullRequestStateCache: ObservableObject {
                 if let answeredAt = entry.answeredAt, answeredAt > startedAt { return }
                 entry.requestedAt = startedAt
                 entry.lastError = result.problemSummary
-                self.entries[link.url] = entry
+                self.setEntry(entry, for: link.url)
             }
         }
         inFlight[link.url] = task
@@ -188,7 +258,7 @@ final class PullRequestStateCache: ObservableObject {
         entry.answeredAt = observedAt
         entry.requestedAt = max(entry.requestedAt ?? observedAt, observedAt)
         entry.lastError = nil
-        entries[link.url] = entry
+        setEntry(entry, for: link.url)
         if let state = self.state(for: link), previous != state {
             answerObserver?(link, state)
         }

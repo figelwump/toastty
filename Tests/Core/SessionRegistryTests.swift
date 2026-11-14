@@ -1808,12 +1808,21 @@ struct SessionRegistryTests {
             at: now.addingTimeInterval(3)
         )
 
+        // A reader that keeps statuses reads again at the end of the grace
+        // period: the registry reports no other moment.
+        let graceEnd = now.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval)
+        #expect(registry.nextWorkspaceStatusChange(after: now.addingTimeInterval(4)) == graceEnd)
+        #expect(registry.nextWorkspaceStatusChange(after: graceEnd) == nil)
+        let reader = SessionRegistry.WorkspaceStatusReader(registry)
+        #expect(reader.statuses(for: workspaceID, at: graceEnd.addingTimeInterval(-0.001)).first?.projection == .resuming)
+
         let status = try #require(registry.workspaceStatuses(
             for: workspaceID,
-            at: now.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval)
+            at: graceEnd
         ).first)
         #expect(status.status == SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"))
         #expect(status.projection == .none)
+        #expect(reader.statuses(for: workspaceID, at: graceEnd) == [status])
     }
 
     @Test
