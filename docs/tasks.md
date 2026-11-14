@@ -363,9 +363,38 @@ worktree.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it. A busy agent queues it as typed input. It fails when the
-  task has no running agent, and says so when the message was typed but may not
-  have been submitted; check that terminal before you send it again.
+  agent and submits it, whatever the agent does. A busy agent queues it as typed
+  input, and the Return key can answer a permission prompt that is on screen. It
+  fails when the task has no running agent, and says so when the message was
+  typed but may not have been submitted; check that terminal before you send it
+  again.
+- `toastty task send <task-id> "<message>" --steer` checks the agent first, so
+  that the message can go to a busy agent. Toastty types nothing into a
+  permission prompt or a question. The result's `delivery` says what it did,
+  and `message` says it in a sentence:
+
+  | `delivery` | What Toastty did |
+  | --- | --- |
+  | `sent` | The agent was at its open prompt. Toastty typed the message there. |
+  | `steered` | A Claude Code or Codex agent was in a turn. Toastty typed the message into that turn. Claude Code reads it after its active tool calls finish, or when the turn ends. |
+  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt or a question is on screen. `queuePosition` counts from 1. |
+
+  Toastty holds at most 5 messages for an agent. It loses them when Toastty
+  quits or the agent restarts, and reports neither. The command fails, with
+  nothing typed, in these cases:
+  - Toastty cannot tell what the agent does: it does not follow that agent's
+    conversation, or the agent starts, ended or failed.
+  - Someone typed in the task's terminal since the agent's latest turn
+    started, at a time when Toastty did not follow that conversation. That
+    text can still be in the agent's prompt, and Toastty does not add to it.
+    Toastty follows every agent's conversation while Remote Access is on,
+    and otherwise from the first `--steer` send to the task.
+  - 5 messages already wait.
+
+  The message is not your typing, so `lastUserInputAt` does not move. Toastty
+  learns of a permission prompt from the agent's hooks, a short time after the
+  prompt comes on screen. A message that arrives in that time can still
+  reach the prompt.
 - `toastty task watch <task-id> --until <condition>` tells the calling agent's
   own task once, by a one-line message, when the other task reaches the
   condition. A waiting agent can then end its turn instead of polling in a

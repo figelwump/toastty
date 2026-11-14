@@ -92,6 +92,60 @@ extension TaskCoordinator {
     /// Types `text` into the task's agent and submits it.
     @discardableResult
     func send(taskID: UUID, text: String) throws -> TaskSessionInfo {
+        let (record, session) = try sendTarget(taskID: taskID, text: text)
+        switch deliver(text, to: session, taskID: taskID) {
+        case .delivered:
+            return session
+        case .uncertain:
+            throw Self.uncertainSendError(record)
+        case .unavailable:
+            throw Self.unavailableSendError(record)
+        }
+    }
+
+    /// Gives `text` to the task's agent whatever it does now, without
+    /// typing into a permission prompt or a question: see
+    /// `TaskSessionProviding.deliverSteering`. The message is the sender's,
+    /// not the user's typing, so the task's last user input does not move.
+    func sendSteering(taskID: UUID, text: String) async throws -> (session: TaskSessionInfo, delivery: TaskSteerDelivery) {
+        let (record, session) = try sendTarget(taskID: taskID, text: text)
+        let result = await sessions?.deliverSteering(text, panelID: session.panelID) ?? .failure(.stateUnknown)
+        var metadata = [
+            "task_id": taskID.uuidString,
+            "session_id": session.sessionID,
+            "utf8_count": String(text.utf8.count),
+        ]
+        switch result {
+        case .success(let delivery):
+            metadata["delivery"] = delivery.name
+            ToasttyLog.info("Sent a message to a task under the input checks", category: .tasks, metadata: metadata)
+            return (session, delivery)
+        case .failure(let failure):
+            metadata["failure"] = String(describing: failure)
+            ToasttyLog.warning("A message to a task was not sent under the input checks", category: .tasks, metadata: metadata)
+            switch failure {
+            case .stateUnknown:
+                throw TaskError(
+                    "Toastty cannot tell what task \(record.title)'s agent does now, so it typed nothing. Send the message again when the agent is idle."
+                )
+            case .unavailable:
+                throw Self.unavailableSendError(record)
+            case .uncertain:
+                throw Self.uncertainSendError(record)
+            case .typedInTerminal:
+                throw TaskError(
+                    "Someone typed in task \(record.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
+                )
+            case .queueFull:
+                throw TaskError(
+                    "Task \(record.title) already has \(TaskSteerSender.maximumHeldMessages) messages that wait for its agent's next prompt. Nothing was added."
+                )
+            }
+        }
+    }
+
+    /// The task and its running agent, for a message that is not empty.
+    private func sendTarget(taskID: UUID, text: String) throws -> (TaskRecord, TaskSessionInfo) {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
@@ -102,16 +156,17 @@ extension TaskCoordinator {
         guard let session = liveAgentSession(of: record) else {
             throw TaskError("Task \(record.title) has no running agent.")
         }
-        switch deliver(text, to: session, taskID: taskID) {
-        case .delivered:
-            return session
-        case .uncertain:
-            throw TaskError(
-                "Toastty typed the message into task \(record.title)'s terminal but may not have submitted it. Check that terminal before you send it again."
-            )
-        case .unavailable:
-            throw TaskError("Toastty could not type into task \(record.title)'s terminal.")
-        }
+        return (record, session)
+    }
+
+    private static func uncertainSendError(_ record: TaskRecord) -> TaskError {
+        TaskError(
+            "Toastty typed the message into task \(record.title)'s terminal but may not have submitted it. Check that terminal before you send it again."
+        )
+    }
+
+    private static func unavailableSendError(_ record: TaskRecord) -> TaskError {
+        TaskError("Toastty could not type into task \(record.title)'s terminal.")
     }
 
     private func deliver(_ text: String, to session: TaskSessionInfo, taskID: UUID) -> TerminalInputDeliveryResult {
