@@ -69,6 +69,61 @@ struct RemoteTaskBoardTests {
         ])
     }
 
+    /// What the phone needs to draw families and To ship lines in project
+    /// cards: each task's parent, also one the board leaves out because it
+    /// is Done, a parent's "N/M merged", and the project of a lane's tasks.
+    @Test func tasksCarryTheirParentAndChildProgress() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        let harness = try Harness(fixture)
+        defer { harness.removeRuntimeFiles() }
+        func insert(_ title: String, parent: UUID? = nil, change: (inout TaskRecord) -> Void = { _ in }) throws -> TaskRecord {
+            var record = TaskRecord(
+                createdAt: Date(), text: title, title: title, slug: title, source: .cli,
+                resolved: TaskFields(agent: "codex"), workspaceID: fixture.workspaceID,
+                projectRoot: fixture.projectRoot, setup: .started, parentTaskID: parent
+            )
+            change(&record)
+            try fixture.coordinator.records.insert(record)
+            return record
+        }
+        func merge(_ record: inout TaskRecord) {
+            record.pullRequestURL = "https://github.com/example/toastty/pull/\(abs(record.id.hashValue) % 1000 + 200)"
+            record.mergedAt = Date()
+            record.mergeCommit = String(record.id.uuidString.prefix(12))
+        }
+
+        let finishedParent = try insert("Signup feedback") { $0.doneAt = Date() }
+        let orphan = try insert("Copy fixes", parent: finishedParent.id)
+        let parent = try insert("Billing rework")
+        let merged = try insert("Billing API", parent: parent.id, change: merge)
+        let open = try insert("Billing UI", parent: parent.id)
+        _ = try insert("Billing spike", parent: parent.id) { $0.archivedAt = Date() }
+
+        let board = try #require(harness.service.facadeSessionList(at: .now).tasks)
+        func task(_ record: TaskRecord) throws -> RemoteTaskSummary {
+            try #require(board.tasks.first { $0.id == record.id })
+        }
+        // A Done parent is not on the board, so its child names it.
+        #expect(board.tasks.contains { $0.id == finishedParent.id } == false)
+        #expect(try task(orphan).parentTaskID == finishedParent.id)
+        #expect(try task(orphan).parentTaskTitle == "Signup feedback")
+        #expect(try task(open).parentTaskID == parent.id)
+        #expect(try task(open).parentTaskTitle == "Billing rework")
+        // The archived child does not count; the merged one does.
+        #expect(try task(parent).childProgress == RemoteTaskChildProgress(merged: 1, total: 2))
+        #expect(try task(parent).parentTaskID == nil)
+        #expect(try task(open).childProgress == nil)
+        // The merged child waits for a release. Its lane's recent task
+        // names the project, as a project card picks its To ship tasks.
+        #expect(try task(merged).group == .toShip)
+        #expect(try task(merged).parentTaskTitle == "Billing rework")
+        let lane = try #require(board.toShip.first)
+        #expect(lane.recentTaskIDs == [merged.id])
+        #expect(try task(merged).projectWorkspaceID == fixture.workspaceID)
+        #expect(board.finishedByProject.first { $0.projectWorkspaceID == fixture.workspaceID }?.toShipCount == 1)
+    }
+
     @Test func aChangeOnlyTheBoardSeesSendsANewSnapshot() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let harness = try Harness(fixture)
