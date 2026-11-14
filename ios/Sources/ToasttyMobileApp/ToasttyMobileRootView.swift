@@ -337,6 +337,16 @@ struct ToasttyMobileRootView: View {
         navigationPath.append(.workspace(workspaceID))
     }
 
+    /// Opens a workspace from a conversation. The conversation route always
+    /// sits on top of the stack, so the conversation closes and the
+    /// workspace takes its place, as a workspace link opens one.
+    private func openWorkspaceInPlaceOfConversation(_ workspaceID: UUID) {
+        sessionController.homeController.dismissConversation()
+        var path = navigationPath.synchronized(with: nil)
+        if path.last != .workspace(workspaceID) { path.append(.workspace(workspaceID)) }
+        navigationPath = path
+    }
+
     private func handleDeepLink(_ url: URL) {
         guard let destination = deepLinkParser?.parse(url) else { return }
         switch sessionController.state {
@@ -547,7 +557,8 @@ struct ToasttyMobileRootView: View {
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
             canAcknowledgeRead: liveConversation?.conversationID == conversationID
                 && liveConversation?.canAcknowledgeRead == true,
-            onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
+            onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID),
+            openTaskSpace: openWorkspaceInPlaceOfConversation
         )
         .id(conversationID)
 #if DEBUG

@@ -100,7 +100,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
-    func testTaskLinksDrawAsChipsThatOpenTheTask() {
+    func testTaskLinksDrawAsChipsThatOpenTheTaskSpace() {
         let app = launchTaskFixture(taskLinks: true)
         let segment = app.segmentedControls["toastty-mobile-home-segment"]
         XCTAssertTrue(segment.waitForExistence(timeout: 10))
@@ -128,14 +128,25 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         }
         attachScreenshot(named: "task-link-chips", of: app)
 
-        // A tap opens the task's detail.
-        question.tap()
+        // A task with no task space to open shows its detail instead.
+        link(containing: "#259", in: app).tap()
         let title = app.staticTexts["toastty-task-detail-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertEqual(title.label, "early-session-titles")
-        attachScreenshot(named: "task-link-chip-opens-detail", of: app)
-        app.buttons["Done"].tap()
+        XCTAssertEqual(title.label, "Parent task rollup")
+        attachScreenshot(named: "task-link-chip-without-task-space-opens-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+
+        // A tap opens the task's space in place of the conversation, so Back
+        // returns to Home.
+        question.tap()
+        let taskSpace = app.navigationBars["early-session-titles"]
+        XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-conversation-title"].exists)
+        attachScreenshot(named: "task-link-chip-opens-task-space", of: app)
+        taskSpace.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(segment.waitForExistence(timeout: 5))
     }
 
     /// A chip keeps its text on one line with no-break spaces and word

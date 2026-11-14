@@ -17,7 +17,8 @@ struct ToasttyConversationScreen: View {
     /// exactly that draft.
     @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
     @State private var isShowingDetails = false
-    /// The task detail that ⓘ opened, for a session in a task space.
+    /// The task detail that ⓘ opened, for a session in a task space, or that
+    /// a task chip opened for a task with no task space to open.
     @State private var taskDetail: ToasttyTaskDetailSelection?
 
     let conversationID: UUID
@@ -49,6 +50,8 @@ struct ToasttyConversationScreen: View {
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
+    /// Leaves this conversation for a task space.
+    let openTaskSpace: (UUID) -> Void
 
     init(
         conversationID: UUID,
@@ -81,7 +84,8 @@ struct ToasttyConversationScreen: View {
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         canAcknowledgeRead: Bool,
-        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
+        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
+        openTaskSpace: @escaping (UUID) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
         self.controller = controller
@@ -111,6 +115,7 @@ struct ToasttyConversationScreen: View {
         self.submitInteractionAnswer = submitInteractionAnswer
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
+        self.openTaskSpace = openTaskSpace
     }
 
     var body: some View {
@@ -162,10 +167,16 @@ struct ToasttyConversationScreen: View {
         .environment(\.conversationLinkPresenter, taskChips.presenter)
         .environment(\.openURL, OpenURLAction { url in
             if CoordinatorTaskLink.isToasttyURL(url) {
-                // The text is an agent's: only a task chip opens anything,
-                // and it opens that task's detail.
+                // The text is an agent's: only a task chip opens anything. It
+                // opens the task's space, or the task's detail when the phone
+                // has no task space to open.
                 guard let taskID = taskChips.taskID(for: url) else { return .discarded }
-                taskDetail = ToasttyTaskDetailSelection(id: taskID)
+                if let task = controller.snapshot.taskBoard?.task(id: taskID),
+                   let taskSpaceID = controller.snapshot.openableTaskSpaceID(of: task) {
+                    openTaskSpace(taskSpaceID)
+                } else {
+                    taskDetail = ToasttyTaskDetailSelection(id: taskID)
+                }
                 return .handled
             }
             guard let reference = ToasttyPreviewURLPolicy.localFileReference(url) else { return .systemAction }

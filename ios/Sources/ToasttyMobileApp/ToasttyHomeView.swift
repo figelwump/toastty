@@ -267,7 +267,7 @@ struct ToasttyHomeView: View {
             if let task = controller.snapshot.taskBoard?.task(id: selection.id) ?? taskDetailFallback {
                 ToasttyTaskDetailSheet(
                     task: task,
-                    canOpenTaskSpace: task.taskSpaceWorkspaceID.map { controller.snapshot.subspaceRow(id: $0) != nil } ?? false,
+                    canOpenTaskSpace: controller.snapshot.openableTaskSpaceID(of: task) != nil,
                     openTaskSpace: openWorkspace,
                     controller: controller
                 )
