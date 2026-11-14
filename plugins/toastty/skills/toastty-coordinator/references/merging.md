@@ -79,7 +79,7 @@ is obvious.
   `userTypedMinutesAgo` is null or more than 15. In
   `"$TOASTTY_CLI_PATH" --json task get <task-id>`, `parentTaskID` and `merge`
   are null: it is not a child of another task, and no merge is under way.
-  The ledger has no `merging` line for it. Its `text` does not start with
+  The ledger has no `merging` line for it. Its `text` has no line
   `[coordinator review]`: the user reads each change that comes from your
   review.
 
@@ -108,7 +108,8 @@ tell the user that the task waits at a prompt. Otherwise:
    denial, say that a permission rule for this command in your agent program
    lets you ask next time.
 3. Write a `merging` line in the ledger, with the head commit and with the
-   rule, or with "the user asked":
+   rule, or with "the user asked". For a rule, also write the `review` line
+   in `decisions.md`, with `verdict=rule`, as `references/improving.md` says:
 
    ```text
    - 2026-11-09T19:12Z merging 9d03e7c [Fix the typo in the guide](toastty://task/<id>): by rule "toastty: documentation up to 40 lines".

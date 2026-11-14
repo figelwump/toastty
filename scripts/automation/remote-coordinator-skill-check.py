@@ -1941,9 +1941,9 @@ def review_ask(run):
               and not any(re.search(r'\bbuild\b|\bci\b', r.lower()) for r in rules), rules, required=False)
     run.check('it commits the rule, and only the policy', int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
               and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md', run.git('log', '--stat', '--format=%h %s'))
-    run.check("the new task's text starts with the mark of a task from a review", bool(created)
-              and (created[0].get('text') or '').lstrip().startswith('[coordinator review]'),
-              [(t.get('text') or '')[:300] for t in created])
+    run.check("the new task's text has the line that marks a task from a review", bool(created)
+              and '[coordinator review]' in [line.strip() for line in (created[0].get('text') or '').splitlines()],
+              [(t.get('text') or '')[-300:] for t in created])
     run.check('friction.md shows the pattern as sent on, with the time of this review',
               any('validation-mac-full' in line for line in run.friction_section('Sent on'))
               and 'Last review: never' not in run.friction(), run.friction(), required=False)
@@ -1998,7 +1998,9 @@ def review_timer(run):
     task = waits_for_ci(run)
     # Far enough ahead that the first wake ends before it: a check must be a minute away.
     run.seed_policy(improving=f'- Review once a day at {review_time(9)}. Proposals only.')
-    review_records(run, last=day(1, '%Y-%m-%dT%H:%MZ'))
+    # The last review was after yesterday's review time, so none is due before today's.
+    last = (datetime.now(timezone.utc) - timedelta(hours=20)).strftime('%Y-%m-%dT%H:%MZ')
+    review_records(run, last=last)
     run.open_coordinator()
     policy, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
@@ -2007,11 +2009,11 @@ def review_timer(run):
     wake = run.coordinator()['wake']
     seconds = (parse_time(wake['nextWakeAt']) - time.time()) if wake.get('nextWakeAt') else None
     run.check('a wake before the time sets the next check for the review', seconds is not None and 0 < seconds <= 570, wake)
-    run.check('it makes no review before the time', 'Last review: ' + day(1) in run.friction(), run.friction())
+    run.check('it makes no review before the time', 'Last review: ' + last in run.friction(), run.friction())
     later = run.new_turns(wake=True, timeout=TURN_TIMEOUT + 600)
     said = run.said(later)
     run.check('at the time, it makes the review: friction.md has the new time',
-              'Last review: ' + day(1) not in run.friction() and 'Last review: ' + day(0)[:8] in run.friction(), run.friction())
+              'Last review: ' + last not in run.friction() and 'Last review: never' not in run.friction(), run.friction())
     run.check('it tells the user the proposals', 'validation mac' in said.lower(), said, required=False)
     run.check('it starts nothing without the user: no task, no rule, no commit',
               created_since(run, before) == [] and run.policy() == policy
@@ -2038,7 +2040,7 @@ def review_empty(run):
     end_turn_for_ci(run, task)
     turns = run.new_turns(wake=True)
     run.check('the review counts as made: friction.md has the new time',
-              'Last review: ' + day(1) not in run.friction() and 'Last review: ' + day(0)[:8] in run.friction(), run.friction())
+              'Last review: ' + day(1) not in run.friction() and 'Last review: never' not in run.friction(), run.friction())
     run.check('the line that was seen once stays open', any('old-test-window' in line for line in run.friction_section('Open')),
               run.friction())
     run.check('it starts nothing: no task and no rule', created_since(run, before) == [] and run.policy() == policy,

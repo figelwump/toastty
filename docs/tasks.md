@@ -1079,7 +1079,10 @@ task does that, after your yes.
   your merge, the line gets the result: the change merged as it was reviewed
   or changed first, and how long it waited. A question line gets whether
   your answer was the one the coordinator suggested. The file names a task
-  by its ID and holds no text from a task.
+  by its ID and holds no text from a task. A merge that the coordinator
+  asked for under a rule gets a line too. That merge was not your decision,
+  so it supports no wider rule. When you tell the coordinator that such a
+  merge was wrong, it proposes to remove or narrow the rule.
 
 **The review.** The coordinator makes one when you ask, such as "what slows
 us down?" or "where am I the bottleneck?", and at the time that the Improving
@@ -1112,7 +1115,8 @@ What a review cannot do:
 
 - It starts nothing without your yes: no task, no policy line, no rule.
 - A task that came from a review never merges under a Merging rule. You read
-  each change that comes from a review.
+  each change that comes from a review. The task's text ends with the line
+  `[coordinator review]`, which marks it.
 - It proposes no task while 2 tasks from earlier reviews are open.
 - It never proposes a rule for a change to the build, CI, a release,
   dependencies, secrets or stored data, and never a change to the Never

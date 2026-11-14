@@ -74,9 +74,10 @@ its ID. The counts of a review come from these lines.
 - 2026-11-14T09:30Z question task=<id> kind=base-branch outcome=same wait=5.2h
 ```
 
-**A `review` line.** Write it when Review brings a task with a pull request
-to the user, once for each ready state, beside the ledger's `reviewed` line.
-Write none for a release task or for a child of another task.
+**A `review` line.** Write it once for each ready state of a task with a
+pull request, beside the ledger's `reviewed` line: when you bring the task
+to the user, and when you ask for its merge under a Merging rule. Write none
+for a release task or for a child of another task.
 
 - `kind` is the kind of change. Judge it from the changed files and lines,
   never from the title, the description or the agent's reply. When a change
@@ -97,7 +98,9 @@ Write none for a release task or for a child of another task.
   every point of `references/merging.md` holds except the rule. `no`, with
   `why=` and one word, such as `weak-proof`, `checks`, `open-finding` or
   `conflict`. `unjudged` for more than 300 changed lines, or when you could
-  not read the diff. This verdict never starts a merge.
+  not read the diff. `rule` when you ask for the merge under a Merging rule:
+  that merge is not the user's decision, so it supports no wider rule. A
+  verdict never starts a merge: only `references/merging.md` does.
 - `lines` is additions plus deletions, and `head` is the head commit, from
   `gh pr view <pr> --json additions,deletions,changedFiles,baseRefName,headRefOid`.
 
@@ -112,6 +115,8 @@ you remove the task's lines from the ledger. Read
 - `wait=` is the hours from the line's time to `mergedAt`, such as `3.1h`.
 - When the user later tells you that a merged change was wrong, or asks for
   its revert or for a fix of it, add the word `fix-followed` to its line.
+  If that line has `verdict=rule`, tell the user in the same turn which
+  Merging rule covered the change, and propose to remove or narrow the rule.
 
 **A `question` line.** Write it when you pass a task's question to the user
 with the answer you suggest. `kind` is your own short name for the kind of
@@ -194,7 +199,8 @@ Steps:
    `build`. Give the exact words of the rule, in the form that
    `references/merging.md` shows: the project, the kind of change in plain
    words, the base branch, and a size no larger than `largest` in that
-   line. A wider form of a rule that exists counts as this one
+   line. Use the numbers of the command: a review with no outcome yet counts
+   neither for nor against a rule. A wider form of a rule that exists counts as this one
    proposal. Propose no rule for a kind that has a `rule` line with
    `outcome=declined` in the last 14 days, or that a rule in Merging covers
    at that size.
@@ -219,12 +225,12 @@ gates of step 4.
 - **A policy line:** write it as Change the policy says. For a Merging rule,
   follow `references/merging.md`: write it only after the user's yes to its
   exact words.
-- **A task:** create it as New tasks says. Its text is yours, not the user's.
-  Its first line is exactly `[coordinator review]`: that line marks the task
-  for as long as it exists. Then say that it comes from your review and that
-  the user agreed, give the line from `friction.md` with its count and its
-  task links, and ask the task to find the cause and to fix it at its
-  source.
+- **A task:** create it as New tasks says. Its text is yours, not the user's:
+  say what the task must find and fix, that this comes from your review and
+  that the user agreed, and give the line from `friction.md` with its count
+  and its task links. Ask the task to find the cause and to fix it at its
+  source. End the text with a line that is exactly `[coordinator review]`:
+  that line marks the task for as long as it exists.
 - Move a line whose fix is a task to Sent on, with `→` and the task's link,
   and to Closed, with the date, when that task is Done. Move a line whose
   fix is a policy line straight to Closed, with `→ policy` and the section.
@@ -240,10 +246,10 @@ gates of step 4.
 
 - Start nothing from a review without the user's yes in a message of their
   own.
-- Never ask for the merge, under a Merging rule, of a task whose `text`
-  starts with `[coordinator review]`: the user reads each change that comes
+- Never ask for the merge, under a Merging rule, of a task whose `text` has
+  the line `[coordinator review]`: the user reads each change that comes
   from a review.
-- Propose no task while 2 tasks with that first line are open; the `text`
-  field of `toastty --json task list` shows it. Say that they come first.
+- Propose no task while 2 tasks with that line are open; the `text` field
+  of `toastty --json task list` shows it. Say that they come first.
 - Never propose a change to the Never list, to the limits in
   `references/merging.md`, or to these limits.
