@@ -306,6 +306,10 @@ extension ToasttyLayerAnimationView.Animation {
         animation.autoreverses = autoreverses
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
+        // The SwiftUI drawings updated 12 to 30 times per second. Ask for
+        // the same, so a display with a higher refresh rate does not draw
+        // these small shapes on every refresh.
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 12, maximum: 30, preferred: 24)
         // The cycle started in the past, on the shared clock's boundary.
         animation.beginTime = layer.convertTime(now - cyclePosition(now: now), from: nil)
         return animation
