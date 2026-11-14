@@ -23,7 +23,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(model.workspaceID, emptyos.id)
         XCTAssertEqual(model.workspaceTitle, "emptyos")
         XCTAssertEqual(model.preset, sol)
-        XCTAssertEqual(model.agentTitle, "codex · gpt-6.1-sol · high")
+        XCTAssertEqual([model.agentTitle, model.modelTitle, model.effortTitle], ["Codex", "gpt-6.1-sol", "high"])
         XCTAssertEqual(model.frequentPresets.map(ToasttyNewTaskModel.title), [
             "claude · opus-5.5 · xhigh",
             "codex · gpt-6.1-sol · high",
@@ -54,7 +54,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         let noFrequent = ToasttyNewTaskModel(host: FakeNewTaskHost(options: options(frequent: [], defaultPreset: nil)))
         await noFrequent.loadOptions()
         XCTAssertEqual(noFrequent.preset, RemoteTaskPreset(profileID: "claude"))
-        XCTAssertEqual(noFrequent.agentTitle, "claude")
+        XCTAssertEqual([noFrequent.agentTitle, noFrequent.modelTitle, noFrequent.effortTitle], ["Claude", "Default", "Default"])
     }
 
     func testPermissionAndEmptyMacStatesExplainThemselvesAndBlockCreate() async {
@@ -134,7 +134,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
 
     // MARK: - Editing
 
-    func testFrequentModelAndEffortChoicesEditThePreset() async throws {
+    func testAgentModelAndEffortPillsEditThePreset() async throws {
         let model = ToasttyNewTaskModel(host: FakeNewTaskHost(options: options(defaultPreset: sol)))
         await model.loadOptions()
         let claude = try XCTUnwrap(model.agents.first { $0.profileID == "claude" })
@@ -142,26 +142,66 @@ final class ToasttyNewTaskModelTests: XCTestCase {
 
         model.selectPreset(opus)
         XCTAssertEqual(model.preset, opus)
-        // A Codex model keeps an effort Codex takes; "max" is not one.
-        model.selectEffort("max", for: claude)
+        model.selectEffort("max")
         XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "claude", model: "claude-opus-5-5", effort: "max"))
-        model.selectModel("gpt-6.1-sol", for: codex)
-        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: nil))
-        model.selectEffort("low", for: codex)
-        model.selectModel(nil, for: codex)
+        XCTAssertEqual(model.effortTitle, "max")
+        // As in the Mac's Agent column, a new agent drops a model or
+        // effort it does not list: Codex has neither opus nor "max".
+        model.selectAgent(codex)
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: nil, effort: nil))
+        XCTAssertEqual([model.modelTitle, model.effortTitle], ["Default", "Default"])
+        model.selectModel("gpt-6.1-sol")
+        model.selectEffort("low")
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: "low"))
+        model.selectEffort("max")
+        XCTAssertEqual(model.preset?.effort, "low", "Codex does not take max")
+        // Claude takes "low", so the effort stays.
+        model.selectAgent(claude)
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "claude", model: nil, effort: "low"))
+        model.selectAgent(codex)
+        model.selectModel(nil)
         XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: nil, effort: "low"))
 
-        XCTAssertFalse(model.useCustomModel("--yolo", for: codex))
+        XCTAssertFalse(model.useCustomModel("--yolo", for: "codex"))
         XCTAssertEqual(model.errorMessage, ToasttyNewTaskModel.invalidModelMessage)
-        XCTAssertTrue(model.useCustomModel(" gpt-7 ", for: codex))
+        XCTAssertTrue(model.useCustomModel(" gpt-7 ", for: "codex"))
         XCTAssertEqual(model.preset?.model, "gpt-7")
-        XCTAssertEqual(model.modelChoices(for: codex), ["gpt-7", "gpt-6.1-sol"])
+        XCTAssertEqual(model.modelChoices, ["gpt-7", "gpt-6.1-sol"], "A typed model is listed first")
         XCTAssertNil(model.errorMessage)
+        // A prompt opened for Claude does nothing once Codex is selected,
+        // as when a reload changed the agent while it showed.
+        XCTAssertFalse(model.useCustomModel("claude-sonnet-5-5", for: "claude"))
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: "gpt-7", effort: "low"))
+        model.selectModel("gpt-6.1-sol")
+        XCTAssertEqual(model.modelChoices, ["gpt-6.1-sol"], "A listed model keeps the Mac's order")
+        model.selectEffort(nil)
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: nil))
 
         model.selectWorkspace(emptyos.id)
         XCTAssertEqual(model.workspaceTitle, "emptyos")
         model.selectWorkspace(UUID())
         XCTAssertEqual(model.workspaceID, emptyos.id, "Only a listed workspace can be chosen")
+    }
+
+    /// The sheet hides the Model and Effort pills for an agent that takes
+    /// neither, so switching to it must leave neither behind.
+    func testAnAgentWithoutModelOrEffortClearsBoth() async throws {
+        let plain = RemoteSessionStartAgent(
+            profileID: "opencode", displayName: "OpenCode", availability: .available,
+            supportsModel: false, recentModels: [], reasoningEfforts: []
+        )
+        let model = ToasttyNewTaskModel(host: FakeNewTaskHost(options: .loaded(RemoteTaskCreateOptionsResponse(
+            permission: .allowed, workspaces: [toastty], agents: agents() + [plain],
+            defaultPreset: opus, supportsAttachments: true
+        ))))
+        await model.loadOptions()
+        XCTAssertEqual(model.preset, opus)
+        model.selectAgent(plain)
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "opencode"))
+        XCTAssertEqual(model.modelChoices, [])
+        model.selectModel("claude-opus-5-5")
+        model.selectEffort("high")
+        XCTAssertEqual(model.preset, RemoteTaskPreset(profileID: "opencode"), "OpenCode takes no model or effort")
     }
 
     func testSharedContentStartsTheDraftAndAttachmentsNeedMacSupport() async {

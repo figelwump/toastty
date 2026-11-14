@@ -117,17 +117,30 @@ final class ToasttyNewTaskModel: Identifiable {
         (options?.frequentPresets ?? []).filter(isUsable)
     }
 
+    /// The Agent, Model and Effort pills' values, as the Mac's Agent picker
+    /// columns show them. A nil model or effort is the profile's default.
     var agentTitle: String {
-        preset.map(Self.title) ?? "Choose"
+        selectedAgent?.displayName ?? "Choose"
     }
 
-    /// The models to offer for `agent`: the one chosen now, then the Mac's
-    /// suggestions. A value the Mac would refuse is left out.
-    func modelChoices(for agent: RemoteSessionStartAgent) -> [String] {
-        guard agent.supportsModel else { return [] }
+    var modelTitle: String {
+        preset?.model.map(Self.shortModelName) ?? Self.defaultChoiceTitle
+    }
+
+    var effortTitle: String {
+        preset?.effort ?? Self.defaultChoiceTitle
+    }
+
+    static let defaultChoiceTitle = "Default"
+
+    /// The selected agent's models: the Mac's suggestions in their order,
+    /// with a typed model the list lacks first. A value the Mac would
+    /// refuse is left out.
+    var modelChoices: [String] {
+        guard let agent = selectedAgent, agent.supportsModel else { return [] }
         var seen = Set<String>()
-        let current = preset?.profileID == agent.profileID ? preset?.model : nil
-        return ([current].compactMap { $0 } + agent.recentModels)
+        let typed = preset?.model.flatMap { agent.recentModels.contains($0) ? nil : $0 }
+        return ([typed].compactMap { $0 } + agent.recentModels)
             .filter { Self.isValidModel($0) && seen.insert($0).inserted }
     }
 
@@ -246,29 +259,39 @@ final class ToasttyNewTaskModel: Identifiable {
         draftDidChange()
     }
 
-    /// Picks a model for `agent`. Switching agents keeps an effort only
-    /// when the new agent takes it.
-    func selectModel(_ model: String?, for agent: RemoteSessionStartAgent) {
+    /// Switches the agent as the Mac's Agent column does: a model or effort
+    /// the new agent does not list goes back to Default.
+    func selectAgent(_ agent: RemoteSessionStartAgent) {
+        guard agent.profileID != preset?.profileID else { return }
+        let model = preset?.model.flatMap { agent.supportsModel && agent.recentModels.contains($0) ? $0 : nil }
         let effort = preset?.effort.flatMap { agent.reasoningEfforts.contains($0) ? $0 : nil }
-        selectPreset(RemoteTaskPreset(profileID: agent.profileID, model: agent.supportsModel ? model : nil, effort: effort))
-    }
-
-    func selectEffort(_ effort: String?, for agent: RemoteSessionStartAgent) {
-        let model = preset?.profileID == agent.profileID ? preset?.model : nil
         selectPreset(RemoteTaskPreset(profileID: agent.profileID, model: model, effort: effort))
     }
 
-    /// Uses a typed model ID. Returns false, and says why, when the Mac
-    /// would refuse it.
+    /// Sets the selected agent's model; `nil` is its default.
+    func selectModel(_ model: String?) {
+        guard let current = preset else { return }
+        selectPreset(RemoteTaskPreset(profileID: current.profileID, model: model, effort: current.effort))
+    }
+
+    /// Sets the selected agent's effort; `nil` is its default.
+    func selectEffort(_ effort: String?) {
+        guard let current = preset else { return }
+        selectPreset(RemoteTaskPreset(profileID: current.profileID, model: current.model, effort: effort))
+    }
+
+    /// Uses a typed model ID for `profileID`, the agent the prompt opened
+    /// for. Returns false when that agent is no longer selected, as after
+    /// a reload, and says why when the Mac would refuse the ID.
     @discardableResult
-    func useCustomModel(_ value: String, for agent: RemoteSessionStartAgent) -> Bool {
-        guard allowsEditing else { return false }
+    func useCustomModel(_ value: String, for profileID: String) -> Bool {
+        guard allowsEditing, preset?.profileID == profileID else { return false }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isValidModel(trimmed) else {
             errorMessage = Self.invalidModelMessage
             return false
         }
-        selectModel(trimmed, for: agent)
+        selectModel(trimmed)
         return true
     }
 

@@ -1039,7 +1039,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-new-session-home-listed", of: app)
     }
 
-    func testNewTaskFromHomeCreatesATaskWithAFrequentPreset() {
+    func testNewTaskFromHomeChoosesAgentModelAndEffortAndCreatesATask() {
         let app = launchFixtureApp()
         let newTask = app.buttons["toastty-mobile-home-new-task"]
         XCTAssertTrue(newTask.waitForExistence(timeout: 10))
@@ -1051,14 +1051,48 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(create.isEnabled, "A task needs its text")
         let workspace = app.buttons["toastty-mobile-new-task-workspace"]
         XCTAssertEqual(workspace.value as? String, "toastty")
-        // The Mac's quick entry choice: its last preset.
+        // The Mac's quick entry choice: its last preset, one pill per part.
         let agent = app.buttons["toastty-mobile-new-task-agent"]
-        XCTAssertEqual(agent.value as? String, "codex · gpt-6.1-sol · high")
+        let model = app.buttons["toastty-mobile-new-task-model"]
+        let effort = app.buttons["toastty-mobile-new-task-effort"]
+        func pillValues() -> [String?] { [agent, model, effort].map { $0.value as? String } }
+        XCTAssertEqual(pillValues(), ["Codex", "gpt-6.1-sol", "high"])
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-footer"].exists)
         attachScreenshot(named: "fixture-new-task-empty", of: app)
 
+        // A Frequent chip sets all three.
         app.buttons["toastty-mobile-new-task-frequent-0"].tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "claude · opus-5.5 · xhigh" })
+        XCTAssertTrue(waitUntil(timeout: 5) { pillValues() == ["Claude", "opus-5.5", "xhigh"] })
+
+        // Effort is one tap away and lists only Claude's efforts.
+        effort.tap()
+        let maxEffort = app.buttons["max"]
+        XCTAssertTrue(maxEffort.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-new-task-effort-menu", of: app)
+        maxEffort.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { effort.value as? String == "max" })
+
+        model.tap()
+        let sonnet = app.buttons["sonnet-5.5"]
+        XCTAssertTrue(sonnet.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Other…"].exists)
+        attachScreenshot(named: "fixture-new-task-model-menu", of: app)
+        sonnet.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { pillValues() == ["Claude", "sonnet-5.5", "max"] })
+
+        // Codex lists neither sonnet nor max, so both go back to Default.
+        agent.tap()
+        let codex = app.buttons["Codex"]
+        XCTAssertTrue(codex.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-new-task-agent-menu", of: app)
+        codex.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { pillValues() == ["Codex", "Default", "Default"] })
+        effort.tap()
+        XCTAssertTrue(app.buttons["xhigh"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["max"].exists, "Codex does not take max")
+        app.buttons["xhigh"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { effort.value as? String == "xhigh" })
+
         workspace.tap()
         let research = app.buttons["herdr research"]
         XCTAssertTrue(research.waitForExistence(timeout: 5))
