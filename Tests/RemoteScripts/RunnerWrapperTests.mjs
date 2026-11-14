@@ -24,11 +24,17 @@ const fixtureExecution = [
   '  *) exit 78 ;;',
   'esac',
   `printf 'remote evidence\\n' >"$2/evidence.log"`,
+  `printf '%s' '{"state":"finished"}' >"$2/admission.json"`,
   'case "$4" in',
   '  */scripts/remote/test.sh) : >"$2/COMPLETED" ;;',
-  '  */scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED" ;;',
+  '  */scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED"; : >"$2/CLEANUP_CONFIRMED" ;;',
   '  *) exit 78 ;;',
   'esac',
+  'if [[ "${FIXTURE_UNCONFIRMED_GUI:-0}" == 1 ]]; then',
+  '  : >"$2/desktop-active"; : >"$2/CLEANUP_FAILED"',
+  `  printf '%s' '{"state":"blocked"}' >"$2/admission.json"`,
+  '  exit 78',
+  'fi',
 ].join("\n");
 const scripts = [
   "scripts/remote/test.sh",
@@ -177,6 +183,16 @@ process.exit(0);
 }
 
 for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh preserves blocked admission and its marker even when a pass result exists`, (t) => {
+    const context = fixture(t, kind);
+    const result = context.run({ FIXTURE_UNCONFIRMED_GUI: "1" });
+    assert.notEqual(result.status, 0);
+    assert.ok(existsSync(join(context.remoteRun, "desktop-active")));
+    assert.ok(existsSync(context.remoteWorktree));
+    assert.equal(context.metadata().remoteRemoved, false);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
+    assert.ok(!context.phases().includes("cleanup"));
+  });
   test(`${kind}.sh retains remote evidence and fails when copying a pass result fails`, (t) => {
     const context = fixture(t, kind);
     const result = context.run({ FIXTURE_FAIL_ARTIFACT_COPY: "1" });

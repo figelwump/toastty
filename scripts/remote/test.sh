@@ -969,7 +969,8 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
 
   local cleanup_confirmed=0
   if [[ "$remote_result_received" == 1 && -f "$LOCAL_ARTIFACTS_DIR/COMPLETED" ]] \
-    && [[ ! -e "$LOCAL_ARTIFACTS_DIR/INTERRUPTED" && ! -e "$LOCAL_ARTIFACTS_DIR/CLEANUP_FAILED" ]] \
+    && [[ ! -e "$LOCAL_ARTIFACTS_DIR/INTERRUPTED" && ! -e "$LOCAL_ARTIFACTS_DIR/CLEANUP_FAILED" && ! -e "$LOCAL_ARTIFACTS_DIR/desktop-active" ]] \
+    && jq -e '.state == "finished"' "$LOCAL_ARTIFACTS_DIR/admission.json" >/dev/null 2>&1 \
     && jq -e '
       .schemaVersion == 2
       and .cleanupFailureSummary == null

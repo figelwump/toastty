@@ -542,6 +542,12 @@ remote_exit_code=0
   --release-marker "$remote_run_root/desktop-active" \
   -- /bin/bash "$script_path" --remote-exec || remote_exit_code=$?
 : >"$remote_run_root/EXECUTION_FINISHED"
+if [[ ! -e "$remote_run_root/desktop-active" ]] \
+  && jq -e '.state == "finished"' "$remote_run_root/admission.json" >/dev/null 2>&1; then
+  : >"$remote_run_root/CLEANUP_CONFIRMED"
+else
+  : >"$remote_run_root/CLEANUP_FAILED"
+fi
 exit "$remote_exit_code"
 EOF
     :
@@ -721,12 +727,22 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     remote_validation_exit_code=1
     toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote evidence copy or execution completion was not confirmed; remote run retained"
   fi
+  local cleanup_confirmed=0
+  if [[ -f "$LOCAL_ARTIFACTS_DIR/remote/CLEANUP_CONFIRMED" \
+    && ! -e "$LOCAL_ARTIFACTS_DIR/remote/CLEANUP_FAILED" \
+    && ! -e "$LOCAL_ARTIFACTS_DIR/remote/desktop-active" ]] \
+    && jq -e '.state == "finished"' "$LOCAL_ARTIFACTS_DIR/remote/admission.json" >/dev/null 2>&1; then
+    cleanup_confirmed=1
+  else
+    remote_validation_exit_code=1
+    toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote GUI cleanup or admission release was not confirmed; remote run retained"
+  fi
   if ! jq -e '.status == "pass"' "$LOCAL_ARTIFACTS_DIR/result.json" >/dev/null; then
     remote_validation_exit_code=1
   fi
 
   toastty_run_phase cleanup
-  if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == "1" && "$result_confirmed" == 1 && -f "$LOCAL_ARTIFACTS_DIR/remote/EXECUTION_FINISHED" ]]; then
+  if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == "1" && "$result_confirmed" == 1 && "$cleanup_confirmed" == 1 && -f "$LOCAL_ARTIFACTS_DIR/remote/EXECUTION_FINISHED" ]]; then
     log "Cleaning up remote worktree"
     if remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")

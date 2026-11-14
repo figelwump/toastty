@@ -51,11 +51,17 @@ def guard(state: Path):
         os.close(fd)
 
 
-def write_request(fd: int, value: dict) -> None:
-    payload = json.dumps(value).encode()
-    os.lseek(fd, 0, os.SEEK_SET)
-    os.ftruncate(fd, 0)
-    os.write(fd, payload)
+def write_request(path: Path, value: dict) -> None:
+    # Metadata is published atomically; the lease has a separate stable inode.
+    # Killing a writer cannot expose an empty or half-written request to readers.
+    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
+    fd = safe_open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w") as output:
+            json.dump(value, output)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def contained(root: Path, value: str | None) -> Path | None:
@@ -70,7 +76,7 @@ def contained(root: Path, value: str | None) -> Path | None:
 def inventory(state: Path) -> list[dict]:
     result = []
     for path in sorted((state / "requests").glob("*.json")):
-        fd = safe_open(path, os.O_RDWR)
+        fd = safe_open(path.with_suffix(".lease"), os.O_RDWR)
         try:
             alive = True
             try:
@@ -78,7 +84,11 @@ def inventory(state: Path) -> list[dict]:
                 alive = False
             except BlockingIOError:
                 pass
-            value = json.loads(os.read(fd, 65536))
+            metadata_fd = safe_open(path, os.O_RDONLY)
+            try:
+                value = json.loads(os.read(metadata_fd, 65536))
+            finally:
+                os.close(metadata_fd)
             if (value.get("id") != path.stem or value.get("resource") not in ("compute", "desktop")
                     or value.get("state") not in ("waiting", "running", "blocked")
                     or not isinstance(value.get("queuedAt"), (int, float))):
@@ -195,6 +205,7 @@ def execute(args, root: Path, state: Path) -> int:
     directory(state / "requests")
     request_id = uuid.uuid4().hex
     path = state / "requests" / f"{request_id}.json"
+    lease = path.with_suffix(".lease")
     row = {"id": request_id, "label": args.label, "resource": args.resource,
            "pid": os.getpid(), "queuedAt": time.time(), "state": "waiting"}
     if marker:
@@ -207,9 +218,9 @@ def execute(args, root: Path, state: Path) -> int:
         signal.signal(number, interrupt)
     try:
         with guard(state):
-            fd = safe_open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            fd = safe_open(lease, os.O_CREAT | os.O_EXCL | os.O_RDWR)
             fcntl.flock(fd, fcntl.LOCK_EX)
-            write_request(fd, row)
+            write_request(path, row)
         next_log = 0
         while True:
             with guard(state):
@@ -217,7 +228,7 @@ def execute(args, root: Path, state: Path) -> int:
                 rows += legacy_activity(root, rows)
                 if eligible(rows, request_id):
                     row.update(state="running", startedAt=time.time(), queueSeconds=time.monotonic() - begun)
-                    write_request(fd, row)
+                    write_request(path, row)
                     break
                 if time.monotonic() >= next_log:
                     owners = ", ".join(r["label"] for r in rows if r["state"] != "waiting")
@@ -228,10 +239,22 @@ def execute(args, root: Path, state: Path) -> int:
                 print(f"[admission] queue timeout after {elapsed:.1f}s; no command started", file=sys.stderr)
                 rc = 75
                 return rc
-            time.sleep(min(0.2, args.timeout - elapsed))
+            time.sleep(min(1, args.timeout - elapsed))
         print(f"[admission] {args.label} admitted as {args.resource} after {row['queueSeconds']:.2f}s", file=sys.stderr, flush=True)
-        child = subprocess.Popen(command, pass_fds=(fd,), start_new_session=True)
-        rc = child.wait(timeout=args.runtime_timeout or None)
+        environment = dict(os.environ, TOASTTY_ADMISSION_SUPERVISOR_PID=str(os.getpid()))
+        child = subprocess.Popen(command, pass_fds=(fd,), start_new_session=True, env=environment)
+        running_since = time.monotonic()
+        while True:
+            remaining = args.runtime_timeout - (time.monotonic() - running_since) if args.runtime_timeout else 5
+            try:
+                rc = child.wait(timeout=max(0, min(5, remaining)))
+                break
+            except subprocess.TimeoutExpired:
+                if args.runtime_timeout and time.monotonic() - running_since >= args.runtime_timeout:
+                    raise
+                # Non-PTY SSH does not guarantee HUP on disconnect. A periodic
+                # write detects the closed SSH channel even during a quiet build.
+                print(f"[admission] {args.label} running ({args.resource})", file=sys.stderr, flush=True)
         rc = rc if rc >= 0 else 128 - rc
     except subprocess.TimeoutExpired:
         stop(child)
@@ -243,24 +266,31 @@ def execute(args, root: Path, state: Path) -> int:
         if child is not None:
             stop(child)
         rc = 128 + error.number
+    except BrokenPipeError:
+        with open(os.devnull, "w") as sink:
+            os.dup2(sink.fileno(), sys.stderr.fileno())
+        if child is not None:
+            stop(child)
+        rc = 141
     finally:
         if fd is not None:
             with guard(state):
                 if marker is not None and marker.exists():
                     row["state"] = "blocked"
-                    write_request(fd, row)
+                    write_request(path, row)
                     rc = rc or 78
                     print(f"[admission] GUI cleanup unconfirmed; reservation retained: {marker}", file=sys.stderr)
                 # Close our copy before checking for a surviving command's copy.
                 # Unlinking first would hide an inherited lease held by a child
                 # that survived its wrapper, allowing a conflicting admission.
                 os.close(fd)
-                probe = safe_open(path, os.O_RDWR)
+                probe = safe_open(lease, os.O_RDWR)
                 try:
                     try:
                         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         if row["state"] != "blocked":
                             path.unlink()
+                            lease.unlink()
                             row["state"] = "finished"
                     except BlockingIOError:
                         rc = rc or 78
@@ -303,7 +333,9 @@ def main() -> int:
                 return 0
             fd = safe_open(state / "state.lock", os.O_RDONLY)
             try:
-                fcntl.flock(fd, fcntl.LOCK_SH)
+                # Serialize lease probes too: concurrent shared-lock readers
+                # could otherwise mistake each other's probe for a live owner.
+                fcntl.flock(fd, fcntl.LOCK_EX)
                 rows = inventory(state)
                 value = snapshot(rows + legacy_activity(root, rows))
             finally:

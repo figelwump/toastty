@@ -23,13 +23,19 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-function fixture(t, mode = "normal") {
+function fixture(t, mode = "normal", foreignPID = "") {
   const dir = mkdtempSync(join(tmpdir(), "toastty-cu-session-"));
   const run = join(dir, "runs", "fixture");
   const worktree = join(dir, "worktree");
   mkdirSync(join(worktree, "scripts/dev"), { recursive: true });
   mkdirSync(run, { recursive: true });
-  writeFileSync(join(worktree, "scripts/dev/bootstrap-worktree.sh"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(worktree, "scripts/dev/bootstrap-worktree.sh"), `#!/bin/bash
+if [[ "$FIXTURE_MODE" == slow-bootstrap ]]; then
+  touch ${quote(join(dir, "bootstrap-started"))}
+  /bin/sleep 60
+  touch ${quote(join(dir, "bootstrap-completed"))}
+fi
+`, { mode: 0o755 });
   const binary = join(dir, "fixture-app");
   writeFileSync(binary, `#!/usr/bin/env python3
 import json, os, signal, time
@@ -55,6 +61,11 @@ RUN_LABEL=fixture
 REMOTE_SESSION=1
 TIMEOUT_SECONDS=10
 xcodebuild() {
+  if [[ "$FIXTURE_MODE" == slow-build ]]; then
+    touch ${quote(join(dir, "build-started"))}
+    /bin/sleep 60
+    touch ${quote(join(dir, "build-completed"))}
+  fi
   printf '%s\\n' "$@" >${quote(join(dir, "build-args"))}
   mkdir -p "$(dirname "$app_binary")"
   cp ${quote(binary)} "$app_binary"
@@ -69,6 +80,7 @@ launchctl() {
       printf '%s' "$!" >${quote(join(dir, "server-pid"))}
       ;;
     print)
+      [[ "$FIXTURE_MODE" != foreign-no-root ]] || return 1
       [[ -f ${quote(join(dir, "server-pid"))} ]] || return 1
       printf 'pid = %s\\n' "$(cat ${quote(join(dir, "server-pid"))})"
       ;;
@@ -80,8 +92,14 @@ launchctl() {
       ;;
   esac
 }
-lsof() { [[ -f ${quote(join(dir, "server-pid"))} ]] && cat ${quote(join(dir, "server-pid"))}; }
-curl() { [[ "$FIXTURE_MODE" != startup-failure ]]; }
+lsof() {
+  if [[ "$FIXTURE_MODE" == foreign-* ]]; then
+    printf '%s' ${quote(String(foreignPID))}
+  else
+    [[ -f ${quote(join(dir, "server-pid"))} ]] && cat ${quote(join(dir, "server-pid"))}
+  fi
+}
+curl() { [[ "$FIXTURE_MODE" != startup-failure && "$FIXTURE_MODE" != foreign-* ]]; }
 run_remote_prepare_mode
 `);
   const marker = join(run, "desktop-active");
@@ -151,9 +169,9 @@ for (const end of ["disconnect", "signal"]) {
 
 test("Computer Use failed app-server startup cleans the app before releasing admission", { timeout: 15000 }, async (t) => {
   const f = fixture(t, "startup-failure");
-  f.child.stdin.end();
   assert.notEqual((await f.completion).code, 0, f.output());
   assert.equal(existsSync(f.marker), false, f.output());
+  assert.ok(f.appPID(), "fixture never reached app-server startup");
   assert.equal(alive(f.appPID()), false);
 });
 
@@ -167,3 +185,49 @@ test("Computer Use unconfirmed app cleanup leaves desktop admission blocked", { 
   const report = JSON.parse(readFileSync(f.report));
   assert.equal(report.state, "blocked");
 });
+
+for (const phase of ["bootstrap", "build"]) {
+  for (const control of ["STOP", "EOF"]) {
+    test(`Computer Use ${control} during ${phase} cancels before any app launch`, { timeout: 15000 }, async (t) => {
+      const f = fixture(t, `slow-${phase}`);
+      await until(() => existsSync(join(f.dir, `${phase}-started`)), `${phase} started`);
+      f.child.stdin.end(control === "STOP" ? "STOP\n" : undefined);
+      assert.notEqual((await f.completion).code, 0, f.output());
+      assert.equal(existsSync(join(f.dir, `${phase}-completed`)), false, "cancelled preparation continued");
+      assert.equal(f.appPID(), null, "cancelled preparation launched the app");
+      assert.equal(existsSync(join(f.run, "launch.json")), false);
+      assert.equal(existsSync(f.marker), false);
+      assert.notEqual(JSON.parse(readFileSync(f.report)).state, "blocked", f.output());
+    });
+  }
+}
+
+for (const mode of ["foreign-no-root", "foreign-listener"]) {
+  test(`Computer Use ${mode} preserves an unrelated listener and blocks admission`, { timeout: 15000 }, async (t) => {
+    const foreign = spawn("/bin/sleep", ["120"]);
+    const exited = new Promise((resolve) => foreign.once("exit", resolve));
+    t.after(async () => {
+      foreign.kill("SIGKILL");
+      await exited;
+    });
+    const f = fixture(t, mode, foreign.pid);
+    assert.notEqual((await f.completion).code, 0, f.output());
+    assert.equal(alive(foreign.pid), true, "cleanup stopped an unrelated listener");
+    assert.ok(f.appPID(), "fixture never reached app-server startup");
+    assert.equal(alive(f.appPID()), false);
+    assert.equal(existsSync(f.marker), true);
+    assert.equal(JSON.parse(readFileSync(f.report)).state, "blocked", f.output());
+  });
+}
+
+for (const control of ["STOP", "EOF"]) {
+  test(`Computer Use buffered ${control} cancels before preparation`, { timeout: 15000 }, async (t) => {
+    const f = fixture(t);
+    f.child.stdin.end(control === "STOP" ? "STOP\n" : undefined);
+    assert.notEqual((await f.completion).code, 0, f.output());
+    assert.equal(existsSync(join(f.dir, "build-args")), false);
+    assert.equal(f.appPID(), null);
+    assert.equal(existsSync(f.marker), false);
+    assert.notEqual(JSON.parse(readFileSync(f.report)).state, "blocked", f.output());
+  });
+}

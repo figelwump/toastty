@@ -364,6 +364,20 @@ copy_remote_artifacts_back() {
   toastty_copy_run_artifacts "$REMOTE_HOST:$1" "$LOCAL_ARTIFACTS_DIR/remote" "$FULL_ARTIFACTS"
 }
 
+pid_is_descendant_of() {
+  local candidate="$1"
+  local ancestor="$2"
+  [[ "$candidate" =~ ^[0-9]+$ && "$ancestor" =~ ^[0-9]+$ ]] || return 1
+  local depth=0
+  while (( candidate > 1 && depth < 256 )); do
+    [[ "$candidate" == "$ancestor" ]] && return 0
+    candidate="$(ps -p "$candidate" -o ppid= 2>/dev/null | tr -d '[:space:]')" || return 1
+    [[ "$candidate" =~ ^[0-9]+$ ]] || return 1
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
 run_remote_prepare_mode() {
   require_command xcodebuild
   require_command jq
@@ -398,12 +412,7 @@ run_remote_prepare_mode() {
     codex_cli="$LEGACY_CODEX_APP_CLI"
   fi
   [[ -x "$codex_cli" ]] || fail "No app-bundled Codex CLI found in ChatGPT.app or Codex.app"
-  local codex_version
-  codex_version="$("$codex_cli" --version)" || fail "Codex CLI at $codex_cli failed --version"
-  if [[ "$codex_cli" == "$LEGACY_CODEX_APP_CLI" ]]; then
-    warn "Using the legacy Codex app; its CLI may require overrides for CODEX_COMPUTER_USE_MODEL and CODEX_COMPUTER_USE_SERVICE_TIER"
-  fi
-  log "Using $codex_cli ($codex_version)" >&2
+  local codex_version=""
   local app_server_launchd_label="com.giantthings.toastty.cu-appserver.${run_hash_value}"
   local app_server_plist="$remote_run_root/app-server.plist"
   local app_server_launcher="$remote_run_root/app-server-launch.sh"
@@ -413,13 +422,38 @@ run_remote_prepare_mode() {
   local app_server_listener_pid=""
   local app_server_port=""
   local release_marker="$remote_run_root/desktop-active"
+  local app_server_started=0
+  local app_server_ownership_uncertain=0
+  local control_reader_pid=""
+  local session_ready="$remote_run_root/session-ready"
+  local session_control="$remote_run_root/session-control.txt"
+  local control_reader_ready="$remote_run_root/control-reader-ready"
+  local supervisor_pid="${TOASTTY_ADMISSION_SUPERVISOR_PID:-}"
+
+  resolve_app_server_listener() {
+    [[ -n "$app_server_pid" ]] || app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
+    [[ "$app_server_pid" =~ ^[0-9]+$ ]] || return 1
+    local candidate
+    candidate="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | sort -u || true)"
+    # A bound port does not establish ownership. The listener must belong to
+    # this run's LaunchAgent before it can be recorded or stopped.
+    if pid_is_descendant_of "$candidate" "$app_server_pid"; then
+      app_server_listener_pid="$candidate"
+      return 0
+    fi
+    return 1
+  }
 
   cleanup_remote_prepare() {
     local cleanup_exit_code=$?
-    # Resolve the owned LaunchAgent even when startup failed before launch.json.
-    if [[ -n "$app_server_port" ]]; then
-      [[ -n "$app_server_pid" ]] || app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
-      [[ -n "$app_server_listener_pid" ]] || app_server_listener_pid="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | head -n 1 || true)"
+    if [[ -n "$control_reader_pid" ]]; then
+      kill "$control_reader_pid" >/dev/null 2>&1 || true
+      wait "$control_reader_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ "$app_server_started" == "1" && -z "$app_server_listener_pid" ]]; then
+      if ! resolve_app_server_listener; then
+        app_server_ownership_uncertain=1
+      fi
     fi
     SOCKET_PATH_ARG="$socket_path"
     APP_PID_ARG="$app_pid"
@@ -428,7 +462,7 @@ run_remote_prepare_mode() {
     APP_SERVER_LAUNCHD_LABEL_ARG="$app_server_launchd_label"
     # A signal can land between spawning the app and recording $!; retain the
     # reservation if that tiny window leaves ownership unconfirmed.
-    if run_remote_stop_mode && [[ ! -f "$release_marker" || -n "$app_pid" ]]; then
+    if run_remote_stop_mode && [[ "$app_server_ownership_uncertain" == "0" && ( ! -f "$release_marker" || -n "$app_pid" ) ]]; then
       rm -f "$release_marker"
     else
       warn "Owned GUI processes did not stop; desktop admission remains reserved: $release_marker"
@@ -444,10 +478,91 @@ run_remote_prepare_mode() {
   rm -f "$socket_path"
   rm -f "$launch_json"
 
+  if [[ "$REMOTE_SESSION" == "1" ]]; then
+    [[ "$supervisor_pid" =~ ^[0-9]+$ && "$supervisor_pid" == "$PPID" ]] \
+      || fail "--remote-session requires its admission supervisor"
+    rm -f "$session_ready" "$session_control" "$control_reader_ready"
+    trap 'exit 0' USR1
+    # One reader owns the control stream from before preparation through the
+    # turn. Builds cannot consume it, and an SSH EOF cancels a long build too.
+    exec 8<&0
+    python3 - "$supervisor_pid" "$$" "$control_reader_ready" "$session_control" "$session_ready" "$((3600 + TIMEOUT_SECONDS + 120))" <<'PYCONTROL' &
+import os
+from pathlib import Path
+import select
+import signal
+import sys
+import time
+
+supervisor, session = map(int, sys.argv[1:3])
+reader_ready, control, session_ready = map(Path, sys.argv[3:6])
+deadline = time.monotonic() + int(sys.argv[6])
+
+def finish(command):
+    control.write_text(command + "\n")
+    if command == "STOP" and session_ready.exists():
+        os.kill(session, signal.SIGUSR1)
+    else:
+        # Admission owns the group and escalates if a build ignores TERM.
+        os.kill(supervisor, signal.SIGTERM)
+
+def watch():
+    initial = True
+    pending = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            finish("TIMEOUT")
+            return
+        readable, _, _ = select.select([8], [], [], min(1, remaining) if initial else remaining)
+        if not readable:
+            if initial and not pending:
+                # Already-buffered STOP/EOF must cancel before preparation.
+                reader_ready.touch()
+                initial = False
+                continue
+            finish("INVALID_CONTROL" if initial else "TIMEOUT")
+            return
+        chunk = os.read(8, 4096)
+        if not chunk:
+            finish("DISCONNECTED")
+            return
+        pending += chunk
+        if b"\n" in pending:
+            finish("STOP" if pending.partition(b"\n")[0] == b"STOP" else "INVALID_CONTROL")
+            return
+        if len(pending) >= 4096:
+            finish("INVALID_CONTROL")
+            return
+
+try:
+    watch()
+except (OSError, ValueError):
+    # A broken watcher must not leave preparation running unobserved.
+    os.kill(supervisor, signal.SIGTERM)
+    raise
+PYCONTROL
+    control_reader_pid=$!
+    exec 8<&-
+    local control_ready_deadline=$((SECONDS + 10))
+    while [[ ! -f "$control_reader_ready" ]]; do
+      [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled before preparation"
+      kill -0 "$control_reader_pid" >/dev/null 2>&1 || fail "Computer Use control reader exited before preparation"
+      (( SECONDS < control_ready_deadline )) || fail "Computer Use control reader did not start"
+      sleep 0.1
+    done
+  fi
+
+  codex_version="$("$codex_cli" --version </dev/null)" || fail "Codex CLI at $codex_cli failed --version"
+  if [[ "$codex_cli" == "$LEGACY_CODEX_APP_CLI" ]]; then
+    warn "Using the legacy Codex app; its CLI may require overrides for CODEX_COMPUTER_USE_MODEL and CODEX_COMPUTER_USE_SERVICE_TIER"
+  fi
+  log "Using $codex_cli ($codex_version)" >&2
+
   (
     cd "$remote_worktree_dir"
     TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
-  ) >"$bootstrap_log" 2>&1
+  ) </dev/null >"$bootstrap_log" 2>&1
 
   (
     cd "$remote_worktree_dir"
@@ -458,7 +573,7 @@ run_remote_prepare_mode() {
       -destination "platform=macOS,arch=${arch}" \
       -derivedDataPath "$derived_path" \
       build
-  ) >"$build_log" 2>&1
+  ) </dev/null >"$build_log" 2>&1
 
   local app_bundle_id
   app_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Contents/Info.plist")" \
@@ -469,13 +584,14 @@ run_remote_prepare_mode() {
   # start the coordinator, in a sheet over the window. The session is about
   # something else, so it starts with the question answered.
   # Admission must stay blocked after an interrupted supervisor until cleanup is confirmed.
+  [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled during preparation"
   : >"$release_marker"
   TOASTTY_RUNTIME_HOME="$runtime_home" \
   TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
-  "$app_binary" -toastty.coordinator.startOfferAnswered YES >"$app_log" 2>&1 &
+  "$app_binary" -toastty.coordinator.startOfferAnswered YES </dev/null >"$app_log" 2>&1 &
   app_pid=$!
 
   for _ in $(seq 1 300); do
@@ -536,6 +652,7 @@ EOF
 EOF
 
   launchctl bootout "$gui_domain/$app_server_launchd_label" >/dev/null 2>&1 || true
+  app_server_started=1
   launchctl bootstrap "$gui_domain" "$app_server_plist" \
     || fail "Failed to bootstrap codex app-server into $gui_domain"
 
@@ -547,10 +664,10 @@ EOF
   done
 
   curl -fsS "http://127.0.0.1:${app_server_port}/readyz" >/dev/null 2>&1 || fail "codex app-server did not become ready"
-  app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
-  app_server_listener_pid="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | head -n 1 || true)"
-  [[ -n "$app_server_pid" ]] || app_server_pid="$app_server_listener_pid"
-  [[ -n "$app_server_pid" ]] || fail "Failed to resolve the codex app-server pid"
+  if ! resolve_app_server_listener; then
+    app_server_ownership_uncertain=1
+    fail "The app-server listener does not belong to this run's LaunchAgent"
+  fi
 
   cat >"$launch_json" <<EOF
 {
@@ -581,16 +698,15 @@ EOF
 EOF
 
   if [[ "$REMOTE_SESSION" == "1" ]]; then
+    [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled during startup"
+    : >"$session_ready"
     printf 'TOASTTY_COMPUTER_USE_READY\n'
-    local session_command=""
-    # EOF also ends the session if the local controller or SSH connection dies.
-    if ! IFS= read -r -t "$((TIMEOUT_SECONDS + 120))" session_command || [[ "$session_command" != STOP ]]; then
-      warn "Computer Use controller disconnected or exceeded its turn deadline"
-      exit 1
-    fi
-    cleanup_remote_prepare
+    # The reader sends USR1 for a normal STOP, or cancels the supervisor for
+    # EOF/invalid input. Waiting here remains interruptible by those signals.
+    wait "$control_reader_pid"
+    fail "Computer Use control reader exited without stopping the session"
   fi
-  trap - EXIT TERM HUP INT
+  trap - EXIT TERM HUP INT USR1
 }
 
 run_remote_stop_mode() {
@@ -608,6 +724,15 @@ run_remote_stop_mode() {
     return 1
   }
 
+  local listener_pid="$APP_SERVER_LISTENER_PID_ARG"
+  if [[ -n "$listener_pid" ]] && kill -0 "$listener_pid" >/dev/null 2>&1; then
+    if ! pid_is_descendant_of "$listener_pid" "$APP_SERVER_PID_ARG"; then
+      warn "Refusing to stop a listener outside the owned LaunchAgent process tree"
+      listener_pid=""
+      stop_failed=1
+    fi
+  fi
+
   rm -f "$SOCKET_PATH_ARG"
 
   if [[ -n "$APP_SERVER_LAUNCHD_LABEL_ARG" ]]; then
@@ -617,9 +742,9 @@ run_remote_stop_mode() {
     fi
   fi
 
-  if [[ -n "$APP_SERVER_LISTENER_PID_ARG" ]]; then
-    kill "$APP_SERVER_LISTENER_PID_ARG" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_SERVER_LISTENER_PID_ARG" || stop_failed=1
+  if [[ -n "$listener_pid" ]]; then
+    kill "$listener_pid" >/dev/null 2>&1 || true
+    wait_for_pid_exit "$listener_pid" || stop_failed=1
   fi
 
   if [[ -n "$APP_SERVER_PID_ARG" ]]; then
@@ -646,7 +771,7 @@ stop_remote_session() {
     CLEANUP_SESSION_PID=""
     if [[ "${1:-}" == cancel && "$CLEANUP_REMOTE_PREPARED" != "1" ]]; then
       # Abort a queued/startup SSH session rather than waiting for its full budget.
-      # The remote supervisor handles HUP and keeps any unconfirmed GUI marker.
+      # The remote control reader observes STOP/EOF and cancels its supervisor.
       kill "$session_pid" >/dev/null 2>&1 || true
     fi
     if wait "$session_pid"; then

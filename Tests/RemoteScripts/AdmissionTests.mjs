@@ -48,6 +48,40 @@ test("status reports first-writer initialization without creating its lock", (t)
   assert.equal(existsSync(join(root, ".admission", "state.lock")), false);
 });
 
+test("killing metadata publication leaves the previous complete request readable", async (t) => {
+  const root = fixture(t), ready = join(root, "publication-paused");
+  const code = `
+import importlib.util,os,pathlib,fcntl,sys,time
+spec=importlib.util.spec_from_file_location('admission',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+root=pathlib.Path(sys.argv[2]).resolve();state=root/'.admission';m.directory(state);m.directory(state/'requests')
+path=state/'requests'/'interrupted.json';fd=m.safe_open(path.with_suffix('.lease'),os.O_CREAT|os.O_EXCL|os.O_RDWR);fcntl.flock(fd,fcntl.LOCK_EX)
+row={'id':'interrupted','label':'interrupted','resource':'desktop','pid':os.getpid(),'queuedAt':time.time(),'state':'waiting'}
+with m.guard(state):m.write_request(path,row)
+def pause(self,target):
+ pathlib.Path(sys.argv[3]).touch();time.sleep(30)
+pathlib.Path.replace=pause
+with m.guard(state):
+ row['state']='running';m.write_request(path,row)
+`;
+  const child = spawn("python3", ["-c", code, helper, root, ready]);
+  const finished = new Promise((r) => child.on("exit", r));
+  t.after(() => child.kill("SIGKILL"));
+  await until(() => existsSync(ready));
+  child.kill("SIGKILL"); await finished;
+  assert.deepEqual(status(root).running, []);
+  const next = run(root, "after-crash", "desktop", [], ["true"]);
+  assert.equal((await next.finished).code, 0);
+});
+
+test("a closed caller output channel stops an admitted quiet command", async (t) => {
+  const root = fixture(t), pidPath = join(root, "pid");
+  const child = run(root, "disconnected", "compute", [], ["python3", "-c", "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)", pidPath]);
+  await until(() => existsSync(pidPath));
+  child.stderr.destroy();
+  assert.equal((await child.finished).code, 141);
+  assert.equal(status(root).running.length, 0);
+});
+
 test("two compute workers overlap; a third waits and records actual queue time", async (t) => {
   const root = fixture(t);
   const a = run(root, "compute-a", "compute"), b = run(root, "compute-b", "compute");
