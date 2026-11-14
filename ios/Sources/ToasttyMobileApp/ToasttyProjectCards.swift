@@ -252,14 +252,20 @@ struct ToasttyProjectCardHeader: View {
     let card: MobileHomeCard
     let freshness: LiveProjectionFreshness
     let isCollapsed: Bool
-    let toggleCollapsed: () -> Void
+    /// `nil` in the Needs you segment, whose cards do not collapse.
+    let toggleCollapsed: (() -> Void)?
     let openWorkspace: (UUID) -> Void
+    /// The buckets the counts show: the Needs you segment shows only its
+    /// two, and leaves out the annotation chips.
+    var buckets: [TaskBucket] = TaskBucket.allCases
+
+    private var isNeedsYouSegment: Bool { toggleCollapsed == nil }
 
     var body: some View {
         // The chevron and the counts line up with the name, above any
         // annotation chips.
         HStack(alignment: .cardName, spacing: 2) {
-            if card.isOtherTasks == false {
+            if card.isOtherTasks == false, let toggleCollapsed {
                 Button(action: toggleCollapsed) {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
@@ -277,7 +283,8 @@ struct ToasttyProjectCardHeader: View {
                 Button {
                     openWorkspace(workspace.id)
                 } label: {
-                    nameAndCounts(workspace.annotations)
+                    nameAndCounts(isNeedsYouSegment ? [] : workspace.annotations)
+                        .padding(.leading, isNeedsYouSegment ? 6 : 0)
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
@@ -312,7 +319,7 @@ struct ToasttyProjectCardHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            ToasttyBucketCounts(counts: card.counts, freshness: freshness)
+            ToasttyBucketCounts(counts: card.counts, freshness: freshness, buckets: buckets)
         }
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .padding(.trailing, 6)
@@ -321,8 +328,8 @@ struct ToasttyProjectCardHeader: View {
 
     private var accessibilityLabel: String {
         ([card.title]
-            + (card.workspace?.annotations ?? []).map(ToasttyWorkspaceAnnotationAccessibility.label(for:))
-            + [ToasttyBucketCounts.label(card.counts)].filter { $0.isEmpty == false })
+            + (isNeedsYouSegment ? [] : card.workspace?.annotations ?? []).map(ToasttyWorkspaceAnnotationAccessibility.label(for:))
+            + [ToasttyBucketCounts.label(card.counts, buckets: buckets)].filter { $0.isEmpty == false })
             .joined(separator: ", ")
     }
 }
@@ -333,10 +340,11 @@ struct ToasttyProjectCardHeader: View {
 struct ToasttyBucketCounts: View {
     let counts: [TaskBucket: Int]
     let freshness: LiveProjectionFreshness
+    var buckets: [TaskBucket] = TaskBucket.allCases
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(TaskBucket.allCases, id: \.self) { bucket in
+            ForEach(buckets, id: \.self) { bucket in
                 if let count = counts[bucket], count > 0 {
                     HStack(spacing: 3) {
                         mark(bucket)
@@ -353,8 +361,8 @@ struct ToasttyBucketCounts: View {
 
     /// "2 need you, 1 ready for review, 3 running, 2 idle", leaving out
     /// empty buckets.
-    static func label(_ counts: [TaskBucket: Int]) -> String {
-        TaskBucket.allCases.compactMap { bucket -> String? in
+    static func label(_ counts: [TaskBucket: Int], buckets: [TaskBucket] = TaskBucket.allCases) -> String {
+        buckets.compactMap { bucket -> String? in
             guard let count = counts[bucket], count > 0 else { return nil }
             return switch bucket {
             case .needsYou: "\(count) \(count == 1 ? "needs" : "need") you"
@@ -391,11 +399,12 @@ struct ToasttyBucketCounts: View {
 }
 
 /// Home's switcher while the Mac runs its task system: All, and Needs you
-/// with its count in the Needs you yellow. A segmented picker cannot color
-/// part of a title, so this draws its own segments.
+/// with its counts, as on the Mac: yellow for what needs the user, blue for
+/// what waits for a review ("Needs you 4 · 3"). A segmented picker cannot
+/// color part of a title, so this draws its own segments.
 struct ToasttyHomeSegmentControl: View {
     @Binding var selection: ToasttyHomeSegment
-    let needsYouCount: Int
+    let counts: MobileHomeNeedsYouCounts
 
     var body: some View {
         HStack(spacing: 2) {
@@ -405,11 +414,21 @@ struct ToasttyHomeSegmentControl: View {
             segment(.needsYou) {
                 HStack(spacing: 5) {
                     Text(ToasttyHomeSegment.needsYou.title)
-                    if needsYouCount > 0 {
-                        Text("\(needsYouCount)")
-                            .foregroundStyle(ToasttyDesignTokens.needsYou)
-                            .monospacedDigit()
+                    HStack(spacing: 4) {
+                        if counts.needsYou > 0 {
+                            Text("\(counts.needsYou)")
+                                .foregroundStyle(ToasttyDesignTokens.needsYou)
+                        }
+                        if counts.needsYou > 0, counts.readyToReview > 0 {
+                            Text("·")
+                                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        }
+                        if counts.readyToReview > 0 {
+                            Text("\(counts.readyToReview)")
+                                .foregroundStyle(ToasttyDesignTokens.taskReview)
+                        }
                     }
+                    .monospacedDigit()
                 }
             }
         }
@@ -420,6 +439,15 @@ struct ToasttyHomeSegmentControl: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("toastty-mobile-home-segment")
+    }
+
+    /// As the Mac's switcher says them: "All projects", and "Only what
+    /// needs you, 4, 3 ready for review".
+    static func accessibilityLabel(_ segment: ToasttyHomeSegment, counts: MobileHomeNeedsYouCounts) -> String {
+        switch segment {
+        case .all: "All projects"
+        case .needsYou: counts.accessibilityLabel
+        }
     }
 
     private func segment<Label: View>(_ value: ToasttyHomeSegment, @ViewBuilder label: () -> Label) -> some View {
@@ -439,8 +467,114 @@ struct ToasttyHomeSegmentControl: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(value == .needsYou && needsYouCount > 0 ? "\(value.title), \(needsYouCount)" : value.title)
+        .accessibilityLabel(Self.accessibilityLabel(value, counts: counts))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier("toastty-mobile-home-segment-\(value.rawValue)")
+    }
+}
+
+/// Home's Needs you segment while the Mac runs its task system: under each
+/// project's name, its Needs you rows, then its Ready to review rows, with
+/// the rows the All cards put in those buckets. Projects with neither are
+/// left out; Other tasks comes last. Rows take one line, as on the Mac,
+/// except for a question or a failure.
+struct ToasttyNeedsYouCards: View {
+    let cards: [MobileHomeCard]
+    let controller: HomeScreenController
+    @Binding var infoConversation: ToasttySessionInfoSelection?
+    let openWorkspace: (UUID) -> Void
+    let openTask: (RemoteTaskSummary) -> Void
+
+    var body: some View {
+        let listed = cards.filter(\.listsInNeedsYou)
+        if listed.isEmpty {
+            ContentUnavailableView(
+                "Nothing needs you",
+                systemImage: "checkmark.circle",
+                description: Text(Self.allNote)
+            )
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .padding(.vertical, 32)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("toastty-needs-you-empty")
+            .toasttyListRow()
+        } else {
+            ForEach(listed) { card in
+                Group {
+                    ToasttyProjectCardHeader(
+                        card: card,
+                        freshness: controller.freshness,
+                        isCollapsed: false,
+                        toggleCollapsed: nil,
+                        openWorkspace: openWorkspace,
+                        buckets: TaskBucket.needsYouSegmentBuckets
+                    )
+                    .padding(.top, 12)
+                    .toasttyListRow(vertical: 0)
+                    ForEach(TaskBucket.needsYouSegmentBuckets, id: \.self) { bucket in
+                        let entries = card.needsYou.entries(bucket)
+                        if entries.isEmpty == false {
+                            ToasttyTaskGroupHeader(title: bucket.title, count: card.counts[bucket] ?? 0, tint: bucket.tint)
+                                .padding(.top, 2)
+                                .accessibilityIdentifier("toastty-needs-you-bucket-\(card.id.uuidString)-\(bucket)")
+                                .toasttyListRow(vertical: 0)
+                            ForEach(entries) { entry in
+                                row(entry, in: card)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(Self.allNote)
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 18)
+                .accessibilityIdentifier("toastty-needs-you-all-note")
+                .toasttyListRow()
+        }
+    }
+
+    static let allNote = "Running and idle work is in All."
+
+    @ViewBuilder
+    private func row(_ entry: MobileHomeBucketEntry, in card: MobileHomeCard) -> some View {
+        let compact = ToasttyCompactRow(
+            tag: entry.payload.compactTag(listsApartFromParent: entry.listsApartFromParent, showsProject: card.isOtherTasks),
+            detail: entry.payload.compactDetail
+        )
+        switch entry.payload {
+        case .conversation(let conversation):
+            ToasttySessionRow(
+                conversation: conversation,
+                freshness: controller.freshness,
+                accessibilityIdentifier: "toastty-mobile-grouped-card-\(conversation.id.uuidString)",
+                canFlag: controller.canFlagConversations,
+                onFlag: { controller.setConversationFlag(conversation.id, isFlagged: $0) },
+                compact: compact,
+                onOpen: controller.open
+            )
+            .modifier(ToasttyBucketEntryStyle(entry: entry))
+            .toasttyListRow()
+            .toasttySessionSwipeActions(conversation, controller: controller, infoConversation: $infoConversation)
+        case .subspace(let subspace):
+            ToasttySubspaceRow(
+                row: subspace,
+                parentTitle: card.title,
+                controller: controller,
+                openWorkspace: openWorkspace,
+                compact: compact
+            )
+            .modifier(ToasttyBucketEntryStyle(entry: entry))
+            .toasttyListRow()
+            .toasttySubspaceDoneSwipe(subspace, controller: controller)
+        case .task(let task):
+            ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller, compact: compact) {
+                openTask(task)
+            }
+            .modifier(ToasttyBucketEntryStyle(entry: entry))
+            .toasttyListRow()
+        }
     }
 }

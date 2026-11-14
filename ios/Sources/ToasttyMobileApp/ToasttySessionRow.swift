@@ -19,6 +19,9 @@ struct ToasttySessionRow: View {
     /// Whether the Mac takes a flag change from this device now.
     var canFlag = false
     var onFlag: (Bool) -> Void = { _ in }
+    /// Drawn on one line, as the Needs you segment lists rows: the summary
+    /// shows only for an error.
+    var compact: ToasttyCompactRow? = nil
     let onOpen: (MobileConversation) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -68,14 +71,20 @@ struct ToasttySessionRow: View {
                         .overlay {
                             ToasttySessionRailMark(bucket: bucket, freshness: freshness)
                         }
-                    if conversation.isFlaggedForLater {
+                    if conversation.isFlaggedForLater, compact == nil {
                         ToasttyLaterFlagMark()
                     }
                 }
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     titleLine
-                    summaryLine
+                    if let compact {
+                        if let detail = compact.detail {
+                            summaryText(detail)
+                        }
+                    } else {
+                        summaryLine
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -139,8 +148,16 @@ struct ToasttySessionRow: View {
             }
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                titleText
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // A one-line row has no room under the status mark, so the
+                // flag follows the name, as on the Mac.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    titleText
+                    if compact != nil, conversation.isFlaggedForLater {
+                        ToasttyLaterFlagMark()
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 trailingFacts
             }
         }
@@ -199,12 +216,7 @@ struct ToasttySessionRow: View {
                         waitingSummaryText(waiting.rowText(.compact))
                     }
                 } else {
-                    Text(conversation.lastActivity)
-                        .font(isGenerating ? .caption.monospaced().italic() : .caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+                    summaryText(conversation.lastActivity)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,6 +231,15 @@ struct ToasttySessionRow: View {
                 .accessibilityHidden(true)
             }
         }
+    }
+
+    private func summaryText(_ text: String) -> some View {
+        Text(text)
+            .font(isGenerating ? .caption.monospaced().italic() : .caption.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func waitingSummaryText(_ text: String) -> some View {

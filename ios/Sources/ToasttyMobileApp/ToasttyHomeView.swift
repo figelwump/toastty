@@ -285,8 +285,8 @@ struct ToasttyHomeView: View {
                     ToasttyNotificationErrorBanner(message: notificationError, retry: retryNotifications)
                 }
                 connectionNotice
-                if let board = controller.snapshot.taskBoard {
-                    homeSegmentPicker(board)
+                if controller.snapshot.taskBoard != nil {
+                    homeSegmentPicker
                 } else {
                     workspaceSessionFilterPicker
                 }
@@ -313,10 +313,12 @@ struct ToasttyHomeView: View {
     }
 
     private var orderedRowIDs: [AnyHashable] {
-        if let board = controller.snapshot.taskBoard {
+        if controller.snapshot.taskBoard != nil {
             switch selectedHomeSegment {
             case .needsYou:
-                return board.entries(.needsYou).map(\.taskID)
+                return cards.filter(\.listsInNeedsYou).flatMap { card in
+                    [AnyHashable(card.id)] + card.needsYouOrderedKeys.map(AnyHashable.init)
+                }
             case .all:
                 return cards.flatMap { card in
                     [AnyHashable(card.id)] + (isCardCollapsed(card) ? [] : card.orderedKeys.map(AnyHashable.init))
@@ -340,13 +342,14 @@ struct ToasttyHomeView: View {
         ToasttyHomeSegment(rawValue: storedHomeSegment) ?? .defaultSegment
     }
 
-    private func homeSegmentPicker(_ board: MobileTaskBoard) -> some View {
+    /// The switcher counts the rows the Needs you segment lists.
+    private var homeSegmentPicker: some View {
         ToasttyHomeSegmentControl(
             selection: Binding(
                 get: { selectedHomeSegment },
                 set: { storedHomeSegment = $0.rawValue }
             ),
-            needsYouCount: board.count(.needsYou)
+            counts: MobileHomeNeedsYouCounts(cards)
         )
     }
 
@@ -390,16 +393,17 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
-        if let board = controller.snapshot.taskBoard {
+        if controller.snapshot.taskBoard != nil {
             switch selectedHomeSegment {
             case .all:
                 cardContent(proxy)
             case .needsYou:
-                ToasttyNeedsYouTaskList(
-                    board: board,
+                ToasttyNeedsYouCards(
+                    cards: cards,
                     controller: controller,
+                    infoConversation: $infoConversation,
                     openWorkspace: openWorkspace,
-                    openTask: openTask
+                    openTask: { openTask($0.id) }
                 )
             }
         } else {

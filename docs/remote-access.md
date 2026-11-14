@@ -268,7 +268,8 @@ completed session that has already stopped. Reading the same completion on the
 Mac has the same effect on the phone.
 
 The iOS app icon badge counts sessions with an unread completion, a pending
-approval, or an error. Each session counts once. Quiet unread sessions in a
+approval, or an error. While the Mac runs the task system, it counts what needs
+you instead; see [Task alerts](#task-alerts). Each session counts once. Quiet unread sessions in a
 task space marked done do not count, matching the conversation screen's **Next**
 action. Reading a completion or resolving an approval or error updates the
 badge when the Mac sends the new state. Opening the app alone does not clear it.
@@ -604,8 +605,24 @@ in Home.
   busy. Tasks whose project is not open on the Mac list in an **Other tasks**
   card at the end. The question and approval pills, the ⑂ filter, swipe
   actions and long-press menus work as before.
-- **Needs you** lists the tasks that need you, each with its family, and
-  counts them in yellow.
+- **Needs you** lists only what needs you, from every project, under each
+  project's name: a **Needs you** section, then a **Ready to review** section,
+  with the same rows the project's All card puts in those buckets, sessions
+  included, in the same order. Projects with neither are left out, and
+  **Other tasks** comes last. A task lists under the task that started it only
+  when both list; otherwise it lists alone and names that task with a ↖ tag,
+  also when the task that started it is Done. Rows take one line: the mark,
+  the title and one tag on the right, which is the pull request, else the ↖
+  task, else how many child tasks merged. The phone has no hover card, so a
+  row keeps its second line only for a question or a failure, such as an
+  agent error or a failed setup. With nothing to list, the segment says
+  **Nothing needs you**; running and idle work stays in All. The switcher
+  counts the rows the segment lists: **Needs you 4 · 3** shows the Needs you
+  rows in yellow and the Ready to review rows in blue, counting each row by
+  its own state, as the Mac's switcher does.
+- In **All**, a row's title keeps its room, as on the Mac: a parent's child
+  progress sits on the row's second line, and a row's pull request chip gives
+  way when the title would be cut short.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
   view does: **To ship** first, one lane per project with its latest merged
   tasks, then **Needs you**, **Ready to review**, **Running** and **Idle**,
@@ -710,8 +727,9 @@ the Ready alert goes out. An approval alert goes out at once: an approval puts
 the task in Needs you for a reason without a task alert.
 
 Tapping a task alert opens the task's session while its task space is open,
-and the task's detail otherwise. The app icon badge counts the tasks that need
-you, as the Tasks view does, instead of sessions.
+and the task's detail otherwise. The app icon badge shows the yellow number on
+Home's Needs you switcher: the sessions, task spaces and tasks that need you,
+without those that only wait for your review.
 
 A merge counts as stopped when Toastty records why its own merge stopped
 (**⚠ merge stopped** on the task's row), or when the merge skill ends its turn
