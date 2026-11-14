@@ -240,7 +240,9 @@ struct ToasttySelectableText: NSViewRepresentable {
             ]
             if let color = run.backgroundColor { attributes[.backgroundColor] = NSColor(color) }
             if let link = run.link { attributes[.link] = link }
-            if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = true }
+            // The chip's link names it, so two chips side by side keep two
+            // outlines.
+            if run[ConversationChipAttribute.self] != nil { attributes[.toasttyChip] = run.link ?? true }
             if run[ConversationChipSpinnerAttribute.self] == true {
                 // The dot keeps its place in the line, drawn clear. The
                 // layout manager draws a spinner in its color there.
@@ -508,7 +510,8 @@ public final class ToasttyTranscriptTextView: NSTextView {
 }
 
 extension NSAttributedString.Key {
-    /// Marks the characters of a chip. See `ConversationChipAttribute`.
+    /// Marks the characters of a chip. The value is the chip's link, so
+    /// each chip has its own range. See `ConversationChipAttribute`.
     static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
     /// A chip's dot drawn as a spinner. The value is the spinner's color.
     /// See `ConversationChipSpinnerAttribute`.
@@ -546,15 +549,10 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 
     /// Draws the outline of each chip in the range behind its text.
     func drawChipOutlines(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        guard let textStorage, glyphsToShow.length > 0 else { return }
+        guard glyphsToShow.length > 0 else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-        textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
-            guard value != nil else { return }
-            // The whole chip, also when only a part of it is drawn now.
-            var chipRange = NSRange()
-            _ = textStorage.attribute(.toasttyChip, at: range.location,
-                                      longestEffectiveRange: &chipRange,
-                                      in: NSRange(location: 0, length: textStorage.length))
+        // The whole chip, also when only a part of it is drawn now.
+        for chipRange in chipRanges(in: characters) {
             for rect in chipOutlineRects(forCharacterRange: chipRange) {
                 let outline = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.5, dy: 0.5)
                 let path = NSBezierPath(roundedRect: outline, xRadius: outline.height / 2, yRadius: outline.height / 2)
@@ -565,6 +563,24 @@ final class ToasttyChipLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 path.stroke()
             }
         }
+    }
+
+    /// The whole range of each chip with text in `characters`, also when
+    /// only a part of the chip is in `characters`. Each range gets its own
+    /// outline. Two chips side by side have different links, so they stay
+    /// two ranges.
+    func chipRanges(in characters: NSRange) -> [NSRange] {
+        guard let textStorage else { return [] }
+        let whole = NSRange(location: 0, length: textStorage.length)
+        var ranges: [NSRange] = []
+        textStorage.enumerateAttribute(.toasttyChip, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            var chipRange = NSRange()
+            _ = textStorage.attribute(.toasttyChip, at: range.location,
+                                      longestEffectiveRange: &chipRange, in: whole)
+            ranges.append(chipRange)
+        }
+        return ranges
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
