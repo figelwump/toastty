@@ -647,45 +647,14 @@ struct ToasttyHomeView: View {
         )
     }
 
-    /// Creates a task, as the Mac's quick entry does. A Mac without task
-    /// creation gets the new-session sheet instead.
-    @ViewBuilder
     private var newSessionButton: some View {
-        if controller.canCreateTasks {
-            Button {
-                newTask = ToasttyNewTaskModel(host: controller)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .background(ToasttyDesignTokens.amber, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
-            .accessibilityLabel("New task")
-            .accessibilityIdentifier("toastty-mobile-home-new-task")
-        } else if controller.canStartSessions,
-           let workspace = controller.defaultSessionStartWorkspace(
-               lastUsed: ToasttyNewSessionPreferences(defaults: defaults).lastWorkspaceID
-           ) {
-            Button {
-                newSession = ToasttyNewSessionModel(
-                    workspaceID: workspace.id,
-                    workspaceTitle: workspace.title,
-                    host: controller,
-                    preferences: ToasttyNewSessionPreferences(defaults: defaults)
-                )
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .background(ToasttyDesignTokens.amber, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
-            .accessibilityLabel("New session")
-            .accessibilityIdentifier("toastty-mobile-home-new-session")
-        }
+        ToasttyNewWorkButton(
+            controller: controller,
+            identifierPrefix: "toastty-mobile-home",
+            newTask: $newTask,
+            newSession: $newSession,
+            defaults: defaults
+        )
     }
 
     private var settingsButton: some View {

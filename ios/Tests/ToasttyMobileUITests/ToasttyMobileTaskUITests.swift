@@ -416,15 +416,18 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(session))
     }
 
-    /// The Tasks tab's + opens the same New Task sheet as Home's, and the
-    /// tab says that the Mac saved the task. A Mac that takes no new tasks
-    /// from this phone gets no +.
+    /// The Tasks tab shows Home's +. It opens the same New Task sheet, and
+    /// the tab says that the Mac saved the task. For a Mac that takes no new
+    /// tasks from this phone it starts a session, as Home's does.
     func testNewTaskFromTheTasksTabCreatesATask() {
         var app = launchTaskFixture()
         app.tabBars.buttons["Tasks"].tap()
         let newTask = app.buttons["toastty-mobile-tasks-new-task"]
         XCTAssertTrue(newTask.waitForExistence(timeout: 5))
         XCTAssertEqual(newTask.label, "New task")
+        // The same button as Home's, so the same size.
+        XCTAssertEqual(newTask.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(newTask.frame.height, 44, accuracy: 1)
         attachScreenshot(named: "tasks-tab-new-task-button", of: app)
         newTask.tap()
 
@@ -450,8 +453,12 @@ final class ToasttyMobileTaskUITests: XCTestCase {
 
         app = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_TASK_CREATE": "unsupported"])
         app.tabBars.buttons["Tasks"].tap()
-        XCTAssertTrue(app.collectionViews["toastty-mobile-tasks"].waitForExistence(timeout: 5))
+        let newSession = app.buttons["toastty-mobile-tasks-new-session"]
+        XCTAssertTrue(newSession.waitForExistence(timeout: 5))
+        XCTAssertEqual(newSession.label, "New session")
         XCTAssertFalse(app.buttons["toastty-mobile-tasks-new-task"].exists)
+        newSession.tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-new-session-start"].waitForExistence(timeout: 5))
     }
 
     /// While the connection is not live, the Tasks tab says that its list

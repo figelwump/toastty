@@ -649,9 +649,8 @@ in Home.
   its detail: the stage and why, the status line, the pull request, and the
   project. As in Home, the tab says above its list when the connection is not
   live, with **Retry** while it reconnects, and shows what a release or a task
-  action started. **+** in its navigation bar opens
-  [New Task](#creating-a-task), as on Home, while the Mac takes new tasks from
-  this phone.
+  action started. Its navigation bar has the same **+** as Home: it opens
+  [New Task](#creating-a-task), or the new-session sheet with an older Mac.
 
 The Mac computes every stage, group and line, so both apps show the same
 thing. It sends a `tasks` board in the session snapshot and advertises the

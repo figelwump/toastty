@@ -16,6 +16,7 @@ struct ToasttyTasksTabView: View {
 
     @State private var taskDetail: ToasttyTaskDetailSelection?
     @State private var newTask: ToasttyNewTaskModel?
+    @State private var newSession: ToasttyNewSessionModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let toShipGroupID = "tasks-group-to-ship"
@@ -67,25 +68,35 @@ struct ToasttyTasksTabView: View {
         .background(ToasttyDesignTokens.background)
         .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)
-        // The same New task as Home's +, as the Mac's Tasks view has one.
-        .toolbar {
-            if controller.canCreateTasks {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        newTask = ToasttyNewTaskModel(host: controller)
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("New task")
-                    .accessibilityIdentifier("toastty-mobile-tasks-new-task")
-                }
-            }
-        }
+        // Home's +, as the Mac's Tasks view has a New Task button.
+        .toolbar { newWorkToolbarItem }
         .toasttyNewTaskSheet($newTask, controller: controller)
+        .toasttyNewSessionSheet($newSession, controller: controller)
         .toasttyTaskDetailSheet($taskDetail, controller: controller, openWorkspace: openWorkspace)
         // What a release or a task action started, as Home says it.
         .toasttySubspaceDoneNotice(controller)
         .toasttyTaskActionPresenter(controller)
+    }
+
+    /// The button draws its own amber circle, so it takes no bar background
+    /// where the system would add one.
+    @ToolbarContentBuilder
+    private var newWorkToolbarItem: some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .primaryAction) { newWorkButton }
+                .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .primaryAction) { newWorkButton }
+        }
+    }
+
+    private var newWorkButton: some View {
+        ToasttyNewWorkButton(
+            controller: controller,
+            identifierPrefix: "toastty-mobile-tasks",
+            newTask: $newTask,
+            newSession: $newSession
+        )
     }
 
     static func scrollID(_ target: ToasttyTasksTabTarget, in sections: MobileTaskSections) -> String {
