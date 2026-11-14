@@ -1075,6 +1075,8 @@ struct SidebarView: View {
             segment: sidebarSegment,
             openTasksView: { openTasksView(selecting: nil) },
             newTask: newTask.map { action in { action() } },
+            newTaskShortcutLabel: taskBoard.newTaskShortcut?.label,
+            showsShortcutBadge: optionKeyPressed,
             selectSegment: { segment in
                 _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
             },
@@ -2573,7 +2575,7 @@ struct SidebarView: View {
                 }
 
                 if optionKeyPressed, let shortcutLabel {
-                    shortcutBadge(shortcutLabel, highlighted: true)
+                    SidebarShortcutBadge(label: shortcutLabel, highlighted: true)
                 }
             }
 
@@ -5775,19 +5777,6 @@ struct SidebarView: View {
         return isItalic ? base.italic() : base
     }
 
-    private func shortcutBadge(_ label: String, highlighted: Bool) -> some View {
-        Text(label)
-            .font(ToastyTheme.fontShortcutBadge)
-            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
-                in: RoundedRectangle(cornerRadius: 3)
-            )
-            .animation(.easeOut(duration: 0.12), value: highlighted)
-    }
-
     @ViewBuilder
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
         workspaceAgentCountBadgeContent(summary)
@@ -5898,5 +5887,25 @@ private struct SidebarSessionGroupFramePreferenceKey: PreferenceKey {
         nextValue: () -> [SidebarSessionPresentation.SidebarSessionRowID: CGRect]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// A shortcut such as "⌥3" that the sidebar shows beside the control it
+/// opens while Option is held.
+struct SidebarShortcutBadge: View {
+    let label: String
+    var highlighted = true
+
+    var body: some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
+                in: RoundedRectangle(cornerRadius: 3)
+            )
+            .animation(.easeOut(duration: 0.12), value: highlighted)
     }
 }

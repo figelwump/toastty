@@ -131,7 +131,7 @@ struct CoordinatorChatView: View {
                 onCancelReply: { model.cancelReply() },
                 // The dock is narrow: its hint leaves out the shortcut.
                 placeholder: Self.composerPlaceholder(
-                    quickEntryShortcut: host == .panel ? board.newTaskShortcutLabel() : nil
+                    quickEntryShortcut: host == .panel ? board.newTaskShortcut : nil
                 ),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,
@@ -217,11 +217,12 @@ struct CoordinatorChatView: View {
     }
 
     /// The field's hint also names the quick entry shortcut, which sends to
-    /// the coordinator from any app. Without a shortcut it names none.
-    static func composerPlaceholder(quickEntryShortcut: String?) -> String {
+    /// the coordinator from any app. It names none when the shortcut is off
+    /// or another app holds its keys.
+    static func composerPlaceholder(quickEntryShortcut: NewTaskShortcutHint?) -> String {
         let placeholder = "Message Toasty…"
-        guard let quickEntryShortcut else { return placeholder }
-        return "\(placeholder)  \(quickEntryShortcut) from anywhere"
+        guard let quickEntryShortcut, quickEntryShortcut.isGlobal else { return placeholder }
+        return "\(placeholder)  \(quickEntryShortcut.label) from anywhere"
     }
 
     static func text(for notice: CoordinatorChatModel.Notice) -> String {

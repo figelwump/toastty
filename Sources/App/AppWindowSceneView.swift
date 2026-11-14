@@ -75,6 +75,10 @@ struct AppWindowSceneView: View {
             }
             return .browser(panelID: panelID, zoom: webState.effectiveBrowserPageZoom)
 
+        case .scratchpad:
+            // Shown from `scratchpadMagnificationDidChange` instead.
+            return nil
+
         case .coordinatorChat:
             // The chat's scale is not app state. See `coordinatorChatTextScaleChanges`.
             return nil
@@ -204,6 +208,15 @@ struct AppWindowSceneView: View {
             default:
                 return
             }
+        }
+        .onReceive(webPanelRuntimeRegistry.scratchpadMagnificationDidChange) { change in
+            // Scratchpad magnification lives in the panel's web view, not in
+            // the store, so the HUD follows the registry's change events.
+            guard case .scratchpad(_, let panelID)? = store.focusedScaleCommandTarget(preferredWindowID: windowID),
+                  panelID == change.panelID else {
+                return
+            }
+            showFontHUD(.browser(zoom: change.magnification))
         }
         .transaction { transaction in
             if disableAnimations {

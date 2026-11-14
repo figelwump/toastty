@@ -3,7 +3,7 @@ import CoreState
 import Foundation
 import WebKit
 
-private final class HistoryContextMenuEventMonitorToken: @unchecked Sendable {
+private final class EventMonitorToken: @unchecked Sendable {
     let value: Any
 
     init(value: Any) {
@@ -18,7 +18,7 @@ final class FocusAwareWKWebView: WKWebView {
     nonisolated static let historyForwardMenuItemIdentifier = NSUserInterfaceItemIdentifier(
         "dev.toastty.web-panel.history.forward"
     )
-    private nonisolated static let historyContextMenuAugmentationTimeout: TimeInterval = 2
+    private nonisolated static let contextMenuAugmentationTimeout: TimeInterval = 2
 
     var interactionDidRequestFocus: (() -> Void)? {
         didSet { updateUserFocusEventMonitor() }
@@ -27,14 +27,28 @@ final class FocusAwareWKWebView: WKWebView {
     var showsHistoryContextMenuItems = false {
         didSet {
             guard showsHistoryContextMenuItems != oldValue else { return }
-            updateHistoryContextMenuEventMonitor()
+            updateContextMenuEventMonitor()
+        }
+    }
+    /// Items a panel adds after WebKit's own right-click menu items. It is
+    /// called each time a menu opens, so the items can show current state.
+    /// Give each item an identifier: an item already in the menu is not added
+    /// again.
+    var additionalContextMenuItems: (() -> [NSMenuItem])? {
+        didSet {
+            guard (additionalContextMenuItems == nil) != (oldValue == nil) else { return }
+            updateContextMenuEventMonitor()
         }
     }
 
+    private var augmentsContextMenu: Bool {
+        showsHistoryContextMenuItems || additionalContextMenuItems != nil
+    }
+
     private var isObservingPendingContextMenu = false
-    private var historyContextMenuCancellationWorkItem: DispatchWorkItem?
-    nonisolated(unsafe) private var userFocusEventMonitor: HistoryContextMenuEventMonitorToken?
-    nonisolated(unsafe) private var historyContextMenuEventMonitor: HistoryContextMenuEventMonitorToken?
+    private var contextMenuCancellationWorkItem: DispatchWorkItem?
+    nonisolated(unsafe) private var userFocusEventMonitor: EventMonitorToken?
+    nonisolated(unsafe) private var contextMenuEventMonitor: EventMonitorToken?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -73,7 +87,7 @@ final class FocusAwareWKWebView: WKWebView {
             return event
         }
         if let token {
-            userFocusEventMonitor = HistoryContextMenuEventMonitorToken(value: token)
+            userFocusEventMonitor = EventMonitorToken(value: token)
         }
     }
 
@@ -156,28 +170,32 @@ final class FocusAwareWKWebView: WKWebView {
                 NSEvent.removeMonitor(userFocusEventMonitor.value)
             }
         }
-        if let historyContextMenuEventMonitor {
+        if let contextMenuEventMonitor {
             DispatchQueue.main.async {
-                NSEvent.removeMonitor(historyContextMenuEventMonitor.value)
+                NSEvent.removeMonitor(contextMenuEventMonitor.value)
             }
         }
     }
 
-    func augmentHistoryContextMenu(_ menu: NSMenu) {
-        guard showsHistoryContextMenuItems else { return }
-
-        let historyItems = Self.historyContextMenuItems(
-            target: self,
-            canGoBack: canGoBack,
-            canGoForward: canGoForward
-        )
+    func augmentContextMenu(_ menu: NSMenu) {
+        var items: [NSMenuItem] = []
+        if showsHistoryContextMenuItems {
+            items += Self.historyContextMenuItems(
+                target: self,
+                canGoBack: canGoBack,
+                canGoForward: canGoForward
+            )
+        }
+        items += additionalContextMenuItems?() ?? []
 
         let existingItemCount = menu.items.count
-        if menu.items.contains(where: { $0.identifier == Self.historyBackMenuItemIdentifier }) == false {
-            menu.addItem(historyItems[0])
-        }
-        if menu.items.contains(where: { $0.identifier == Self.historyForwardMenuItemIdentifier }) == false {
-            menu.addItem(historyItems[1])
+        for item in items {
+            let isAlreadyInMenu = item.identifier.map { identifier in
+                menu.items.contains { $0.identifier == identifier }
+            } ?? false
+            if isAlreadyInMenu == false {
+                menu.addItem(item)
+            }
         }
         if existingItemCount > 0,
            menu.items.count > existingItemCount,
@@ -224,7 +242,7 @@ final class FocusAwareWKWebView: WKWebView {
     }
 
     func prepareToAugmentNextContextMenu() {
-        guard showsHistoryContextMenuItems else { return }
+        guard augmentsContextMenu else { return }
 
         cancelPendingContextMenuAugmentation()
         isObservingPendingContextMenu = true
@@ -242,12 +260,12 @@ final class FocusAwareWKWebView: WKWebView {
             return
         }
         cancelPendingContextMenuAugmentation()
-        augmentHistoryContextMenu(menu)
+        augmentContextMenu(menu)
     }
 
     func cancelPendingContextMenuAugmentation() {
-        historyContextMenuCancellationWorkItem?.cancel()
-        historyContextMenuCancellationWorkItem = nil
+        contextMenuCancellationWorkItem?.cancel()
+        contextMenuCancellationWorkItem = nil
         if isObservingPendingContextMenu {
             NotificationCenter.default.removeObserver(
                 self,
@@ -258,19 +276,19 @@ final class FocusAwareWKWebView: WKWebView {
         }
     }
 
-    func handleHistoryContextMenuGesture(
+    func handleContextMenuGesture(
         eventType: NSEvent.EventType,
         modifierFlags: NSEvent.ModifierFlags,
         eventWindow: NSWindow?,
         hitView: NSView?
     ) {
-        guard showsHistoryContextMenuItems else { return }
+        guard augmentsContextMenu else { return }
 
         // Any newer mouse gesture supersedes a pending WebKit menu. This keeps
         // a delayed context-menu response scoped to the click that requested it.
         cancelPendingContextMenuAugmentation()
 
-        guard Self.shouldPrepareHistoryContextMenu(
+        guard Self.shouldPrepareContextMenu(
             eventType: eventType,
             modifierFlags: modifierFlags,
             eventWindow: eventWindow,
@@ -290,14 +308,14 @@ final class FocusAwareWKWebView: WKWebView {
         let cancellationWorkItem = DispatchWorkItem { [weak self] in
             self?.cancelPendingContextMenuAugmentation()
         }
-        historyContextMenuCancellationWorkItem = cancellationWorkItem
+        contextMenuCancellationWorkItem = cancellationWorkItem
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.historyContextMenuAugmentationTimeout,
+            deadline: .now() + Self.contextMenuAugmentationTimeout,
             execute: cancellationWorkItem
         )
     }
 
-    static func shouldPrepareHistoryContextMenu(
+    static func shouldPrepareContextMenu(
         eventType: NSEvent.EventType,
         modifierFlags: NSEvent.ModifierFlags,
         eventWindow: NSWindow?,
@@ -327,17 +345,17 @@ final class FocusAwareWKWebView: WKWebView {
         return hitView === webView || hitView.isDescendant(of: webView)
     }
 
-    private func updateHistoryContextMenuEventMonitor() {
-        if showsHistoryContextMenuItems {
-            installHistoryContextMenuEventMonitorIfNeeded()
+    private func updateContextMenuEventMonitor() {
+        if augmentsContextMenu {
+            installContextMenuEventMonitorIfNeeded()
         } else {
-            removeHistoryContextMenuEventMonitor()
+            removeContextMenuEventMonitor()
             cancelPendingContextMenuAugmentation()
         }
     }
 
-    private func installHistoryContextMenuEventMonitorIfNeeded() {
-        guard historyContextMenuEventMonitor == nil else { return }
+    private func installContextMenuEventMonitorIfNeeded() {
+        guard contextMenuEventMonitor == nil else { return }
 
         let eventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
@@ -349,7 +367,7 @@ final class FocusAwareWKWebView: WKWebView {
             }
 
             let location = contentView.convert(event.locationInWindow, from: nil)
-            self.handleHistoryContextMenuGesture(
+            self.handleContextMenuGesture(
                 eventType: event.type,
                 modifierFlags: event.modifierFlags,
                 eventWindow: eventWindow,
@@ -358,16 +376,16 @@ final class FocusAwareWKWebView: WKWebView {
             return event
         }
         if let eventMonitor {
-            historyContextMenuEventMonitor = HistoryContextMenuEventMonitorToken(
+            contextMenuEventMonitor = EventMonitorToken(
                 value: eventMonitor
             )
         }
     }
 
-    private func removeHistoryContextMenuEventMonitor() {
-        guard let historyContextMenuEventMonitor else { return }
-        NSEvent.removeMonitor(historyContextMenuEventMonitor.value)
-        self.historyContextMenuEventMonitor = nil
+    private func removeContextMenuEventMonitor() {
+        guard let contextMenuEventMonitor else { return }
+        NSEvent.removeMonitor(contextMenuEventMonitor.value)
+        self.contextMenuEventMonitor = nil
     }
 
     private func logCursorDiagnostic(_ phase: String, event: NSEvent?) {
