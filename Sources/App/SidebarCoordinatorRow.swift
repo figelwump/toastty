@@ -116,9 +116,9 @@ enum SidebarCoordinatorPresentation {
 /// marks, and says when the agent does not run.
 ///
 /// Where the chat can show, a click shows or hides the dock beside the
-/// selected workspace, as the toolbar's Toasty button does, and the row is
-/// filled while the dock shows. The full view opens from the hover button
-/// and the menu.
+/// selected workspace, as the toolbar's Toasty button does. While the dock
+/// shows, the row is filled and Toasty is golden. The full view opens from
+/// the hover button and the menu.
 struct SidebarCoordinatorRow: View {
     let workspace: WorkspaceState
     /// The full view is open: the coordinator's workspace is selected.
@@ -163,8 +163,10 @@ struct SidebarCoordinatorRow: View {
         )
         Button(action: select) {
             HStack(spacing: 8) {
+                // Golden while the chat is on screen, in the dock or the
+                // full view, as Toasty on the toolbar is.
                 ToastyIcon(
-                    style: .outline,
+                    style: dockShows || isSelected ? .golden : .outline,
                     size: 14,
                     status: SidebarCoordinatorPresentation.iconStatus(mark),
                     badgeRingColor: rowBackground ?? ToastyTheme.chromeBackground
@@ -185,15 +187,6 @@ struct SidebarCoordinatorRow: View {
             .padding(.leading, 10)
             .padding(.trailing, 8)
             .background(rowBackground ?? Color.clear, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(alignment: .leading) {
-                // The dock's edge, as Toasty on the toolbar turns golden.
-                if dockShows {
-                    Capsule()
-                        .fill(ToastyTheme.accent)
-                        .frame(width: 2.5, height: 14)
-                        .padding(.leading, 3)
-                }
-            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
