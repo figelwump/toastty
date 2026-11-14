@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import AppKit
 import CoreState
 import Foundation
 import Testing
@@ -113,7 +114,7 @@ struct CoordinatorDockTests {
         #expect(store.selectWorkspace(windowID: windowID, workspaceID: taskWorkspaceID, preferringUnreadSessionPanelIn: nil))
         #expect(controller.dockShows(in: windowID))
 
-        // The toolbar button and Cmd+Shift+K hide and show it.
+        // The toolbar button hides and shows it.
         controller.toggleDock()
         #expect(controller.dockShows(in: windowID) == false)
         #expect(store.selectedWorkspaceID(in: windowID) == taskWorkspaceID)
@@ -188,6 +189,111 @@ struct CoordinatorDockTests {
         chat.hide(panelID: panelID, host: .panel)
         chat.show(panelID: panelID, host: .dock)
         #expect(chat.composerFocusRequest == before + 2)
+    }
+
+    /// Cmd+Shift+K takes the user to the chat's field before it hides the
+    /// dock: from a terminal while the dock shows, and in the full view.
+    /// The app's key handling owns the key, so a stale View menu item
+    /// cannot drop it.
+    @Test func theDockShortcutGivesTheFieldTheKeyboardBeforeItHidesTheDock() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let chat = fixture.chat
+        let location = try #require(store.state.coordinator)
+        let windowID = location.windowID
+        let taskWorkspaceID = try #require(store.state.topLevelWorkspaceIDs(in: windowID).first)
+        // The key goes through the app's key handling, as a press does.
+        let keys = try CoordinatorChatTextSizeTests.Keys(fixture)
+
+        // Each host's field, and a view that stands for a terminal, in
+        // off-screen windows: only which view has the keyboard matters.
+        func window(_ views: NSView...) -> NSWindow {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let content = NSView(frame: window.contentLayoutRect)
+            views.forEach(content.addSubview)
+            window.contentView = content
+            return window
+        }
+        let dockField = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 20))
+        let terminal = NSTextView(frame: NSRect(x: 0, y: 100, width: 200, height: 20))
+        let dockWindow = window(dockField, terminal)
+        let panelField = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 20))
+        let policy = NSTextView(frame: NSRect(x: 0, y: 100, width: 200, height: 20))
+        let panelWindow = window(panelField, policy)
+        defer {
+            dockWindow.close()
+            panelWindow.close()
+        }
+        chat.setComposerTextView(dockField, host: .dock)
+        chat.setComposerTextView(panelField, host: .panel)
+
+        // The fixture opened the full view, and its field has the keyboard:
+        // the key goes to the dock, which takes the keyboard when it shows.
+        chat.show(panelID: fixture.panelID, host: .panel)
+        #expect(panelWindow.makeFirstResponder(panelField))
+        #expect(controller.dockShortcutAction == .showDock)
+        #expect(try keys.press(.dock) == .coordinatorDockShortcut)
+        #expect(store.selectedWorkspaceID(in: windowID) == taskWorkspaceID)
+        #expect(controller.dockShows(in: windowID))
+        chat.hide(panelID: fixture.panelID, host: .panel)
+        var requests = chat.composerFocusRequest
+        chat.show(panelID: fixture.panelID, host: .dock)
+        #expect(chat.composerFocusRequest == requests + 1)
+
+        // The user types in a terminal beside the dock. The key gives the
+        // dock's field the keyboard and leaves the dock open.
+        #expect(dockWindow.makeFirstResponder(terminal))
+        #expect(controller.dockShortcutAction == .focusDock)
+        #expect(CoordinatorDockPresentation.shortcutTitle(.focusDock) == "Focus Coordinator Chat")
+        requests = chat.composerFocusRequest
+        #expect(try keys.press(.dock) == .coordinatorDockShortcut)
+        #expect(chat.composerFocusRequest == requests + 1)
+        #expect(controller.dockShows(in: windowID))
+
+        // With the keyboard in the dock's field, the key hides the dock.
+        #expect(dockWindow.makeFirstResponder(dockField))
+        #expect(controller.dockShortcutAction == .hideDock)
+        #expect(try keys.press(.dock) == .coordinatorDockShortcut)
+        #expect(controller.dockShows(in: windowID) == false)
+        #expect(store.selectedWorkspaceID(in: windowID) == taskWorkspaceID)
+        chat.hide(panelID: fixture.panelID, host: .dock)
+
+        // In the full view, with another panel focused, as policy.md's can
+        // be, the key gives the chat's field the keyboard and focuses the
+        // coordinator's panel.
+        controller.openFullView()
+        chat.show(panelID: fixture.panelID, host: .panel)
+        #expect(store.send(.splitFocusedSlot(workspaceID: location.workspaceID, orientation: .horizontal)))
+        let otherPanelID = try #require(store.state.workspacesByID[location.workspaceID]?.focusedPanelID)
+        #expect(otherPanelID != location.panelID)
+        #expect(panelWindow.makeFirstResponder(policy))
+        #expect(controller.dockShortcutAction == .focusFullView)
+        requests = chat.composerFocusRequest
+        #expect(try keys.press(.dock) == .coordinatorDockShortcut)
+        #expect(chat.composerFocusRequest == requests + 1)
+        #expect(store.selectedWorkspaceID(in: windowID) == location.workspaceID)
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == location.panelID)
+
+        // The chat is off screen in the full view: the key opens the dock,
+        // as before. The panel shows the terminal; the Tasks view covers the
+        // workspace; focus mode shows only the other panel.
+        #expect(panelWindow.makeFirstResponder(policy))
+        controller.showsTerminal = true
+        #expect(controller.dockShortcutAction == .showDock)
+        controller.showsTerminal = false
+        #expect(store.send(.setTasksViewShown(windowID: windowID, shown: true)))
+        #expect(controller.dockShortcutAction == .showDock)
+        #expect(store.send(.setTasksViewShown(windowID: windowID, shown: false)))
+        #expect(controller.dockShortcutAction == .focusFullView)
+        #expect(store.send(.focusPanel(workspaceID: location.workspaceID, panelID: otherPanelID)))
+        #expect(store.send(.toggleFocusedPanelMode(workspaceID: location.workspaceID)))
+        #expect(controller.dockShortcutAction == .showDock)
     }
 
     private func addWorkspace(to store: AppStore, windowID: UUID, title: String) throws -> UUID {

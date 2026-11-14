@@ -563,8 +563,11 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandSelection == nil || sessionRuntimeStore.taskCoordinator?.board?.isEnabled != true)
 
-            Button(CoordinatorDockPresentation.toggleTitle(dockShows: commandWindowDockShows)) {
-                coordinatorController?.toggleDock()
+            // The native menu can keep an older title until something
+            // rebuilds it. Cmd+Shift+K itself goes through
+            // DisplayShortcutInterceptor, which decides when the key is pressed.
+            Button(CoordinatorDockPresentation.shortcutTitle(coordinatorController?.dockShortcutAction ?? .showDock)) {
+                coordinatorController?.performDockShortcut()
             }
             .keyboardShortcut(
                 ToasttyKeyboardShortcuts.toggleCoordinatorDock.key,
@@ -872,11 +875,6 @@ struct ToasttyCommandMenus: Commands {
             coordinator: coordinatorController.location,
             chatAvailable: coordinatorController.chatIsAvailable
         )
-    }
-
-    private var commandWindowDockShows: Bool {
-        guard let coordinatorController, let windowID = commandSelection?.windowID else { return false }
-        return coordinatorController.dockShows(in: windowID)
     }
 
     /// Restart is for a coordinator that is open, as in the command palette.

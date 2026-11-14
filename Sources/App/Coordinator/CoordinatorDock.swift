@@ -52,6 +52,43 @@ enum CoordinatorDockPresentation {
         dockShows ? "Hide Coordinator Dock" : "Show Coordinator Dock"
     }
 
+    /// What Cmd+Shift+K does. The keyboard goes to the chat's field before
+    /// the dock hides, so the key always takes the user to the field first.
+    enum ShortcutAction: Equatable {
+        /// Shows the dock, with the keyboard in its field. From the full
+        /// view, the window goes back to another workspace.
+        case showDock
+        /// The dock shows; its field takes the keyboard.
+        case focusDock
+        /// The full view shows the chat; its field takes the keyboard.
+        case focusFullView
+        /// The dock's field has the keyboard; the dock hides.
+        case hideDock
+    }
+
+    static func shortcutAction(
+        dockShows: Bool,
+        dockHasKeyboard: Bool,
+        fullViewChatOnScreen: Bool,
+        fullViewHasKeyboard: Bool
+    ) -> ShortcutAction {
+        if dockShows {
+            return dockHasKeyboard ? .hideDock : .focusDock
+        }
+        if fullViewChatOnScreen, fullViewHasKeyboard == false {
+            return .focusFullView
+        }
+        return .showDock
+    }
+
+    static func shortcutTitle(_ action: ShortcutAction) -> String {
+        switch action {
+        case .showDock: toggleTitle(dockShows: false)
+        case .hideDock: toggleTitle(dockShows: true)
+        case .focusDock, .focusFullView: "Focus Coordinator Chat"
+        }
+    }
+
     /// The workspace the window shows when the dock opens from the full
     /// view: the one it showed before, while it is still in the window, or
     /// else the first in the sidebar. `nil` when the window holds no other.
