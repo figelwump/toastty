@@ -31,10 +31,12 @@ struct SidebarPanelNavigationOrder {
             return
         }
 
+        // One reader for every workspace of every window.
+        let statusReader = sessionRegistry.map(SessionRegistry.WorkspaceStatusReader.init)
         let current = Self.targets(
             in: state,
             windowID: windowID,
-            sessionRegistry: sessionRegistry,
+            statusReader: statusReader,
             linkedParentID: linkedParentID
         )
         let focusedIndex = current.targets.firstIndex { $0.panelID == focusedPanelID }
@@ -61,7 +63,7 @@ struct SidebarPanelNavigationOrder {
             forwardTargets += Self.targets(
                 in: state,
                 windowID: window.id,
-                sessionRegistry: sessionRegistry,
+                statusReader: statusReader,
                 linkedParentID: linkedParentID
             ).targets
         }
@@ -73,7 +75,7 @@ struct SidebarPanelNavigationOrder {
     private static func targets(
         in state: AppState,
         windowID: UUID,
-        sessionRegistry: SessionRegistry?,
+        statusReader: SessionRegistry.WorkspaceStatusReader?,
         linkedParentID: (UUID) -> UUID?
     ) -> (targets: [PanelNavigationTarget], sessionPanelIDs: Set<UUID>, workspaceIDs: [UUID]) {
         guard let window = state.window(id: windowID) else { return ([], [], []) }
@@ -106,7 +108,7 @@ struct SidebarPanelNavigationOrder {
                 }
             }
             let statuses = SidebarSessionPresentation.orderedStatuses(
-                sessionRegistry?.workspaceStatuses(for: workspaceID) ?? [],
+                statusReader?.statuses(for: workspaceID) ?? [],
                 panelOrder: workspace.sidebarSessionPanelOrder
             )
             for status in statuses {

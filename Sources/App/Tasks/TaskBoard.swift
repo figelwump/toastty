@@ -90,7 +90,7 @@ enum TaskBoard {
         for (workspaceID, parentID) in state.subspaceParentIDsByWorkspaceID() {
             guard let workspace = state.workspacesByID[workspaceID] else { continue }
             if let taskID = workspace.taskID, recordsByID[taskID] != nil { continue }
-            items.append(observedItem(workspace: workspace, parentID: parentID, inputs: inputs))
+            items.append(observedItem(workspace: workspace, parentID: parentID, inputs: inputs, releaseTags: builder.releaseTags))
         }
         return items.sorted { lhs, rhs in
             lhs.activityAt != rhs.activityAt ? lhs.activityAt > rhs.activityAt : lhs.title < rhs.title
@@ -117,10 +117,14 @@ enum TaskBoard {
 
     /// The item for one open task space: its task's, or a watched one's.
     static func item(taskSpace workspace: WorkspaceState, record: TaskRecord?, inputs: Inputs) -> TaskBoardItem {
+        let builder = ItemBuilder(inputs: inputs)
         if let record {
-            return ItemBuilder(inputs: inputs).item(for: record)
+            return builder.item(for: record)
         }
-        return observedItem(workspace: workspace, parentID: workspace.parentWorkspaceID ?? workspace.id, inputs: inputs)
+        return observedItem(
+            workspace: workspace, parentID: workspace.parentWorkspaceID ?? workspace.id,
+            inputs: inputs, releaseTags: builder.releaseTags
+        )
     }
 
     /// Builds each record's item once. A task that coordinates child tasks
@@ -131,14 +135,30 @@ enum TaskBoard {
     private final class ItemBuilder {
         private let inputs: Inputs
         private var built: [UUID: TaskBoardItem] = [:]
+        let releaseTags: ReleaseTagsLookup
+        /// Looked up for every record, so read from the records once.
+        private lazy var recordsByID = Dictionary(
+            inputs.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        /// Each task's child records, in the records' order. A record that
+        /// names itself as its parent is no child.
+        private lazy var childRecordsByParentID = Dictionary(
+            grouping: inputs.records.filter { $0.parentTaskID != nil && $0.parentTaskID != $0.id },
+            by: { $0.parentTaskID ?? $0.id }
+        )
 
         init(inputs: Inputs) {
             self.inputs = inputs
+            releaseTags = ReleaseTagsLookup(inputs: inputs)
         }
 
         func item(for record: TaskRecord) -> TaskBoardItem {
             if let item = built[record.id] { return item }
-            let item = TaskBoard.item(for: record, inputs: inputs) { [unowned self] in childrenOutcome(of: record) }
+            let item = TaskBoard.item(
+                for: record, inputs: inputs, releaseTags: releaseTags,
+                childRecords: { [unowned self] in childRecordsByParentID[record.id] ?? [] },
+                children: { [unowned self] in childrenOutcome(of: record) }
+            )
             built[record.id] = item
             return item
         }
@@ -147,7 +167,7 @@ enum TaskBoard {
         /// whose parents lead back to itself, which no command makes, never
         /// finishes through its children, whatever order the records are in.
         private func childrenOutcome(of record: TaskRecord) -> TaskChildrenOutcome? {
-            let children = inputs.records.filter { $0.parentTaskID == record.id && $0.id != record.id }
+            let children = childRecordsByParentID[record.id] ?? []
             guard children.isEmpty == false, isInParentLoop(record) == false else { return nil }
             return TaskChildrenOutcome(children: children.map { child in
                 let item = item(for: child)
@@ -161,7 +181,7 @@ enum TaskBoard {
             while let id = next {
                 if seen.contains(id) { return id == record.id }
                 seen.insert(id)
-                next = inputs.records.first { $0.id == id }?.parentTaskID
+                next = recordsByID[id]?.parentTaskID
             }
             return false
         }
@@ -170,10 +190,22 @@ enum TaskBoard {
     /// Children first appear under the task that started them, so a parent
     /// can show how many of them have merged.
     static func childProgress(of taskID: UUID, items: [TaskBoardItem]) -> (merged: Int, total: Int)? {
-        let children = items.filter { $0.parentTaskID == taskID && $0.stage != .archived }
-        guard children.isEmpty == false else { return nil }
-        let merged = children.filter { $0.stage == .toShip || $0.stage == .done }.count
-        return (merged, children.count)
+        childProgressByParentTaskID(items.lazy.filter { $0.parentTaskID == taskID })[taskID]
+    }
+
+    /// `childProgress` for every task that has children, from one pass over
+    /// the items.
+    static func childProgressByParentTaskID(
+        _ items: some Sequence<TaskBoardItem>
+    ) -> [UUID: (merged: Int, total: Int)] {
+        var progress: [UUID: (merged: Int, total: Int)] = [:]
+        for item in items where item.stage != .archived {
+            guard let parentTaskID = item.parentTaskID else { continue }
+            let merged = item.stage == .toShip || item.stage == .done
+            progress[parentTaskID, default: (0, 0)].total += 1
+            if merged { progress[parentTaskID]?.merged += 1 }
+        }
+        return progress
     }
 
     /// The most urgent thing a task space's agents are doing. A session that
@@ -247,7 +279,13 @@ enum TaskBoard {
         }.first
     }
 
-    private static func item(for record: TaskRecord, inputs: Inputs, children: () -> TaskChildrenOutcome?) -> TaskBoardItem {
+    private static func item(
+        for record: TaskRecord,
+        inputs: Inputs,
+        releaseTags: ReleaseTagsLookup,
+        childRecords: () -> [TaskRecord],
+        children: () -> TaskChildrenOutcome?
+    ) -> TaskBoardItem {
         let state = inputs.state
         let waitingOn = waitingOnTitle(record, records: inputs.records)
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { state.workspacesByID[$0] == nil ? nil : $0 }
@@ -261,9 +299,7 @@ enum TaskBoard {
         let root = record.projectRoot ?? project?.rootDirectory
         var facts = TaskStageFacts(record: record)
         if record.readyForReviewAt != nil {
-            facts.newestChildCreatedAt = inputs.records
-                .filter { $0.parentTaskID == record.id && $0.id != record.id }
-                .map(\.createdAt).max()
+            facts.newestChildCreatedAt = childRecords().map(\.createdAt).max()
         }
         let request = taskSpaceID.flatMap(inputs.mergeRequest)
         // While the task space is open, its done mark is the live answer;
@@ -297,7 +333,7 @@ enum TaskBoard {
                 cleanupProblem: cleanupProblem,
                 waitsOnTask: waitingOn != nil
             ),
-            releaseTagsConfigured: releaseTagsConfigured(root: root, repositoryRoot: record.operation.worktree?.checkoutRoot, inputs: inputs),
+            releaseTagsConfigured: releaseTags.configured(root: root, repositoryRoot: record.operation.worktree?.checkoutRoot),
             children: children
         )
         let dates = [
@@ -365,7 +401,12 @@ enum TaskBoard {
         }
     }
 
-    private static func observedItem(workspace: WorkspaceState, parentID: UUID, inputs: Inputs) -> TaskBoardItem {
+    private static func observedItem(
+        workspace: WorkspaceState,
+        parentID: UUID,
+        inputs: Inputs,
+        releaseTags: ReleaseTagsLookup
+    ) -> TaskBoardItem {
         let statuses = inputs.statuses(workspace.id)
         let link = pullRequestLink(workspace)
         let pullRequestState = link.flatMap(inputs.pullRequestState)
@@ -379,7 +420,7 @@ enum TaskBoard {
                 pullRequest: pullRequestState,
                 hasPullRequestLink: link != nil
             ),
-            releaseTagsConfigured: releaseTagsConfigured(root: project?.rootDirectory, inputs: inputs)
+            releaseTagsConfigured: releaseTags.configured(root: project?.rootDirectory)
         )
         let dates = statuses.compactMap(Self.agentActivityAt) + [workspace.doneAt].compactMap { $0 }
         return TaskBoardItem(
@@ -411,9 +452,34 @@ enum TaskBoard {
         WorkspacePullRequestLink(annotationURL: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.url)
     }
 
-    private static func releaseTagsConfigured(root: String?, repositoryRoot: String? = nil, inputs: Inputs) -> Bool {
-        guard let root, let config = inputs.config else { return false }
-        return config.releaseWorkspace(forProjectRoot: root, repositoryRoot: repositoryRoot ?? inputs.repositoryRoots[root], homeDirectoryPath: inputs.homeDirectory)?.releaseTags != nil
+    /// Whether tasks.toml sets `release_tags` for a project root, for one
+    /// build of the board. The answer compares paths after resolving
+    /// symbolic links on disk, and most tasks share a few projects, so each
+    /// root is looked up once for a build.
+    @MainActor
+    private final class ReleaseTagsLookup {
+        private struct Key: Hashable {
+            var root: String
+            var repositoryRoot: String?
+        }
+
+        private let inputs: Inputs
+        private var answers: [Key: Bool] = [:]
+
+        init(inputs: Inputs) {
+            self.inputs = inputs
+        }
+
+        func configured(root: String?, repositoryRoot: String? = nil) -> Bool {
+            guard let root, let config = inputs.config else { return false }
+            let key = Key(root: root, repositoryRoot: repositoryRoot ?? inputs.repositoryRoots[root])
+            if let answer = answers[key] { return answer }
+            let answer = config.releaseWorkspace(
+                forProjectRoot: key.root, repositoryRoot: key.repositoryRoot, homeDirectoryPath: inputs.homeDirectory
+            )?.releaseTags != nil
+            answers[key] = answer
+            return answer
+        }
     }
 }
 
@@ -486,6 +552,17 @@ final class TaskBoardStore: ObservableObject {
     private var workingTaskSpaceIDs: Set<UUID> = []
     private var isTurnCheckScheduled = false
     private var isStateTimesPassScheduled = false
+    /// The board that `currentBoard()` built last.
+    private var builtBoard: BuiltBoard?
+    /// Counts `reloadConfig()` calls. A build compares project paths after
+    /// resolving symbolic links on disk, which no other input reports, so
+    /// each reload ends the kept board.
+    private var configReloadCount = 0
+    /// The items at the last session check, which the views that observe
+    /// the board have drawn; see `scheduleSessionCheck`. `nil` at launch,
+    /// and after a publish for another source, whose new items are not
+    /// known yet when it is sent.
+    private var itemsAtLastSessionCheck: [TaskBoardItem]?
 
     /// A board with no task system, for windows and tests without one.
     static let disabled = TaskBoardStore()
@@ -514,21 +591,21 @@ final class TaskBoardStore: ObservableObject {
         self.now = now
         coordinator.records.objectWillChange
             .sink { [weak self] _ in
-                self?.objectWillChange.send()
+                self?.publishForAnotherSource()
                 self?.scheduleSessionCheck()
                 self?.scheduleStateTimesPass()
             }
             .store(in: &cancellables)
         pullRequests.objectWillChange
             .sink { [weak self] _ in
-                self?.objectWillChange.send()
+                self?.publishForAnotherSource()
                 self?.scheduleStateTimesPass()
             }
             .store(in: &cancellables)
         sessionRuntimeStore.$workspaceMergeRequests
             .removeDuplicates()
             .sink { [weak self] _ in
-                self?.objectWillChange.send()
+                self?.publishForAnotherSource()
                 self?.scheduleStateTimesPass()
             }
             .store(in: &cancellables)
@@ -586,21 +663,7 @@ final class TaskBoardStore: ObservableObject {
 
     /// Every item, or those a window's sidebar shows.
     func items(windowID: UUID? = nil) -> [TaskBoardItem] {
-        guard let coordinator, let store else { return [] }
-        let all = TaskBoard.items(TaskBoard.Inputs(
-            state: store.state,
-            records: coordinator.records.records,
-            statuses: { [weak sessionRuntimeStore] workspaceID in
-                sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? []
-            },
-            pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
-            config: config,
-            sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
-            repositoryRoots: repositoryRoots,
-            mergeRequest: { [weak sessionRuntimeStore] workspaceID in
-                sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
-            }
-        ))
+        guard let store, let all = currentBoard()?.items else { return [] }
         guard let windowID else { return all }
         return TaskBoard.items(all, in: windowID, state: store.state)
     }
@@ -612,12 +675,28 @@ final class TaskBoardStore: ObservableObject {
     func item(taskSpace workspace: WorkspaceState, statuses: [WorkspaceSessionStatus]) -> TaskBoardItem? {
         guard let coordinator, let store else { return nil }
         let record = workspace.taskID.flatMap(coordinator.records.record(id:))
-        return TaskBoard.item(taskSpace: workspace, record: record, inputs: TaskBoard.Inputs(
+        if let item = builtItem(taskSpace: workspace, record: record, statuses: statuses) {
+            return item
+        }
+        return TaskBoard.item(taskSpace: workspace, record: record, inputs: boardInputs(
             state: store.state,
             records: coordinator.records.records,
             statuses: { [weak sessionRuntimeStore] workspaceID in
                 workspaceID == workspace.id ? statuses : sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? []
-            },
+            }
+        ))
+    }
+
+    /// What `TaskBoard.items` reads from the board's sources now.
+    private func boardInputs(
+        state: AppState,
+        records: [TaskRecord],
+        statuses: @escaping (UUID) -> [WorkspaceSessionStatus]
+    ) -> TaskBoard.Inputs {
+        TaskBoard.Inputs(
+            state: state,
+            records: records,
+            statuses: statuses,
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
             config: config,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
@@ -625,7 +704,60 @@ final class TaskBoardStore: ObservableObject {
             mergeRequest: { [weak sessionRuntimeStore] workspaceID in
                 sessionRuntimeStore?.workspaceMergeRequests[workspaceID]
             }
-        ))
+        )
+    }
+
+    /// The board for what its sources hold now. One update of the window
+    /// asks for the items several times (the sidebar, the Coordinator chat,
+    /// the menus), and so do passes that run each second, so the board is
+    /// built once and kept while `BoardInputs` compares equal.
+    ///
+    /// The inputs are read here, at each call, and never from a publisher's
+    /// notification: the sources publish before they change, so a board
+    /// dropped on a notification could be built again from the old values
+    /// and then kept for the new ones.
+    private func currentBoard() -> BuiltBoard? {
+        guard let coordinator, let store else { return nil }
+        let inputs = BoardInputs(
+            state: store.state,
+            records: coordinator.records.records,
+            mergeRequests: sessionRuntimeStore?.workspaceMergeRequests ?? [:],
+            config: config,
+            repositoryRoots: repositoryRoots,
+            sessionStatusGeneration: sessionRuntimeStore?.workspaceStatusGeneration(),
+            pullRequestStateRevision: pullRequests?.stateRevision,
+            configReloadCount: configReloadCount
+        )
+        if let builtBoard, builtBoard.inputs == inputs {
+            return builtBoard
+        }
+        let board = BuiltBoard(inputs: inputs, items: TaskBoard.items(boardInputs(
+            state: inputs.state,
+            records: inputs.records,
+            statuses: { [weak sessionRuntimeStore] workspaceID in
+                sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? []
+            }
+        )))
+        builtBoard = board
+        return board
+    }
+
+    /// The kept board's item for a task space, when the caller's workspace
+    /// and statuses are those the board read. An item depends on its task
+    /// space's statuses as a set (the most urgent kind, any unread turn, the
+    /// latest time), so their order does not matter: the sidebar passes
+    /// them in its own order.
+    private func builtItem(
+        taskSpace workspace: WorkspaceState,
+        record: TaskRecord?,
+        statuses: [WorkspaceSessionStatus]
+    ) -> TaskBoardItem? {
+        guard let sessionRuntimeStore, let board = currentBoard(),
+              board.inputs.state.workspacesByID[workspace.id] == workspace else { return nil }
+        let read = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        guard statuses.count == read.count,
+              statuses.allSatisfy(read.contains), read.allSatisfy(statuses.contains) else { return nil }
+        return board.item(record.map { .task($0.id) } ?? .taskSpace(workspace.id))
     }
 
     /// A task's merge that is under way. Only a task whose task space is
@@ -649,6 +781,7 @@ final class TaskBoardStore: ObservableObject {
 
     func reloadConfig() {
         guard let coordinator else { return }
+        configReloadCount &+= 1
         refreshRepositoryRoots()
         do {
             let loaded = try coordinator.configLoader()
@@ -709,6 +842,23 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
+    /// Publishes for a change of the records, the pull request answers or
+    /// the merges. These sources publish before they change, so the items
+    /// that the views draw next are not known here.
+    private func publishForAnotherSource() {
+        itemsAtLastSessionCheck = nil
+        objectWillChange.send()
+    }
+
+    /// Runs the checks that follow a session change, once for a burst of
+    /// changes, and then tells the views when the board is not what they
+    /// drew. The registry publishes before it changes, so this runs on a
+    /// later turn of the main actor. A status report that moves no item,
+    /// such as one for a session outside a task space, publishes nothing:
+    /// views that show sessions observe the session store themselves. The
+    /// items can also change with the time alone, when a grace period ends;
+    /// the session store publishes its registry again at that moment, and
+    /// the comparison with the items of the last check finds the change.
     private func scheduleSessionCheck() {
         guard isTurnCheckScheduled == false else { return }
         isTurnCheckScheduled = true
@@ -717,7 +867,12 @@ final class TaskBoardStore: ObservableObject {
             self.isTurnCheckScheduled = false
             self.syncSessionTitles()
             self.refreshAfterTurnsEnded()
-            self.objectWillChange.send()
+            let items = self.items()
+            let drawn = self.itemsAtLastSessionCheck
+            self.itemsAtLastSessionCheck = items
+            if items != drawn {
+                self.objectWillChange.send()
+            }
         }
     }
 
@@ -850,6 +1005,43 @@ final class TaskBoardStore: ObservableObject {
             .filter { $0.pullRequestURL == link.url }
             .map(\.id)
         coordinator.cleanUpMergedTasks(merged)
+    }
+}
+
+/// What `TaskBoard.items` reads, apart from the time. Two sources also
+/// change their answers with the time alone, at the end of a grace period:
+/// the session statuses and the pull request states. Each gives a number
+/// that changes with its values and with those moments, so equal inputs
+/// here always give equal items.
+private struct BoardInputs: Equatable {
+    var state: AppState
+    var records: [TaskRecord]
+    var mergeRequests: [UUID: WorkspaceMergeRequest]
+    var config: TasksConfig?
+    var repositoryRoots: [String: String]
+    /// Covers the session registry: the statuses, and the session titles.
+    var sessionStatusGeneration: Int?
+    var pullRequestStateRevision: Int?
+    var configReloadCount: Int
+}
+
+/// A board and the inputs it was built from.
+private struct BuiltBoard {
+    let inputs: BoardInputs
+    let items: [TaskBoardItem]
+    private let indexBySubject: [TaskBoardItem.Subject: Int]
+
+    init(inputs: BoardInputs, items: [TaskBoardItem]) {
+        self.inputs = inputs
+        self.items = items
+        indexBySubject = Dictionary(
+            items.enumerated().map { ($0.element.id, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    func item(_ subject: TaskBoardItem.Subject) -> TaskBoardItem? {
+        indexBySubject[subject].map { items[$0] }
     }
 }
 

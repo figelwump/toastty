@@ -123,6 +123,8 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation()
 
         XCTAssertEqual(presentation.topLevelWorkspaces.map(\.id), [parentID])
+        // Workspaces keep the Mac sidebar's order, not their titles' order.
+        XCTAssertEqual(presentation.workspaces.map(\.id), [parentID, subspaceID, reviewID])
         let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == subspaceID })
         XCTAssertEqual(row.id, subspaceID)
         XCTAssertEqual(row.status, .done)

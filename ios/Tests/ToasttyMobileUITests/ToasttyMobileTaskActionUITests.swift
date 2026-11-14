@@ -137,8 +137,7 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
         goBackToHome(in: app)
 
         // A task whose setup failed offers Retry and Delete; Delete asks.
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        segment.buttons.element(boundBy: 1).tap()
+        app.buttons["toastty-mobile-home-segment-needsYou"].tap()
         let failed = app.buttons["toastty-task-row-\(setupFailedTaskID)"]
         XCTAssertTrue(scrollTo(failed, in: app))
         failed.tap()
@@ -176,15 +175,16 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        // Every project card expanded, whatever an earlier test saved.
+        app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
         app.launch()
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        XCTAssertTrue(segment.waitForExistence(timeout: 10))
-        let projects = segment.buttons["Projects"]
-        if projects.isSelected == false { projects.tap() }
+        let all = app.buttons["toastty-mobile-home-segment-all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 10))
+        if all.isSelected == false { all.tap() }
         return app
     }
 
-    /// Opens the task space's session from Projects.
+    /// Opens the task space's session from All.
     private func openSession(of state: ControlState, in app: XCUIApplication) {
         let row = app.buttons["toastty-subspace-row-\(state.subspaceID)"]
         XCTAssertTrue(scrollTo(row, in: app), state.name)
@@ -208,18 +208,43 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
     }
 
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 12) -> Bool {
-        let list = app.collectionViews["toastty-mobile-home"].exists
-            ? app.collectionViews["toastty-mobile-home"]
+        let identifier = "toastty-mobile-home"
+        let list = app.collectionViews[identifier].exists
+            ? app.collectionViews[identifier]
             : app.collectionViews.firstMatch
         for _ in 0..<attempts {
-            if element.exists, element.isHittable { return true }
+            if isReachable(element, in: app, list: identifier) { return true }
+            // A row under Home's header is above the visible rows.
+            if identifier == "toastty-mobile-home", element.exists, let top = homeHeaderBottom(in: app),
+               element.frame.minY < top {
+                break
+            }
             list.swipeUp(velocity: .slow)
         }
         for _ in 0..<attempts {
-            if element.exists, element.isHittable { return true }
+            if isReachable(element, in: app, list: identifier) { return true }
             list.swipeDown(velocity: .slow)
         }
-        return element.exists && element.isHittable
+        return isReachable(element, in: app, list: identifier)
+    }
+
+    /// The bottom of Home's pinned header, which covers list rows that
+    /// XCTest still reports as hittable.
+    private func homeHeaderBottom(in app: XCUIApplication) -> CGFloat? {
+        let segment = app.buttons["toastty-mobile-home-segment-all"]
+        return segment.exists ? segment.frame.maxY + 8 : nil
+    }
+
+    /// Visible, below Home's header when the row is in Home's list, and
+    /// above the tab bar.
+    private func isReachable(_ element: XCUIElement, in app: XCUIApplication, list identifier: String) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        if identifier == "toastty-mobile-home", let top = homeHeaderBottom(in: app), element.frame.minY < top {
+            return false
+        }
+        let tabBar = app.tabBars.firstMatch
+        if tabBar.exists, element.frame.maxY > tabBar.frame.minY { return false }
+        return true
     }
 
     private func waitForLabelPrefix(_ element: XCUIElement, _ prefix: String, timeout: TimeInterval = 5) -> Bool {

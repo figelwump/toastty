@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The activity spinner of the conversation and the iPhone app. It matches the
 /// desktop app's `SessionStatusIndicator`: a trimmed arc that rotates once
-/// every 0.9 seconds.
+/// every 0.9 seconds. On the Mac, Core Animation turns it; see
+/// `ToasttyLayerAnimationView`.
 public struct ToasttySpinner: View {
     var size: CGFloat
     var lineWidth: CGFloat
@@ -16,14 +17,26 @@ public struct ToasttySpinner: View {
     }
 
     public var body: some View {
+        spinner
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+
+    #if os(macOS)
+    private var spinner: some View {
+        ToasttyLayerAnimationView(
+            shapes: [.spinnerArc(size: size, lineWidth: lineWidth, color: color)],
+            animates: reduceMotion == false
+        )
+    }
+    #else
+    private var spinner: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
             Circle()
                 .trim(from: 0.16, to: 0.9)
                 .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(reduceMotion ? .zero : angle(at: context.date))
         }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
     }
 
     private func angle(at date: Date) -> Angle {
@@ -31,4 +44,5 @@ public struct ToasttySpinner: View {
             .truncatingRemainder(dividingBy: 0.9) / 0.9
         return .degrees(phase * 360)
     }
+    #endif
 }

@@ -253,7 +253,13 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         stateTransitions.retain(mobileConversations.map(\.id))
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
         var metadata: [UUID: RemoteWorkspaceSummary] = [:]
-        for workspace in workspaces { metadata[workspace.id] = workspace }
+        // The Mac lists workspaces in its sidebar's order, which Home's
+        // project cards keep.
+        var sidebarPosition: [UUID: Int] = [:]
+        for (index, workspace) in workspaces.enumerated() {
+            metadata[workspace.id] = workspace
+            if sidebarPosition[workspace.id] == nil { sidebarPosition[workspace.id] = index }
+        }
         let ids = Set(grouped.keys).union(metadata.keys)
         let workspaces = ids.map { id in
             MobileWorkspace(
@@ -273,6 +279,9 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 acceptsDoneMark: metadata[id]?.acceptsDoneMark ?? true
             )
         }.sorted {
+            // A workspace known only from its sessions follows, by title.
+            let left = sidebarPosition[$0.id] ?? .max, right = sidebarPosition[$1.id] ?? .max
+            if left != right { return left < right }
             let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
             if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
             return $0.id.uuidString < $1.id.uuidString

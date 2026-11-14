@@ -1,3 +1,4 @@
+import ConversationUI
 import CoreState
 import SwiftUI
 
@@ -16,29 +17,22 @@ struct SessionChildActivityDot: View {
     var phaseOffset: Double = 0
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                Circle()
-                    .fill(ToastyTheme.sessionIndicatorSpinnerColor.opacity(0.75))
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
-                    Circle()
-                        .fill(
-                            ToastyTheme.sessionIndicatorSpinnerColor
-                                .opacity(Self.pulseOpacity(at: context.date, phaseOffset: phaseOffset))
-                        )
-                }
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
+        ToasttyLayerAnimationView(shapes: [breathingDot], animates: reduceMotion == false)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 
-    static func pulseOpacity(at date: Date, phaseOffset: Double = 0) -> Double {
-        // 2s triangle-wave breathe between 0.35 and 0.95.
-        let phase = (date.timeIntervalSinceReferenceDate + phaseOffset)
-            .truncatingRemainder(dividingBy: 2) / 2
-        return 0.35 + 0.6 * (1 - abs(2 * phase - 1))
+    /// The opacity rises from 0.35 to 0.95 in one second and falls back in
+    /// the next. With Reduce Motion it stays at 0.75.
+    private var breathingDot: ToasttyLayerAnimationView.Shape {
+        .init(
+            path: CGPath(ellipseIn: CGRect(x: 0, y: 0, width: size, height: size), transform: nil),
+            fillColor: ToastyTheme.sessionIndicatorSpinnerColor,
+            restingOpacity: 0.75,
+            animations: [
+                .init(property: .opacity, values: [0.35, 0.95], duration: 1, autoreverses: true, delay: -phaseOffset),
+            ]
+        )
     }
 
     static func phaseOffset(forStableID stableID: String) -> Double {
@@ -73,9 +67,10 @@ struct SessionStatusIndicator: View {
             case .hidden:
                 EmptyView()
             case .spinner:
-                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-                    spinner(angle: spinnerAngle(at: context.date))
-                }
+                ToasttyLayerAnimationView(shapes: [
+                    .spinnerArc(size: size, lineWidth: lineWidth, color: ToastyTheme.sessionIndicatorSpinnerColor),
+                ])
+                .frame(width: size, height: size)
             case .dot:
                 Circle()
                     .fill(ToastyTheme.badgeBlue)
@@ -84,22 +79,5 @@ struct SessionStatusIndicator: View {
             }
         }
         .accessibilityHidden(true)
-    }
-
-    private func spinner(angle: Angle) -> some View {
-        Circle()
-            .trim(from: 0.16, to: 0.9)
-            .stroke(
-                ToastyTheme.sessionIndicatorSpinnerColor,
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-            )
-            .rotationEffect(angle)
-            .frame(width: size, height: size)
-    }
-
-    private func spinnerAngle(at date: Date) -> Angle {
-        let phase = date.timeIntervalSinceReferenceDate
-            .truncatingRemainder(dividingBy: 0.9) / 0.9
-        return .degrees(phase * 360)
     }
 }

@@ -490,7 +490,14 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
-        let activeRecordsByID = activeRecordsByID()
+        panelStatus(for: panelID, activeRecordsByID: activeRecordsByID(), at: now)
+    }
+
+    private func panelStatus(
+        for panelID: UUID,
+        activeRecordsByID: [String: SessionRecord],
+        at now: Date
+    ) -> WorkspaceSessionStatus? {
         if let activeRecord = activeSession(for: panelID) {
             return workspaceSessionStatus(
                 from: activeRecord,
@@ -515,34 +522,73 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
-        let activeRecordsByID = activeRecordsByID()
-        let orderBySessionID = Dictionary(
-            uniqueKeysWithValues: sessionOrder.enumerated().map { offset, sessionID in
-                (sessionID, offset)
+        WorkspaceStatusReader(self).statuses(for: workspaceID, at: now)
+    }
+
+    /// Reads the statuses of workspaces and panels from one registry value.
+    /// Each read needs the registry's active records and the order of its
+    /// sessions. A reader works them out once, for a caller that reads many
+    /// workspaces or panels of the same registry.
+    public struct WorkspaceStatusReader: Sendable {
+        private let registry: SessionRegistry
+        private let activeRecordsByID: [String: SessionRecord]
+        private let orderBySessionID: [String: Int]
+        /// Only records that can have a row: a stopped session has none.
+        private let liveRecordsByWorkspaceID: [UUID: [SessionRecord]]
+
+        public init(_ registry: SessionRegistry) {
+            self.registry = registry
+            activeRecordsByID = registry.activeRecordsByID()
+            orderBySessionID = Dictionary(
+                uniqueKeysWithValues: registry.sessionOrder.enumerated().map { offset, sessionID in
+                    (sessionID, offset)
+                }
+            )
+            liveRecordsByWorkspaceID = Dictionary(
+                grouping: registry.sessionsByID.values.filter(\.isActive),
+                by: \.workspaceID
+            )
+        }
+
+        public func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
+            registry.panelStatus(for: panelID, activeRecordsByID: activeRecordsByID, at: now)
+        }
+
+        public func statuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
+            (liveRecordsByWorkspaceID[workspaceID] ?? [])
+                .filter { record in
+                    SessionRegistry.projectedStatus(from: record, at: now) != nil
+                }
+                // Keep sidebar session rows stable as tabs switch or session
+                // statuses change. New sessions append by creation time.
+                .sorted { lhs, rhs in
+                    SessionRegistry.stableWorkspaceStatusSort(
+                        lhs,
+                        rhs,
+                        orderBySessionID: orderBySessionID
+                    )
+                }
+                .compactMap { record in
+                    registry.workspaceSessionStatus(
+                        from: record,
+                        activeRecordsByID: activeRecordsByID,
+                        at: now
+                    )
+                }
+        }
+    }
+
+    /// The first moment after `now` at which `workspaceStatuses(for:at:)` can
+    /// give another answer for this same registry: the end of a resume grace
+    /// period that runs at `now`. `nil` when no answer depends on the time.
+    /// An answer read at `now` holds for any later time before this moment.
+    public func nextWorkspaceStatusChange(after now: Date) -> Date? {
+        sessionsByID.values
+            .compactMap { record -> Date? in
+                guard record.isActive, Self.shouldProjectResuming(record: record, now: now) else { return nil }
+                return record.lastActivityFinishedAt?.addingTimeInterval(Self.resumeProjectionGraceInterval)
             }
-        )
-        return sessionsByID.values
-            .filter { record in
-                record.workspaceID == workspaceID &&
-                Self.projectedStatus(from: record, at: now) != nil &&
-                record.isActive
-            }
-            // Keep sidebar session rows stable as tabs switch or session
-            // statuses change. New sessions append by creation time.
-            .sorted { lhs, rhs in
-                Self.stableWorkspaceStatusSort(
-                    lhs,
-                    rhs,
-                    orderBySessionID: orderBySessionID
-                )
-            }
-            .compactMap { record in
-                workspaceSessionStatus(
-                    from: record,
-                    activeRecordsByID: activeRecordsByID,
-                    at: now
-                )
-            }
+            .min()
     }
 
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {

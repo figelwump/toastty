@@ -564,8 +564,43 @@ private struct SidebarStatusPillSemanticText: ViewModifier {
 /// rather than SwiftUI state, because the body writes it while it computes.
 @MainActor
 private final class SidebarTaskBoardSnapshot {
-    var windowItems: [TaskBoardItem] = []
-    var allItems: [TaskBoardItem] = []
+    private(set) var windowItems: [TaskBoardItem] = []
+    private(set) var allItems: [TaskBoardItem] = []
+    /// The window and the windows that `windowItems` was filtered for.
+    private var windowID: UUID?
+    private var windows: [WindowState] = []
+    /// Each parent task's child progress, worked out at the first request
+    /// after the items changed.
+    private var childProgressByParentTaskID: [UUID: (merged: Int, total: Int)]?
+
+    /// Takes the board's items for a pass. While the items and the windows
+    /// stay equal, the window's items and the child progress labels of the
+    /// last pass still hold, and they are kept.
+    func update(allItems: [TaskBoardItem], windowID: UUID, state: AppState) {
+        guard allItems != self.allItems || windowID != self.windowID || state.windows != windows else { return }
+        self.allItems = allItems
+        self.windowID = windowID
+        windows = state.windows
+        windowItems = TaskBoard.items(allItems, in: windowID, state: state)
+        childProgressByParentTaskID = nil
+    }
+
+    func clear() {
+        allItems = []
+        windowItems = []
+        windowID = nil
+        windows = []
+        childProgressByParentTaskID = nil
+    }
+
+    /// As `TaskBoard.childProgress(of:items:)` for `allItems`. Every task
+    /// space row asks, so one pass over the items answers them all.
+    func childProgress(of taskID: UUID) -> (merged: Int, total: Int)? {
+        if childProgressByParentTaskID == nil {
+            childProgressByParentTaskID = TaskBoard.childProgressByParentTaskID(allItems)
+        }
+        return childProgressByParentTaskID?[taskID]
+    }
 }
 
 /// The bucket each row was last drawn in and the selected row's hold, for
@@ -646,7 +681,12 @@ struct SidebarView: View {
     @State private var activeSessionDrag: SessionDragState?
     @State private var sessionPointerRowID: SidebarSessionPresentation.SidebarSessionRowID?
     @State private var activeWorkspaceDrag: WorkspaceDragState?
-    @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
+    /// Counts changes of the workspace row frames during a card drag, when
+    /// the insertion indicator must follow them. The frames are in
+    /// `scrollGeometry`, outside the view's state: they change whenever a
+    /// row's height does, and as state each such change drew the whole
+    /// sidebar a second time.
+    @State private var workspaceRowFrameChangesDuringDrag = 0
     @State private var hoverState = SidebarHoverState()
     // The sidebar owns this reference; only the pill overlay observes it.
     @State private var scrollGeometry = SidebarScrollGeometry()
@@ -898,7 +938,10 @@ struct SidebarView: View {
                         }
                     }
                     .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
-                        measuredWorkspaceRowFramesByID = framesByID
+                        scrollGeometry.workspaceRowFrames = framesByID
+                        if activeWorkspaceDrag != nil {
+                            workspaceRowFrameChangesDuringDrag &+= 1
+                        }
                         workspaceRowFrameObserver?(framesByID)
                     }
                     .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
@@ -913,9 +956,11 @@ struct SidebarView: View {
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
+                           // Read so that a frame change draws the indicator again.
+                           workspaceRowFrameChangesDuringDrag >= 0,
                            let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
                                orderedWorkspaceIDs: store.state.topLevelWorkspaceIDs(in: windowID),
-                               measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+                               measuredRowFramesByID: scrollGeometry.workspaceRowFrames,
                                draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
                                targetIndex: activeWorkspaceDrag.targetIndex
                            ) {
@@ -943,7 +988,7 @@ struct SidebarView: View {
                     }
                 }
                 .overlay {
-                    SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent) { pill in
+                    SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent(bucketed)) { pill in
                         hiddenSessionPill(pill, using: proxy)
                     }
                 }
@@ -1054,13 +1099,10 @@ struct SidebarView: View {
 
     private func refreshTaskBoardSnapshot() {
         guard taskBoard.isEnabled else {
-            taskBoardSnapshot.windowItems = []
-            taskBoardSnapshot.allItems = []
+            taskBoardSnapshot.clear()
             return
         }
-        let all = taskBoard.items()
-        taskBoardSnapshot.allItems = all
-        taskBoardSnapshot.windowItems = TaskBoard.items(all, in: windowID, state: store.state)
+        taskBoardSnapshot.update(allItems: taskBoard.items(), windowID: windowID, state: store.state)
     }
 
     private var sidebarSegment: SidebarSegment {
@@ -2035,7 +2077,9 @@ struct SidebarView: View {
             .allowsHitTesting(false)
     }
 
-    private var sidebarHiddenSessionContent: SidebarScrollGeometry.Content {
+    /// `bucketed` is the pass's buckets, when the task system is on: they
+    /// hold each card's task space rows, which are not worked out again.
+    private func sidebarHiddenSessionContent(_ bucketed: BucketedSidebar?) -> SidebarScrollGeometry.Content {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
             return SidebarScrollGeometry.Content(isDragging: true)
         }
@@ -2065,7 +2109,8 @@ struct SidebarView: View {
             }
         }
         for parentID in store.state.topLevelWorkspaceIDs(in: windowID) {
-            let rows = subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
+            let rows = bucketed?.cards[parentID]?.subspaceRows
+                ?? subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
             // Bucketed cards have no Task Spaces group to collapse.
             let isCollapsed = taskBoard.isEnabled == false && collapsedSubspaceGroupParentIDs.contains(parentID)
             let displayedRows = isCollapsed ? rows : SidebarSubspacePresentation.filteredRows(
@@ -3669,7 +3714,7 @@ struct SidebarView: View {
 
         var dragState = activeWorkspaceDrag
         if dragState?.workspaceID != workspaceID {
-            let startPointerY = (measuredWorkspaceRowFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
+            let startPointerY = (scrollGeometry.workspaceRowFrames[workspaceID]?.minY ?? 0) + value.startLocation.y
             dragState = WorkspaceDragState(
                 workspaceID: workspaceID,
                 sourceIndex: sourceIndex,
@@ -3695,7 +3740,7 @@ struct SidebarView: View {
         let pointerY = (dragState?.startPointerY ?? value.location.y) + value.translation.height
         let targetIndex = Self.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: orderedWorkspaceIDs,
-            measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+            measuredRowFramesByID: scrollGeometry.workspaceRowFrames,
             draggedWorkspaceID: workspaceID,
             pointerY: pointerY
         ) ?? sourceIndex
@@ -3853,7 +3898,7 @@ struct SidebarView: View {
             metadata["activeTargetIndex"] = "\(activeWorkspaceDrag.targetIndex)"
             metadata["activeTranslationHeight"] = "\(activeWorkspaceDrag.translationHeight)"
         }
-        if let measuredFrame = measuredWorkspaceRowFramesByID[workspaceID] {
+        if let measuredFrame = scrollGeometry.workspaceRowFrames[workspaceID] {
             metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
         }
         return metadata
@@ -4625,9 +4670,9 @@ struct SidebarView: View {
     }
 
     private func childProgressLabel(ofTaskID taskID: UUID) -> String? {
-        guard let coordinator = taskCoordinator,
-              coordinator.records.records.contains(where: { $0.parentTaskID == taskID }) else { return nil }
-        guard let progress = TaskBoard.childProgress(of: taskID, items: taskBoardSnapshot.allItems) else { return nil }
+        // Each record has an item, so a task without child records has no
+        // child items and no label.
+        guard taskCoordinator != nil, let progress = taskBoardSnapshot.childProgress(of: taskID) else { return nil }
         return SidebarSubspacePresentation.childProgressLabel(merged: progress.merged, total: progress.total)
     }
 
@@ -5709,7 +5754,7 @@ struct SidebarView: View {
 
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
-            measuredWorkspaceRowFramesByID = [:]
+            scrollGeometry.workspaceRowFrames = [:]
             scrollGeometry.sessionRowFrames = [:]
             scrollGeometry.subspaceFrames = [:]
             cancelWorkspaceDrag()
@@ -5717,7 +5762,7 @@ struct SidebarView: View {
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
-        measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
+        scrollGeometry.workspaceRowFrames = scrollGeometry.workspaceRowFrames.filter { workspaceIDs.contains($0.key) }
         scrollGeometry.subspaceFrames = scrollGeometry.subspaceFrames.filter { workspaceIDs.contains($0.key.workspaceID) }
         let currentSessionRowIDs = Set(currentSidebarSessionRowIDs())
         scrollGeometry.sessionRowFrames = scrollGeometry.sessionRowFrames.filter { currentSessionRowIDs.contains($0.key) }
