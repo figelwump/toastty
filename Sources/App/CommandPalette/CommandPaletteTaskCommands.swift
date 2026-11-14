@@ -11,12 +11,16 @@ enum PaletteTaskCommand: Equatable, Sendable {
     case release(workspaceID: UUID)
     case openCoordinator
     case restartCoordinator
+    case toggleCoordinatorDock
 }
 
 /// What the palette offers for the coordinator.
 struct PaletteCoordinatorOption: Equatable {
     /// The coordinator's workspace is open, so it can restart.
     let isOpen: Bool
+    /// Whether the dock shows, in the window that holds the coordinator's
+    /// workspace. `nil` in other windows, and where the chat cannot show.
+    var dockShows: Bool? = nil
 }
 
 /// An open project that can release from Toastty, so the palette can start
@@ -42,8 +46,9 @@ enum CommandPaletteTaskCatalog {
         currentTaskDescriptors(current) + releases.map(releaseDescriptor) + coordinatorDescriptors(coordinator)
     }
 
-    /// "Open Coordinator" while the task system is on, and "Restart
-    /// Coordinator" once the coordinator's workspace is open.
+    /// "Open Coordinator" while the task system is on, "Restart
+    /// Coordinator" once the coordinator's workspace is open, and "Show
+    /// Coordinator Dock" or "Hide Coordinator Dock" in its window.
     private static func coordinatorDescriptors(_ option: PaletteCoordinatorOption?) -> [PaletteCommandDescriptor] {
         guard let option else { return [] }
         var descriptors = [PaletteCommandDescriptor(
@@ -64,6 +69,17 @@ enum CommandPaletteTaskCatalog {
                 keywords: ["coordinator", "agent", "restart", "start", "new", "session"],
                 shortcut: nil,
                 invocation: .task(.restartCoordinator)
+            ))
+        }
+        if let dockShows = option.dockShows {
+            descriptors.append(PaletteCommandDescriptor(
+                id: "coordinator.dock.toggle",
+                usageKey: "coordinator.dock.toggle",
+                title: CoordinatorDockPresentation.toggleTitle(dockShows: dockShows),
+                subtitle: dockShows ? nil : "The coordinator's chat beside your workspace",
+                keywords: ["coordinator", "dock", "chat", "show", "hide", "toggle", "panel", "left"],
+                shortcut: PaletteShortcut(ToasttyKeyboardShortcuts.toggleCoordinatorDock),
+                invocation: .task(.toggleCoordinatorDock)
             ))
         }
         return descriptors
@@ -278,9 +294,19 @@ final class CommandPaletteTaskActions {
     }
 
     /// `nil` when this Toastty has no coordinator to open.
-    func coordinatorOption() -> PaletteCoordinatorOption? {
+    func coordinatorOption(originWindowID: UUID? = nil) -> PaletteCoordinatorOption? {
         guard let controller = coordinator?.coordinatorController else { return nil }
-        return PaletteCoordinatorOption(isOpen: controller.location != nil)
+        let offersDock = originWindowID.map {
+            CoordinatorDockPresentation.showsToggle(
+                windowID: $0,
+                coordinator: controller.location,
+                chatAvailable: controller.chatIsAvailable
+            )
+        } ?? false
+        return PaletteCoordinatorOption(
+            isOpen: controller.location != nil,
+            dockShows: offersDock ? originWindowID.map(controller.dockShows(in:)) : nil
+        )
     }
 
     /// The releasable project that the workspace is: its saved root, or
@@ -310,6 +336,11 @@ final class CommandPaletteTaskActions {
     func execute(_ command: PaletteTaskCommand, originWindowID: UUID) -> Bool {
         guard let store, let sessionRuntimeStore, let coordinator, let board else { return false }
         switch command {
+        case .toggleCoordinatorDock:
+            guard let controller = coordinator.coordinatorController else { return false }
+            afterPaletteCloses { controller.toggleDock() }
+            return true
+
         case .openCoordinator, .restartCoordinator:
             guard let controller = coordinator.coordinatorController else { return false }
             let windowID = store.commandSelection(preferredWindowID: originWindowID)?.windowID

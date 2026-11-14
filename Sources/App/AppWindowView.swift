@@ -44,6 +44,81 @@ struct AppWindowView: View {
         taskCoordinator?.board ?? .disabled
     }
 
+    private var coordinatorController: CoordinatorController? {
+        taskCoordinator?.coordinatorController
+    }
+
+    /// The coordinator's dock shows in this window now.
+    private var dockShows: Bool {
+        coordinatorController?.dockShows(in: windowID) == true
+    }
+
+    /// The dock's toggle shows in the toolbar of the coordinator's window.
+    private var showsDockToggle: Bool {
+        guard let coordinatorController else { return false }
+        return CoordinatorDockPresentation.showsToggle(
+            windowID: windowID,
+            coordinator: coordinatorController.location,
+            chatAvailable: coordinatorController.chatIsAvailable
+        )
+    }
+
+    /// The buttons at the titlebar's left, after the traffic lights.
+    private var titlebarButtonCount: Int {
+        showsDockToggle ? 4 : 3
+    }
+
+    private var dockWidth: CGFloat {
+        CGFloat(store.window(id: windowID)?.coordinatorDockWidth ?? WindowState.defaultCoordinatorDockWidth)
+    }
+
+    private var columnResizeEdges: [ResizableColumnEdge] {
+        var edges: [ResizableColumnEdge] = []
+        var dividerX: CGFloat = 0
+        if sidebarVisible {
+            let sidebarWidth = effectiveSidebarWidth
+            dividerX = sidebarWidth
+            edges.append(ResizableColumnEdge(
+                id: "sidebar.resize.\(windowID.uuidString)",
+                dividerX: dividerX,
+                columnWidth: sidebarWidth,
+                accessibilityLabel: "Resize Sidebar",
+                accessibilityIdentifier: "sidebar.resize",
+                metadata: [
+                    "windowID": windowID.uuidString,
+                    "sidebarWidth": String(format: "%.1f", sidebarWidth),
+                ],
+                setWidth: { [store, windowID] width in
+                    _ = store.send(.setSidebarWidth(
+                        windowID: windowID,
+                        width: width,
+                        defaultWidth: Double(ToastyTheme.sidebarWidth)
+                    ))
+                }
+            ))
+            dividerX += Self.sidebarDividerWidth
+        }
+        if dockShows {
+            let dockWidth = dockWidth
+            dividerX += dockWidth
+            edges.append(ResizableColumnEdge(
+                id: "coordinator-dock.resize.\(windowID.uuidString)",
+                dividerX: dividerX,
+                columnWidth: dockWidth,
+                accessibilityLabel: "Resize Coordinator Dock",
+                accessibilityIdentifier: "coordinator.dock.resize",
+                metadata: [
+                    "windowID": windowID.uuidString,
+                    "dockWidth": String(format: "%.1f", dockWidth),
+                ],
+                setWidth: { [store, windowID] width in
+                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: width))
+                }
+            ))
+        }
+        return edges
+    }
+
     private func requestWorkspaceMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
         workspaceMergeController.requestMerge(workspaceID: workspaceID, mode: mode)
     }
@@ -103,6 +178,29 @@ struct AppWindowView: View {
                         .frame(width: Self.sidebarDividerWidth)
                 }
 
+                if #available(macOS 15.0, *), dockShows,
+                   let coordinatorController, let chat = coordinatorController.chat,
+                   let location = coordinatorController.location {
+                    CoordinatorDockView(
+                        controller: coordinatorController,
+                        sessionRuntimeStore: sessionRuntimeStore,
+                        store: store,
+                        chat: chat,
+                        board: taskBoard,
+                        location: location,
+                        headerLeadingInset: sidebarVisible
+                            ? 14
+                            : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount),
+                        appIsActive: appIsActive
+                    )
+                    .frame(width: dockWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+
+                    Rectangle()
+                        .fill(ToastyTheme.hairline)
+                        .frame(width: Self.sidebarDividerWidth)
+                }
+
                 WorkspaceView(
                     windowID: windowID,
                     store: store,
@@ -122,12 +220,14 @@ struct AppWindowView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
-                    sidebarVisible: sidebarVisible,
+                    leftColumnVisible: sidebarVisible || dockShows,
+                    titlebarButtonCount: titlebarButtonCount,
                     requestWorkspaceMerge: requestWorkspaceMerge,
                     requestWorkspaceClose: requestWorkspaceClose
                 )
                 // The Tasks view covers the workspace instead of replacing
-                // it, so terminals stay attached while it shows.
+                // it, so terminals stay attached while it shows. The dock
+                // stays beside it.
                 .overlay {
                     if showsTasksView, taskBoard.isEnabled {
                         TasksView(
@@ -142,16 +242,15 @@ struct AppWindowView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+            .animation(.easeInOut(duration: 0.15), value: dockShows)
             .overlay(alignment: .topLeading) {
                 GeometryReader { geometry in
-                    if sidebarVisible {
-                        SidebarResizeLayer(
-                            windowID: windowID,
-                            sidebarWidth: effectiveSidebarWidth,
-                            defaultSidebarWidth: ToastyTheme.sidebarWidth,
+                    let edges = columnResizeEdges
+                    if edges.isEmpty == false {
+                        ColumnResizeLayer(
+                            edges: edges,
                             height: geometry.size.height,
-                            appIsActive: appIsActive,
-                            store: store
+                            appIsActive: appIsActive
                         )
                         .frame(
                             width: geometry.size.width,
@@ -246,6 +345,13 @@ struct AppWindowView: View {
         }
         .onChange(of: slotFocusSignature) { _, _ in
             handleSlotFocusSignatureChange()
+        }
+        .onChange(of: dockShows) { _, shows in
+            // A hidden dock takes its field, and maybe the keyboard, with
+            // it: the keyboard goes back to the workspace's panel.
+            if shows == false {
+                scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
+            }
         }
         .onChange(of: showsTasksView) { _, isShown in
             // While shown, the Tasks view holds focus in this window and
@@ -379,7 +485,15 @@ struct AppWindowView: View {
         sidebarWidth: CGFloat,
         height: CGFloat
     ) -> CGRect {
-        let dividerCenterX = sidebarWidth + (Self.sidebarDividerWidth / 2)
+        columnResizeHandleFrame(dividerX: sidebarWidth, height: height)
+    }
+
+    /// The area that takes a drag on a column's divider, centered on it.
+    static func columnResizeHandleFrame(
+        dividerX: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        let dividerCenterX = dividerX + (Self.sidebarDividerWidth / 2)
         return CGRect(
             x: dividerCenterX - (Self.sidebarResizeHandleHitWidth / 2),
             y: 0,
@@ -406,6 +520,14 @@ struct AppWindowView: View {
     private var titlebarControls: some View {
         HStack(spacing: ToastyTheme.titlebarControlSpacing) {
             sidebarToggleButton
+            if showsDockToggle, let coordinatorController {
+                CoordinatorDockToggleButton(
+                    controller: coordinatorController,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    store: store,
+                    windowID: windowID
+                )
+            }
             navigationButton(
                 symbol: "chevron.left",
                 label: "Go Back",
@@ -573,34 +695,47 @@ private struct WindowSlotFocusSignature: Equatable {
     let focusedPanelID: UUID?
 }
 
-private struct SidebarResizeLayer: View {
-    let windowID: UUID
-    let sidebarWidth: CGFloat
-    let defaultSidebarWidth: CGFloat
+/// A column whose right edge the user drags to set its width: the sidebar
+/// or the coordinator's dock.
+struct ResizableColumnEdge: Identifiable {
+    let id: String
+    /// Where the column's divider starts, in the window's content.
+    let dividerX: CGFloat
+    let columnWidth: CGFloat
+    let accessibilityLabel: String
+    let accessibilityIdentifier: String
+    let metadata: [String: String]
+    let setWidth: (Double) -> Void
+}
+
+/// The resize edges of the window's columns, in one overlay.
+private struct ColumnResizeLayer: View {
+    let edges: [ResizableColumnEdge]
     let height: CGFloat
     let appIsActive: Bool
-    @ObservedObject var store: AppStore
 
     @State private var resizeStartWidth: Double?
-    @State private var hovered = false
-    @State private var dragging = false
+    @State private var hoveredEdgeID: String?
+    @State private var draggingEdgeID: String?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            BoundaryResizeHandleVisual(
-                highlighted: highlighted,
-                appIsActive: appIsActive,
-                width: AppWindowView.sidebarDividerWidth
-            )
-            .frame(
-                width: AppWindowView.sidebarResizeHandleHitWidth,
-                height: height,
-                alignment: .topLeading
-            )
-            .position(x: sidebarWidth + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
-            .allowsHitTesting(false)
+            ForEach(edges) { edge in
+                BoundaryResizeHandleVisual(
+                    highlighted: hoveredEdgeID == edge.id || draggingEdgeID == edge.id,
+                    appIsActive: appIsActive,
+                    width: AppWindowView.sidebarDividerWidth
+                )
+                .frame(
+                    width: AppWindowView.sidebarResizeHandleHitWidth,
+                    height: height,
+                    alignment: .topLeading
+                )
+                .position(x: edge.dividerX + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
+                .allowsHitTesting(false)
+            }
 
-            BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+            BoundaryInteractionOverlay(descriptors: edges.map(boundaryDescriptor))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDisappear {
@@ -608,77 +743,50 @@ private struct SidebarResizeLayer: View {
         }
     }
 
-    private var boundaryDescriptor: BoundaryInteractionDescriptor {
+    private func boundaryDescriptor(_ edge: ResizableColumnEdge) -> BoundaryInteractionDescriptor {
         BoundaryInteractionDescriptor(
-            id: boundaryID,
-            hitFrame: AppWindowView.sidebarResizeHandleFrame(
-                sidebarWidth: sidebarWidth,
-                height: height
-            ),
+            id: edge.id,
+            hitFrame: AppWindowView.columnResizeHandleFrame(dividerX: edge.dividerX, height: height),
             visualFrame: CGRect(
-                x: sidebarWidth,
+                x: edge.dividerX,
                 y: 0,
                 width: AppWindowView.sidebarDividerWidth,
                 height: height
             ),
             axis: .vertical,
             cursor: .resizeLeftRight,
-            accessibilityLabel: "Resize Sidebar",
-            accessibilityIdentifier: "sidebar.resize",
-            metadata: [
-                "windowID": windowID.uuidString,
-                "sidebarWidth": String(format: "%.1f", sidebarWidth),
-            ],
+            accessibilityLabel: edge.accessibilityLabel,
+            accessibilityIdentifier: edge.accessibilityIdentifier,
+            metadata: edge.metadata,
             onBegan: { _ in
-                resizeStartWidth = Double(sidebarWidth)
-                updateInteraction(dragging: true)
+                resizeStartWidth = Double(edge.columnWidth)
+                draggingEdgeID = edge.id
             },
             onChanged: { value in
                 guard let startingWidth = resizeStartWidth else { return }
-                let nextWidth = startingWidth + Double(value.translation.width)
-                _ = store.send(
-                    .setSidebarWidth(
-                        windowID: windowID,
-                        width: nextWidth,
-                        defaultWidth: Double(defaultSidebarWidth)
-                    )
-                )
+                edge.setWidth(startingWidth + Double(value.translation.width))
             },
             onEnded: { _ in
                 resizeStartWidth = nil
-                updateInteraction(dragging: false)
+                draggingEdgeID = nil
             },
             onHoverChanged: { hovering in
-                updateInteraction(hovered: hovering)
+                if hovering {
+                    hoveredEdgeID = edge.id
+                } else if hoveredEdgeID == edge.id {
+                    hoveredEdgeID = nil
+                }
             }
         )
     }
 
-    private var boundaryID: String {
-        "sidebar.resize.\(windowID.uuidString)"
-    }
-
-    private var highlighted: Bool {
-        hovered || dragging
-    }
-}
-
-private extension SidebarResizeLayer {
-    func updateInteraction(
-        hovered: Bool? = nil,
-        dragging: Bool? = nil
-    ) {
-        self.hovered = hovered ?? self.hovered
-        self.dragging = dragging ?? self.dragging
-    }
-
-    func releaseInteraction() {
+    private func releaseInteraction() {
         resizeStartWidth = nil
-        guard hovered || dragging else { return }
+        guard hoveredEdgeID != nil || draggingEdgeID != nil else { return }
 
         DispatchQueue.main.async {
-            hovered = false
-            dragging = false
+            hoveredEdgeID = nil
+            draggingEdgeID = nil
         }
     }
 }

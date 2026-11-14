@@ -52,7 +52,8 @@ struct AppWindowSceneView: View {
         guard windowState != nil,
               let target = store.focusedScaleCommandTarget(
                   preferredWindowID: windowID,
-                  coordinatorChatCovers: coordinatorChatCovers
+                  coordinatorChatCovers: coordinatorChatCovers,
+                  coordinatorDockHasKeyboard: coordinatorDockHasKeyboard
               ) else {
             return nil
         }
@@ -83,6 +84,11 @@ struct AppWindowSceneView: View {
     private var coordinatorChatCovers: (UUID) -> Bool {
         let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController
         return { controller?.coversTerminal(panelID: $0) == true }
+    }
+
+    private var coordinatorDockHasKeyboard: (UUID) -> Bool {
+        let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return { controller?.dockHasKeyboard(in: $0) == true }
     }
 
     /// Each new text scale of the coordinator's chat, after a change.
@@ -161,10 +167,12 @@ struct AppWindowSceneView: View {
             hideFontHUDTask = nil
         }
         .onReceive(coordinatorChatTextScaleChanges) { scale in
-            // Only the window whose focused panel is the chat shows it.
+            // Only the window whose focused panel or dock is the chat
+            // shows it.
             guard case .coordinatorChat = store.focusedScaleCommandTarget(
                 preferredWindowID: windowID,
-                coordinatorChatCovers: coordinatorChatCovers
+                coordinatorChatCovers: coordinatorChatCovers,
+                coordinatorDockHasKeyboard: coordinatorDockHasKeyboard
             ) else { return }
             showFontHUD(.coordinatorChat(scale: scale))
         }

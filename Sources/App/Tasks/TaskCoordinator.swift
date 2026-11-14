@@ -104,6 +104,11 @@ protocol TaskSessionProviding: AnyObject {
     /// Types `text` into the panel and submits it, as `terminal.send-text`
     /// does. A busy agent queues it as typed input.
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
+    /// Gives `text` to the agent in the panel under Toastty's input checks,
+    /// for `task send --steer`: typed at an open prompt, typed into a
+    /// running turn that can read it, or held for the next open prompt.
+    /// Nothing is typed into a permission prompt or a question.
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
     /// The session's latest agent message, read from its transcript.
     func lastReply(sessionID: String) -> TaskAgentReply?
     /// The managed session's workspace scope; `nil` when it is unscoped or
@@ -122,6 +127,9 @@ protocol TaskSessionProviding: AnyObject {
 extension TaskSessionProviding {
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        .failure(.stateUnknown)
+    }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
@@ -942,8 +950,14 @@ final class TaskCoordinator {
         }
         for record in records.records {
             let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+            // Until the repository has been identified, do not use the
+            // previous directory-only rule to delete files.
+            if record.mergedAt != nil && record.doneAt == nil && record.shippedAt == nil && record.archivedAt == nil {
+                if let root = record.projectRoot, board != nil,
+                   record.operation.worktree == nil, board?.repositoryRoots[root] == nil { continue }
+            }
             let releaseTagsConfigured = record.projectRoot.flatMap {
-                config.workspace(forProjectRoot: $0, homeDirectoryPath: homeDirectoryPath)?.releaseTags
+                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.releaseTags
             } != nil
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
             let hasFiles = fileManager.fileExists(atPath: directoryURL.path)

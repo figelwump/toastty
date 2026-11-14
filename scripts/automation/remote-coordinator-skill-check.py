@@ -832,12 +832,29 @@ class Run:
         unsigned = [m['text'][:120] for task, m in received if not m['text'].lstrip().startswith('[coordinator]')
                     and not (task.id in self.merges_expected and 'toastty-task-merge' in m['text'])]
         self.check('every message to a task starts with [coordinator]', not unsigned, unsigned)
+        # `task send --steer` may reach an agent that works: Toastty checks
+        # the agent before it types. It never types at a prompt.
+        steered = [c for c in commands if re.search(r'task\s+send\b', c) and '--steer' in c]
         interrupted = []
         for task, message in received:
             before = [kind for at, kind in task.statuses if at <= message['at']]
-            if before and before[-1] in ('working', 'needs_approval'):
+            checked = before and before[-1] == 'working' and any(
+                task.id in c and message['text'].strip()[:60] in c for c in steered)
+            if before and before[-1] in ('working', 'needs_approval') and not checked:
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
-        self.check('no message to an agent that works or waits at a prompt', not interrupted, interrupted)
+        self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
+                   not interrupted, interrupted)
+        unchecked = []
+        for turn in turns:
+            started = parse_time(turn['at']) if turn.get('at') else time.time()
+            for command in turn['commands']:
+                if not re.search(r'task\s+send\b', command) or '--steer' in command:
+                    continue
+                for task in self.tasks:
+                    before = [kind for at, kind in task.statuses if at <= started]
+                    if task.id in command and before and before[-1] == 'working':
+                        unchecked.append(f'{task.title} was working: {command[:300]}')
+        self.check('no send without --steer to a task whose agent works', not unchecked, unchecked)
         missing = [turn['prompt'][:200] for turn in turns if turn['wake']
                    and not any(re.search(r'coordinator\s+wake\s+--(in|at|clear)', c) for c in turn['commands'])]
         wakes = len([turn for turn in turns if turn['wake']])
@@ -1620,6 +1637,28 @@ def busy_silent(run):
     run.check('the user is told, with the task link', task.link in run.said(turns), run.said(turns))
 
 
+def user_words_busy(run):
+    """The user corrects a task whose agent works: the coordinator passes the words on with --steer."""
+    task = run.create_task('Fix the login redirect', status='working')
+    run.reply(task, 'Reading the login flow now.')
+    run.seed_policy()
+    run.open_coordinator()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    turns = run.tell('For the login redirect task: also keep the query string when it redirects.')
+    commands = [command for turn in turns for command in turn['commands']]
+    sends = [c for c in commands if re.search(r'task\s+send\b', c) and task.id in c]
+    run.check("it passes the user's words to the busy task with --steer", any('--steer' in c for c in sends), commands)
+    run.check('it sends nothing to the busy task without --steer', all('--steer' in c for c in sends), sends)
+    run.check("the message holds the user's words", any('query string' in c for c in sends), sends)
+    created = [t['title'] for t in run.cli('task', 'list')['tasks'] if t['taskID'] not in before]
+    run.check('it makes no new task for the correction', created == [], created)
+    # The task's agent is a fake with no turn in its transcript, so what
+    # Toastty did with the message says nothing about the coordinator.
+    run.notes.append(f'Messages the fake agent read: {[m["text"][:120] for m in run.messages(task)]}')
+    run.notes.append(f'What the coordinator said: {run.said(turns)[:600]}')
+    return turns
+
+
 def new_task(run):
     """A new task whose project is unclear: it asks first, then adds a rule and commits it."""
     # Both sites have a pricing page with recent work, so the history cannot decide.
@@ -1716,13 +1755,14 @@ SCENARIOS = {
     'release': release,
     'user-typed': user_typed,
     'busy-silent': busy_silent,
+    'user-words-busy': user_words_busy,
     'new-task': new_task,
     'interrupted': interrupted,
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
-            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release')
+            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release', 'user-words-busy')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):

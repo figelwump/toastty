@@ -182,9 +182,16 @@ enum ToastyTheme {
     static let hiddenSidebarTitleLeadingSpacing: CGFloat = 2
     /// Leading padding for the top bar content when the sidebar is hidden,
     /// leaving room for the traffic lights, sidebar toggle, and history buttons.
-    static let topBarLeadingPaddingWithoutSidebar: CGFloat =
-        titlebarSidebarToggleLeadingPadding + (3 * titlebarSidebarToggleButtonSize) +
-        (2 * titlebarControlSpacing) + hiddenSidebarTitleLeadingSpacing
+    static let topBarLeadingPaddingWithoutSidebar: CGFloat = topBarLeadingPadding(titlebarButtonCount: 3)
+
+    /// Leading padding for content at the window's left edge, below the
+    /// titlebar's buttons: the traffic lights, then `titlebarButtonCount`
+    /// buttons. The coordinator's window adds the dock's button.
+    static func topBarLeadingPadding(titlebarButtonCount: Int) -> CGFloat {
+        let count = CGFloat(max(1, titlebarButtonCount))
+        return titlebarSidebarToggleLeadingPadding + (count * titlebarSidebarToggleButtonSize) +
+            ((count - 1) * titlebarControlSpacing) + hiddenSidebarTitleLeadingSpacing
+    }
     static let hiddenSidebarTitleCenterY: CGFloat =
         titlebarSidebarToggleTopPadding + (titlebarSidebarToggleButtonSize / 2)
 

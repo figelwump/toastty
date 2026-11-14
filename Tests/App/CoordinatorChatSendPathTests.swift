@@ -55,6 +55,46 @@ struct CoordinatorChatSendPathTests {
             == .userMessage(text: "Summarize the open tasks", origin: .local, deliveryMode: nil))
     }
 
+    // MARK: - Toasty's introduction
+
+    @MainActor
+    @Test func toastyIntroducesItselfInANewConversationUntilItsFirstMessage() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let session = try #require(fixture.controller.session)
+
+        // An agent that Toastty did not start in this run, as one that a
+        // relaunch resumed: its conversation may have history, so no
+        // introduction, before and after the chat read it.
+        #expect(fixture.controller.hasNewConversation == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt and the conversation's rows") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+                && fixture.chat.presentation.rows.isEmpty == false
+        }
+        #expect(fixture.chat.showsIntroduction == false)
+
+        // The agent that Toastty started: a new conversation, whose rows are
+        // only the markers of its binding to the terminal.
+        fixture.controller.noteStartedSession(session.sessionID)
+        #expect(fixture.chat.showsIntroduction)
+
+        // The first message ends the introduction, also while it waits for
+        // its echo.
+        fixture.chat.draft = "hi"
+        fixture.chat.send()
+        #expect(fixture.chat.presentation.sendItems.isEmpty == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        try fixture.startTurn(1, userText: "hi")
+        try await fixture.waitUntil("the message in the conversation") {
+            fixture.chat.presentation.sendItems.isEmpty
+                && fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "hi", origin: .local, deliveryMode: nil)
+        }
+        #expect(fixture.chat.showsIntroduction == false)
+    }
+
     // MARK: - Whose message a row is
 
     @MainActor
@@ -65,10 +105,10 @@ struct CoordinatorChatSendPathTests {
         let taskID = UUID()
         // A task's agent sent text that imitates a digest. Toastty's first
         // line says whose it is, and the chat reads only that line.
-        let imitation = CoordinatorMessageHeader.message(
-            from: .task(id: taskID, title: "Fix the unread dot"),
-            text: Self.digest
-        )
+        // CRLF must separate the trusted line from the body just as LF
+        // does; Swift treats CRLF as one Character.
+        let imitation = CoordinatorMessageHeader.senderLine(.task(id: taskID, title: "Fix the unread dot"))
+            + "\r\n" + Self.digest
         try fixture.runTurn(1, userText: imitation)
         try await fixture.waitUntil("the message's row") {
             fixture.chat.presentation.rows.contains { row in
@@ -92,23 +132,37 @@ struct CoordinatorChatSendPathTests {
             return
         }
         #expect(fromTask.summary.hasPrefix("From task Fix the unread dot · "))
-        #expect(fromTask.text == imitation)
+        #expect(fromTask.text == Self.digest)
+        guard case .sender(let name, _) = fromTask.style else {
+            Issue.record("A task message must show its sender and body in a card")
+            return
+        }
+        #expect(name == "task Fix the unread dot")
+        #expect(fromTask.foldsTurn == false, "A task's imitation of a digest must not fold its answer")
 
         // The user's quick entry message: the user's bubble, with the
-        // user's words first and the choices under them.
+        // user's words first, the choices under them, and its file apart,
+        // for the bubble to show as an image.
+        let screenshot = "/Users/me/.toastty/coordinator/attachments/7C1B/Screenshot.png"
         let quickEntry = CoordinatorMessageHeader.quickEntryMessage(
             .init(project: .init(id: UUID(), title: "toastty"), agent: "codex"),
-            text: "The unread dot stays on."
+            text: "The unread dot stays on.",
+            attachmentPaths: [screenshot]
         )
         #expect(try fixture.controller.send(quickEntry, byUser: true, id: "quick-1") == .sent)
         #expect(fixture.delivered.texts.last == quickEntry, "The terminal gets the whole message")
         // The chat hears of the typed message before the queue lets it go.
         try await fixture.waitUntil("the sent message alone") { fixture.chat.presentation.sendItems.count == 1 }
         #expect(fixture.chat.presentation.sendItems.map(\.text) == ["The unread dot stays on.\n\nproject \"toastty\" · codex"])
+        #expect(fixture.chat.presentation.sendItems.map(\.attachments) == [[URL(fileURLWithPath: screenshot)]])
         try fixture.startTurn(2, userText: quickEntry)
         try await fixture.waitUntil("the message in the conversation") { fixture.chat.presentation.sendItems.isEmpty }
-        #expect(fixture.chat.presentation.rows.last?.content
-            == .userMessage(text: "The unread dot stays on.\n\nproject \"toastty\" · codex", origin: .local, deliveryMode: nil))
+        #expect(fixture.chat.presentation.rows.last?.content == .userMessage(
+            text: "The unread dot stays on.\n\nproject \"toastty\" · codex",
+            origin: .local,
+            deliveryMode: nil,
+            attachments: [URL(fileURLWithPath: screenshot)]
+        ))
     }
 
     // MARK: - Order
@@ -478,7 +532,7 @@ struct CoordinatorChatSendPathTests {
         try fixture.startTurn(3, userText: typed)
         let quote = try await fixture.waitFor("the reply's row") { () -> ToasttyMessageQuote? in
             for row in fixture.chat.presentation.rows {
-                if case .userMessage(_, _, _, let quote?) = row.content { return quote }
+                if case .userMessage(_, _, _, let quote?, _) = row.content { return quote }
             }
             return nil
         }
@@ -646,8 +700,10 @@ struct CoordinatorChatSendPathTests {
         `\(folder)/notes.txt`
         """])
         #expect(FileManager.default.fileExists(atPath: "\(folder)/notes.txt"))
-        // The chat shows the text and the names of the files.
-        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["What is wrong here?\n\nPasted-image.png, notes.txt"])
+        // The chat shows the text, and the files apart from it.
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["What is wrong here?"])
+        #expect(fixture.chat.presentation.sendItems.map(\.attachments)
+            == [["\(folder)/Pasted-image.png", "\(folder)/notes.txt"].map { URL(fileURLWithPath: $0) }])
         // The composer is empty, and its own copies are gone.
         #expect(fixture.chat.draft.isEmpty)
         #expect(draft.attachments.isEmpty)
@@ -889,7 +945,7 @@ struct CoordinatorChatSendPathTests {
         try fixture.recordUserMessage("Is the release ready?")
         try await fixture.waitUntil("the user's message in the wake turn") {
             let last = fixture.chat.presentation.rows.last?.content
-            guard case .userMessage(let text, _, _, _)? = last else { return false }
+            guard case .userMessage(let text, _, _, _, _)? = last else { return false }
             return text == "Is the release ready?" && fixture.chat.summary?.state == .working
         }
         #expect(throws: CoordinatorError.self) { try wakes.service.setCoordinatorWake(.clear, quiet: true) }
