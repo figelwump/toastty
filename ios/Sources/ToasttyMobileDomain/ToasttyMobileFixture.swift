@@ -195,8 +195,8 @@ public enum ToasttyMobileFixture {
     public static let startingTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000004")!
     public static let shippedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000005")!
     public static let otherProjectTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000012")!
-    public static let shareSheetTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000013")!
-    public static let steerChipTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000014")!
+    public static let shareSheetTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000016")!
+    public static let steerChipTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000017")!
 
     /// `home` from a Mac with the task system on. Its task spaces are
     /// tasks: compact-session-rows waits for approval, early-session-titles
@@ -329,6 +329,43 @@ public enum ToasttyMobileFixture {
             workspaces: home.workspaces + taskActionWorkspaces(),
             taskBoard: MobileTaskBoard(board)
         )
+    }()
+
+    /// A Mac with the task system on where nothing needs the user: one
+    /// session works, one task runs and one is idle. Home's Needs you
+    /// segment shows its empty state.
+    public static let quietTaskHome: MobileHomeSnapshot = {
+        let toasttyID = previewWorkspaceID
+        let now = Date()
+        let toastty = MobileWorkspace(
+            id: toasttyID,
+            title: "toastty",
+            conversations: [
+                conversation(
+                    2, workspaceID: toasttyID, workspaceTitle: "toastty",
+                    cwd: "~/GiantThings/repos/toastty", agent: .codex,
+                    title: "Sparkle update check", status: .working,
+                    availability: .unavailable(reason: "working"), age: "now", last: "Running the test suite"
+                ),
+            ]
+        )
+        func task(_ id: UUID, _ title: String, _ group: RemoteTaskGroup, _ status: String) -> RemoteTaskSummary {
+            RemoteTaskSummary(
+                id: id, title: title, group: group, statusLine: status,
+                stageTitle: group == .running ? "Running" : "Idle", stageReason: status,
+                projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+            )
+        }
+        let board = RemoteTaskBoard(
+            tasks: [
+                task(startingTaskID, "Split the parser", .running, "Claude · working"),
+                task(otherProjectTaskID, "Linux port spike", .idle, "Codex · idle"),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: startingTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
+            doneCount: 3
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: [toastty], taskBoard: MobileTaskBoard(board))
     }()
 
     /// Task worktrees spawned from the toastty workspace, one in each state

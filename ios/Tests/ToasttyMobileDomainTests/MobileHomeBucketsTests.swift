@@ -239,6 +239,138 @@ final class MobileHomeBucketsTests: XCTestCase {
         XCTAssertTrue(MobileHomeBuckets.cards(in: snapshot(sessions: [session(1, "Approval", .needsApproval)], board: nil)).isEmpty)
     }
 
+    // MARK: - Needs you segment
+
+    /// Each project lists its Needs you rows, then its Ready to review rows,
+    /// with sessions, task spaces and tasks in the All card's order.
+    /// Projects with neither drop out; Other tasks comes last.
+    func testNeedsYouSegmentListsNeedsYouThenReadyToReviewPerProject() {
+        let review = taskSpace(11, "Review space", session: .idle)
+        let quiet = MobileWorkspace(id: otherProjectID, title: "quiet", conversations: [session(9, "Idle elsewhere", .idle, workspace: otherProjectID)])
+        let board = RemoteTaskBoard(tasks: [
+            task(21, "Review space", .needsYou, mark: .review, taskSpace: review.id),
+            task(22, "Setup failed", .needsYou),
+            task(23, "Open PR", .needsYou, mark: .review),
+            task(24, "Running task", .running),
+            task(25, "Project closed", .needsYou, mark: .question, project: nil),
+        ])
+        let all = MobileHomeBuckets.cards(in: MobileHomeSnapshot(
+            hostName: "mac",
+            workspaces: [
+                MobileWorkspace(id: projectID, title: "toastty", conversations: [
+                    session(1, "Approval", .needsApproval), session(2, "Working", .working), session(3, "Unread", .ready),
+                ]),
+                quiet, review,
+            ],
+            taskBoard: MobileTaskBoard(board)
+        ))
+        XCTAssertEqual(all.map(\.title), ["toastty", "quiet", MobileHomeBuckets.otherTasksCardTitle])
+        XCTAssertEqual(all.filter(\.listsInNeedsYou).map(\.title), ["toastty", MobileHomeBuckets.otherTasksCardTitle])
+        let toastty = all[0]
+        XCTAssertEqual(toastty.needsYou.entries(.needsYou).map(label), ["Approval", "Unread", "Setup failed"])
+        XCTAssertEqual(toastty.needsYou.entries(.readyToReview).map(label), ["Review space", "Open PR"])
+        XCTAssertTrue(toastty.needsYou.entries(.running).isEmpty)
+        XCTAssertTrue(toastty.needsYou.entries(.idle).isEmpty)
+        XCTAssertEqual(toastty.needsYouOrderedKeys.count, 5)
+        XCTAssertEqual(all[2].needsYou.entries(.needsYou).map(label), ["Project closed"])
+
+        // The switcher counts the rows the segment lists.
+        let counts = MobileHomeNeedsYouCounts(all)
+        let listed = all.flatMap { card in TaskBucket.needsYouSegmentBuckets.flatMap(card.needsYou.entries) }
+        XCTAssertEqual(counts, MobileHomeNeedsYouCounts(needsYou: 4, readyToReview: 2))
+        XCTAssertEqual(counts.needsYou, listed.filter { $0.ownBucket == .needsYou }.count)
+        XCTAssertEqual(counts.readyToReview, listed.filter { $0.ownBucket == .readyToReview }.count)
+        XCTAssertEqual(counts.accessibilityLabel, "Only what needs you, 4, 2 ready for review")
+        XCTAssertEqual(MobileHomeNeedsYouCounts(readyToReview: 1).accessibilityLabel, "Only what needs you, 1 ready for review")
+    }
+
+    /// A child lists under its parent only when both list; otherwise it
+    /// lists alone and names its parent with ↖, also when the parent left
+    /// the board.
+    func testAChildListsApartFromAParentThatDoesNotNeedYou() throws {
+        let board = RemoteTaskBoard(tasks: [
+            task(21, "Running parent", .running, childProgress: RemoteTaskChildProgress(merged: 0, total: 1)),
+            task(22, "Asks", .needsYou, mark: .question, parent: 21, parentTitle: "Running parent"),
+            task(23, "Asking parent", .needsYou, mark: .question),
+            task(24, "Review child", .needsYou, mark: .review, parent: 23, parentTitle: "Asking parent"),
+            // Its parent is Done and not on the board.
+            task(25, "Orphan review", .needsYou, mark: .review, parent: 99, parentTitle: "Done parent"),
+        ])
+        let card = try XCTUnwrap(cards(board: board).first)
+        let needsYou = card.needsYou.entries(.needsYou)
+        XCTAssertEqual(needsYou.map(label), ["Asks", "Asking parent", "  Review child (dimmed)"])
+        XCTAssertEqual(needsYou.map(\.listsApartFromParent), [true, false, false])
+        XCTAssertEqual(needsYou[0].payload.compactTag(listsApartFromParent: true, showsProject: false), .parent("Running parent"))
+        let review = card.needsYou.entries(.readyToReview)
+        XCTAssertEqual(review.map(label), ["Orphan review"])
+        XCTAssertEqual(review.first?.listsApartFromParent, true)
+        // In All, the family lists together and nothing lists apart.
+        XCTAssertEqual(names(card, .needsYou), ["Running parent (dimmed)", "  Asks", "Asking parent", "  Review child (dimmed)"])
+        XCTAssertTrue(TaskBucket.allCases.flatMap(card.layout.entries).allSatisfy { $0.listsApartFromParent == false })
+    }
+
+    /// One tag: the pull request, then the ↖ parent, then the child
+    /// progress; the project only in Other tasks.
+    func testAOneLineRowShowsOneTagInTheMacsOrder() {
+        let progress = RemoteTaskChildProgress(merged: 1, total: 2)
+        let everything = MobileHomeRow.task(task(
+            21, "All tags", .needsYou, pullRequest: 36, parent: 20, parentTitle: "Parent", childProgress: progress
+        ))
+        XCTAssertEqual(everything.compactTag(listsApartFromParent: true, showsProject: true), .pullRequest(pullRequestFixture(36)))
+        let noPullRequest = MobileHomeRow.task(task(22, "No PR", .needsYou, parent: 20, parentTitle: "Parent", childProgress: progress))
+        XCTAssertEqual(noPullRequest.compactTag(listsApartFromParent: true, showsProject: true), .parent("Parent"))
+        // Under its parent, the row does not name it.
+        XCTAssertEqual(noPullRequest.compactTag(listsApartFromParent: false, showsProject: true), .childProgress(progress))
+        let plain = MobileHomeRow.task(task(23, "Plain", .needsYou))
+        XCTAssertEqual(plain.compactTag(listsApartFromParent: false, showsProject: true), .project("toastty"))
+        XCTAssertNil(plain.compactTag(listsApartFromParent: false, showsProject: false))
+        XCTAssertNil(MobileHomeRow.conversation(session(1, "Session", .ready)).compactTag(listsApartFromParent: false, showsProject: true))
+
+        // A task space's pull request annotation comes first.
+        let annotation = RemoteWorkspaceAnnotation(key: MobileSubspaceRow.pullRequestAnnotationKey, text: "PR #41", color: "#5BA08A")
+        var space = taskSpace(11, "Space", session: .idle)
+        space = MobileWorkspace(
+            id: space.id, title: space.title, conversations: space.conversations,
+            annotations: [annotation], parentWorkspaceID: projectID
+        )
+        let row = MobileHomeRow.subspace(MobileSubspaceRow(workspace: space, task: task(24, "Space", .needsYou, mark: .review, pullRequest: 41)))
+        XCTAssertEqual(row.compactTag(listsApartFromParent: true, showsProject: false), .pullRequestAnnotation(annotation))
+    }
+
+    /// A one-line row keeps a second line only for a question or a failure.
+    func testAOneLineRowKeepsItsSecondLineOnlyForAQuestionOrAFailure() {
+        XCTAssertEqual(MobileHomeRow.task(task(21, "Asks", .needsYou, mark: .question, rowSummary: "Asks: which?")).compactDetail, "Asks: which?")
+        XCTAssertEqual(MobileHomeRow.task(task(22, "Setup", .needsYou, rowSummary: "⚠ setup failed")).compactDetail, "⚠ setup failed")
+        XCTAssertNil(MobileHomeRow.task(task(23, "Review", .needsYou, mark: .review)).compactDetail)
+        XCTAssertNil(MobileHomeRow.task(task(24, "Cleanup stopped", .needsYou)).compactDetail)
+        // Setup that still runs has a summary, but not in Needs you.
+        XCTAssertNil(MobileHomeRow.task(task(25, "Starting", .running, mark: .starting, rowSummary: "Moving")).compactDetail)
+
+        XCTAssertEqual(MobileHomeRow.conversation(session(1, "Failed", .error)).compactDetail, "Failed")
+        XCTAssertNil(MobileHomeRow.conversation(session(2, "Approval", .needsApproval)).compactDetail)
+        XCTAssertNil(MobileHomeRow.conversation(session(3, "Unread", .ready)).compactDetail)
+
+        let erroring = taskSpace(11, "Erroring", session: .error)
+        XCTAssertEqual(MobileHomeRow.subspace(MobileSubspaceRow(workspace: erroring)).compactDetail, "Erroring session")
+        let asking = taskSpace(12, "Asking", session: .idle)
+        let question = task(26, "Asking", .needsYou, mark: .question, taskSpace: asking.id, rowSummary: "Asks: ok?")
+        XCTAssertEqual(MobileHomeRow.subspace(MobileSubspaceRow(workspace: asking, task: question)).compactDetail, "Asks: ok?")
+        let approving = taskSpace(13, "Approving", session: .needsApproval)
+        XCTAssertNil(MobileHomeRow.subspace(MobileSubspaceRow(workspace: approving)).compactDetail)
+    }
+
+    /// The badge's number: the switcher's yellow count with a board, and
+    /// no number from the board without one.
+    func testTheNeedsYouCountsNeedABoard() {
+        let sessions = [session(1, "Approval", .needsApproval), session(2, "Unread", .ready)]
+        XCTAssertNil(MobileHomeBuckets.needsYouCounts(in: snapshot(sessions: sessions, board: nil)))
+        let board = RemoteTaskBoard(tasks: [task(21, "Open PR", .needsYou, mark: .review)])
+        XCTAssertEqual(
+            MobileHomeBuckets.needsYouCounts(in: snapshot(sessions: sessions, board: board)),
+            MobileHomeNeedsYouCounts(needsYou: 2, readyToReview: 1)
+        )
+    }
+
     /// The Tasks tab splits Needs you as the Mac's Tasks view does: a family
     /// whose only members that need the user wait for a review lists under
     /// Ready to review.
@@ -300,16 +432,21 @@ final class MobileHomeBucketsTests: XCTestCase {
 
     private func task(
         _ number: Int, _ title: String, _ group: RemoteTaskGroup, mark: RemoteTaskMark? = nil,
-        project: UUID? = MobileHomeBucketsTests.defaultProjectID, taskSpace: UUID? = nil, parent: Int? = nil,
-        childProgress: RemoteTaskChildProgress? = nil
+        project: UUID? = MobileHomeBucketsTests.defaultProjectID, taskSpace: UUID? = nil, pullRequest: Int? = nil,
+        parent: Int? = nil, parentTitle: String? = nil, childProgress: RemoteTaskChildProgress? = nil,
+        rowSummary: String? = nil
     ) -> RemoteTaskSummary {
         RemoteTaskSummary(
-            id: uuid(number), title: title, group: group, mark: mark, statusLine: title,
+            id: uuid(number), title: title, group: group, mark: mark, statusLine: title, rowSummary: rowSummary,
             stageTitle: "", stageReason: "",
             projectWorkspaceID: project, projectTitle: project == nil ? nil : "toastty",
-            taskSpaceWorkspaceID: taskSpace, activityAt: now,
-            parentTaskID: parent.map { uuid($0) }, childProgress: childProgress
+            taskSpaceWorkspaceID: taskSpace, pullRequest: pullRequest.map(pullRequestFixture), activityAt: now,
+            parentTaskID: parent.map { uuid($0) }, parentTaskTitle: parentTitle, childProgress: childProgress
         )
+    }
+
+    private func pullRequestFixture(_ number: Int) -> RemoteTaskPullRequest {
+        RemoteTaskPullRequest(number: number, url: URL(string: "https://github.com/example/toastty/pull/\(number)")!, state: .open)
     }
 
     private func snapshot(

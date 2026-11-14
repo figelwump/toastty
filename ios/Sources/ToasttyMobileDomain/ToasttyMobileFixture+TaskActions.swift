@@ -21,6 +21,8 @@ public extension ToasttyMobileFixture {
     static let mergedDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000009")!
     static let markedDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000010")!
     static let archiveTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000011")!
+    /// A Done task that started Website hero refresh; not on the board.
+    static let finishedParentTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000013")!
     /// The release task the fixture starts when the phone asks for one.
     static let releaseTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000015")!
 
@@ -60,13 +62,15 @@ public extension ToasttyMobileFixture {
         func task(
             _ id: UUID, _ title: String, group: RemoteTaskGroup, mark: RemoteTaskMark? = nil,
             status: String, stage: String, why: String, taskSpace: UUID,
-            pullRequest: RemoteTaskPullRequest? = nil, control: RemoteTaskMergeControl, actions: [RemoteTaskActionItem]
+            pullRequest: RemoteTaskPullRequest? = nil, control: RemoteTaskMergeControl, actions: [RemoteTaskActionItem],
+            parent: (id: UUID, title: String)? = nil
         ) -> RemoteTaskSummary {
             RemoteTaskSummary(
                 id: id, title: title, group: group, mark: mark, statusLine: status,
                 stageTitle: stage, stageReason: why,
                 projectWorkspaceID: emptyosWorkspaceID, projectTitle: "emptyos", taskSpaceWorkspaceID: taskSpace,
-                pullRequest: pullRequest, activityAt: now, mergeControl: control, actions: actions
+                pullRequest: pullRequest, activityAt: now, mergeControl: control, actions: actions,
+                parentTaskID: parent?.id, parentTaskTitle: parent?.title
             )
         }
         return [
@@ -83,7 +87,10 @@ public extension ToasttyMobileFixture {
                     kind: .completeTask, title: "Complete Task",
                     action: RemoteTaskActionItem(action: .markDone, title: "Complete Task")
                 ),
-                actions: [markDoneItem, archiveItem]
+                actions: [markDoneItem, archiveItem],
+                // Its parent is Done and off the board, so Needs you names
+                // it with ↖.
+                parent: (finishedParentTaskID, "Website refresh")
             ),
             task(
                 cleanupStoppedTaskID, "Gateway test flake", group: .needsYou,
