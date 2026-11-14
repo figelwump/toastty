@@ -295,8 +295,13 @@ private struct ProviderArgvEditor {
             )
         }
         if executableIndex > 0 {
-            guard let wrapper,
-                  ManagedAgentCommandResolver.inferManagedAgent(
+            guard let wrapper else {
+                throw AgentLaunchError.unsafeLaunchOverrideArgv(
+                    profileID: profileID,
+                    message: "could not resolve an unambiguous \(agent.displayName) executable boundary"
+                )
+            }
+            guard ManagedAgentCommandResolver.inferManagedAgent(
                       commandName: argv[0],
                       argv: argv
                   ) == agent else {

@@ -921,6 +921,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             )
         }
 
+        @discardableResult
         func git(_ arguments: [String], in directory: String) throws -> String { try git(arguments, directory) }
 
         /// The task space's agent, as the merge owner sees it.

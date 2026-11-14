@@ -226,6 +226,7 @@ final class RightAuxPanelViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testPanelCardSuppressesGenericHoverCloseInRightAuxPanel() {
         XCTAssertTrue(
             PanelCardView.showsHoveredCloseAffordance(

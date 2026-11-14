@@ -82,7 +82,7 @@ struct TailscaleTailnetOriginDetectorTests {
         )
 
         await assertDetectionError(.needsLogin) {
-            try await detector.detectOrigin()
+            _ = try await detector.detectOrigin()
         }
     }
 
@@ -94,7 +94,7 @@ struct TailscaleTailnetOriginDetectorTests {
         )
 
         await assertDetectionError(.notInstalled) {
-            try await detector.detectOrigin()
+            _ = try await detector.detectOrigin()
         }
     }
 

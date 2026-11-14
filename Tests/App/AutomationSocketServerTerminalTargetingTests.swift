@@ -139,7 +139,7 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
     }
 
     func testTerminalSendTextChecksExpectedSessionInUnselectedTabWithoutChangingSelection() async throws {
-        var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
+        let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
         let selectedPanelID = try XCTUnwrap(selectedTab.focusedPanelID)
@@ -271,7 +271,7 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
 
     func testTerminalStateReturnsOwningWindowForPanelInAnotherWindow() async throws {
         let firstFixture = makeSingleWindowFixture()
-        var secondTab = WorkspaceTabState.bootstrap(terminalTitle: "Second Window Terminal")
+        let secondTab = WorkspaceTabState.bootstrap(terminalTitle: "Second Window Terminal")
         guard let secondPanelID = secondTab.focusedPanelID else {
             XCTFail("expected second window fixture to include a focused terminal")
             return

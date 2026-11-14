@@ -74,7 +74,7 @@ struct CodexRolloutTranscriptParserTests {
         }
         #expect(interactions.count == 2)
 
-        let approval = try? #require(interactions.first)
+        let approval = interactions.first
         #expect(approval?.kind == .permission)
         #expect(approval?.providerCallID == "call_0101")
         #expect(approval?.providerApprovalID == "appr_0101")

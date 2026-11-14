@@ -175,7 +175,8 @@ final class CommandPaletteControllerTests: XCTestCase {
     }
 
     func testPresentedPaletteRefreshesAfterProfileStoresReload() async throws {
-        throw XCTSkip(
+        try XCTSkipIf(
+            true,
             "Temporarily disabled while AppKit-backed command palette controller tests are unstable under xcodebuild. Covered by CommandPaletteViewModelTests.testRefreshProjectedCommandsReflectsReloadedAgentAndTerminalProfileCatalogs."
         )
 
@@ -242,7 +243,8 @@ final class CommandPaletteControllerTests: XCTestCase {
     }
 
     func testToggleReusesSharedFileIndexServiceAcrossPaletteSessions() async throws {
-        throw XCTSkip(
+        try XCTSkipIf(
+            true,
             "Temporarily disabled while AppKit-backed command palette controller tests are unstable under xcodebuild. Covered by CommandPaletteViewModelTests.testSeparateViewModelsReuseSharedFileIndexServiceAcrossPaletteSessions."
         )
 
